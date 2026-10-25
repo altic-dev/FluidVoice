@@ -5186,12 +5186,17 @@ final class SettingsStore: ObservableObject {
         case whisperLargeTurbo = "whisper-large-turbo"
         case whisperLarge = "whisper-large"
 
+        // MARK: - Other transcribe.cpp Models
+
+        case qwen3Asr17B = "qwen3-asr-1.7b"
+
         var parakeetDescriptor: ParakeetSpeechModelCatalog.Descriptor? {
             ParakeetSpeechModelCatalog.descriptor(forModelID: self.rawValue)
         }
 
         /// Relative product ratings for display and sorting, not benchmark accuracy.
         var hasPerformanceRatings: Bool {
+            guard self != .qwen3Asr17B else { return false }
             guard let descriptor = self.parakeetDescriptor else { return true }
             return descriptor.performanceRatings != nil
         }
@@ -5219,6 +5224,7 @@ final class SettingsStore: ObservableObject {
             case .whisperMedium: return "Whisper Medium"
             case .whisperLargeTurbo: return "Whisper Large Turbo"
             case .whisperLarge: return "Whisper Large"
+            case .qwen3Asr17B: return "Qwen3 ASR 1.7B (Test)"
             }
         }
 
@@ -5226,7 +5232,7 @@ final class SettingsStore: ObservableObject {
             switch self {
             case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico: return self.parakeetDescriptor?.languageSupport ?? "English Only"
             case .parakeetRealtime: return "English Only (Live Streaming)"
-            case .qwen3Asr: return "30 Languages"
+            case .qwen3Asr, .qwen3Asr17B: return "30 Languages"
             case .cohereTranscribeSixBit: return "14 Languages (Select Manually)"
             case .nemotronOffline, .nemotronStreaming, .nemotronStreaming320: return "Around 40 Languages"
             case .appleSpeech: return "System Languages"
@@ -5253,6 +5259,7 @@ final class SettingsStore: ObservableObject {
             case .whisperMedium: return "~793.0 MiB"
             case .whisperLargeTurbo: return "~845.3 MiB"
             case .whisperLarge: return "~1.55 GiB"
+            case .qwen3Asr17B: return "~2.03 GiB"
             }
         }
 
@@ -5270,20 +5277,21 @@ final class SettingsStore: ObservableObject {
             case .whisperMedium: return 831_538_144
             case .whisperLargeTurbo: return 886_381_728
             case .whisperLarge: return 1_668_741_440
+            case .qwen3Asr17B: return 2_185_030_624
             case .appleSpeech, .appleSpeechAnalyzer: return 0
             }
         }
 
         var requiresAppleSilicon: Bool {
             switch self {
-            case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico, .parakeetRealtime, .qwen3Asr, .cohereTranscribeSixBit, .nemotronOffline, .nemotronStreaming, .nemotronStreaming320: return true
+            case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico, .parakeetRealtime, .qwen3Asr, .qwen3Asr17B, .cohereTranscribeSixBit, .nemotronOffline, .nemotronStreaming, .nemotronStreaming320: return true
             default: return false
             }
         }
 
         var isWhisperModel: Bool {
             switch self {
-            case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico, .parakeetRealtime, .qwen3Asr, .cohereTranscribeSixBit, .nemotronOffline, .nemotronStreaming, .nemotronStreaming320, .appleSpeech,
+            case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico, .parakeetRealtime, .qwen3Asr, .qwen3Asr17B, .cohereTranscribeSixBit, .nemotronOffline, .nemotronStreaming, .nemotronStreaming320, .appleSpeech,
                  .appleSpeechAnalyzer: return false
             default: return true
             }
@@ -5298,6 +5306,7 @@ final class SettingsStore: ObservableObject {
             case .whisperMedium: return "whisper-medium-Q8_0.gguf"
             case .whisperLargeTurbo: return "whisper-large-v3-turbo-Q8_0.gguf"
             case .whisperLarge: return "whisper-large-v3-Q8_0.gguf"
+            case .qwen3Asr17B: return "Qwen3-ASR-1.7B-Q8_0.gguf"
             default: return nil
             }
         }
@@ -5414,6 +5423,7 @@ final class SettingsStore: ObservableObject {
             case .whisperMedium: return "Medium Quality"
             case .whisperLargeTurbo: return "Higher Quality but Faster"
             case .whisperLarge: return "Maximum Accuracy"
+            case .qwen3Asr17B: return "Qwen3 - Multilingual 1.7B"
             }
         }
 
@@ -5450,6 +5460,8 @@ final class SettingsStore: ObservableObject {
                 return "Near-maximum accuracy with optimized speed."
             case .whisperLarge:
                 return "Best possible accuracy. Large download and memory usage."
+            case .qwen3Asr17B:
+                return "Automatically detects 30 languages. Transcribes on your Mac after you stop recording."
             }
         }
 
@@ -5478,6 +5490,8 @@ final class SettingsStore: ObservableObject {
                 return 6.0
             case .whisperLarge:
                 return 8.0
+            case .qwen3Asr17B:
+                return 6.0
             }
         }
 
@@ -5514,6 +5528,7 @@ final class SettingsStore: ObservableObject {
             case .whisperMedium: return 2
             case .whisperLargeTurbo: return 3
             case .whisperLarge: return 1
+            case .qwen3Asr17B: return 0
             }
         }
 
@@ -5534,6 +5549,7 @@ final class SettingsStore: ObservableObject {
             case .whisperMedium: return 4
             case .whisperLargeTurbo: return 5
             case .whisperLarge: return 5
+            case .qwen3Asr17B: return 0
             }
         }
 
@@ -5554,6 +5570,7 @@ final class SettingsStore: ObservableObject {
             case .whisperMedium: return 0.40
             case .whisperLargeTurbo: return 0.65
             case .whisperLarge: return 0.20
+            case .qwen3Asr17B: return 0
             }
         }
 
@@ -5574,6 +5591,7 @@ final class SettingsStore: ObservableObject {
             case .whisperMedium: return 0.80
             case .whisperLargeTurbo: return 0.95
             case .whisperLarge: return 1.00
+            case .qwen3Asr17B: return 0
             }
         }
 
@@ -5585,6 +5603,7 @@ final class SettingsStore: ObservableObject {
             case .fluidParakeetMini, .fluidParakeetPico: return "New"
             case .parakeetRealtime: return "Beta"
             case .qwen3Asr: return "Beta"
+            case .qwen3Asr17B: return "Test"
             case .cohereTranscribeSixBit: return "New"
             case .nemotronOffline, .nemotronStreaming, .nemotronStreaming320: return "New + Beta"
             case .appleSpeechAnalyzer: return "New"
@@ -5606,7 +5625,7 @@ final class SettingsStore: ObservableObject {
         /// Large Whisper models are too slow for streaming, so they only do final transcription on stop.
         var supportsStreaming: Bool {
             switch self {
-            case .qwen3Asr, .whisperMedium, .whisperLargeTurbo, .whisperLarge:
+            case .qwen3Asr, .qwen3Asr17B, .whisperMedium, .whisperLargeTurbo, .whisperLarge:
                 return false // Too slow for real-time chunk processing
             default:
                 return true // All other models support streaming
@@ -5672,7 +5691,7 @@ final class SettingsStore: ObservableObject {
                 return .nvidia
             case .appleSpeech, .appleSpeechAnalyzer:
                 return .apple
-            case .qwen3Asr:
+            case .qwen3Asr, .qwen3Asr17B:
                 return .qwen
             case .cohereTranscribeSixBit:
                 return .cohere
@@ -5784,7 +5803,7 @@ final class SettingsStore: ObservableObject {
                 return "FluidVoice"
             case .parakeetTDT, .parakeetTDTv2, .parakeetRealtime, .nemotronOffline, .nemotronStreaming, .nemotronStreaming320:
                 return "NVIDIA"
-            case .qwen3Asr:
+            case .qwen3Asr, .qwen3Asr17B:
                 return "Qwen"
             case .cohereTranscribeSixBit:
                 return "Cohere"
@@ -5810,7 +5829,7 @@ final class SettingsStore: ObservableObject {
                 return "#1A75FF" // FluidBrandColors.blue
             case .parakeetTDT, .parakeetTDTv2, .parakeetRealtime, .nemotronOffline, .nemotronStreaming, .nemotronStreaming320:
                 return "#76B900"
-            case .qwen3Asr:
+            case .qwen3Asr, .qwen3Asr17B:
                 return "#E67E22"
             case .cohereTranscribeSixBit:
                 return "#FA6B3C"
