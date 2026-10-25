@@ -3406,11 +3406,6 @@ struct ContentView: View {
             tokensPerSecond: aiTokensPerSecond,
             outcome: aiFallbackReason == nil ? "success" : "ai_fallback"
         )
-        LowMemorySlowdownMonitor.shared.recordCleanup(
-            modelID: postProcessingModel,
-            tokensPerSecond: aiTokensPerSecond,
-            cleanupMilliseconds: aiProcessingDurationMilliseconds
-        )
         let finalOutputPlan = ASRService.makeDictationLiteralOutputPlan(
             for: finalText,
             appName: appInfo.name,

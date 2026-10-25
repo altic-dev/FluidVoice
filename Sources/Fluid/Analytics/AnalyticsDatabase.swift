@@ -168,22 +168,6 @@ final class AnalyticsDatabase {
         }
     }
 
-    func recordLowMemoryWarning(_ warning: AnalyticsLowMemoryWarning, at date: Date) throws {
-        var properties: [String: Any] = [
-            "model": warning.model,
-            "memory_pressure": warning.pressureLevel >= 4 ? "critical" : "warning",
-            "swap_used_mb": warning.swapUsedMB,
-            "app_memory_mb": warning.appFootprintMB,
-            "recent_tps": warning.recentTokensPerSecond,
-        ]
-        properties["usual_tps"] = warning.usualTokensPerSecond
-        properties["cleanup_ms"] = warning.lastCleanupMilliseconds
-        try self.finalizeDays(before: date)
-        try self.transaction {
-            try self.enqueue(.lowMemoryWarning, at: date, properties: properties)
-        }
-    }
-
     func recordInsertionLatency(
         path: AnalyticsInsertionPath,
         outcome: AnalyticsInsertionOutcome,

@@ -51,6 +51,49 @@ final class PronunciationModelRevisionTests: XCTestCase {
         }
     }
 
+    func testReplayUsesEveryInstalledHostedPackIncludingProWithoutChangingItsFiles() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let installedKeys = { DictionaryMatchPlayground.installedModelKeys { $0.cacheDirectory(in: root) } }
+        XCTAssertEqual(installedKeys(), ["parakeet-v2", "parakeet-v3"])
+        for descriptor in ParakeetSpeechModelCatalog.descriptors where descriptor.isHostedPack {
+            let directory = descriptor.cacheDirectory(in: root)
+            for model in descriptor.requiredModelNames {
+                let modelRoot = directory.appendingPathComponent(model)
+                try FileManager.default.createDirectory(at: modelRoot.appendingPathComponent("weights"), withIntermediateDirectories: true)
+                for file in ["coremldata.bin", "metadata.json", "weights/weight.bin"] {
+                    try Data("fixture".utf8).write(to: modelRoot.appendingPathComponent(file))
+                }
+            }
+            try Data("{}".utf8).write(to: directory.appendingPathComponent(descriptor.vocabularyFile))
+            let marker = directory.appendingPathComponent(ParakeetSpeechModelCatalog.installationRevisionFileName)
+            let hash = try XCTUnwrap(descriptor.archiveSHA256)
+            try Data(hash.utf8).write(to: marker)
+            let profile = Self.profile(entryID: UUID(), key: descriptor.pronunciationModelKey)
+            XCTAssertEqual(try DictionaryMatchPlayground.targetProfile(from: [profile], target: profile.label, compatibleModelKeys: installedKeys()), profile)
+            if descriptor.variant == .pro {
+                let legacy = Self.profile(entryID: UUID(), key: descriptor.modelID)
+                XCTAssertEqual(try DictionaryMatchPlayground.targetProfile(from: [legacy], target: legacy.label, compatibleModelKeys: installedKeys()), legacy)
+                let oldHash = String(repeating: "a", count: 64)
+                try Data(oldHash.utf8).write(to: marker)
+                let older = Self.profile(entryID: UUID(), key: descriptor.modelID + ":sha256:" + oldHash)
+                XCTAssertEqual(try DictionaryMatchPlayground.targetProfile(from: [older], target: older.label, compatibleModelKeys: installedKeys()), older)
+                XCTAssertThrowsError(try DictionaryMatchPlayground.targetProfile(from: [legacy], target: legacy.label, compatibleModelKeys: installedKeys()))
+                XCTAssertThrowsError(try DictionaryMatchPlayground.targetProfile(from: [profile], target: profile.label, compatibleModelKeys: installedKeys()))
+                XCTAssertEqual(try String(contentsOf: marker, encoding: .utf8), oldHash)
+                try Data("bad".utf8).write(to: marker)
+                XCTAssertFalse(installedKeys().contains(older.modelKey))
+                try Data(hash.utf8).write(to: marker)
+                let model = try XCTUnwrap(descriptor.requiredModelNames.first)
+                try FileManager.default.removeItem(at: directory.appendingPathComponent(model + "/weights/weight.bin"))
+                XCTAssertFalse(installedKeys().contains(profile.modelKey))
+            }
+            XCTAssertEqual(try String(contentsOf: marker, encoding: .utf8), hash, "Replay discovery must never rewrite an installation")
+        }
+        XCTAssertTrue(installedKeys().contains(ParakeetSpeechModelCatalog.mini.pronunciationModelKey))
+        XCTAssertTrue(installedKeys().contains(ParakeetSpeechModelCatalog.pico.pronunciationModelKey))
+    }
+
     func testProReloadKeepsLegacyAndSharedProfilesWithoutRewritingStorage() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }

@@ -156,9 +156,6 @@ final class NotchOverlayManager {
         self.commandOutputPresentationTask = nil
         self.refreshNotchPresentationPolicy()
         Self.overlayBench("show_called mode=\(mode.rawValue) state=\(self.state) commandExpanded=\(self.isCommandOutputExpanded)")
-        if mode == .dictation {
-            LowMemorySlowdownMonitor.shared.dictationOverlayAppeared()
-        }
         self.cancelInFlightHideForNewPresentation()
 
         // Don't show regular notch if expanded command output is visible
@@ -318,7 +315,6 @@ final class NotchOverlayManager {
     }
 
     func hide() {
-        LowMemorySlowdownMonitor.shared.dictationOverlayDismissed()
         guard SettingsStore.shared.overlayClosingAnimationEnabled else {
             self.hideImmediately()
             return
@@ -347,7 +343,6 @@ final class NotchOverlayManager {
     /// Removes a successfully completed recording overlay synchronously so it
     /// cannot outlive the text insertion that follows.
     func hideImmediately() {
-        LowMemorySlowdownMonitor.shared.dictationOverlayDismissed()
         var trace = OverlayCloseTrace("manager.hide")
         defer { trace.finish() }
         let startedAt = ProcessInfo.processInfo.systemUptime
@@ -398,7 +393,6 @@ final class NotchOverlayManager {
     /// Reports whether the active overlay finished hiding or a newer
     /// presentation superseded this request.
     func hideAndWait() async -> RecordingOverlayHideOutcome {
-        LowMemorySlowdownMonitor.shared.dictationOverlayDismissed()
         guard SettingsStore.shared.overlayClosingAnimationEnabled else {
             self.hideImmediately()
             return .hidden
