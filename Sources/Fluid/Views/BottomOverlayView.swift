@@ -2402,6 +2402,7 @@ private struct DynamicPreviewHeightPreferenceKey: PreferenceKey {
 struct BottomOverlayView: View {
     @ObservedObject private var contentState = NotchContentState.shared
     @ObservedObject private var appServices = AppServices.shared
+    @ObservedObject private var lowMemory = LowMemorySlowdownMonitor.shared
     @ObservedObject private var activeAppMonitor = ActiveAppMonitor.shared
     @ObservedObject private var historyStore = TranscriptionHistoryStore.shared
     @ObservedObject private var settings = SettingsStore.shared
@@ -3372,6 +3373,20 @@ struct BottomOverlayView: View {
         )
     }
 
+    @ViewBuilder
+    private var emptyPreview: some View {
+        if self.lowMemory.isNoticeVisible, self.contentState.mode == .dictation {
+            Label(LowMemorySlowdownMonitor.message, systemImage: "memorychip")
+                .font(.fluidSystem(size: max(self.layout.modeFontSize - 1, 10), weight: .semibold))
+                .foregroundStyle(.orange.opacity(0.9))
+                .lineLimit(1)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+                .transition(.opacity)
+        } else {
+            Color.clear
+        }
+    }
+
     private var textDeliveryFailureView: some View {
         let message = self.contentState.textDeliveryFailureMessage
         let failureID = self.contentState.textDeliveryFailureID
@@ -3450,16 +3465,16 @@ struct BottomOverlayView: View {
                                 // )
                                 // .id(self.processingStatusCycleID)
                                 // .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
-                                Color.clear
+                                self.emptyPreview
                             } else if self.contentState.isProcessing {
-                                Color.clear
+                                self.emptyPreview
                             } else if self.hasTranscription {
                                 let previewText = self.transcriptionPreviewText
                                 if !previewText.isEmpty {
                                     self.scrollingCaption
                                 }
                             } else {
-                                Color.clear
+                                self.emptyPreview
                             }
                         }
                         .padding(.vertical, self.transcriptionVerticalPadding)
@@ -3493,11 +3508,11 @@ struct BottomOverlayView: View {
                                 //     font: .fluidSystem(size: self.layout.transFontSize, weight: .medium)
                                 // )
                                 // .id(self.processingStatusCycleID)
-                                Color.clear
+                                self.emptyPreview
                             } else if self.contentState.isProcessing {
-                                Color.clear
+                                self.emptyPreview
                             } else {
-                                Color.clear
+                                self.emptyPreview
                             }
                         }
                         .background(

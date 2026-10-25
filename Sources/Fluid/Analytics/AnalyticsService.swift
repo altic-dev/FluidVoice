@@ -77,6 +77,13 @@ final class AnalyticsService {
         }
     }
 
+    /// Beta builds report each low-memory slowdown warning when it shows.
+    func recordBetaLowMemoryWarning(_ warning: AnalyticsLowMemoryWarning) {
+        self.submit { core, context in
+            await core.recordBetaLowMemoryWarning(warning, context: context)
+        }
+    }
+
     func recordInsertionLatency(
         path: AnalyticsInsertionPath,
         outcome: AnalyticsInsertionOutcome,
@@ -353,6 +360,19 @@ private actor AnalyticsCore {
                 measuredAppVersion: context.appVersion,
                 at: Date()
             )
+            self.startFlushLoopIfNeeded()
+        } catch {
+            return
+        }
+    }
+
+    func recordBetaLowMemoryWarning(_ warning: AnalyticsLowMemoryWarning, context: AnalyticsContext) async {
+        guard context.collectsBetaPerformance,
+              context.config.isConfigured
+        else { return }
+        do {
+            let database = try self.database(for: context)
+            try database.recordLowMemoryWarning(warning, at: Date())
             self.startFlushLoopIfNeeded()
         } catch {
             return

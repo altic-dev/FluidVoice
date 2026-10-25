@@ -14,6 +14,7 @@ enum AnalyticsEvent: String {
     case modelDownloadStarted = "model_download_started"
     case modelDownloadFinished = "model_download_finished"
     case dictationPerformanceDailySummary = "dictation_performance_daily_summary"
+    case lowMemoryWarning = "low_memory_warning"
 }
 
 enum AnalyticsBuildPolicy {
@@ -85,6 +86,17 @@ enum AnalyticsFluidIntelligenceModel: String {
             return nil
         }
     }
+}
+
+/// One low-memory slowdown warning, with the speeds and memory readings that triggered it.
+struct AnalyticsLowMemoryWarning: Equatable {
+    let model: String
+    let pressureLevel: Int
+    let swapUsedMB: Int
+    let appFootprintMB: Int
+    let recentTokensPerSecond: [Int]
+    let usualTokensPerSecond: Int?
+    let lastCleanupMilliseconds: Int?
 }
 
 enum AnalyticsInsertionPath: String {

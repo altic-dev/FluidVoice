@@ -806,6 +806,36 @@ final class AnalyticsDatabaseTests: XCTestCase {
         XCTAssertEqual(events.map(\.name), [AnalyticsEvent.activeUser.rawValue])
     }
 
+    func testLowMemoryWarningIsOneEventWithItsTimingAndMemory() throws {
+        let database = try self.makeDatabase()
+        try database.recordLowMemoryWarning(
+            AnalyticsLowMemoryWarning(
+                model: "fluid-1.1-splash",
+                pressureLevel: 4,
+                swapUsedMB: 3072,
+                appFootprintMB: 2700,
+                recentTokensPerSecond: [20, 25, 30],
+                usualTokensPerSecond: 400,
+                lastCleanupMilliseconds: 4200
+            ),
+            at: Date(timeIntervalSince1970: 1_800_000_000)
+        )
+
+        let events = try self.events(in: database).filter { $0.name == AnalyticsEvent.lowMemoryWarning.rawValue }
+        XCTAssertEqual(events.count, 1)
+        let properties = try XCTUnwrap(events.first?.properties)
+        XCTAssertEqual(properties["distinct_id"] as? String, "test-install-id")
+        XCTAssertEqual(properties["chip"] as? String, "Apple M3 Pro")
+        XCTAssertEqual(properties["ram_gb"] as? Int, 24)
+        XCTAssertEqual(properties["model"] as? String, "fluid-1.1-splash")
+        XCTAssertEqual(properties["memory_pressure"] as? String, "critical")
+        XCTAssertEqual(properties["swap_used_mb"] as? Int, 3072)
+        XCTAssertEqual(properties["app_memory_mb"] as? Int, 2700)
+        XCTAssertEqual(properties["recent_tps"] as? [Int], [20, 25, 30])
+        XCTAssertEqual(properties["usual_tps"] as? Int, 400)
+        XCTAssertEqual(properties["cleanup_ms"] as? Int, 4200)
+    }
+
     private func makeDatabase(
         url: URL? = nil,
         systemConfiguration: AnalyticsSystemConfiguration = AnalyticsSystemConfiguration(
