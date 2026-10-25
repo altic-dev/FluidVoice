@@ -219,7 +219,7 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
         case .qwen3Asr:
             return "Qwen3 ASR is a multilingual FluidAudio model with strong quality, but higher memory usage. Requires macOS 15+."
         case .qwen3Asr17B:
-            return "Experimental dictation for Apple Silicon. Automatically detects 30 languages and produces text after you stop recording."
+            return "On-device dictation for Apple Silicon. Automatically detects 30 languages and produces text after you stop recording."
         case .cohereTranscribeSixBit:
             return "Cohere Transcribe downloads a CoreML pipeline from Hugging Face and caches it locally. Select the language manually before dictation. Best on Apple Silicon with 8GB+ RAM."
         case .nemotronOffline:

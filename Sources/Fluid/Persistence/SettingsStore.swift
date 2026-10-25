@@ -5223,7 +5223,7 @@ final class SettingsStore: ObservableObject {
             case .whisperMedium: return "Whisper Medium"
             case .whisperLargeTurbo: return "Whisper Large Turbo"
             case .whisperLarge: return "Whisper Large"
-            case .qwen3Asr17B: return "Qwen3 ASR 1.7B (Test)"
+            case .qwen3Asr17B: return "Qwen3 ASR 1.7B"
             }
         }
 
@@ -5602,7 +5602,7 @@ final class SettingsStore: ObservableObject {
             case .fluidParakeetMini, .fluidParakeetPico: return "New"
             case .parakeetRealtime: return "Beta"
             case .qwen3Asr: return "Beta"
-            case .qwen3Asr17B: return "Test"
+            case .qwen3Asr17B: return nil
             case .cohereTranscribeSixBit: return "New"
             case .nemotronOffline, .nemotronStreaming, .nemotronStreaming320: return "New + Beta"
             case .appleSpeechAnalyzer: return "New"
