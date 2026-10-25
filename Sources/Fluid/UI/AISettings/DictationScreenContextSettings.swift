@@ -10,7 +10,7 @@ struct DictationScreenContextSettings: View {
     var body: some View {
         FluidManagementRow(
             title: "Use my active screen to improve dictation accuracy",
-            detail: "Everything is processed on your device."
+            detail: "Supported model: Fluid-1.1 Splash. Everything is processed on your device."
         ) {
             Toggle("Use my active screen to improve dictation accuracy", isOn: self.enabledBinding)
                 .toggleStyle(.switch)
