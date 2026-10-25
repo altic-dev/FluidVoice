@@ -469,7 +469,7 @@ enum SettingsSearchIndex {
         ),
         .init(
             target: .dictationScreenContext,
-            title: "Use words on my screen",
+            title: "Use screen text",
             terms: ["experimental Fluid Intelligence context OCR screen words window capture recording permission accessibility cursor names spelling"]
         ),
     ]

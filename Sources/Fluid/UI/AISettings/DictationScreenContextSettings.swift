@@ -9,10 +9,10 @@ struct DictationScreenContextSettings: View {
 
     var body: some View {
         FluidManagementRow(
-            title: "Use words on my screen",
-            detail: "Helps FluidVoice make your dictation more accurate. Everything is processed on your device."
+            title: "Use screen text",
+            detail: "Helps FluidVoice make your dictation more accurate. Processed entirely on your device."
         ) {
-            Toggle("Use words on my screen", isOn: self.enabledBinding)
+            Toggle("Use screen text", isOn: self.enabledBinding)
                 .toggleStyle(.switch)
                 .labelsHidden()
                 .disabled(self.isBusy || self.permission.isRequesting)
