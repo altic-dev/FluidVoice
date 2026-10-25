@@ -29,7 +29,7 @@ struct PrivateAIModelPresentation {
     // Illustrative design-preview values, not measured benchmark scores.
     var intelligence: Int?
     var speed: Int?
-    /// A short tag next to the name, such as "Research preview".
+    /// A small label above the name, such as "Research preview".
     var badge: String?
 
     static func forModel(id: String) -> Self {
@@ -40,8 +40,8 @@ struct PrivateAIModelPresentation {
             Self(summary: "More capable", useCase: "Better structure, formatting and corrections.", language: "English only", intelligence: 4, speed: 4)
         case "fluid-1.1-splash":
             Self(
-                summary: "Our best cleanup model yet",
-                useCase: "Multilingual, and reads what's on screen so names and terms come out right.",
+                summary: "Multilingual",
+                useCase: "Our best cleanup model yet",
                 language: "English, German, Spanish, French, Portuguese",
                 intelligence: 5,
                 speed: 4,

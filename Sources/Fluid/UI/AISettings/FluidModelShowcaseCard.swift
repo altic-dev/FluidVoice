@@ -26,7 +26,13 @@ struct FluidModelShowcaseCard: View {
             VStack(alignment: .leading, spacing: self.theme.metrics.spacing.md) {
                 Color.clear.frame(height: 20)
                     .overlay(alignment: .leading) {
-                        if self.isRecommended {
+                        if let badge = presentation.badge {
+                            Text(badge)
+                                .font(self.theme.typography.captionSmall)
+                                .foregroundStyle(self.theme.palette.secondaryText)
+                                .lineLimit(1)
+                                .padding(.trailing, 24)
+                        } else if self.isRecommended {
                             Text(self.compact ? "Recommended" : "Recommended for your Mac")
                                 .font(self.theme.typography.captionStrong)
                                 .foregroundStyle(FluidBrandColors.blue)
@@ -35,27 +41,10 @@ struct FluidModelShowcaseCard: View {
                                 .help("Based on your Mac’s RAM. You can choose either model.")
                         }
                     }
-                HStack(spacing: 8) {
-                    Text(self.model.displayName.replacingOccurrences(of: "Fluid-1", with: "Fluid 1"))
-                        .font(self.compact ? self.theme.typography.sectionTitle : self.theme.typography.title)
-                        .foregroundStyle(self.theme.palette.primaryText)
-                        .lineLimit(2).minimumScaleFactor(0.85)
-                    if self.isSelected {
-                        Image(systemName: "checkmark.circle.fill")
-                            .font(.fluidSystem(size: 18, weight: .semibold))
-                            .foregroundStyle(FluidBrandColors.blue)
-                            .accessibilityLabel("Selected")
-                    }
-                    if let badge = presentation.badge {
-                        Text(badge)
-                            .font(self.theme.typography.captionStrong)
-                            .foregroundStyle(FluidBrandColors.blue)
-                            .lineLimit(1)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 3)
-                            .background(FluidBrandColors.blue.opacity(0.14), in: Capsule())
-                    }
-                }
+                Text(self.model.displayName.replacingOccurrences(of: "Fluid-1", with: "Fluid 1"))
+                    .font(self.compact ? self.theme.typography.sectionTitle : self.theme.typography.title)
+                    .foregroundStyle(self.theme.palette.primaryText)
+                    .lineLimit(self.compact ? 2 : 1).minimumScaleFactor(0.85)
                 ZStack(alignment: .topLeading) {
                     VStack(alignment: .leading, spacing: self.theme.metrics.spacing.md) {
                         Text(presentation.summary)
@@ -114,7 +103,7 @@ struct FluidModelShowcaseCard: View {
         .onHover { self.hovered = $0 }
         .animation(self.reduceMotion ? nil : .easeOut(duration: 0.12), value: self.hovered)
         .accessibilityLabel("Preview \(self.model.displayName.replacingOccurrences(of: "Fluid-1", with: "Fluid 1"))")
-        .accessibilityValue([self.isPreview ? "Previewed" : "", self.isRecommended ? "Recommended for your Mac" : ""].filter { !$0.isEmpty }.joined(separator: ", "))
+        .accessibilityValue([self.isPreview ? "Previewed" : "", self.isSelected ? "Selected" : "", self.isRecommended ? "Recommended for your Mac" : ""].filter { !$0.isEmpty }.joined(separator: ", "))
         .accessibilityHint(self.showsInfo ? self.infoAccessibilityDescription : "\(presentation.summary). \(presentation.useCase) Browse without changing the selected model.")
         .overlay(alignment: .topTrailing) {
             // Sibling to the browse button: opening details never selects or activates a model.
