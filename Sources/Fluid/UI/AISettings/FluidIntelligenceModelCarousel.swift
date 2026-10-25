@@ -42,7 +42,7 @@ struct FluidIntelligenceModelCarousel<Controls: View>: View {
                         }
                         .overlay(alignment: .bottom) {
                             if position == 0, let model = self.models.first(where: { $0.id == id }) {
-                                VStack(alignment: .leading, spacing: 10) {
+                                VStack(alignment: .leading, spacing: 8) {
                                     if PrivateAIIntegrationService.readsDictationContext(model: model.id) {
                                         ScreenContextChip(settings: SettingsStore.shared)
                                     }
