@@ -1,5 +1,5 @@
 {
-  "originHash" : "b292cff340b2a516c854d49a19a563c138d2f0e4d2a4e91c4f8f75dff25ed1b1",
+  "originHash" : "a0c8ff48ce252b23959ede2248b69ae9fb3f5d8eab7fb2c3ed9987d677a120f2",
   "pins" : [
     {
       "identity" : "appupdater",
@@ -25,14 +25,6 @@
       "state" : {
         "revision" : "ca2a9d90cbe49e09b92f4b6ebd922c03ebea51d0",
         "version" : "1.3.0"
-      }
-    },
-    {
-      "identity" : "fluidaudio",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/altic-dev/FluidAudio.git",
-      "state" : {
-        "revision" : "eb1e6628998e47022799d305b52c2680d3576801"
       }
     },
     {

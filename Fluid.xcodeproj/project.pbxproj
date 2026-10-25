@@ -779,7 +779,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				AEC300000000000000000001 /* XCLocalSwiftPackageReference "WebRTCAudioProcessing" */,
-				7C078DA32E3B386A00FB7CAC /* XCRemoteSwiftPackageReference "FluidAudio" */,
+				7C078DA32E3B386A00FB7CAC /* XCLocalSwiftPackageReference "../FluidAudio-fluid-speech-pro" */,
 				7CE006BB2E80EBE600DDCCD6 /* XCRemoteSwiftPackageReference "AppUpdater" */,
 				7C3697872ED70F9C005874CE /* XCRemoteSwiftPackageReference "DynamicNotchKit" */,
 				7C9A71002F58B00000FB7CAF /* XCRemoteSwiftPackageReference "transcribe-cpp-swift" */,
@@ -1534,17 +1534,13 @@
 			isa = XCLocalSwiftPackageReference;
 			relativePath = Vendor/WebRTCAudioProcessing;
 		};
+		7C078DA32E3B386A00FB7CAC /* XCLocalSwiftPackageReference "../FluidAudio-fluid-speech-pro" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = "../FluidAudio-fluid-speech-pro";
+		};
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCRemoteSwiftPackageReference section */
-		7C078DA32E3B386A00FB7CAC /* XCRemoteSwiftPackageReference "FluidAudio" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/altic-dev/FluidAudio.git";
-			requirement = {
-				kind = revision;
-				revision = eb1e6628998e47022799d305b52c2680d3576801;
-			};
-		};
 
 
 		7C3697872ED70F9C005874CE /* XCRemoteSwiftPackageReference "DynamicNotchKit" */ = {
@@ -1597,7 +1593,7 @@
 		};
 		7C078DA42E3B386A00FB7CAC /* FluidAudio */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 7C078DA32E3B386A00FB7CAC /* XCRemoteSwiftPackageReference "FluidAudio" */;
+			package = 7C078DA32E3B386A00FB7CAC /* XCLocalSwiftPackageReference "../FluidAudio-fluid-speech-pro" */;
 			productName = FluidAudio;
 		};
 		7C3697882ED70F9C005874CE /* DynamicNotchKit */ = {
