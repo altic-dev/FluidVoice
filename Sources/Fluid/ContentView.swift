@@ -1722,7 +1722,8 @@ struct ContentView: View {
                 accessibilityEnabled: self.accessibilityEnabled,
                 savesTranscriptionHistory: SettingsStore.shared.saveTranscriptionHistory,
                 savesAudioWithTranscriptionHistory: SettingsStore.shared.saveAudioWithTranscriptionHistory,
-                overlayAtBottom: self.settings.overlayPosition == .bottom
+                overlayAtBottom: self.settings.overlayPosition == .bottom,
+                privateAIAvailable: PrivateAIProviderFeature.shared.isAvailable
             )
         )
     }

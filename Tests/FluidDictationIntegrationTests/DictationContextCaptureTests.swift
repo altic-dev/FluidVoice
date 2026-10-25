@@ -174,9 +174,28 @@ final class DictationContextCaptureTests: XCTestCase {
     }
 
     func testSearchFindsOCRInExperimentalSettings() {
-        let result = SettingsSearchIndex.results(for: "OCR").first
+        let result = SettingsSearchIndex.results(for: "OCR", availability: self.searchAvailability(privateAIAvailable: true)).first
         XCTAssertEqual(result?.target, .dictationScreenContext)
         XCTAssertEqual(result?.section, .experimental)
+    }
+
+    func testPublicBuildSearchOmitsFluidIntelligenceContext() {
+        let availability = self.searchAvailability(privateAIAvailable: false)
+        for query in ["OCR", "screen words", "Fluid Intelligence"] {
+            XCTAssertFalse(SettingsSearchIndex.results(for: query, availability: availability).contains { $0.target == .dictationScreenContext })
+        }
+        XCTAssertTrue(availability.includes(.experimental))
+    }
+
+    private func searchAvailability(privateAIAvailable: Bool) -> SettingsSearchAvailability {
+        .init(
+            microphoneAuthorized: true,
+            accessibilityEnabled: true,
+            savesTranscriptionHistory: true,
+            savesAudioWithTranscriptionHistory: true,
+            overlayAtBottom: false,
+            privateAIAvailable: privateAIAvailable
+        )
     }
 
     private func target(pid: pid_t = 1, window: AXUIElement? = nil, element: AXUIElement? = nil) -> TypingService.RecordingTargetContext {
