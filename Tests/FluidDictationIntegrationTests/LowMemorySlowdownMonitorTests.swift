@@ -7,13 +7,13 @@ final class LowMemorySlowdownMonitorTests: XCTestCase {
     private let normal = Reading(pressureLevel: 1, swapUsedMB: 0, appFootprintMB: 900)
     private let warning = Reading(pressureLevel: 2, swapUsedMB: 2048, appFootprintMB: 2600)
 
+    private let usualSpeeds: [Double] = [400, 420, 380, 410, 400, 390, 405, 415, 395, 400]
+
     func testThreeCleanupsUnderHalfTheUsualSpeedAreASlowdown() {
         var detector = CleanupSlowdownDetector()
-        for speed in [400.0, 420, 380, 410, 400] {
+        for speed in self.usualSpeeds + [150, 160] {
             XCTAssertNil(detector.record(model: "fluid-1.1-splash", tokensPerSecond: speed))
         }
-        XCTAssertNil(detector.record(model: "fluid-1.1-splash", tokensPerSecond: 150))
-        XCTAssertNil(detector.record(model: "fluid-1.1-splash", tokensPerSecond: 160))
         XCTAssertEqual(
             detector.record(model: "fluid-1.1-splash", tokensPerSecond: 140),
             CleanupSlowdownDetector.Slowdown(recent: [150, 160, 140], usual: 400)
@@ -22,7 +22,7 @@ final class LowMemorySlowdownMonitorTests: XCTestCase {
 
     func testOneFastCleanupBreaksTheStreak() {
         var detector = CleanupSlowdownDetector()
-        for speed in [400.0, 420, 380, 410, 400, 150, 160] {
+        for speed in self.usualSpeeds + [150, 160] {
             _ = detector.record(model: "fluid-1.1-splash", tokensPerSecond: speed)
         }
         XCTAssertNil(detector.record(model: "fluid-1.1-splash", tokensPerSecond: 390))
@@ -30,27 +30,28 @@ final class LowMemorySlowdownMonitorTests: XCTestCase {
 
     func testASteadilySlowMacIsComparedWithItself() {
         var detector = CleanupSlowdownDetector()
-        for speed in [90.0, 95, 85, 92, 88, 90, 86, 91] {
+        for speed in [90.0, 95, 85, 92, 88, 90, 86, 91, 89, 93, 87, 90, 94, 88, 91] {
             XCTAssertNil(detector.record(model: "fluid-1.1-splash", tokensPerSecond: speed))
         }
     }
 
-    func testSpeedsUnderTheFloorCountWithoutABaseline() {
+    func testNothingIsJudgedBeforeTenCleanupsSetTheUsualSpeed() {
         var detector = CleanupSlowdownDetector()
-        XCTAssertNil(detector.record(model: "fluid-1-mini-96k-dflash", tokensPerSecond: 20))
-        XCTAssertNil(detector.record(model: "fluid-1-mini-96k-dflash", tokensPerSecond: 25))
+        for _ in 0..<12 {
+            XCTAssertNil(detector.record(model: "fluid-1-mini-96k-dflash", tokensPerSecond: 20))
+        }
         XCTAssertEqual(
-            detector.record(model: "fluid-1-mini-96k-dflash", tokensPerSecond: 30),
-            CleanupSlowdownDetector.Slowdown(recent: [20, 25, 30], usual: nil)
+            detector.record(model: "fluid-1-mini-96k-dflash", tokensPerSecond: 20),
+            CleanupSlowdownDetector.Slowdown(recent: [20, 20, 20], usual: 20)
         )
     }
 
     func testModelsKeepSeparateHistories() {
         var detector = CleanupSlowdownDetector()
-        XCTAssertNil(detector.record(model: "a", tokensPerSecond: 20))
-        XCTAssertNil(detector.record(model: "b", tokensPerSecond: 20))
-        XCTAssertNil(detector.record(model: "a", tokensPerSecond: 20))
-        XCTAssertNil(detector.record(model: "b", tokensPerSecond: 20))
+        for _ in 0..<12 {
+            XCTAssertNil(detector.record(model: "a", tokensPerSecond: 20))
+            XCTAssertNil(detector.record(model: "b", tokensPerSecond: 20))
+        }
         XCTAssertNotNil(detector.record(model: "a", tokensPerSecond: 20))
     }
 
@@ -59,7 +60,7 @@ final class LowMemorySlowdownMonitorTests: XCTestCase {
         var reports: [AnalyticsLowMemoryWarning] = []
         var memory = self.warning
         let monitor = LowMemorySlowdownMonitor(readMemory: { memory }, report: { reports.append($0) })
-        for _ in 0..<3 {
+        for _ in 0..<13 {
             monitor.recordCleanup(modelID: "fluid-1.1-splash", tokensPerSecond: 20, cleanupMilliseconds: 4200)
         }
         XCTAssertFalse(monitor.isNoticeVisible)
@@ -73,13 +74,13 @@ final class LowMemorySlowdownMonitorTests: XCTestCase {
             swapUsedMB: 3072,
             appFootprintMB: 2700,
             recentTokensPerSecond: [20, 20, 20],
-            usualTokensPerSecond: nil,
+            usualTokensPerSecond: 20,
             lastCleanupMilliseconds: 4200
         )])
 
         monitor.dictationOverlayDismissed()
         XCTAssertFalse(monitor.isNoticeVisible)
-        for _ in 0..<3 {
+        for _ in 0..<13 {
             monitor.recordCleanup(modelID: "fluid-1.1-splash", tokensPerSecond: 20, cleanupMilliseconds: 4200)
         }
         monitor.dictationOverlayAppeared()
@@ -91,7 +92,7 @@ final class LowMemorySlowdownMonitorTests: XCTestCase {
     func testSlowCleanupWithFreeMemoryStaysQuiet() {
         var reports: [AnalyticsLowMemoryWarning] = []
         let monitor = LowMemorySlowdownMonitor(readMemory: { self.normal }, report: { reports.append($0) })
-        for _ in 0..<3 {
+        for _ in 0..<13 {
             monitor.recordCleanup(modelID: "fluid-1.1-splash", tokensPerSecond: 20, cleanupMilliseconds: 4200)
         }
         monitor.dictationOverlayAppeared()
@@ -104,7 +105,7 @@ final class LowMemorySlowdownMonitorTests: XCTestCase {
         var reports: [AnalyticsLowMemoryWarning] = []
         var memory = self.warning
         let monitor = LowMemorySlowdownMonitor(readMemory: { memory }, report: { reports.append($0) })
-        for _ in 0..<3 {
+        for _ in 0..<13 {
             monitor.recordCleanup(modelID: "fluid-1.1-splash", tokensPerSecond: 20, cleanupMilliseconds: 4200)
         }
         memory = self.normal
@@ -116,7 +117,7 @@ final class LowMemorySlowdownMonitorTests: XCTestCase {
     @MainActor
     func testCleanupsWithoutASpeedAreIgnored() {
         let monitor = LowMemorySlowdownMonitor(readMemory: { self.warning }, report: { _ in XCTFail("no report") })
-        for _ in 0..<3 {
+        for _ in 0..<13 {
             monitor.recordCleanup(modelID: "gpt-5", tokensPerSecond: nil, cleanupMilliseconds: 4200)
         }
         monitor.dictationOverlayAppeared()

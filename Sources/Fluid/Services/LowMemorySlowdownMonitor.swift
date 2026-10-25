@@ -76,7 +76,7 @@ final class LowMemorySlowdownMonitor: ObservableObject {
             swapUsedMB: memory.swapUsedMB,
             appFootprintMB: memory.appFootprintMB,
             recentTokensPerSecond: slowdown.recent.map { Int($0.rounded()) },
-            usualTokensPerSecond: slowdown.usual.map { Int($0.rounded()) },
+            usualTokensPerSecond: Int(slowdown.usual.rounded()),
             lastCleanupMilliseconds: cleanupMilliseconds
         )
     }
@@ -115,15 +115,15 @@ final class LowMemorySlowdownMonitor: ObservableObject {
 
 /// Counts a cleanup as slow when it runs under half this Mac's usual speed for the model, or under
 /// a floor no supported Mac should drop to without swapping. Compares a Mac with itself, so an M1 is
-/// not judged against an M5.
+/// not judged against an M5. Judges nothing until it has seen enough cleanups to know the usual speed.
 struct CleanupSlowdownDetector {
     struct Slowdown: Equatable {
         let recent: [Double]
-        let usual: Double?
+        let usual: Double
     }
 
     static let streak = 3
-    static let minimumBaselineSamples = 5
+    static let minimumBaselineSamples = 10
     static let historyLimit = 20
     static let slowFractionOfUsual = 0.5
     static let floorTokensPerSecond = 40.0
@@ -135,13 +135,13 @@ struct CleanupSlowdownDetector {
         history.append(tokensPerSecond)
         if history.count > Self.historyLimit { history.removeFirst(history.count - Self.historyLimit) }
         self.samples[model] = history
-        guard history.count >= Self.streak else { return nil }
+        guard history.count >= Self.minimumBaselineSamples + Self.streak else { return nil }
 
         let recent = Array(history.suffix(Self.streak))
         let earlier = history.dropLast(Self.streak).sorted()
-        let usual = earlier.count >= Self.minimumBaselineSamples ? earlier[earlier.count / 2] : nil
+        let usual = earlier[earlier.count / 2]
         let isSlow = { (speed: Double) in
-            speed < Self.floorTokensPerSecond || usual.map { speed < $0 * Self.slowFractionOfUsual } == true
+            speed < Self.floorTokensPerSecond || speed < usual * Self.slowFractionOfUsual
         }
         return recent.allSatisfy(isSlow) ? Slowdown(recent: recent, usual: usual) : nil
     }
