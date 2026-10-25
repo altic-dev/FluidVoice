@@ -41,7 +41,7 @@ struct ReleaseHighlightsContent {
             destination: .voiceEngine
         )
         return Self(
-            release: "1.6.13",
+            release: "1.6.13-beta.1",
             title: hasPrivateAI ? "Smarter cleanup, sharper speech" : "Sharper speech",
             subtitle: hasPrivateAI
                 ? "Meet Fluid 1.1 Splash and Fluid Speech Pro. Plus Qwen dictation, smoother live captions and faster cleanup on M5 Macs."
