@@ -46,6 +46,15 @@ struct FluidModelShowcaseCard: View {
                             .foregroundStyle(FluidBrandColors.blue)
                             .accessibilityLabel("Selected")
                     }
+                    if let badge = presentation.badge {
+                        Text(badge)
+                            .font(self.theme.typography.captionStrong)
+                            .foregroundStyle(FluidBrandColors.blue)
+                            .lineLimit(1)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 3)
+                            .background(FluidBrandColors.blue.opacity(0.14), in: Capsule())
+                    }
                 }
                 ZStack(alignment: .topLeading) {
                     VStack(alignment: .leading, spacing: self.theme.metrics.spacing.md) {
@@ -63,6 +72,9 @@ struct FluidModelShowcaseCard: View {
                     .accessibilityHidden(self.showsInfo)
                     VStack(alignment: .leading, spacing: self.theme.metrics.spacing.md) {
                         self.infoRow("Languages", value: presentation.language)
+                        if let memory = self.model.recommendedMemoryGB {
+                            self.infoRow("Recommended", value: "Mac with \(memory) GB+ RAM")
+                        }
                         if let bytes = self.model.artifact.byteCount, bytes > 0 {
                             self.infoRow("Download size", value: "≈\(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))")
                         }
@@ -134,8 +146,12 @@ struct FluidModelShowcaseCard: View {
 
     private var infoAccessibilityDescription: String {
         let language = PrivateAIModelPresentation.forModel(id: self.model.id).language
-        guard let bytes = self.model.artifact.byteCount, bytes > 0 else { return "Languages: \(language)" }
-        return "Languages: \(language). Download size: approximately \(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))."
+        var parts = ["Languages: \(language)."]
+        if let memory = self.model.recommendedMemoryGB { parts.append("Recommended: Mac with \(memory) GB or more RAM.") }
+        if let bytes = self.model.artifact.byteCount, bytes > 0 {
+            parts.append("Download size: approximately \(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)).")
+        }
+        return parts.joined(separator: " ")
     }
 }
 

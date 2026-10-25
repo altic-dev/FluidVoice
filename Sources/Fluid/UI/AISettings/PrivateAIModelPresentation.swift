@@ -29,6 +29,8 @@ struct PrivateAIModelPresentation {
     // Illustrative design-preview values, not measured benchmark scores.
     var intelligence: Int?
     var speed: Int?
+    /// A short tag next to the name, such as "Research preview".
+    var badge: String?
 
     static func forModel(id: String) -> Self {
         switch id {
@@ -37,7 +39,12 @@ struct PrivateAIModelPresentation {
         case "fluid-1-mini-96k-dflash":
             Self(summary: "More capable", useCase: "Better structure, formatting and corrections.", language: "English only", intelligence: 4, speed: 4)
         case "fluid-1.1-splash":
-            Self(summary: "Reads your screen", useCase: "Supports on-screen context.", language: "Multilingual", intelligence: 5, speed: 4)
+            Self(
+                summary: "Our best cleanup model yet",
+                useCase: "Multilingual, and reads what's on screen so names and terms come out right.",
+                language: "English, German, Spanish, French, Portuguese",
+                intelligence: 5, speed: 4, badge: "Research preview"
+            )
         case "fluid-1":
             Self(summary: "The original Fluid model", useCase: "Will be deprecated soon. Cleanup and formatting across languages.", language: "Multilingual", intelligence: 4, speed: 2)
         default:
