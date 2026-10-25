@@ -1075,6 +1075,13 @@ final class MeetingSessionCoordinator: ObservableObject {
         guard !trimmed.isEmpty else { throw MeetingDomainError.emptyMeetingTitle }
         guard target.title != trimmed else { return target }
 
+        if let directory = try await self.store.existingSessionDirectory(for: sessionID) {
+            let snapshot = target
+            try await Task.detached(priority: .utility) {
+                try MeetingSummaryController.SavedSummary.migrateLegacySummaries(in: directory, for: snapshot)
+            }.value
+        }
+
         target.title = trimmed
         target.defaultTitleBase = nil
         target.updatedAt = Date()

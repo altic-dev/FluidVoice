@@ -185,6 +185,7 @@ nonisolated enum FluidServeMeetings {
     static func savedSummaries(for entry: Entry, customPrompt: String = "", fileManager: FileManager = .default) -> [SavedSummary] {
         struct Stored: Decodable {
             var transcriptHash: String
+            var transcriptHashVersion: Int?
             var text: String
             var promptHash: String?
             var providerID: String?
@@ -197,16 +198,26 @@ nonisolated enum FluidServeMeetings {
             .filter { $0.hasPrefix(prefix) && $0.hasSuffix(".json") }
             .sorted()
         guard !names.isEmpty else { return [] }
-        let currentHash = self.fingerprint(self.summaryInput(for: entry.meeting))
+        let legacyHash = self.fingerprint(self.summaryInput(for: entry.meeting))
+        var contentSource = entry.meeting
+        contentSource.title = ""
+        let contentHash = self.fingerprint(self.summaryInput(for: contentSource))
         let customPromptHash = self.fingerprint(customPrompt.trimmingCharacters(in: .whitespacesAndNewlines))
         return names.compactMap { name in
             let style = String(name.dropFirst(prefix.count).dropLast(".json".count))
             guard let data = try? Data(contentsOf: entry.directory.appendingPathComponent(name, isDirectory: false)),
                   let stored = try? JSONDecoder().decode(Stored.self, from: data),
-                  stored.providerID != nil, stored.transcriptHash == currentHash,
+                  stored.providerID != nil,
                   stored.promptHash == (style == "custom" ? customPromptHash : nil),
                   !stored.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             else { return nil }
+            let currentHash: String
+            switch stored.transcriptHashVersion {
+            case nil: currentHash = legacyHash
+            case 2: currentHash = contentHash
+            default: return nil
+            }
+            guard stored.transcriptHash == currentHash else { return nil }
             return SavedSummary(
                 style: style,
                 text: stored.text,
