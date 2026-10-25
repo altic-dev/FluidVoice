@@ -45,6 +45,18 @@ struct FluidIntelligenceModelCarousel<Controls: View>: View {
                                 self.controls(model).padding(.horizontal, 16).padding(.bottom, 16)
                             }
                         }
+                        .overlay(alignment: .topLeading) {
+                            // Sits in the card's empty top row; that row shows the
+                            // recommendation instead when this model is recommended.
+                            if position == 0, let model = self.models.first(where: { $0.id == id }),
+                               self.recommendedModelID != model.id,
+                               PrivateAIIntegrationService.readsDictationContext(model: model.id)
+                            {
+                                ScreenContextChip(settings: SettingsStore.shared)
+                                    .padding(.top, self.spacing.xl - 2)
+                                    .padding(.leading, self.spacing.xl)
+                            }
+                        }
                         .frame(width: position == 0 ? cardWidth : sideWidth, height: AppTheme.Metrics.Showcase.cardHeight)
                         .saturation(position == 0 ? 1 : 0.12)
                         .opacity(position == 0 || self.contrast == .increased ? 1 : 0.65)

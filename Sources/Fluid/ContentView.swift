@@ -511,6 +511,9 @@ struct ContentView: View {
             .onReceive(NotificationCenter.default.publisher(for: .openCustomDictionaryFromVoiceEngine)) { _ in
                 self.navigateToApp(.customDictionary)
             }
+            .onReceive(NotificationCenter.default.publisher(for: .openScreenContextSettings)) { _ in
+                self.openSettings(.experimental)
+            }
             .onReceive(NotificationCenter.default.publisher(for: .fluidMeetEnabledChanged)) { _ in
                 if self.settings.fluidMeetEnabled, self.appServices.isUIReady {
                     self.menuBarManager.configure(meetingCoordinator: self.appServices.meetingSessionCoordinator)
