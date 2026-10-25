@@ -9,7 +9,14 @@ enum PrivateAIUpcomingModel: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .quad: "Fluid 1 Quad"
-        case .multilingual: "Fluid 1.1 Multilingual"
+        case .multilingual: "Fluid 1.1 Wave Multilingual"
+        }
+    }
+
+    var note: String {
+        switch self {
+        case .quad: "Not available yet"
+        case .multilingual: "Faster, smarter, smaller Fluid 1"
         }
     }
 }
@@ -29,8 +36,10 @@ struct PrivateAIModelPresentation {
             Self(summary: "Smallest & fastest", useCase: "Everyday dictation with basic cleanup and formatting.", language: "English only", intelligence: 2, speed: 5)
         case "fluid-1-mini-96k-dflash":
             Self(summary: "More capable", useCase: "Better structure, formatting and corrections.", language: "English only", intelligence: 4, speed: 4)
+        case "fluid-1.1-splash":
+            Self(summary: "Reads your screen", useCase: "Supports on-screen context.", language: "Multilingual", intelligence: 5, speed: 4)
         case "fluid-1":
-            Self(summary: "The original Fluid model", useCase: "Cleanup and formatting across languages.", language: "Multilingual", intelligence: 4, speed: 2)
+            Self(summary: "The original Fluid model", useCase: "Will be deprecated soon. Cleanup and formatting across languages.", language: "Multilingual", intelligence: 4, speed: 2)
         default:
             Self(summary: "On-device cleanup", useCase: "Polish your words privately on your Mac.")
         }

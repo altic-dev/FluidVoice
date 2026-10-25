@@ -131,7 +131,7 @@ struct FluidIntelligenceModelCarousel<Controls: View>: View {
                     .font(compact ? self.theme.typography.sectionTitle : self.theme.typography.title)
                     .foregroundStyle(self.theme.palette.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)
-                Text("Not available yet")
+                Text(model.note)
                     .font(self.theme.typography.body)
                     .foregroundStyle(self.theme.palette.tertiaryText)
                 Spacer(minLength: 0)
