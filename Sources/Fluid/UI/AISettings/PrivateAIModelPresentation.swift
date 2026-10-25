@@ -16,7 +16,7 @@ enum PrivateAIUpcomingModel: String, CaseIterable, Identifiable {
     var note: String {
         switch self {
         case .quad: "Not available yet"
-        case .multilingual: "Faster, smarter, smaller Fluid 1"
+        case .multilingual: "Multilingual. Faster, smarter, smaller Fluid 1"
         }
     }
 }
