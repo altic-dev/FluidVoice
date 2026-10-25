@@ -1500,6 +1500,24 @@ struct SettingsView: View {
                 }
                 .settingsSearchTarget(.fasterLongDictation)
                 .shownInSettingsSection(.experimental, selectedSection: self.selectedSection)
+
+                if PrivateAIProviderFeature.shared.isAvailable {
+                    ThemedCard(style: .standard) {
+                        VStack(alignment: .leading, spacing: 16) {
+                            Label("Fluid Intelligence", systemImage: "sparkles")
+                                .font(.fluidSystem(.headline))
+                            Text("Experimental dictation context for supported Fluid Intelligence models. Requires Accessibility access; OCR also needs Screen Recording.")
+                                .font(self.theme.typography.bodySmall)
+                                .foregroundStyle(self.settingsSecondaryText)
+                                .fixedSize(horizontal: false, vertical: true)
+                            Divider()
+                            DictationScreenContextSettings(settings: self.settings, isBusy: self.asr.isRunningOrStarting)
+                        }
+                        .padding(16)
+                    }
+                    .settingsSearchTarget(.dictationScreenContext)
+                    .shownInSettingsSection(.experimental, selectedSection: self.selectedSection)
+                }
             }
             .padding(.bottom, 28)
             .fluidPageContent(width: .expanding)

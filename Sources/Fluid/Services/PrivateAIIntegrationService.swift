@@ -31,6 +31,8 @@ actor PrivateAIIntegrationService {
         let appVersion: String?
         /// Raw text for models trained to read it; others ignore both.
         var textBeforeCursor: String? = nil
+        // Absence means no screen context was read.
+        // swiftlint:disable:next discouraged_optional_collection
         var screenText: [String]? = nil
     }
 

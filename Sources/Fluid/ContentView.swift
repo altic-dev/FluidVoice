@@ -587,6 +587,7 @@ struct ContentView: View {
             .onDisappear {
                 Task { await self.asr.stopWithoutTranscription() }
                 self.cancelPrewarmDictationIfNeeded()
+                self.cancelDictationContextCapture()
                 // Note: Overlay lifecycle is now managed by MenuBarManager
                 // Note: NotchContentState handlers capture self (a struct value copy) and are
                 // intentionally kept alive so the overlay remains fully functional when the
@@ -697,6 +698,7 @@ struct ContentView: View {
                     Task { await self.asr.stopWithoutTranscription() }
                 }
                 self.cancelPrewarmDictationIfNeeded()
+                self.cancelDictationContextCapture()
                 self.clearActiveRecordingMode()
                 self.menuBarManager.setOverlayMode(.dictation)
             }
@@ -717,6 +719,7 @@ struct ContentView: View {
                     Task { await self.asr.stopWithoutTranscription() }
                 }
                 self.cancelPrewarmDictationIfNeeded()
+                self.cancelDictationContextCapture()
                 self.clearActiveRecordingMode()
                 self.menuBarManager.setOverlayMode(.dictation)
             }
@@ -737,6 +740,7 @@ struct ContentView: View {
                     Task { await self.asr.stopWithoutTranscription() }
                 }
                 self.cancelPrewarmDictationIfNeeded()
+                self.cancelDictationContextCapture()
                 self.clearActiveRecordingMode()
                 self.rewriteModeService.clearState()
                 self.menuBarManager.setOverlayMode(.dictation)
@@ -2523,8 +2527,7 @@ struct ContentView: View {
     /// Starts reading the text around the cursor when the dictation model was
     /// trained to use it. Every other model skips this entirely.
     private func startDictationContextCaptureIfNeeded(for slot: SettingsStore.DictationShortcutSlot) {
-        self.dictationContextCapture?.cancel()
-        self.dictationContextCapture = nil
+        self.cancelDictationContextCapture()
         let route = DictationProviderRoute.resolve(
             settings: .shared,
             dictationSlot: slot,
@@ -2542,11 +2545,17 @@ struct ContentView: View {
         )
     }
 
-    private func attachDictationContext(to stopSnapshot: inout DictationStopSnapshot?) async {
-        guard let capture = self.dictationContextCapture else { return }
+    private func cancelDictationContextCapture() {
+        self.dictationContextCapture?.cancel()
         self.dictationContextCapture = nil
-        // Text read from another app's window would mislead the model.
-        guard let target = stopSnapshot?.target, target.pid == capture.pid else {
+    }
+
+    private func attachDictationContext(_ capture: DictationContextCapture, to stopSnapshot: inout DictationStopSnapshot?) async {
+        // Context must belong to the exact destination field and a supported local model.
+        guard let snapshot = stopSnapshot, snapshot.usesAI, snapshot.route.usesPrivateAI,
+              PrivateAIIntegrationService.readsDictationContext(model: snapshot.route.model),
+              let target = snapshot.target, capture.matches(target)
+        else {
             capture.cancel()
             return
         }
@@ -3091,6 +3100,11 @@ struct ContentView: View {
 
     // swiftlint:disable:next function_body_length
     private func processStoppedTranscription(route: DictationOutputRoute, pipelineID: String, toggleStopRequestedAt: TimeInterval?) async {
+        let contextCapture = self.dictationContextCapture
+        defer {
+            contextCapture?.cancel()
+            if self.dictationContextCapture === contextCapture { self.dictationContextCapture = nil }
+        }
         guard let summaryActivity = MeetingSummaryActivityCoordinator.shared.beginProcessing() else {
             MeetingSummaryActivityCoordinator.presentBusyError()
             return
@@ -3147,8 +3161,10 @@ struct ContentView: View {
         )
         self.appBench("asr_stop_return elapsedMs=\(Int(((ProcessInfo.processInfo.systemUptime - asrStopStartedAt) * 1000).rounded()))")
         self.completeDictationStopSnapshot(&stopSnapshot)
-        if self.dictationContextCapture != nil {
-            await self.attachDictationContext(to: &stopSnapshot)
+        if let contextCapture, self.overlayLifecycleID == expectedOverlayLifecycleID,
+           self.cancelledOutputLifecycleID != expectedOverlayLifecycleID, !Task.isCancelled
+        {
+            await self.attachDictationContext(contextCapture, to: &stopSnapshot)
         }
         let audioSnapshot = self.asr.consumeLastCompletedAudioSnapshot()
         let dictionaryLearningRecording = self.asr.consumeDictionaryLearningRecording()
@@ -3902,6 +3918,7 @@ struct ContentView: View {
     }
 
     private func advanceOverlayLifecycle() {
+        self.cancelDictationContextCapture()
         self.spokenSendAutoStopTask?.cancel()
         self.spokenSendAutoStopTask = nil
         self.stopSpokenSendVoiceActivityMonitoring()
@@ -4320,6 +4337,7 @@ struct ContentView: View {
             DebugLogger.shared.info("Actions: stopping active recording before history action output", source: "ContentView")
             await self.asr.stopWithoutTranscription()
             self.cancelPrewarmDictationIfNeeded()
+            self.cancelDictationContextCapture()
         }
 
         let appInfo = self.getCurrentAppInfo()
@@ -4394,6 +4412,7 @@ struct ContentView: View {
             DebugLogger.shared.info("Actions: stopping active recording before reprocess", source: "ContentView")
             await self.asr.stopWithoutTranscription()
             self.cancelPrewarmDictationIfNeeded()
+            self.cancelDictationContextCapture()
         }
 
         self.setActiveRecordingMode(.dictate)
@@ -4596,6 +4615,7 @@ struct ContentView: View {
     }
 
     private func setActiveRecordingMode(_ mode: ActiveRecordingMode) {
+        if mode == .command || mode == .edit { self.cancelDictationContextCapture() }
         if mode != .dictate, mode != .promptMode {
             self.clearActiveDictationShortcutState()
         }
@@ -4761,6 +4781,7 @@ struct ContentView: View {
                 return
             }
             if startOutcome == .failed {
+                self.cancelDictationContextCapture()
                 self.menuBarManager.hideRecordingOverlayImmediately(reason: "asr_start_failed")
             }
         }
@@ -4795,6 +4816,7 @@ struct ContentView: View {
               self.activeRecordingMode == mode || self.activeRecordingMode == .none
         else { return }
         self.cancelPrewarmDictationIfNeeded()
+        self.cancelDictationContextCapture()
         self.clearActiveRecordingMode()
         self.menuBarManager.hideRecordingOverlayImmediately(reason: "capture_start_cancelled")
     }
@@ -5231,6 +5253,7 @@ struct ContentView: View {
         }
 
         if let lifecycleID = self.processingDictationLifecycleID {
+            self.cancelDictationContextCapture()
             // A stop already owns the audio; suppress its pending output without stopping again.
             self.cancelledOutputLifecycleID = lifecycleID
             handled = true
@@ -5266,9 +5289,11 @@ struct ContentView: View {
                 self.clearActiveRecordingMode()
             }
             self.cancelPrewarmDictationIfNeeded()
+            self.cancelDictationContextCapture()
             handled = true
         } else if self.activeRecordingMode != .none {
             self.cancelPrewarmDictationIfNeeded()
+            self.cancelDictationContextCapture()
             self.clearActiveRecordingMode()
             handled = true
         }
@@ -5554,6 +5579,7 @@ extension ContentView {
                 return
             }
             if startOutcome == .failed {
+                self.cancelDictationContextCapture()
                 self.menuBarManager.hideRecordingOverlayImmediately(reason: "asr_start_failed")
                 if isOnboardingTryout {
                     AnalyticsService.shared.recordOnboardingTryoutAttemptResult(

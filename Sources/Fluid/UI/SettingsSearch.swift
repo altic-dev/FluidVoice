@@ -73,6 +73,7 @@ enum SettingsSearchTarget: Hashable {
     case fasterLongDictation
     case dictionaryMatcherExperiments
     case historyPerformance
+    case dictationScreenContext
 
     var section: SettingsSection {
         switch self {
@@ -132,7 +133,7 @@ enum SettingsSearchTarget: Hashable {
         case .dataAndDiagnostics, .backupAndRestore, .debugLogs:
             return .dataAndDiagnostics
 
-        case .experimental, .returnToStartingField, .fasterLongDictation, .dictionaryMatcherExperiments, .historyPerformance:
+        case .experimental, .returnToStartingField, .fasterLongDictation, .dictionaryMatcherExperiments, .historyPerformance, .dictationScreenContext:
             return .experimental
         }
     }
@@ -461,6 +462,11 @@ enum SettingsSearchIndex {
             target: .historyPerformance,
             title: "Show Performance in History",
             terms: ["timing speed tokens per second ASR cleanup Fluid Intelligence"]
+        ),
+        .init(
+            target: .dictationScreenContext,
+            title: "Fluid Intelligence screen context",
+            terms: ["experimental OCR screen words window capture recording permission accessibility cursor names spelling"]
         ),
     ]
 

@@ -1,35 +1,36 @@
 import AppKit
 import SwiftUI
 
-/// Screen settings for a dictation model trained to read the text around the
-/// cursor. Shown only while such a model is selected.
+/// Experimental context settings. Unsupported models never read this context.
 struct DictationScreenContextSettings: View {
     @ObservedObject var settings: SettingsStore
     let isBusy: Bool
 
-    @State private var screenRecordingAllowed = CGPreflightScreenCaptureAccess()
+    @StateObject private var permission = DictationScreenPermissionController()
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 20) {
             self.scopeRow
             if self.settings.dictationScreenContextScope != .off {
+                Divider()
                 self.ocrRow
-                if self.settings.dictationScreenContextOCREnabled, !self.screenRecordingAllowed {
+                if self.settings.dictationScreenContextOCREnabled, self.permission.hasChecked {
+                    Divider()
                     self.permissionRow
                 }
             }
         }
+        .task { await self.permission.refresh() }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
-            self.screenRecordingAllowed = CGPreflightScreenCaptureAccess()
+            Task { await self.permission.refresh() }
         }
     }
 
     private var scopeRow: some View {
-        HStack(alignment: .center, spacing: 8) {
-            Text("Screen words")
-                .font(.fluidSystem(.caption))
-                .frame(width: 124, alignment: .leading)
-
+        FluidManagementRow(
+            title: "Screen words",
+            detail: "Words in the window you dictate into help spell names right. Stays on this Mac."
+        ) {
             FluidDropdownPicker(
                 "Screen words",
                 selectedTitle: self.settings.dictationScreenContextScope.displayName,
@@ -42,55 +43,35 @@ struct DictationScreenContextSettings: View {
             .fluidDropdownStyle()
             .labelsHidden()
             .disabled(self.isBusy)
-            .frame(width: 190)
-
-            Text("Words in the window you dictate into help spell names right. Stays on this Mac.")
-                .font(.fluidSystem(.caption2))
-                .foregroundStyle(.secondary)
-                .lineLimit(2)
-
-            Spacer(minLength: 0)
+            .frame(width: 200)
         }
     }
 
     private var ocrRow: some View {
-        HStack(alignment: .center, spacing: 8) {
-            Text("Read with OCR")
-                .font(.fluidSystem(.caption))
-                .frame(width: 124, alignment: .leading)
-
-            Toggle("", isOn: self.ocrBinding)
+        FluidManagementRow(
+            title: "Read with OCR",
+            detail: "Uses a screenshot when the app doesn't share enough text. Requires Screen Recording permission."
+        ) {
+            Toggle("Read with OCR", isOn: self.ocrBinding)
                 .toggleStyle(.switch)
-                .controlSize(.mini)
                 .labelsHidden()
-                .disabled(self.isBusy)
+                .disabled(self.isBusy || self.permission.isRequesting)
                 .help("Reads a screenshot of the front window. Needs Screen Recording.")
-                .accessibilityLabel("Read with OCR")
-
-            Text("Reads the front window when the app doesn't share its text. Stays on this Mac.")
-                .font(.fluidSystem(.caption2))
-                .foregroundStyle(.secondary)
-                .lineLimit(2)
-
-            Spacer(minLength: 0)
         }
     }
 
     private var permissionRow: some View {
-        HStack(alignment: .center, spacing: 8) {
-            Color.clear.frame(width: 124, height: 1)
-
-            Image(systemName: "exclamationmark.triangle.fill")
-            Text("Screen Recording isn't allowed yet, so OCR is skipped.")
-                .lineLimit(2)
-
-            Button("Open Settings") { self.openScreenRecordingSettings() }
-                .fluidButton(.compact, size: .small)
-
-            Spacer(minLength: 0)
+        FluidManagementRow(
+            title: self.permission.isAllowed ? "Screen Recording allowed" : "Screen Recording permission needed",
+            detail: self.permission.isAllowed
+                ? "Screenshots are processed on this Mac and aren't saved."
+                : "Allow access in macOS to use OCR. Dictation still works without it."
+        ) {
+            if !self.permission.isAllowed {
+                Button("Open System Settings") { self.openScreenRecordingSettings() }
+                    .fluidGlassAction()
+            }
         }
-        .font(.fluidSystem(.caption))
-        .foregroundStyle(.orange)
     }
 
     private var ocrBinding: Binding<Bool> {
@@ -100,10 +81,13 @@ struct DictationScreenContextSettings: View {
                 self.settings.dictationScreenContextOCREnabled = isOn
                 // The only place dictation asks for Screen Recording. Turning
                 // OCR off leaves the permission to the user.
-                if isOn, !CGPreflightScreenCaptureAccess() {
-                    _ = CGRequestScreenCaptureAccess()
+                if isOn {
+                    Task {
+                        await self.permission.requestIfNeeded {
+                            self.settings.dictationScreenContextOCREnabled && self.settings.dictationScreenContextScope != .off
+                        }
+                    }
                 }
-                self.screenRecordingAllowed = CGPreflightScreenCaptureAccess()
             }
         )
     }
@@ -115,7 +99,7 @@ struct DictationScreenContextSettings: View {
             instruction: "Drag \(Bundle.main.fluidAppDisplayName) into the Screen & System Audio Recording list as shown",
             settingsPaneURL: url,
             isGranted: { CGPreflightScreenCaptureAccess() },
-            onGranted: { self.screenRecordingAllowed = true }
+            onGranted: { Task { await self.permission.refresh() } }
         )
     }
 }

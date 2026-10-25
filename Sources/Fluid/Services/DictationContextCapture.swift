@@ -25,19 +25,37 @@ nonisolated enum DictationScreenContextScope: String, CaseIterable, Sendable {
 /// so nothing here formats them.
 nonisolated struct DictationTypingContext: Sendable, Equatable {
     var textBeforeCursor: String?
-    /// One Accessibility element or OCR line per entry.
+    // One Accessibility element or OCR line per entry; nil means none was read.
+    // swiftlint:disable:next discouraged_optional_collection
     var screenText: [String]?
 }
 
 /// Reads the dictation context when recording starts, off the main thread,
 /// so it is ready when speech ends. What it reads is never logged or kept.
-nonisolated final class DictationContextCapture: @unchecked Sendable {
-    let pid: pid_t
+final nonisolated class DictationContextCapture: @unchecked Sendable {
+    private let target: TypingService.RecordingTargetContext
     private let task: Task<DictationTypingContext?, Never>
+    private let first = FirstResult()
 
-    private init(pid: pid_t, task: Task<DictationTypingContext?, Never>) {
-        self.pid = pid
+    init(target: TypingService.RecordingTargetContext, task: Task<DictationTypingContext?, Never>) {
+        self.target = target
         self.task = task
+    }
+
+    deinit { self.cancel() }
+
+    @MainActor
+    func matches(_ target: TypingService.RecordingTargetContext) -> Bool {
+        guard self.target.pid == target.pid else { return false }
+        if self.target.id == target.id { return true }
+        guard let original = self.target.element, let current = target.element,
+              CFEqual(original, current)
+        else { return false }
+        switch (self.target.window, target.window) {
+        case let (original?, current?): return CFEqual(original, current)
+        case (nil, nil): return true
+        default: return false
+        }
     }
 
     @MainActor
@@ -59,44 +77,79 @@ nonisolated final class DictationContextCapture: @unchecked Sendable {
         let task = Task.detached(priority: .userInitiated) {
             await DictationContextReader.read(request)
         }
-        return DictationContextCapture(pid: target.pid, task: task)
+        return DictationContextCapture(target: target, task: task)
     }
 
     /// The context, or nil when it is not ready within `timeout`; a late
     /// result is dropped.
     func result(timeout: Duration) async -> DictationTypingContext? {
         let task = self.task
-        return await withCheckedContinuation { continuation in
-            let first = FirstResult(continuation)
-            Task.detached {
-                first.resume(await task.value)
+        let first = self.first
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                first.install(continuation)
+                Task.detached {
+                    let value = await task.value
+                    first.resume(task.isCancelled ? nil : value)
+                }
+                first.setTimeout(Task.detached {
+                    do { try await Task.sleep(for: timeout) } catch { return }
+                    task.cancel()
+                    first.resume(nil)
+                })
             }
-            Task.detached {
-                try? await Task.sleep(for: timeout)
-                task.cancel()
-                first.resume(nil)
-            }
+        } onCancel: {
+            self.cancel()
         }
     }
 
     func cancel() {
         self.task.cancel()
+        self.first.resume(nil)
     }
 }
 
-private nonisolated final class FirstResult: @unchecked Sendable {
+private final nonisolated class FirstResult: @unchecked Sendable {
     private let lock = NSLock()
     private var continuation: CheckedContinuation<DictationTypingContext?, Never>?
+    private var completed = false
+    private var value: DictationTypingContext?
+    private var timeout: Task<Void, Never>?
 
-    init(_ continuation: CheckedContinuation<DictationTypingContext?, Never>) {
-        self.continuation = continuation
+    func install(_ continuation: CheckedContinuation<DictationTypingContext?, Never>) {
+        self.lock.lock()
+        if self.completed {
+            let value = self.value
+            self.lock.unlock()
+            continuation.resume(returning: value)
+        } else {
+            self.continuation = continuation
+            self.lock.unlock()
+        }
+    }
+
+    func setTimeout(_ timeout: Task<Void, Never>) {
+        self.lock.lock()
+        let completed = self.completed
+        if !completed { self.timeout = timeout }
+        self.lock.unlock()
+        if completed { timeout.cancel() }
     }
 
     func resume(_ value: DictationTypingContext?) {
         self.lock.lock()
+        guard !self.completed else {
+            self.lock.unlock()
+            return
+        }
+        self.completed = true
+        self.value = value
         let continuation = self.continuation
         self.continuation = nil
+        let timeout = self.timeout
+        self.timeout = nil
         self.lock.unlock()
+        timeout?.cancel()
         continuation?.resume(returning: value)
     }
 }
@@ -142,7 +195,12 @@ nonisolated enum DictationContextReader {
     ]
     private static let textEntryRoles: Set<String> = ["AXTextArea", "AXTextField", "AXComboBox"]
 
-    static func read(_ request: Request) async -> DictationTypingContext? {
+    static func read(
+        _ request: Request,
+        recognizeWindow: @Sendable (pid_t, AXUIElement?) async -> [String] = { await DictationContextReader.recognizedWindowText(pid: $0, window: $1) }
+    ) async -> DictationTypingContext? {
+        guard !Task.isCancelled else { return nil }
+        if let element = request.element { AXUIElementSetMessagingTimeout(element, self.messagingTimeoutSeconds) }
         guard !self.isPrivate(request) else { return nil }
 
         let textBeforeCursor = (request.textBeforeCursor ?? request.element.flatMap(self.textBeforeCursor(in:)))
@@ -153,8 +211,10 @@ nonisolated enum DictationContextReader {
         for window in windows where !Task.isCancelled {
             self.collectAccessibilityText(in: window, into: &lines)
         }
-        if request.readsWindowImage, lines.wordCount < self.minimumAccessibilityWords, !Task.isCancelled {
-            for line in await self.recognizedWindowText(pid: request.pid, window: windows.first) {
+        if request.scope != .off, request.readsWindowImage, let window = windows.first,
+           lines.wordCount < self.minimumAccessibilityWords, !Task.isCancelled
+        {
+            for line in await recognizeWindow(request.pid, window) {
                 lines.add(line)
             }
         }
@@ -172,23 +232,29 @@ nonisolated enum DictationContextReader {
         case .off:
             return []
         case .frontWindow:
+            guard let window = request.window else { return [] }
             let app = AXUIElementCreateApplication(request.pid)
             self.exposeWebContent(of: app, pid: request.pid)
-            return [request.window ?? self.element(app, kAXFocusedWindowAttribute)].compactMap { $0 }
+            return [window]
         }
     }
 
     private static let webContentLock = NSLock()
-    nonisolated(unsafe) private static var webContentPIDs: Set<pid_t> = []
+    private nonisolated(unsafe) static var webContentPIDs: [pid_t] = []
 
     /// Chrome and Electron apps build their page's Accessibility tree only
     /// when asked; other apps ignore the attribute. The tree may still be
     /// building on the first dictation in such an app.
     private static func exposeWebContent(of app: AXUIElement, pid: pid_t) {
         self.webContentLock.lock()
-        let isNew = self.webContentPIDs.insert(pid).inserted
+        let isNew = !self.webContentPIDs.contains(pid)
+        if isNew {
+            if self.webContentPIDs.count == 64 { self.webContentPIDs.removeFirst() }
+            self.webContentPIDs.append(pid)
+        }
         self.webContentLock.unlock()
         guard isNew else { return }
+        AXUIElementSetMessagingTimeout(app, self.messagingTimeoutSeconds)
         AXUIElementSetAttributeValue(app, "AXManualAccessibility" as CFString, kCFBooleanTrue)
     }
 
@@ -246,14 +312,13 @@ nonisolated enum DictationContextReader {
 
     private static func collectAccessibilityText(in window: AXUIElement, into lines: inout LineCollector) {
         let deadline = ProcessInfo.processInfo.systemUptime + self.accessibilityBudgetSeconds
+        AXUIElementSetMessagingTimeout(window, self.messagingTimeoutSeconds)
         let windowFrame = self.frame(of: window)
         var stack = [window]
         var visited = 0
         while let element = stack.popLast(), visited < self.maxVisitedElements, !lines.isFull {
             visited += 1
-            if visited.isMultiple(of: 32),
-               Task.isCancelled || ProcessInfo.processInfo.systemUptime > deadline
-            {
+            if Task.isCancelled || ProcessInfo.processInfo.systemUptime > deadline {
                 break
             }
             AXUIElementSetMessagingTimeout(element, self.messagingTimeoutSeconds)
@@ -267,7 +332,7 @@ nonisolated enum DictationContextReader {
             for text in item.texts {
                 lines.add(text, limit: self.maxLinesPerElement)
             }
-            stack.append(contentsOf: item.children.reversed())
+            stack.append(contentsOf: item.children.prefix(max(0, self.maxVisitedElements - visited - stack.count)).reversed())
         }
     }
 
@@ -282,7 +347,7 @@ nonisolated enum DictationContextReader {
         var texts: [String] = []
         if var value = values[2] as? String {
             if value.utf16.count > self.longValueCharacters, self.textEntryRoles.contains(role) {
-                value = self.visibleText(of: element) ?? value
+                value = self.visibleText(of: element) ?? ""
             }
             texts.append(value)
         }
@@ -315,12 +380,15 @@ nonisolated enum DictationContextReader {
     /// (Vision garbles small gray text at 1x), and reads it with Vision.
     /// Needs Screen Recording; FluidVoice never asks for it here.
     private static func recognizedWindowText(pid: pid_t, window: AXUIElement?) async -> [String] {
-        guard CGPreflightScreenCaptureAccess(),
-              let windowID = self.windowID(pid: pid, frame: window.flatMap(self.frame(of:)))
+        guard !Task.isCancelled, CGPreflightScreenCaptureAccess(),
+              let frame = window.flatMap(self.frame(of:)),
+              let windowID = self.windowID(pid: pid, frame: frame)
         else { return [] }
         do {
             let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
-            guard let scWindow = content.windows.first(where: { $0.windowID == windowID }) else { return [] }
+            guard !Task.isCancelled,
+                  let scWindow = content.windows.first(where: { $0.windowID == windowID })
+            else { return [] }
             let filter = SCContentFilter(desktopIndependentWindow: scWindow)
             let configuration = SCStreamConfiguration()
             let scale = CGFloat(filter.pointPixelScale)
@@ -350,7 +418,7 @@ nonisolated enum DictationContextReader {
         return (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }
     }
 
-    /// The app's on-screen window matching the Accessibility window, else its frontmost one.
+    /// Only the captured window may be read; a stale window must never fall back to another one.
     private static func windowID(pid: pid_t, frame: CGRect?) -> CGWindowID? {
         let info = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
             as? [[String: Any]] ?? []
@@ -366,7 +434,7 @@ nonisolated enum DictationContextReader {
                     && abs(rect.width - frame.width) < 2 && abs(rect.height - frame.height) < 2
             }
         }
-        return (matching ?? windows.first)?[kCGWindowNumber as String] as? CGWindowID
+        return matching?[kCGWindowNumber as String] as? CGWindowID
     }
 
     // MARK: - Accessibility helpers
