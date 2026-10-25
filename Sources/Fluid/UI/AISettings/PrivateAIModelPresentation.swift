@@ -43,7 +43,9 @@ struct PrivateAIModelPresentation {
                 summary: "Our best cleanup model yet",
                 useCase: "Multilingual, and reads what's on screen so names and terms come out right.",
                 language: "English, German, Spanish, French, Portuguese",
-                intelligence: 5, speed: 4, badge: "Research preview"
+                intelligence: 5,
+                speed: 4,
+                badge: "Research preview"
             )
         case "fluid-1":
             Self(summary: "The original Fluid model", useCase: "Will be deprecated soon. Cleanup and formatting across languages.", language: "Multilingual", intelligence: 4, speed: 2)

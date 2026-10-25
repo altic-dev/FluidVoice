@@ -55,6 +55,7 @@ final class SettingsStore: ObservableObject {
         self.migrateDictationPromptProfilesIfNeeded()
         self.migrateLegacyDictationAIPreferenceIfNeeded()
         self.migrateSecondaryPromptShortcutIfNeeded()
+        Self.migrateModifierOnlyCancelShortcutIfNeeded(defaults: self.defaults)
         self.retireLegacySecondaryPromptShortcutIfNeeded()
         self.normalizePromptSelectionsIfNeeded()
         self.purgeRetiredAppleIntelligenceState()
@@ -3211,10 +3212,21 @@ final class SettingsStore: ObservableObject {
         }
         set {
             objectWillChange.send()
-            if let data = try? JSONEncoder().encode(newValue) {
+            // Old backups can still contain a modifier-only Cancel binding.
+            let shortcut = newValue?.isModifierOnlyShortcut == true ? HotkeyShortcut(keyCode: 53, modifierFlags: []) : newValue
+            if let data = try? JSONEncoder().encode(shortcut) {
                 self.defaults.set(data, forKey: Keys.cancelRecordingHotkeyShortcut)
             }
         }
+    }
+
+    static func migrateModifierOnlyCancelShortcutIfNeeded(defaults: UserDefaults) {
+        guard let data = defaults.data(forKey: Keys.cancelRecordingHotkeyShortcut),
+              let shortcut = try? JSONDecoder().decode(HotkeyShortcut.self, from: data),
+              shortcut.isModifierOnlyShortcut,
+              let replacement = try? JSONEncoder().encode(HotkeyShortcut(keyCode: 53, modifierFlags: []))
+        else { return }
+        defaults.set(replacement, forKey: Keys.cancelRecordingHotkeyShortcut)
     }
 
     /// Unassigned by default. Meeting recording never claims a shortcut until explicitly configured.

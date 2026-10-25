@@ -137,6 +137,51 @@ final class HotkeyShortcutTests: XCTestCase {
         }
     }
 
+    func testModifierOnlyCancelMigrationRestoresEscapeAndIsIdempotent() throws {
+        let key = "CancelRecordingHotkeyShortcut"
+        try self.withRestoredDefaults(keys: [key, self.primaryDictationShortcutsKey]) {
+            let defaults = UserDefaults.standard
+            let primary = try JSONEncoder().encode([HotkeyShortcut(keyCode: 61, modifierFlags: [])])
+            defaults.set(primary, forKey: self.primaryDictationShortcutsKey)
+            for keyCode: UInt16 in [54, 55, 56, 60, 58, 61, 59, 62, 63] {
+                try defaults.set(JSONEncoder().encode(HotkeyShortcut(keyCode: keyCode, modifierFlags: [])), forKey: key)
+                SettingsStore.migrateModifierOnlyCancelShortcutIfNeeded(defaults: defaults)
+                let migrated = try XCTUnwrap(defaults.data(forKey: key))
+                XCTAssertEqual(try JSONDecoder().decode(HotkeyShortcut.self, from: migrated), HotkeyShortcut(keyCode: 53, modifierFlags: []))
+                SettingsStore.migrateModifierOnlyCancelShortcutIfNeeded(defaults: defaults)
+                XCTAssertEqual(defaults.data(forKey: key), migrated)
+                XCTAssertEqual(defaults.data(forKey: self.primaryDictationShortcutsKey), primary)
+            }
+        }
+    }
+
+    func testCancelMigrationPreservesValidDisabledMissingAndMalformedSettings() throws {
+        let key = "CancelRecordingHotkeyShortcut"
+        try self.withRestoredDefaults(keys: [key]) {
+            let defaults = UserDefaults.standard
+            let values: [Data?] = try [
+                nil, Data("null".utf8), Data("invalid".utf8),
+                JSONEncoder().encode(HotkeyShortcut(keyCode: 9, modifierFlags: [])),
+                JSONEncoder().encode(HotkeyShortcut(keyCode: 9, modifierFlags: [.option])),
+            ]
+            for value in values {
+                if let value { defaults.set(value, forKey: key) } else { defaults.removeObject(forKey: key) }
+                SettingsStore.migrateModifierOnlyCancelShortcutIfNeeded(defaults: defaults)
+                XCTAssertEqual(defaults.data(forKey: key), value)
+            }
+        }
+    }
+
+    func testRestoringModifierOnlyCancelShortcutFallsBackToEscape() throws {
+        try self.withRestoredDefaults(keys: ["CancelRecordingHotkeyShortcut"]) {
+            let settings = SettingsStore.shared
+            settings.cancelRecordingHotkeyShortcut = HotkeyShortcut(keyCode: 58, modifierFlags: [.control, .option], modifierKeyCodes: [59, 58])
+            XCTAssertEqual(settings.cancelRecordingHotkeyShortcut, HotkeyShortcut(keyCode: 53, modifierFlags: []))
+            settings.cancelRecordingHotkeyShortcut = nil
+            XCTAssertNil(settings.cancelRecordingHotkeyShortcut)
+        }
+    }
+
     func testInputDeliveryTimingRejectsMissingAndFutureEventTimestamps() {
         let missing = HotkeyInputTiming(receivedAt: 100, eventTimestamp: 0, eventType: 12, receivedTimestamp: 5_000_000_000)
         XCTAssertNil(missing.deliveryAgeMs)
@@ -1304,6 +1349,51 @@ final class HotkeyShortcutTests: XCTestCase {
             settings.cancelRecordingHotkeyShortcut = HotkeyShortcut(keyCode: 53, modifierFlags: [])
             XCTAssertTrue(try XCTUnwrap(settings.cancelRecordingHotkeyShortcut).matches(keyCode: 53, modifiers: []))
             XCTAssertEqual(UserDefaults.standard.data(forKey: self.legacyHotkeyShortcutKey), data, "Reading invalid bindings must not rewrite preferences")
+        }
+    }
+
+    @MainActor
+    func testCancelRejectsModifierOnlyShortcutsWithoutChangingSavedBindings() {
+        self.withIsolatedShortcutConflicts { settings in
+            let savedCancel = HotkeyShortcut(keyCode: 53, modifierFlags: [])
+            settings.cancelRecordingHotkeyShortcut = savedCancel
+            let modifierKeys: [UInt16] = [54, 55, 56, 60, 58, 61, 59, 62, 63]
+            let shortcuts = modifierKeys.map { HotkeyShortcut(keyCode: $0, modifierFlags: []) } + [
+                HotkeyShortcut(keyCode: 58, modifierFlags: [.control, .option], modifierKeyCodes: [59, 58]),
+                HotkeyShortcut(keyCode: 61, modifierFlags: [.shift, .option], modifierKeyCodes: [60, 61]),
+            ]
+            let view = ContentView()
+            for shortcut in shortcuts + shortcuts.reversed() {
+                XCTAssertEqual(
+                    view.shortcutConflictMessage(for: shortcut, target: .cancel),
+                    "Modifier-only keys can't cancel recording. Use Esc or include a regular key.",
+                    shortcut.displayString
+                )
+                XCTAssertEqual(settings.cancelRecordingHotkeyShortcut, savedCancel)
+                XCTAssertTrue(settings.primaryDictationShortcuts.isEmpty)
+            }
+        }
+    }
+
+    @MainActor
+    func testCancelRestrictionPreservesRegularKeysAndOtherModifierOnlyActions() {
+        self.withIsolatedShortcutConflicts { _ in
+            let view = ContentView()
+            for shortcut in [
+                HotkeyShortcut(keyCode: 53, modifierFlags: []),
+                HotkeyShortcut(keyCode: 9, modifierFlags: []),
+                HotkeyShortcut(keyCode: 9, modifierFlags: [.option]),
+                HotkeyShortcut(keyCode: 53, modifierFlags: [.control, .shift]),
+            ] {
+                XCTAssertNil(view.shortcutConflictMessage(for: shortcut, target: .cancel), shortcut.displayString)
+            }
+            let leftOption = HotkeyShortcut(keyCode: 58, modifierFlags: [])
+            for target: ShortcutRecordingTarget in [
+                .primaryDictation(.add), .secondaryDictation, .command, .edit,
+                .pasteLast, .dictationPrompt("__default__"), .newPrompt,
+            ] {
+                XCTAssertNil(view.shortcutConflictMessage(for: leftOption, target: target), "\(target)")
+            }
         }
     }
 

@@ -1268,6 +1268,9 @@ struct ContentView: View {
     }
 
     func shortcutConflictMessage(for shortcut: HotkeyShortcut, target: ShortcutRecordingTarget) -> String? {
+        if target == .cancel, shortcut.isModifierOnlyShortcut {
+            return "Modifier-only keys can't cancel recording. Use Esc or include a regular key."
+        }
         if target == .meeting, !shortcut.isMeetingRecordingShortcut {
             return "Use a keyboard key with a modifier for meeting recording"
         }
