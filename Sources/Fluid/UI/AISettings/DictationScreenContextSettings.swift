@@ -10,7 +10,7 @@ struct DictationScreenContextSettings: View {
     var body: some View {
         FluidManagementRow(
             title: "Screen context",
-            detail: "Helps Fluid Intelligence spell names using text from the window you dictate into. Stays on this Mac."
+            detail: "Helps Fluid Intelligence spell names using text from the window you dictate into. All context is processed on-device."
         ) {
             Toggle("Screen context", isOn: self.enabledBinding)
                 .toggleStyle(.switch)
