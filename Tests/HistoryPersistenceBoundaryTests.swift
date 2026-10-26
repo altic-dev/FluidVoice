@@ -20,9 +20,13 @@ final class DictationAudioHistoryStore {
     var deletedFileNames: [String] = []
     /// Files in the shared audio folder that the orphan sweep may delete.
     var storedFileNames: Set<String> = []
+    var fileSizes: [String: Int64] = [:]
     @discardableResult func deleteAudio(fileName: String) -> Int64 {
         self.deletedFileNames.append(fileName)
-        return 0
+        self.storedFileNames.remove(fileName)
+        let bytes = self.fileSizes.removeValue(forKey: fileName) ?? 0
+        self.usageBytes -= bytes
+        return bytes
     }
 
     func deleteAllAudioFiles() {}
@@ -36,13 +40,15 @@ final class DictationAudioHistoryStore {
         let orphans = self.storedFileNames.subtracting(referencedFileNames).sorted()
         self.storedFileNames.subtract(orphans)
         self.deletedFileNames.append(contentsOf: orphans)
-        return (orphans.count, 0)
+        let bytes = orphans.reduce(Int64(0)) { $0 + (self.fileSizes.removeValue(forKey: $1) ?? 0) }
+        self.usageBytes -= bytes
+        return (orphans.count, bytes)
     }
 }
 
 @MainActor final class SettingsStore {
     static let shared = SettingsStore()
-    var audioHistoryBudgetBytes: Int64 { 1_000_000 }
+    var audioHistoryBudgetBytes: Int64 = 1_000_000
     var weekendsDontBreakStreak: Bool { false }
 }
 
@@ -245,6 +251,156 @@ final class ImportingDefaults: UserDefaults {
         try await self.testTodaySummary(root: root, defaults: defaults, audio: audio)
         try await self.testStars(root: root, defaults: defaults, audio: audio)
         try await self.testLegacyImportAcrossBuilds(root: root, audio: audio)
+        try await self.testManualPruneResponsiveness(root: root)
+        try await self.testManualPruneChangesDuringRead(root: root)
+    }
+
+    @MainActor static func testManualPruneResponsiveness(root: URL) async throws {
+        let suite = "fluid-history-manual-prune-\(UUID())"
+        guard let defaults = ImportingDefaults(suiteName: suite) else {
+            preconditionFailure("Unable to create isolated history defaults")
+        }
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let writer = TranscriptionHistoryWriter(defaults: defaults, url: root.appendingPathComponent("manual.sqlite3"))
+        let store = TranscriptionHistoryStore(writer: writer)
+        try await store.waitUntilLoaded()
+        let audioStore = DictationAudioHistoryStore.shared
+        audioStore.usageBytes = 2_000_000
+        audioStore.storedFileNames = ["manual-orphan.wav"]
+        defer {
+            audioStore.usageBytes = 0
+            audioStore.storedFileNames = []
+        }
+        let release = DispatchSemaphore(value: 0)
+        let (writerResults, writerResult) = AsyncStream<Bool>.makeStream()
+        await withCheckedContinuation { continuation in
+            writer.write(upserts: []) { error in
+                precondition(error == nil)
+                continuation.resume()
+                // A watchdog lets the old synchronous implementation finish and fail the
+                // responsiveness assertion, instead of leaving the executable deadlocked.
+                writerResult.yield(release.wait(timeout: .now() + 2) == .success)
+                writerResult.finish()
+            }
+        }
+        defaults.onNextRead = {
+            Task { @MainActor in release.signal() }
+        }
+        let pruned = await store.pruneAudioToBudget()
+        _ = await writer.drain()
+        var results = writerResults.makeAsyncIterator()
+        guard await results.next() == true else {
+            print("FAIL: manual prune blocked main-actor progress until the writer watchdog released it")
+            exit(1)
+        }
+        precondition(pruned == 0 && !audioStore.storedFileNames.contains("manual-orphan.wav"), "Manual prune must finish its orphan sweep")
+        print("PASS: manual prune lets the main actor progress while queued persistence is delayed")
+    }
+
+    @MainActor static func testManualPruneChangesDuringRead(root: URL) async throws {
+        for scenario in ["budget raised", "budget lowered", "zero budget", "restore", "repeated prune", "legacy arrives"] {
+            let suite = "fluid-history-manual-change-\(UUID())"
+            guard let defaults = ImportingDefaults(suiteName: suite) else {
+                preconditionFailure("Unable to create isolated history defaults")
+            }
+            defer { defaults.removePersistentDomain(forName: suite) }
+            let writer = TranscriptionHistoryWriter(defaults: defaults, url: root.appendingPathComponent("\(scenario).sqlite3"))
+            var deleteAllCalls = 0
+            let store = TranscriptionHistoryStore(writer: writer, deleteAllAudioFiles: { deleteAllCalls += 1 })
+            try await store.waitUntilLoaded()
+            func recorded(_ timestamp: TimeInterval, _ fileName: String) -> TranscriptionHistoryEntry {
+                var entry = TranscriptionHistoryEntry(
+                    timestamp: Date(timeIntervalSince1970: timestamp),
+                    rawText: fileName,
+                    processedText: fileName,
+                    appName: "Test",
+                    windowTitle: "Test",
+                    wasAIProcessed: false
+                )
+                entry = entry.replacingAudio(DictationAudioMetadata(
+                    fileName: fileName,
+                    durationMilliseconds: 1000,
+                    byteCount: 600_000,
+                    sampleRate: 16_000,
+                    channels: 1,
+                    model: nil
+                ))
+                return entry
+            }
+            let oldest = recorded(1, "old.wav")
+            let newest = recorded(2, "new.wav")
+            store.restore(from: [newest, oldest])
+            await store.finishPendingWrites()
+            let audioStore = DictationAudioHistoryStore.shared
+            audioStore.fileSizes = ["old.wav": 600_000, "new.wav": 600_000, "orphan.wav": 800_000]
+            audioStore.storedFileNames = Set(audioStore.fileSizes.keys)
+            audioStore.usageBytes = 2_000_000
+            let deletionStart = audioStore.deletedFileNames.count
+            let generation = store.audioSaveGeneration
+            defer {
+                audioStore.fileSizes = [:]
+                audioStore.storedFileNames = []
+                audioStore.usageBytes = 0
+                SettingsStore.shared.audioHistoryBudgetBytes = 1_000_000
+            }
+            let release = DispatchSemaphore(value: 0)
+            await withCheckedContinuation { continuation in
+                writer.write(upserts: []) { error in
+                    precondition(error == nil)
+                    continuation.resume()
+                    precondition(release.wait(timeout: .now() + 5) == .success, "Main actor must release the delayed writer")
+                }
+            }
+            var repeated: Task<Int, Never>?
+            defaults.onNextRead = {
+                Task { @MainActor in
+                    switch scenario {
+                    case "budget raised":
+                        SettingsStore.shared.audioHistoryBudgetBytes = 3_000_000
+                    case "budget lowered":
+                        SettingsStore.shared.audioHistoryBudgetBytes = 500_000
+                    case "zero budget":
+                        SettingsStore.shared.audioHistoryBudgetBytes = 0
+                    case "restore":
+                        // The replacement references a file the earlier snapshot considered orphaned.
+                        store.restore(from: [recorded(3, "orphan.wav")])
+                    case "repeated prune":
+                        // Hold both requests after their measurements and before their database reads.
+                        defaults.onNextRead = { release.signal() }
+                        repeated = Task { @MainActor in await store.pruneAudioToBudget() }
+                        return
+                    case "legacy arrives":
+                        defaults.set(Data("pending legacy".utf8), forKey: "TranscriptionHistoryEntries")
+                    default:
+                        preconditionFailure("Unknown scenario")
+                    }
+                    release.signal()
+                }
+            }
+            let count = await store.pruneAudioToBudget()
+            let repeatedCount = await repeated?.value ?? 0
+            await store.finishPendingWrites()
+            let deleted = Array(audioStore.deletedFileNames.dropFirst(deletionStart))
+            switch scenario {
+            case "budget raised", "legacy arrives":
+                precondition(count == 0 && deleted.isEmpty && store.entries.allSatisfy { $0.audio != nil }, "A raised budget or pending legacy data must prevent deletion")
+            case "budget lowered":
+                precondition(count == 2 && deleted == ["orphan.wav", "old.wav", "new.wav"] && audioStore.usageBytes == 0, "A lowered budget must be applied after the read")
+            case "zero budget":
+                precondition(count == 2 && deleteAllCalls == 1 && store.entries.allSatisfy { $0.audio == nil }, "Zero budget must use delete-all semantics and report both entries")
+                precondition(store.audioSaveGeneration > generation, "Zero budget must invalidate pending audio saves")
+            case "restore":
+                precondition(count == 0 && Set(deleted) == ["old.wav", "new.wav"], "Restore must replace saved references before pruning")
+                precondition(store.entries.count == 1 && store.entries[0].audio?.fileName == "orphan.wav")
+                precondition(audioStore.usageBytes == 800_000, "A restored reference must survive a stale prune measurement")
+            case "repeated prune":
+                precondition(count + repeatedCount == 1 && deleted == ["orphan.wav", "old.wav"], "Overlapping manual prunes must remeasure instead of deleting the newest recording too")
+                precondition(store.entries.first?.audio?.fileName == "new.wav" && audioStore.usageBytes == 600_000)
+            default:
+                preconditionFailure("Unknown scenario")
+            }
+            print("PASS: manual prune revalidates \(scenario) during its saved-history read")
+        }
     }
 
     /// The database is shared by every build on the Mac, but each bundle and each older
@@ -328,12 +484,12 @@ final class ImportingDefaults: UserDefaults {
         precondition(audioStore.usageMeasurements > measurements, "Attaching audio must measure usage against the budget")
         try await Task.sleep(nanoseconds: 100_000_000)
         precondition(store.entries.first { $0.id == newID }?.audio == audio, "A new recording must not pay for legacy audio")
-        store.pruneAudioToBudget()
+        await store.pruneAudioToBudget()
         precondition(store.entries.first { $0.id == newID }?.audio == audio, "Lowering the budget must not delete recordings while legacy history remains")
         precondition(audioStore.deletedFileNames.count == deletions, "Unimported legacy history must block deleting recordings")
         precondition(audioStore.orphanSweeps == sweeps, "Unimported legacy history must block the orphaned audio sweep")
         upgradeDefaults.removeObject(forKey: key)
-        store.pruneAudioToBudget()
+        await store.pruneAudioToBudget()
         precondition(audioStore.orphanSweeps == sweeps + 1, "Fully imported history must allow the orphaned audio sweep")
         precondition(audioStore.deletedFileNames.dropFirst(deletions) == [audio.fileName], "Fully imported history must allow pruning recordings to the budget")
         precondition(store.entries.allSatisfy { $0.audio == nil })
@@ -354,11 +510,11 @@ final class ImportingDefaults: UserDefaults {
         ))
         try await installStore.waitUntilLoaded()
         let installSweeps = audioStore.orphanSweeps
-        installStore.pruneAudioToBudget()
+        await installStore.pruneAudioToBudget()
         precondition(audioStore.orphanSweeps == installSweeps, "Another install's unimported legacy history must block the orphaned audio sweep")
         precondition(otherInstallDefaults.data(forKey: key) == otherInstallLegacy, "Another install's legacy history is left for that install")
         otherInstallDefaults.removeObject(forKey: key)
-        installStore.pruneAudioToBudget()
+        await installStore.pruneAudioToBudget()
         precondition(audioStore.orphanSweeps == installSweeps + 1, "Once every install has imported, the orphaned audio sweep runs")
         print("PASS: another install's unimported legacy history defers audio budget pruning")
 
@@ -405,7 +561,7 @@ final class ImportingDefaults: UserDefaults {
         audioStore.storedFileNames = ["imported-by-other.wav", "recorded-by-other.wav", "orphan.wav"]
         defer { audioStore.storedFileNames = [] }
         let runningDeletions = audioStore.deletedFileNames.count
-        runningStore.pruneAudioToBudget()
+        await runningStore.pruneAudioToBudget()
         precondition(
             audioStore.deletedFileNames.dropFirst(runningDeletions) == ["orphan.wav"],
             "Audio referenced by rows another running install added must not be swept as orphaned"
@@ -434,7 +590,7 @@ final class ImportingDefaults: UserDefaults {
         let unreadableDeletions = audioStore.deletedFileNames.count
         let unreadableMeasurements = audioStore.usageMeasurements
         runningStore.attachAudio(audio, to: ownID)
-        runningStore.pruneAudioToBudget()
+        await runningStore.pruneAudioToBudget()
         // The settings prune measures once and the automatic prune it restarted measures once more.
         for _ in 0..<200 where audioStore.usageMeasurements < unreadableMeasurements + 2 {
             try await Task.sleep(nanoseconds: 10_000_000)
@@ -500,7 +656,7 @@ final class ImportingDefaults: UserDefaults {
         try await racedStore.waitUntilLoaded()
         precondition(racedStore.entries == [first])
         let racedSweeps = audioStore.orphanSweeps
-        racedStore.pruneAudioToBudget()
+        await racedStore.pruneAudioToBudget()
         precondition(audioStore.orphanSweeps == racedSweeps, "Legacy history retained for the next load must block the orphaned audio sweep")
         precondition(racingDefaults.data(forKey: key) == rewritten, "Legacy history rewritten during a load must not be retired")
         let nextLoad = try await TranscriptionHistoryWriter(defaults: racingDefaults, url: racingURL).load()

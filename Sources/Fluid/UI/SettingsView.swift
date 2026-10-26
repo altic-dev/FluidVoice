@@ -1799,10 +1799,12 @@ struct SettingsView: View {
         }
 
         SettingsStore.shared.audioHistoryBudgetGB = newBudget
-        let pruned = TranscriptionHistoryStore.shared.pruneAudioToBudget()
-        self.refreshAudioHistoryUsage()
-        if pruned > 0 {
-            self.presentInfoAlert(title: "Audio Pruned", message: "Deleted oldest saved audio from \(pruned) history entries.")
+        Task { @MainActor in
+            let pruned = await TranscriptionHistoryStore.shared.pruneAudioToBudget()
+            self.refreshAudioHistoryUsage()
+            if pruned > 0 {
+                self.presentInfoAlert(title: "Audio Pruned", message: "Deleted oldest saved audio from \(pruned) history entries.")
+            }
         }
     }
 
