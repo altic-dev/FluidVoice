@@ -170,28 +170,11 @@ final class NemotronProvider: TranscriptionProvider {
         }
 
         self.maxTranscriptionSamples = Self.loadMaxAudioSamples(from: dir) ?? self.maxTranscriptionSamples
-        let manager: NemotronStreamingAsrManager
-        do {
-            progressHandler?(.loading)
-            manager = try await self.loadManager(modelDirectory: dir, computeUnits: .cpuAndNeuralEngine)
-        } catch {
-            guard Self.shouldRetryWithoutNeuralEngine(error) else {
-                throw error
-            }
-            DebugLogger.shared.warning(
-                "Nemotron: ANE model load failed; retrying with cpuAndGPU fallback [error=\(error.localizedDescription)]",
-                source: "Nemotron"
-            )
-            self.clearCompiledModelCache()
-            do {
-                manager = try await self.loadManager(modelDirectory: dir, computeUnits: .cpuAndGPU)
-            } catch {
-                let compiledCachePath = Self.compiledModelCacheDirectory?.path ?? "~/Library/Caches/FluidAudio/CompiledNemotronModels"
-                throw Self.makeError(
-                    "Nemotron model failed to load even after clearing the compiled CoreML cache at \(compiledCachePath). If this continues, manually delete ~/Library/Caches/FluidAudio/CompiledNemotronModels and try again.",
-                    underlyingError: error
-                )
-            }
+        progressHandler?(.loading)
+        let manager = try await Self.loadRecoveringCompiledCache(
+            compiledCacheDirectory: Self.compiledModelCacheDirectory
+        ) { computeUnits in
+            try await self.loadManager(modelDirectory: dir, computeUnits: computeUnits)
         }
         try await self.applySelectedLanguage(to: manager)
         try Task.checkCancellation()
@@ -359,8 +342,34 @@ final class NemotronProvider: TranscriptionProvider {
         }
     }
 
-    private func clearCompiledModelCache() {
-        Self.clearCompiledModelCache(at: Self.compiledModelCacheDirectory)
+    /// Loads with the Neural Engine first. When that fails with an error the CPU/GPU fallback
+    /// can recover from, the compiled CoreML cache is cleared before the single retry, since a
+    /// corrupt compiled model fails the same way on every compute unit.
+    static func loadRecoveringCompiledCache<Manager>(
+        compiledCacheDirectory: URL?,
+        load: (MLComputeUnits) async throws -> Manager
+    ) async throws -> Manager {
+        do {
+            return try await load(.cpuAndNeuralEngine)
+        } catch {
+            guard self.shouldRetryWithoutNeuralEngine(error) else {
+                throw error
+            }
+            DebugLogger.shared.warning(
+                "Nemotron: ANE model load failed; retrying with cpuAndGPU fallback [error=\(error.localizedDescription)]",
+                source: "Nemotron"
+            )
+            self.clearCompiledModelCache(at: compiledCacheDirectory)
+            do {
+                return try await load(.cpuAndGPU)
+            } catch {
+                let compiledCachePath = compiledCacheDirectory?.path ?? "~/Library/Caches/FluidAudio/CompiledNemotronModels"
+                throw self.makeError(
+                    "Nemotron model failed to load even after clearing the compiled CoreML cache at \(compiledCachePath). If this continues, manually delete ~/Library/Caches/FluidAudio/CompiledNemotronModels and try again.",
+                    underlyingError: error
+                )
+            }
+        }
     }
 
     static func clearCompiledModelCache(at directory: URL?) {
