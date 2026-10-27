@@ -96,13 +96,17 @@ final class MeetingRecordingSourceTests: XCTestCase {
         let defaultsBefore = SettingsStore.shared.meetingRecordingDefaults
         var calls = 0
         var receivedForeground: MeetingApplicationIdentity?
-        let controller = MeetingRecordingSourcePromptController(showsPanel: false, load: { foreground in
-            receivedForeground = foreground
-            return self.snapshot()
-        }, start: { snapshot in
-            calls += 1
-            XCTAssertEqual(snapshot.selectedApplication, self.zoom)
-        })
+        let controller = MeetingRecordingSourcePromptController(
+            showsPanel: false,
+            load: { foreground in
+                receivedForeground = foreground
+                return self.snapshot()
+            },
+            start: { snapshot in
+                calls += 1
+                XCTAssertEqual(snapshot.selectedApplication, self.zoom)
+            }
+        )
         controller.handleShortcut(foreground: self.browser)
         await self.waitUntil { !controller.isLoading }
         XCTAssertEqual(receivedForeground, self.browser)
@@ -119,9 +123,13 @@ final class MeetingRecordingSourceTests: XCTestCase {
     func testCancelDuringDiscoveryIgnoresLateResultAndRapidPresses() async {
         var resume: CheckedContinuation<MeetingRecordingSourceSnapshot, Never>?
         var starts = 0
-        let controller = MeetingRecordingSourcePromptController(showsPanel: false, load: { _ in
-            await withCheckedContinuation { resume = $0 }
-        }, start: { _ in starts += 1 })
+        let controller = MeetingRecordingSourcePromptController(
+            showsPanel: false,
+            load: { _ in
+                await withCheckedContinuation { resume = $0 }
+            },
+            start: { _ in starts += 1 }
+        )
         controller.handleShortcut(foreground: self.browser)
         await self.waitUntil { resume != nil }
         controller.handleShortcut()
@@ -168,6 +176,54 @@ final class MeetingRecordingSourceTests: XCTestCase {
         await self.waitUntil { !controller.isLoading }
         XCTAssertEqual(controller.snapshot?.defaults.mode, .inRoom)
         XCTAssertNil(controller.snapshot?.selectedApplication)
+        controller.cancel()
+    }
+
+    func testCancelledStartCannotDismissANewerSourcePrompt() async {
+        var resume: CheckedContinuation<Void, Never>?
+        var starts = 0
+        var firstStartWasCancelled = false
+        let controller = MeetingRecordingSourcePromptController(showsPanel: false, load: { _ in self.snapshot() }, start: { _ in
+            starts += 1
+            if starts == 1 {
+                await withCheckedContinuation { resume = $0 }
+                firstStartWasCancelled = Task.isCancelled
+            }
+        })
+        controller.handleShortcut()
+        await self.waitUntil { !controller.isLoading }
+        controller.confirm()
+        await self.waitUntil { resume != nil }
+        controller.cancel()
+        XCTAssertFalse(controller.isPresented)
+        XCTAssertFalse(controller.isStarting)
+        controller.handleShortcut()
+        await self.waitUntil { !controller.isLoading }
+        resume?.resume()
+        await self.waitUntil { firstStartWasCancelled }
+        XCTAssertTrue(controller.isPresented, "A cancelled start must not dismiss a later source picker")
+        XCTAssertTrue(controller.canConfirm)
+        XCTAssertEqual(starts, 1)
+        controller.confirm()
+        await self.waitUntil { !controller.isPresented }
+        XCTAssertEqual(starts, 2)
+    }
+
+    func testRefreshKeepsExplicitAppAndMicrophoneChoices() async {
+        var initial = self.snapshot()
+        let secondMic = MeetingMicrophoneIdentity(captureDeviceID: "second", coreAudioUID: "second", displayName: "Second microphone")
+        initial.microphones = MeetingMicrophoneCatalogSnapshot(identities: [self.mic, secondMic], defaultCoreAudioUID: "mic")
+        let controller = MeetingRecordingSourcePromptController(showsPanel: false, load: { _ in initial }, start: { _ in XCTFail("Refreshing must not record") })
+        controller.handleShortcut()
+        await self.waitUntil { !controller.isLoading }
+        controller.selectApplication(self.browser)
+        controller.selectMicrophone(secondMic.captureDeviceID)
+        controller.refresh()
+        await self.waitUntil { !controller.isLoading }
+        XCTAssertEqual(controller.snapshot?.selectedApplication, self.browser)
+        XCTAssertEqual(controller.snapshot?.selectedMicrophoneID, secondMic.captureDeviceID)
+        XCTAssertEqual(controller.snapshot?.defaults.mode, .onlineCall)
+        XCTAssertTrue(controller.canConfirm)
         controller.cancel()
     }
 
