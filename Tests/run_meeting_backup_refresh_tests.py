@@ -62,7 +62,8 @@ def main() -> None:
 import Foundation
 
 enum MeetingCaptureMode { case onlineCall, inRoom }
-struct Defaults { var languageCode: String? = "en"; var mode: MeetingCaptureMode = .onlineCall }
+typealias MeetingRecordingDefaults = Defaults
+struct Defaults { var languageCode: String? = "en"; var mode: MeetingCaptureMode = .onlineCall; var isConfigured = false; var applicationBundleIdentifier: String? }
 final class SettingsStore {
     static let shared = SettingsStore()
     var meetingRecordingDefaults = Defaults()

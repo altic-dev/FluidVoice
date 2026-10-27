@@ -1473,7 +1473,7 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
     @objc private func startMeetingRecording() {
         Task { @MainActor in
             await self.startMeetingRecordingInBackground {
-                try await AppServices.shared.startMeetingRecordingFromMenuBar()
+                MeetingRecordingSourcePromptController.shared.handleShortcut()
             }
         }
     }

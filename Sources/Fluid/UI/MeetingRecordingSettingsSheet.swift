@@ -343,6 +343,7 @@ struct MeetingRecordingSettingsSheet: View {
             set: {
                 self.draft.usesAutomaticApplication = $0 == nil
                 self.draft.selectedApplicationID = $0
+                self.draft.preferredApplicationBundleIdentifier = self.applications.first(where: { $0.id == self.draft.selectedApplicationID })?.identity.bundleIdentifier
             }
         )
     }

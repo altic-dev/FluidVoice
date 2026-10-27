@@ -192,6 +192,14 @@ final class MeetingDetectionPromptController: ObservableObject {
         self.hide()
     }
 
+    /// A manual source picker replaces a suggestion, but cannot cancel an accepted recording.
+    func dismissForSourceSelection() {
+        guard !self.isStarting else { return }
+        let episodeID = self.request?.episodeID ?? self.pendingSuppressedRequest?.episodeID
+        self.hide()
+        if let episodeID { self.onTimeout?(episodeID) }
+    }
+
     private func hide() {
         self.startTask?.cancel()
         self.startTask = nil

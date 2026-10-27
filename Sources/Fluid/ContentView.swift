@@ -5205,7 +5205,7 @@ struct ContentView: View {
         self.hotkeyManager?.setMeetingRecordingCallback {
             Task { @MainActor in
                 await self.menuBarManager.toggleMeetingRecordingFromShortcut {
-                    try await AppServices.shared.startMeetingRecordingFromMenuBar()
+                    MeetingRecordingSourcePromptController.shared.handleShortcut()
                 }
             }
         }
