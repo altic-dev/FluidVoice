@@ -1,12 +1,11 @@
-@testable import FluidVoice_Debug
 import CoreML
+@testable import FluidVoice_Debug
 import XCTest
 
 #if arch(arm64)
 @MainActor
 @available(macOS 14.0, *)
 final class NemotronCacheRecoveryTests: XCTestCase {
-
     func testShouldRetryWithoutNeuralEngine_matchesNestedErrorCodeMinus14() {
         let underlying = NSError(domain: "CoreML", code: -14)
         let error = NSError(
