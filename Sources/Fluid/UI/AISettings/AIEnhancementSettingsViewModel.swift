@@ -7,6 +7,10 @@ import UniformTypeIdentifiers
 
 @MainActor
 final class AIEnhancementSettingsViewModel: ObservableObject {
+    // Explicitly nonisolated: on macOS 15.4+ the synthesized main-actor deinit can abort until the OS runtime has the fix (swiftlang/swift#88036).
+    nonisolated deinit {}
+
+    private let modelVerifications = ProviderModelVerificationStore()
     let settings: SettingsStore
     let menuBarManager: MenuBarManager
     let promptTest: DictationPromptTestCoordinator
@@ -42,12 +46,14 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
     @Published var editingReasoningEnabled: Bool = false
 
     // Provider Management
-    @Published var appleIntelligenceAvailable: Bool = false
     @Published var providerAPIKeys: [String: String] = [:]
     @Published var currentProvider: String = ""
     @Published var savedProviders: [SettingsStore.SavedProvider] = []
+    private var persistsSelectedProvider = true
+    private var managedOriginalKey: String?
     @Published var selectedProviderID: String {
         didSet {
+            guard self.persistsSelectedProvider else { return }
             self.settings.selectedProviderID = self.selectedProviderID
             self.syncPromptSelectionForSelectedProvider()
         }
@@ -81,12 +87,12 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
     @Published var showKeychainPermissionAlert: Bool = false
     @Published var keychainPermissionMessage: String = ""
 
-    // Reasoning config change tracker (triggers view updates)
+    /// Reasoning config change tracker (triggers view updates)
     @Published var reasoningConfigVersion: Int = 0
 
     // MARK: - Cached Provider Items (for scroll performance)
 
-    // These are cached to avoid recomputing on every view body evaluation
+    /// These are cached to avoid recomputing on every view body evaluation
     struct ProviderItemData: Identifiable, Hashable {
         let id: String
         let name: String
@@ -97,10 +103,13 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         let bundleID: String
         let name: String
 
-        var id: String { self.bundleID }
+        var id: String {
+            self.bundleID
+        }
     }
 
     @Published var cachedProviderItems: [ProviderItemData] = []
+    @Published var cachedAddedProviderItems: [ProviderItemData] = []
     @Published var cachedVerifiedProviderItems: [ProviderItemData] = []
     @Published var cachedUnverifiedProviderItems: [ProviderItemData] = []
 
@@ -152,13 +161,11 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
     // MARK: - Load Settings
 
     func loadSettings() {
-        self.settings.normalizeProviderSelectionForCurrentVerificationState()
         self.settings.reconcilePromptStateAfterProfileChanges()
         self.selectedProviderID = self.settings.selectedProviderID
 
         self.availableModelsByProvider = self.settings.availableModelsByProvider
         self.selectedModelByProvider = self.settings.selectedModelByProvider
-        self.appleIntelligenceAvailable = AppleIntelligenceService.isAvailable
         self.providerAPIKeys = self.settings.providerAPIKeys
         self.savedProviders = self.settings.savedProviders
         self.dictationPromptProfiles = self.settings.dictationPromptProfiles
@@ -278,7 +285,6 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         case "": return "No Provider"
         case "openai": return "OpenAI"
         case "groq": return "Groq"
-        case "apple-intelligence": return "Apple Intelligence"
         default:
             return self.savedProviders.first(where: { $0.id == providerID })?.name ?? providerID.capitalized
         }
@@ -316,10 +322,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         var seen = Set<String>()
 
         // Built-in providers list
-        let builtInList = ModelRepository.shared.builtInProvidersList(
-            includeAppleIntelligence: true,
-            appleIntelligenceAvailable: self.appleIntelligenceAvailable
-        )
+        let builtInList = ModelRepository.shared.builtInProvidersList()
 
         for provider in builtInList {
             guard !seen.contains(provider.id) else { continue }
@@ -334,6 +337,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         }
 
         self.cachedProviderItems = items
+        self.cachedAddedProviderItems = self.addedProviderItems(from: items)
         self.cachedVerifiedProviderItems = items.filter { self.connectionStatus(for: $0.id) == .success }
         self.cachedUnverifiedProviderItems = items.filter { self.connectionStatus(for: $0.id) != .success }
     }
@@ -364,59 +368,70 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         }
     }
 
-    func verifyAppleIntelligence() {
-        let providerID = "apple-intelligence"
-        let key = self.providerKey(for: providerID)
-        self.settings.verifiedProviderFingerprints[key] = "apple-intelligence"
-        self.updateConnectionStatus(.success, for: providerID)
-    }
-
     func verifyPrivateAIProvider(model: PrivateAIRegisteredModel) async -> Bool {
         let providerID = PrivateAIProviderFeature.shared.providerID
         let key = self.providerKey(for: providerID)
         guard !self.isTestingConnection else { return false }
+        let currentModel = PrivateAIModelRegistry.model(id: model.id) ?? model
+        let configuredModelID = PrivateAIIntegrationService.configuredModelID
+        let fingerprint = self.privateAIFingerprint(for: currentModel.id)
+
+        // Navigation may expose another settings owner while verification is awaiting the runtime.
+        // Do not publish an old verification into a newly selected model/backend configuration.
+        func configurationIsCurrent() -> Bool {
+            PrivateAIIntegrationService.configuredModelID == configuredModelID
+                && self.privateAIFingerprint(for: currentModel.id) == fingerprint
+        }
 
         self.isTestingConnection = true
         self.updateConnectionStatus(.testing, for: providerID)
-        self.connectionErrorMessage = ""
 
         defer {
             self.isTestingConnection = false
         }
 
-        guard PrivateAIIntegrationService.isModelInstalled(model) else {
+        guard PrivateAIIntegrationService.isModelInstalled(currentModel) else {
             self.updateConnectionStatus(.failed, for: providerID)
-            self.connectionErrorMessage = "\(model.displayName) is not installed."
+            self.setConnectionError(PrivateAIModelLoadState.missingModelMessage, for: providerID)
             return false
         }
 
         do {
-            let status = try await PrivateAIIntegrationService.shared.loadModel(model)
+            let status = try await PrivateAIIntegrationService.shared.verifyModel(currentModel)
+            guard configurationIsCurrent() else {
+                self.updateConnectionStatus(.unknown, for: providerID)
+                return false
+            }
             switch status.state {
             case .ready:
                 var fingerprints = self.settings.verifiedProviderFingerprints
-                fingerprints[key] = self.privateAIFingerprint(for: model.id)
+                fingerprints[key] = fingerprint
                 self.settings.verifiedProviderFingerprints = fingerprints
-                self.selectedModelByProvider[key] = model.id
+                var modelFingerprints = self.settings.verifiedPrivateAIModelFingerprints
+                modelFingerprints[currentModel.id] = fingerprint
+                self.settings.verifiedPrivateAIModelFingerprints = modelFingerprints
+                self.selectedModelByProvider[key] = currentModel.id
                 self.settings.selectedModelByProvider = self.selectedModelByProvider
-                self.selectProviderForUse(providerID)
                 self.updateConnectionStatus(.success, for: providerID)
-                self.connectionErrorMessage = ""
                 DebugLogger.shared.info(
-                    "Private AI Provider verification succeeded for \(model.id)",
+                    "Private AI Provider verification succeeded for \(currentModel.id)",
                     source: "AISettingsView"
                 )
                 return true
             default:
                 self.updateConnectionStatus(.failed, for: providerID)
-                self.connectionErrorMessage = status.message ?? "\(model.displayName) did not report ready."
+                self.setConnectionError(status.message ?? "\(currentModel.displayName) did not report ready.", for: providerID)
                 return false
             }
         } catch {
+            guard configurationIsCurrent() else {
+                self.updateConnectionStatus(.unknown, for: providerID)
+                return false
+            }
             self.updateConnectionStatus(.failed, for: providerID)
-            self.connectionErrorMessage = self.privateAIErrorMessage(for: error)
+            self.setConnectionError(self.privateAIErrorMessage(for: error), for: providerID)
             DebugLogger.shared.error(
-                "Private AI Provider verification failed for \(model.id): \(self.connectionErrorMessage)",
+                "Private AI Provider verification failed for \(currentModel.id): \(self.connectionErrorMessage)",
                 source: "AISettingsView"
             )
             return false
@@ -426,6 +441,13 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
     func resetVerification(for providerID: String) {
         let key = self.providerKey(for: providerID)
         self.settings.verifiedProviderFingerprints.removeValue(forKey: key)
+        if providerID == PrivateAIProviderFeature.shared.providerID {
+            let selectedModelID = self.settings.selectedModelByProvider[key]
+                ?? PrivateAIIntegrationService.configuredModelID
+            if let modelID = PrivateAIModelRegistry.canonicalModelID(for: selectedModelID) {
+                self.settings.verifiedPrivateAIModelFingerprints.removeValue(forKey: modelID)
+            }
+        }
         self.updateConnectionStatus(.unknown, for: providerID)
         self.refreshProviderItems()
     }
@@ -447,9 +469,42 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         self.fetchedModelsProviders.contains(self.providerKey(for: providerID))
     }
 
-    func selectProvider(_ providerID: String) {
+    func configureProvider(_ providerID: String) {
+        self.managedOriginalKey = self.providerAPIKey(for: providerID)
+        self.persistsSelectedProvider = false
         self.selectProviderForUse(providerID)
+        self.persistsSelectedProvider = true
         self.setEditingAPIKey(true, for: providerID)
+    }
+
+    func finishConfiguringProvider() {
+        self.persistsSelectedProvider = false
+        self.selectProviderForUse(self.settings.selectedProviderID)
+        self.persistsSelectedProvider = true
+        self.managedOriginalKey = nil
+    }
+
+    /// Commit a managed provider's key before dismissing, but never save a removed provider
+    /// or the default selected by the removal cleanup in its place.
+    func saveManagedProviderBeforeClosing(_ providerID: String) -> Bool {
+        guard !self.isFetchingModels, !self.isTestingConnection else { return false }
+        return self.saveManagedProviderAPIKeyIfNeeded(providerID)
+    }
+
+    /// Persist only an API-key edit made in the active provider manager. Selecting an
+    /// already-configured or keyless provider must not depend on Keychain write access.
+    func saveManagedProviderAPIKeyIfNeeded(_ providerID: String) -> Bool {
+        guard self.selectedProviderID == providerID,
+              let original = self.managedOriginalKey
+        else { return true }
+        let current = self.providerAPIKey(for: providerID)
+        guard original.trimmingCharacters(in: .whitespacesAndNewlines)
+            != current.trimmingCharacters(in: .whitespacesAndNewlines)
+        else { return true }
+        guard self.hasProviderAPIKeyDraft(for: providerID) else { return true }
+        guard self.saveProviderAPIKeys(invalidating: providerID) else { return false }
+        self.managedOriginalKey = current
+        return true
     }
 
     private func selectProviderForUse(_ providerID: String) {
@@ -469,6 +524,9 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
                 throw ProviderAPIKeySaveError.readbackMismatch
             }
             self.providerAPIKeys = persisted
+            if invalidationTarget == self.selectedProviderID, self.managedOriginalKey != nil {
+                self.managedOriginalKey = self.providerAPIKey(for: invalidationTarget)
+            }
             self.invalidateVerificationIfNeeded(for: invalidationTarget)
             return true
         } catch {
@@ -492,7 +550,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         self.settings.availableModelsByProvider = self.availableModelsByProvider
         self.settings.selectedModelByProvider = self.selectedModelByProvider
 
-        self.selectedProviderID = draft.id
+        self.configureProvider(draft.id)
         self.openAIBaseURL = ""
         self.updateCurrentProvider()
         self.availableModels = []
@@ -547,7 +605,6 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         self.settings.savedProviders = self.savedProviders
         self.settings.availableModelsByProvider = self.availableModelsByProvider
         self.settings.selectedModelByProvider = self.selectedModelByProvider
-        self.settings.selectedProviderID = self.selectedProviderID
         self.refreshProviderItems()
     }
 
@@ -769,7 +826,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
             return
         }
 
-        if !isLocal && apiKey.isEmpty {
+        if !isLocal, apiKey.isEmpty {
             await MainActor.run {
                 self.updateConnectionStatus(.failed, for: providerID)
                 self.setConnectionError("API key is required for \(providerName). Enter your API key above.", for: providerID)
@@ -785,36 +842,32 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
             }
             return
         }
-        let usesResponsesAPI = self.shouldVerifyWithResponsesAPI(baseURL: baseURL, model: trimmedModel)
+        let usesResponsesAPI = LLMClient.shouldUseResponsesAPI(
+            baseURL: baseURL.trimmingCharacters(in: .whitespacesAndNewlines),
+            model: trimmedModel
+        )
 
-        await MainActor.run {
-            self.isTestingConnection = true
-            self.updateConnectionStatus(.testing, for: providerID)
-        }
+        let verificationIdentity = ProviderModelVerificationStore.identity(
+            providerID: providerID, baseURL: baseURL, apiKey: apiKey, model: trimmedModel
+        )
+        self.isTestingConnection = true
+        self.updateConnectionStatus(.testing, for: providerID)
+        // Every validation/network exit must stop the spinner.
+        defer { self.isTestingConnection = false }
 
         // Build the endpoint URL
         let endpoint = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
         let fullURL: String
 
-        if usesResponsesAPI {
-            if endpoint.contains("/responses") {
-                fullURL = endpoint
-            } else if endpoint.contains("/chat/completions") {
-                fullURL = endpoint.replacingOccurrences(of: "/chat/completions", with: "/responses")
-            } else {
-                fullURL = endpoint + "/responses"
-            }
-        } else if isAnthropic {
+        if isAnthropic, !usesResponsesAPI {
             // Anthropic uses /messages endpoint, not /chat/completions
             if endpoint.contains("/messages") {
                 fullURL = endpoint
             } else {
                 fullURL = endpoint + "/messages"
             }
-        } else if endpoint.contains("/chat/completions") || endpoint.contains("/api/chat") || endpoint.contains("/api/generate") {
-            fullURL = endpoint
         } else {
-            fullURL = endpoint + "/chat/completions"
+            fullURL = LLMClient.endpoint(for: endpoint, useResponsesAPI: usesResponsesAPI)
         }
 
         // Debug logging
@@ -913,12 +966,19 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         // Make the request
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
+            // A late result must never label a different model or changed credentials.
+            guard verificationIdentity == self.modelVerificationIdentity(for: providerID) else { return }
 
             if let httpResponse = response as? HTTPURLResponse {
                 let statusCode = httpResponse.statusCode
+                let payload = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+                let apiError = payload?["error"]
+                let hasAPIError = apiError != nil && !(apiError is NSNull)
 
-                if statusCode >= 200, statusCode < 300 {
+                if statusCode >= 200, statusCode < 300, !hasAPIError {
                     await MainActor.run {
+                        guard verificationIdentity == self.modelVerificationIdentity(for: providerID) else { return }
+                        self.modelVerifications.recordSuccess(verificationIdentity)
                         self.updateConnectionStatus(.success, for: providerID)
                         self.setEditingAPIKey(false, for: providerID)
                         self.storeVerificationFingerprint(for: providerID, baseURL: baseURL, apiKey: apiKey)
@@ -934,31 +994,53 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
                         source: "AISettingsView"
                     )
                     await MainActor.run {
+                        guard verificationIdentity == self.modelVerificationIdentity(for: providerID) else { return }
+                        self.modelVerifications.remove(verificationIdentity)
                         self.updateConnectionStatus(.failed, for: providerID)
                         self.setConnectionError(errorMessage, for: providerID)
                     }
                 }
             } else {
                 await MainActor.run {
+                    guard verificationIdentity == self.modelVerificationIdentity(for: providerID) else { return }
+                    self.modelVerifications.remove(verificationIdentity)
                     self.updateConnectionStatus(.failed, for: providerID)
                     self.setConnectionError("Unexpected response type from server", for: providerID)
                 }
             }
         } catch {
+            guard verificationIdentity == self.modelVerificationIdentity(for: providerID) else { return }
+            self.modelVerifications.remove(verificationIdentity)
             let errorMessage = self.interpretNetworkError(error, providerID: providerID)
             DebugLogger.shared.error(
                 "testAPIConnection network error for \(providerID): \(error.localizedDescription)",
                 source: "AISettingsView"
             )
             await MainActor.run {
+                guard verificationIdentity == self.modelVerificationIdentity(for: providerID) else { return }
                 self.updateConnectionStatus(.failed, for: providerID)
                 self.setConnectionError(errorMessage, for: providerID)
             }
         }
+    }
 
-        await MainActor.run {
-            self.isTestingConnection = false
-        }
+    private func modelVerificationIdentity(for providerID: String) -> String {
+        ProviderModelVerificationStore.identity(
+            providerID: providerID,
+            baseURL: self.providerBaseURL(for: providerID),
+            apiKey: self.providerAPIKey(for: providerID),
+            model: self.selectedModel(for: providerID)
+        )
+    }
+
+    func isModelVerified(for providerID: String) -> Bool {
+        self.modelVerifications.contains(self.modelVerificationIdentity(for: providerID))
+    }
+
+    func canUseProviderWithoutVerification(_ providerID: String) -> Bool {
+        let baseURL = self.providerBaseURL(for: providerID).trimmingCharacters(in: .whitespacesAndNewlines)
+        return !baseURL.isEmpty && !self.selectedModel(for: providerID).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && (self.isLocalEndpoint(baseURL) || !self.providerAPIKey(for: providerID).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
     }
 
     /// Returns the provider's HTTP error body unchanged so setup errors match the real API response.
@@ -970,22 +1052,6 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
             return "HTTP \(statusCode): \(responseBody)"
         }
         return "HTTP \(statusCode)"
-    }
-
-    private func shouldVerifyWithResponsesAPI(baseURL: String, model: String) -> Bool {
-        if baseURL.contains("/responses") {
-            return true
-        }
-
-        guard let url = URL(string: baseURL),
-              url.host?.lowercased() == "api.openai.com"
-        else { return false }
-
-        let modelLower = model.lowercased()
-        return modelLower.hasPrefix("gpt-5") ||
-            modelLower.hasPrefix("o1") ||
-            modelLower.hasPrefix("o3") ||
-            modelLower.hasPrefix("o4")
     }
 
     /// Interprets network errors with actionable guidance
@@ -1025,15 +1091,6 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
             return
         }
 
-        // Handle Apple Intelligence specially (no base URL)
-        if newValue == "apple-intelligence" {
-            self.openAIBaseURL = ""
-            self.updateCurrentProvider()
-            self.availableModels = ["System Model"]
-            self.selectedModel = "System Model"
-            return
-        }
-
         // Check if it's a built-in provider
         if ModelRepository.shared.isBuiltIn(newValue) {
             self.openAIBaseURL = ModelRepository.shared.defaultBaseURL(for: newValue)
@@ -1055,6 +1112,14 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
     }
 
     func startEditingProvider() {
+        if PrivateFeatures.privateAIProvider, self.selectedProviderID == PrivateAIProviderFeature.shared.providerID {
+            self.editProviderName = PrivateAIProviderFeature.displayName
+            self.editProviderBaseURL = ""
+            self.editProviderApiKey = ""
+            self.showingEditProvider = true
+            return
+        }
+
         // Handle built-in providers
         if ModelRepository.shared.isBuiltIn(self.selectedProviderID) {
             self.editProviderName = ModelRepository.shared.displayName(for: self.selectedProviderID)
@@ -1090,24 +1155,47 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         return true
     }
 
-    func deleteCurrentProvider() {
-        self.savedProviders.removeAll { $0.id == self.selectedProviderID }
+    @discardableResult
+    func deleteCurrentProvider() -> Bool {
+        guard !self.isFetchingModels, !self.isTestingConnection,
+              !self.selectedProviderID.isEmpty,
+              self.selectedProviderID != PrivateAIProviderFeature.shared.providerID
+        else { return false }
+        let deletedProviderID = self.selectedProviderID
+        let deletedDefaultProvider = self.settings.selectedProviderID == deletedProviderID
+        let key = self.providerKey(for: deletedProviderID)
+        let previousKeys = self.providerAPIKeys
+        let persistedKey = self.managedOriginalKey ?? self.providerAPIKey(for: deletedProviderID)
+        let hadPersistedKey = !persistedKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        self.providerAPIKeys.removeValue(forKey: key)
+        if key != deletedProviderID {
+            self.providerAPIKeys.removeValue(forKey: deletedProviderID)
+        }
+        if hadPersistedKey, !self.saveProviderAPIKeys(invalidating: deletedProviderID) {
+            self.providerAPIKeys = previousKeys
+            return false
+        }
+        self.clearProviderAssignments(for: deletedProviderID)
+        let remainingAddedIDs = (UserDefaults.standard.stringArray(forKey: Self.addedProviderIDsKey) ?? []).filter { $0 != deletedProviderID }
+        UserDefaults.standard.set(remainingAddedIDs, forKey: Self.addedProviderIDsKey)
+        self.savedProviders.removeAll { $0.id == deletedProviderID }
         self.saveSavedProviders()
-        let key = self.providerKey(for: self.selectedProviderID)
         self.availableModelsByProvider.removeValue(forKey: key)
         self.selectedModelByProvider.removeValue(forKey: key)
-        self.providerAPIKeys.removeValue(forKey: key)
-        self.saveProviderAPIKeys()
         self.settings.verifiedProviderFingerprints.removeValue(forKey: key)
         self.settings.availableModelsByProvider = self.availableModelsByProvider
         self.settings.selectedModelByProvider = self.selectedModelByProvider
-        self.selectedProviderID = ""
-        self.openAIBaseURL = ""
-        self.updateCurrentProvider()
-        self.availableModels = []
-        self.selectedModel = ""
+        if deletedDefaultProvider {
+            self.settings.selectedProviderID = ""
+            self.settings.selectedModel = nil
+        }
+        self.fetchedModelsProviders.remove(key)
+        self.clearEditProviderDraft()
+        self.finishConfiguringProvider()
         self.refreshVerifiedProviders()
+        self.refreshProviderItems()
         self.selectSoleVerifiedProviderIfNeeded()
+        return true
     }
 
     func saveEditedProvider() {
@@ -1163,6 +1251,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
     }
 
     func fetchModelsForCurrentProvider() async {
+        guard !self.isFetchingModels, !self.isTestingConnection else { return }
         self.refreshingProviderID = self.selectedProviderID
         self.isFetchingModels = true
         self.fetchModelsError = nil
@@ -1254,6 +1343,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         guard !trimmedModel.isEmpty else { return }
 
         let key = self.providerKey(for: providerID)
+        let changed = self.selectedModelByProvider[key] != trimmedModel
         self.selectedModelByProvider[key] = trimmedModel
         self.settings.selectedModelByProvider = self.selectedModelByProvider
 
@@ -1261,6 +1351,9 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
             self.availableModels = self.models(for: providerID)
             self.selectedModel = trimmedModel
             self.syncPromptSelectionForSelectedProvider()
+        }
+        if changed {
+            self.updateConnectionStatus(self.isModelVerified(for: providerID) ? .success : .unknown, for: providerID)
         }
     }
 
@@ -1414,14 +1507,6 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         let providers = ModelRepository.builtInProviderIDs + self.savedProviders.map { $0.id }
         for providerID in providers {
             let key = self.providerKey(for: providerID)
-            if providerID == "apple-intelligence" {
-                if self.settings.verifiedProviderFingerprints[key] == "apple-intelligence" {
-                    statuses[providerID] = .success
-                } else if statuses[providerID] == .success {
-                    statuses[providerID] = .unknown
-                }
-                continue
-            }
             if providerID == PrivateAIProviderFeature.shared.providerID {
                 if PrivateAIProviderPromptFormat.verifiedModelID(settings: self.settings) != nil {
                     statuses[providerID] = .success
@@ -1553,8 +1638,9 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         return singleLine.count > 120 ? String(singleLine.prefix(120)) + "…" : singleLine
     }
 
-    /// Combine a user-visible body with the hidden base prompt to ensure role/intent is always present.
+    /// Preview uses the same prompt composition as the selected editor mode.
     func combinedDraftPrompt(_ text: String, mode: SettingsStore.PromptMode) -> String {
+        if mode.normalized == .dictate, self.promptEditorMode?.isDefault != true { return text }
         let body = SettingsStore.stripBasePrompt(for: mode, from: text)
         return SettingsStore.combineBasePrompt(for: mode, with: body)
     }
@@ -1645,7 +1731,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         self.draftPromptMode = profile.mode.normalized
         self.draftIncludeContext = (self.draftPromptMode == .edit) ? true : profile.includeContext
         self.draftPromptName = profile.name
-        self.draftPromptText = SettingsStore.stripBasePrompt(for: self.draftPromptMode, from: profile.prompt)
+        self.draftPromptText = SettingsStore.customPromptBody(profile.prompt, mode: self.draftPromptMode)
         self.promptEditorSessionID = UUID()
         self.promptEditorMode = .edit(promptID: profile.id)
     }
@@ -1678,7 +1764,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         }
 
         let name = self.draftPromptName.trimmingCharacters(in: .whitespacesAndNewlines)
-        let promptBody = SettingsStore.stripBasePrompt(for: self.draftPromptMode, from: self.draftPromptText)
+        let promptBody = SettingsStore.customPromptBody(self.draftPromptText, mode: self.draftPromptMode)
         let includeContext = (self.draftPromptMode.normalized == .edit) ? true : self.draftIncludeContext
 
         var profiles = self.settings.dictationPromptProfiles
@@ -1691,6 +1777,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
             var updated = profiles[idx]
             updated.name = name
             updated.prompt = promptBody
+            updated.usesLegacyEmptyPromptFallback = false
             updated.mode = self.draftPromptMode.normalized
             updated.includeContext = includeContext
             updated.updatedAt = now
@@ -1857,7 +1944,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
                       $0.mode.normalized == mode.normalized
               })
         else {
-            return "Built-in Default"
+            return mode.normalized == .dictate ? SettingsStore.DictationModeLabels.externalDefault : "Built-in Default"
         }
 
         let trimmed = profile.name.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1885,10 +1972,6 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
     }
 
     func isPrivateAIPromptAvailable() -> Bool {
-        PrivateAIProviderPromptFormat.isAvailable(settings: self.settings)
-    }
-
-    func isPrivateAIModelSelected() -> Bool {
         PrivateAIProviderPromptFormat.isAvailable(settings: self.settings)
     }
 
@@ -1936,8 +2019,9 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
 
     func defaultVerifiedPromptProviderID() -> String {
         let verified = self.verifiedPromptProviders()
-        if verified.contains(where: { $0.id == self.selectedProviderID }) {
-            return self.selectedProviderID
+        let persistedProviderID = self.settings.selectedProviderID
+        if verified.contains(where: { $0.id == persistedProviderID }) {
+            return persistedProviderID
         }
         return verified.first?.id ?? ""
     }
@@ -1955,12 +2039,18 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         let modelName = (self.selectedModelByProvider[providerKey] ?? self.selectedModel)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard !modelName.isEmpty else { return providerName }
-        return "\(providerName) - \(modelName)"
+        return "\(providerName) - \(ModelDisplayName.forID(modelName))"
     }
 
     func selectPrivateAIPromptIfAvailable() {
         guard self.isPrivateAIPromptAvailable() else { return }
         self.settings.setDictationPromptSelection(.privateAI)
+        // "Only in listed apps" with an empty list would silently keep every app on Basic.
+        if self.settings.promptRoutingScope(for: .dictate) == .selectedAppsOnly,
+           self.settings.appPromptBindings(for: .dictate).isEmpty
+        {
+            self.settings.setPromptRoutingScope(.allApps, for: .dictate)
+        }
         self.refreshPromptSelectionState()
     }
 
@@ -1969,6 +2059,25 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
     /// a user's deliberate "off" or "default" choice.
     private func syncPromptSelectionForSelectedProvider() {
         // Intentionally empty. Selection is sticky.
+    }
+
+    /// True while any dictation shortcut still routes through Fluid Intelligence, even when
+    /// the runtime has been freed by the idle unloader.
+    var routesDictationThroughPrivateAI: Bool {
+        SettingsStore.DictationShortcutSlot.allCases.contains { slot in
+            DictationProviderRoute.resolve(settings: self.settings, dictationSlot: slot).usesPrivateAI
+        }
+    }
+
+    /// Turns off every dictation shortcut currently routed through Fluid Intelligence.
+    /// Slots bound to a cloud provider keep their own selection.
+    func turnOffPrivateAIDictationSlots() {
+        for slot in SettingsStore.DictationShortcutSlot.allCases
+            where DictationProviderRoute.resolve(settings: self.settings, dictationSlot: slot).usesPrivateAI
+        {
+            self.settings.setDictationPromptSelection(.off, for: slot)
+        }
+        self.refreshPromptSelectionState()
     }
 
     func selectPrimaryDictationPromptOff() {
@@ -2069,11 +2178,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
 
     func setSelectedPromptID(_ id: String?, for mode: SettingsStore.PromptMode) {
         if mode.normalized == .dictate {
-            if self.isPrivateAIModelSelected() {
-                if id == nil {
-                    self.settings.setDictationPromptSelection(.privateAI)
-                }
-            } else if let id {
+            if let id {
                 self.settings.setDictationPromptSelection(.profile(id))
             } else {
                 self.settings.setDictationPromptSelection(.default)

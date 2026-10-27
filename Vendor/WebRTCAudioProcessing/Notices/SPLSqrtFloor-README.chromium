@@ -1,0 +1,14 @@
+Name: spl sqrt floor
+Short Name: spl_sqrt_floor
+URL: http://www.pertinentdetail.org/sqrt
+Update Mechanism: Static (https://crbug.com/419413497)
+Version: N/A
+Date: 2018-03-22
+License: SPL-SQRT-FLOOR
+License File: LICENSE
+Security Critical: yes
+Shipped: yes
+
+Description:
+Sqrt routine, originally was posted to the USENET group comp.sys.arm on
+20 Jun 1996.

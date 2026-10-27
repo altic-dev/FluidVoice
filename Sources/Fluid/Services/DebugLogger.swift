@@ -1,34 +1,23 @@
-import Combine
 import Foundation
-import SwiftUI
 
-class DebugLogger: ObservableObject {
+final nonisolated class DebugLogger: @unchecked Sendable {
     static let shared = DebugLogger()
 
-    @Published var logs: [LogEntry] = []
-    private let maxLogs = 1000 // Keep last 1000 log entries
-    private let queue = DispatchQueue(label: "debug.logger", qos: .utility)
+    /// Production builds exclude verbose diagnostics; local Release investigations
+    /// explicitly opt in with FLUIDVOICE_DIAGNOSTICS at compile time.
+    static let diagnosticsEnabled: Bool = {
+        #if DEBUG || FLUIDVOICE_DIAGNOSTICS
+        true
+        #else
+        false
+        #endif
+    }()
 
-    // IMPORTANT: Cached setting to avoid circular dependency with SettingsStore
-    // During SettingsStore.init(), if an error is logged, accessing SettingsStore.shared
-    // would cause a recursive dispatch_once deadlock. We use a cached value instead.
-    private var _loggingEnabledCache: Bool?
-    private var loggingEnabled: Bool {
-        if let cached = _loggingEnabledCache {
-            return cached
-        }
-        // Delay access to SettingsStore until after initial singleton setup
-        // Use UserDefaults directly to avoid the circular dependency
-        let defaults = UserDefaults.standard
-        let enabled: Bool
-        if defaults.object(forKey: "EnableDebugLogs") == nil {
-            enabled = true
-        } else {
-            enabled = defaults.bool(forKey: "EnableDebugLogs")
-        }
-        self._loggingEnabledCache = enabled
-        return enabled
-    }
+    /// Request-local correlation survives actor hops without mutable global state.
+    /// Capture explicitly before handing work to a DispatchQueue or detached task.
+    @TaskLocal static var pipelineID: String?
+
+    private let queue = DispatchQueue(label: "debug.logger", qos: .utility)
 
     private static let logFormatter: DateFormatter = {
         let formatter = DateFormatter()
@@ -38,119 +27,71 @@ class DebugLogger: ObservableObject {
         return formatter
     }()
 
-    struct LogEntry: Identifiable, Equatable {
-        let id = UUID()
-        let timestamp: Date
-        let level: LogLevel
-        let message: String
-        let source: String
-        let formattedTimestamp: String
-
-        init(timestamp: Date, level: LogLevel, message: String, source: String, formattedTimestamp: String) {
-            self.timestamp = timestamp
-            self.level = level
-            self.message = message
-            self.source = source
-            self.formattedTimestamp = formattedTimestamp
-        }
-    }
-
-    enum LogLevel: String, CaseIterable {
+    enum LogLevel: String {
         case info = "INFO"
         case warning = "WARN"
         case error = "ERROR"
         case debug = "DEBUG"
-
-        var color: Color {
-            switch self {
-            case .info: return .blue
-            case .warning: return .orange
-            case .error: return .red
-            case .debug: return .gray
-            }
-        }
     }
 
     private init() {}
 
-    /// Refresh the cached logging setting (call after SettingsStore is fully initialized)
-    func refreshLoggingEnabled() {
-        let defaults = UserDefaults.standard
-        if defaults.object(forKey: "EnableDebugLogs") == nil {
-            self._loggingEnabledCache = true
-        } else {
-            self._loggingEnabledCache = defaults.bool(forKey: "EnableDebugLogs")
-        }
-    }
-
-    func log(_ message: String, level: LogLevel = .info, source: String = "App") {
-        let loggingEnabled = self.loggingEnabled
-
+    func log(_ message: @autoclosure () -> String, level: LogLevel = .info, source: String = "App") {
+        guard level != .debug || Self.diagnosticsEnabled else { return }
+        let message = message()
+        let pipelineID = Self.pipelineID
         self.queue.async {
-            let timestamp = Date()
-            let timestampString = Self.logFormatter.string(from: timestamp)
-
-            let formattedLine = self.formatLogLine(timestamp: timestampString, level: level, source: source, message: message)
-
-            // Always persist diagnostics so issues can be debugged even if UI debug mode is off.
-            FileLogger.shared.append(line: formattedLine)
-            print(formattedLine)
-
-            // UI log panel still respects the in-app debug toggle.
-            guard loggingEnabled else { return }
-
-            let entry = LogEntry(
-                timestamp: timestamp,
-                level: level,
-                message: message,
-                source: source,
-                formattedTimestamp: timestampString
-            )
-
-            DispatchQueue.main.async {
-                self.logs.append(entry)
-
-                // Only trim when significantly above capacity to reduce churn
-                if self.logs.count > self.maxLogs + 100 {
-                    let excess = self.logs.count - self.maxLogs
-                    if excess > 0 {
-                        self.logs.removeFirst(excess)
-                    }
-                }
-            }
+            self.write(message, level: level, source: source, pipelineID: pipelineID)
         }
     }
 
-    func clear() {
-        DispatchQueue.main.async {
-            self.logs.removeAll()
+    /// Defers expensive diagnostic string construction until after latency-sensitive
+    /// work has continued on the caller's executor.
+    func logLazy(
+        level: LogLevel = .info,
+        source: String = "App",
+        _ message: @escaping @Sendable () -> String
+    ) {
+        guard level != .debug || Self.diagnosticsEnabled else { return }
+        let pipelineID = Self.pipelineID
+        self.queue.async {
+            self.write(message(), level: level, source: source, pipelineID: pipelineID)
         }
     }
 
-    func exportLogs() -> String {
-        return self.logs.map { entry in
-            self.formatLogEntry(entry)
-        }.joined(separator: "\n")
+    private func write(_ message: String, level: LogLevel, source: String, pipelineID: String?) {
+        let timestampString = Self.logFormatter.string(from: Date())
+        let formattedLine = self.formatLogLine(
+            timestamp: timestampString,
+            level: level,
+            source: source,
+            message: message,
+            pipelineID: pipelineID
+        )
+
+        // Retain ordinary support logs in production; verbose diagnostics are gated before enqueueing.
+        FileLogger.shared.append(line: formattedLine)
+        #if DEBUG || FLUIDVOICE_DIAGNOSTICS
+        print(formattedLine)
+        #endif
     }
 
-    private func formatLogEntry(_ entry: LogEntry) -> String {
-        self.formatLogLine(timestamp: entry.formattedTimestamp, level: entry.level, source: entry.source, message: entry.message)
-    }
-
-    private func formatLogLine(timestamp: String, level: LogLevel, source: String, message: String) -> String {
-        "[\(timestamp)] [\(level.rawValue)] [\(source)] \(message)"
+    private func formatLogLine(timestamp: String, level: LogLevel, source: String, message: String, pipelineID: String?) -> String {
+        let correlation = pipelineID.map { "pipelineID=\($0) " } ?? ""
+        return "[\(timestamp)] [\(level.rawValue)] [\(source)] \(correlation)\(message)"
     }
 }
 
 // Convenience functions for easier logging
-extension DebugLogger {
+nonisolated extension DebugLogger {
     func info(_ message: String, source: String = "App") {
         self.log(message, level: .info, source: source)
     }
 
-    func benchmark(_ marker: String, message: String, source: String = "Benchmark") {
+    func benchmark(_ marker: String, message: @autoclosure () -> String, source: String = "Benchmark") {
+        guard Self.diagnosticsEnabled else { return }
         let now = ProcessInfo.processInfo.systemUptime
-        self.info("\(marker) t=\(String(format: "%.6f", now)) \(message)", source: source)
+        self.info("\(marker) t=\(String(format: "%.6f", now)) \(message())", source: source)
     }
 
     func warning(_ message: String, source: String = "App") {
@@ -161,7 +102,8 @@ extension DebugLogger {
         self.log(message, level: .error, source: source)
     }
 
-    func debug(_ message: String, source: String = "App") {
-        self.log(message, level: .debug, source: source)
+    func debug(_ message: @autoclosure () -> String, source: String = "App") {
+        guard Self.diagnosticsEnabled else { return }
+        self.log(message(), level: .debug, source: source)
     }
 }

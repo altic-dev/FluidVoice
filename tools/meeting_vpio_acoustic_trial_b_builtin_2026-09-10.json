@@ -1,0 +1,198 @@
+{
+  "caveats" : [
+    "Trial B renders known local PCM through this process's own VPIO output path; it does not route another application's audio and says nothing about whether Apple's echo reference receives other-process playback.",
+    "attenuationDB compares an electrical reference against an acoustic capture and is uncalibrated. Only differences between variants measured back-to-back on one unchanged rig are readable, and even those are confounded by speaker level, room, and AGC.",
+    "A single run establishes neither echo cancellation nor its absence. Treat every number as configuration and coupling evidence pending the paired ScreenCaptureKit topology comparison."
+  ],
+  "postRollSeconds" : 0.6,
+  "preRollSeconds" : 0.3,
+  "renderVolume" : 0.5,
+  "runs" : [
+    {
+      "captureWindow" : {
+        "contributingSegmentCount" : 36,
+        "coverage" : 0.9472752192982457,
+        "frameCount" : 182400,
+        "overlapFrameCount" : 0,
+        "resyncedSegmentCount" : 0,
+        "startHostSeconds" : 149569.71863929168,
+        "synthesizedFrameCount" : 0,
+        "writtenFrameCount" : 172783
+      },
+      "control" : {
+        "applied" : true,
+        "appliedAGCEnabled" : true,
+        "appliedBypass" : false,
+        "readbackAGCEnabled" : true,
+        "readbackAGCRawValue" : 1,
+        "readbackAGCStatus" : 0,
+        "readbackBypass" : false,
+        "readbackBypassRawValue" : 0,
+        "readbackBypassStatus" : 0,
+        "requestedAGCEnabled" : true,
+        "requestedBypass" : false
+      },
+      "reasons" : [
+        "captureGap",
+        "captureWindowIncomplete"
+      ],
+      "render" : {
+        "combinedPeak" : 0.03125,
+        "defaultOutputDeviceID" : 87,
+        "mixerChannelCount" : 2,
+        "mixerSampleRate" : 48000,
+        "outputConnectionCount" : 1,
+        "outputDeviceID" : 87,
+        "outputRouteConfirmed" : true,
+        "outputVolumeReadable" : true,
+        "reasons" : [
+
+        ],
+        "renderStartHostSeconds" : 149570.01863929167,
+        "renderStartResolved" : true,
+        "sampleRate" : 48000,
+        "scheduledFrameCount" : 139200,
+        "systemVolume" : 0.25,
+        "tapFrameCount" : 139200,
+        "tapInvalidHostTimeCount" : 0,
+        "tapPeak" : 0.0883883461356163,
+        "tapRMS" : 0.03194666943073746,
+        "volume" : 0.5
+      },
+      "valid" : false,
+      "variant" : "vpioActive"
+    },
+    {
+      "captureWindow" : {
+        "contributingSegmentCount" : 36,
+        "coverage" : 0.9329002192982456,
+        "frameCount" : 182400,
+        "overlapFrameCount" : 0,
+        "resyncedSegmentCount" : 0,
+        "startHostSeconds" : 149574.2732747917,
+        "synthesizedFrameCount" : 0,
+        "writtenFrameCount" : 170161
+      },
+      "control" : {
+        "applied" : true,
+        "appliedAGCEnabled" : false,
+        "appliedBypass" : false,
+        "readbackAGCEnabled" : false,
+        "readbackAGCRawValue" : 0,
+        "readbackAGCStatus" : 0,
+        "readbackBypass" : false,
+        "readbackBypassRawValue" : 0,
+        "readbackBypassStatus" : 0,
+        "requestedAGCEnabled" : false,
+        "requestedBypass" : false
+      },
+      "reasons" : [
+        "captureGap",
+        "captureWindowIncomplete"
+      ],
+      "render" : {
+        "combinedPeak" : 0.03125,
+        "defaultOutputDeviceID" : 87,
+        "mixerChannelCount" : 2,
+        "mixerSampleRate" : 48000,
+        "outputConnectionCount" : 1,
+        "outputDeviceID" : 87,
+        "outputRouteConfirmed" : true,
+        "outputVolumeReadable" : true,
+        "reasons" : [
+
+        ],
+        "renderStartHostSeconds" : 149574.57327479168,
+        "renderStartResolved" : true,
+        "sampleRate" : 48000,
+        "scheduledFrameCount" : 139200,
+        "systemVolume" : 0.25,
+        "tapFrameCount" : 139200,
+        "tapInvalidHostTimeCount" : 0,
+        "tapPeak" : 0.0883883461356163,
+        "tapRMS" : 0.03194666943073746,
+        "volume" : 0.5
+      },
+      "valid" : false,
+      "variant" : "vpioActiveNoAGC"
+    },
+    {
+      "captureWindow" : {
+        "contributingSegmentCount" : 36,
+        "coverage" : 0.9473684210526315,
+        "frameCount" : 182400,
+        "overlapFrameCount" : 0,
+        "resyncedSegmentCount" : 0,
+        "startHostSeconds" : 149578.81724337503,
+        "synthesizedFrameCount" : 0,
+        "writtenFrameCount" : 172800
+      },
+      "control" : {
+        "applied" : true,
+        "appliedAGCEnabled" : true,
+        "appliedBypass" : true,
+        "readbackAGCEnabled" : true,
+        "readbackAGCRawValue" : 1,
+        "readbackAGCStatus" : 0,
+        "readbackBypass" : true,
+        "readbackBypassRawValue" : 1,
+        "readbackBypassStatus" : 0,
+        "requestedAGCEnabled" : true,
+        "requestedBypass" : true
+      },
+      "reasons" : [
+        "captureGap",
+        "captureWindowIncomplete"
+      ],
+      "render" : {
+        "combinedPeak" : 0.03125,
+        "defaultOutputDeviceID" : 87,
+        "mixerChannelCount" : 2,
+        "mixerSampleRate" : 48000,
+        "outputConnectionCount" : 1,
+        "outputDeviceID" : 87,
+        "outputRouteConfirmed" : true,
+        "outputVolumeReadable" : true,
+        "reasons" : [
+
+        ],
+        "renderStartHostSeconds" : 149579.11724337502,
+        "renderStartResolved" : true,
+        "sampleRate" : 48000,
+        "scheduledFrameCount" : 139200,
+        "systemVolume" : 0.25,
+        "tapFrameCount" : 139200,
+        "tapInvalidHostTimeCount" : 0,
+        "tapPeak" : 0.0883883461356163,
+        "tapRMS" : 0.03194666943073746,
+        "volume" : 0.5
+      },
+      "valid" : false,
+      "variant" : "vpioBypassed"
+    }
+  ],
+  "schemaVersion" : 1,
+  "settleSeconds" : 0.35,
+  "stimulus" : {
+    "chirpEndHz" : 7800,
+    "chirpFrameCount" : 48000,
+    "chirpStartHz" : 180,
+    "gapFrameCount" : 9600,
+    "leadingSilenceFrameCount" : 9600,
+    "measuredPeak" : 0.25,
+    "measuredRMS" : 0.09035877883434296,
+    "safetyMaximumRMS" : 0.15000000596046448,
+    "safetyMinimumRMS" : 0.019999999552965164,
+    "safetyPeakLimit" : 0.3499999940395355,
+    "sampleRate" : 48000,
+    "schemaVersion" : 1,
+    "seed" : 6853810188858556417,
+    "speechF0EndHz" : 145,
+    "speechF0StartHz" : 115,
+    "speechLikeFrameCount" : 57600,
+    "targetPeak" : 0.25,
+    "totalFrameCount" : 139200,
+    "trailingSilenceFrameCount" : 14400,
+    "withinSafetyBounds" : true
+  }
+}

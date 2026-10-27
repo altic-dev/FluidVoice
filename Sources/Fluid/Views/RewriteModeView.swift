@@ -3,7 +3,10 @@ import SwiftUI
 struct RewriteModeView: View {
     @ObservedObject var service: RewriteModeService
     @EnvironmentObject var appServices: AppServices
-    private var asr: ASRService { self.appServices.asr }
+    private var asr: ASRService {
+        self.appServices.asr
+    }
+
     @ObservedObject var settings = SettingsStore.shared
     @EnvironmentObject var menuBarManager: MenuBarManager
     @Environment(\.theme) private var theme
@@ -15,7 +18,7 @@ struct RewriteModeView: View {
     @State private var isHoveringHowTo: Bool = false
     @State private var isThinkingExpanded: Bool = false
 
-    // Local state for available models (derived from shared AI Settings pool)
+    /// Local state for available models (derived from shared AI Settings pool)
     @State private var availableModels: [String] = []
 
     var body: some View {
@@ -23,10 +26,10 @@ struct RewriteModeView: View {
             // Header - cleaner, just title and close
             HStack {
                 Image(systemName: "pencil.and.outline")
-                    .font(.title2)
+                    .font(.fluidSystem(.title2))
                     .foregroundStyle(self.theme.palette.accent)
                 Text("Edit Mode")
-                    .font(.title2)
+                    .font(.fluidSystem(.title2))
                     .fontWeight(.bold)
 
                 Spacer()
@@ -42,10 +45,10 @@ struct RewriteModeView: View {
 
             HStack(spacing: 6) {
                 Image(systemName: "info.circle")
-                    .font(.caption)
+                    .font(.fluidSystem(.caption))
                     .foregroundStyle(self.theme.palette.secondaryText)
                 Text("Edit Mode is powered by Custom Prompts.")
-                    .font(.caption)
+                    .font(.fluidSystem(.caption))
                     .foregroundStyle(self.theme.palette.secondaryText)
                 Spacer(minLength: 0)
             }
@@ -65,7 +68,7 @@ struct RewriteModeView: View {
                         VStack(alignment: .leading, spacing: 8) {
                             HStack {
                                 Text("Original Text")
-                                    .font(.caption)
+                                    .font(.fluidSystem(.caption))
                                     .fontWeight(.bold)
                                     .foregroundStyle(.secondary)
                                 Spacer()
@@ -73,7 +76,7 @@ struct RewriteModeView: View {
                                     Button(self.showOriginal ? "Hide" : "Show") {
                                         withAnimation { self.showOriginal.toggle() }
                                     }
-                                    .font(.caption)
+                                    .font(.fluidSystem(.caption))
                                     .buttonStyle(.link)
                                 }
                             }
@@ -90,17 +93,17 @@ struct RewriteModeView: View {
                     } else {
                         VStack(spacing: 12) {
                             Image(systemName: "text.bubble")
-                                .font(.system(size: 48))
+                                .font(.fluidSystem(size: 48))
                                 .foregroundStyle(self.theme.palette.accent)
                             Text("Edit Mode")
-                                .font(.title2)
+                                .font(.fluidSystem(.title2))
                                 .fontWeight(.bold)
                             Text("Ask the AI to write anything for you - emails, replies, summaries, answers, and more.")
                                 .foregroundStyle(.secondary)
                                 .multilineTextAlignment(.center)
 
                             Text("Or select text first to rewrite existing content.")
-                                .font(.caption)
+                                .font(.fluidSystem(.caption))
                                 .foregroundStyle(.tertiary)
                                 .multilineTextAlignment(.center)
                                 .padding(.top, 4)
@@ -113,7 +116,7 @@ struct RewriteModeView: View {
                     if !self.service.rewrittenText.isEmpty {
                         VStack(alignment: .leading, spacing: 8) {
                             Text("Rewritten Text")
-                                .font(.caption)
+                                .font(.fluidSystem(.caption))
                                 .fontWeight(.bold)
                                 .foregroundStyle(self.theme.palette.accent)
 
@@ -128,12 +131,15 @@ struct RewriteModeView: View {
                                 Button("Try Again") {
                                     self.service.rewrittenText = ""
                                 }
-                                .buttonStyle(.bordered)
+                                .fluidOutlinedButton()
 
                                 Spacer()
 
                                 Button("Replace Original") {
-                                    self.service.acceptRewrite()
+                                    let text = self.service.rewrittenText
+                                    Task { @MainActor in
+                                        await self.service.acceptRewrite(text)
+                                    }
                                     self.onClose?()
                                 }
                                 .buttonStyle(.borderedProminent)
@@ -175,35 +181,25 @@ struct RewriteModeView: View {
                 // Provider Selector (compact, searchable)
                 SearchableProviderPicker(
                     builtInProviders: self.builtInProvidersList,
-                    savedProviders: self.settings.savedProviders.filter { !self.isPrivateAIProviderID($0.id) },
+                    savedProviders: self.settings.savedProviders,
                     selectedProviderID: Binding(
                         get: { self.settings.rewriteModeSelectedProviderID },
                         set: { newValue in
-                            // Prevent selecting disabled Apple Intelligence
-                            if newValue == "apple-intelligence-disabled" {
-                                return
-                            } else if self.isPrivateAIProviderID(newValue) {
-                                return
-                            } else {
-                                self.settings.rewriteModeSelectedProviderID = newValue
-                            }
+                            self.settings.rewriteModeSelectedProviderID = newValue
                             self.updateAvailableModels()
                         }
                     )
                 )
 
-                // Model Selector (hidden for Apple Intelligence)
-                if self.settings.rewriteModeSelectedProviderID != "apple-intelligence" {
-                    SearchableModelPicker(
-                        models: self.availableModels,
-                        selectedModel: Binding(
-                            get: { self.settings.rewriteModeSelectedModel ?? self.availableModels.first ?? "" },
-                            set: { self.settings.rewriteModeSelectedModel = $0 }
-                        ),
-                        onRefresh: nil,
-                        isRefreshing: false
-                    )
-                }
+                SearchableModelPicker(
+                    models: self.availableModels,
+                    selectedModel: Binding(
+                        get: { self.settings.rewriteModeSelectedModel ?? self.availableModels.first ?? "" },
+                        set: { self.settings.rewriteModeSelectedModel = $0 }
+                    ),
+                    onRefresh: nil,
+                    isRefreshing: false
+                )
 
                 // Input field (flexible)
                 TextField(
@@ -217,7 +213,7 @@ struct RewriteModeView: View {
 
                 Button(action: self.submitRequest) {
                     Image(systemName: "arrow.up.circle.fill")
-                        .font(.title2)
+                        .font(.fluidSystem(.title2))
                 }
                 .buttonStyle(.plain)
                 .disabled(self.inputText.isEmpty || self.service.isProcessing)
@@ -225,7 +221,7 @@ struct RewriteModeView: View {
                 // Voice Input
                 Button(action: self.toggleRecording) {
                     Image(systemName: self.asr.isRunning ? "stop.circle.fill" : "mic.circle.fill")
-                        .font(.title2)
+                        .font(.fluidSystem(.title2))
                         .foregroundStyle(self.asr.isRunning ? Color.red : self.theme.palette.accent)
                 }
                 .buttonStyle(.plain)
@@ -286,34 +282,13 @@ struct RewriteModeView: View {
     private func updateAvailableModels() {
         let currentProviderID = self.settings.rewriteModeSelectedProviderID
         let currentModel = self.settings.rewriteModeSelectedModel ?? ""
-        if self.isPrivateAIProviderID(currentProviderID) {
-            self.settings.rewriteModeSelectedProviderID = ""
-            self.settings.rewriteModeSelectedModel = nil
-            self.availableModels = []
-            return
-        }
         guard !currentProviderID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             self.availableModels = []
             return
         }
 
-        // Apple Intelligence has only one model
-        if currentProviderID == "apple-intelligence" {
-            self.availableModels = ["System Model"]
-            return
-        }
-
         // Pull models from the shared pool configured in AI Settings
-        let possibleKeys = self.providerKeys(for: currentProviderID)
-        let storedList = possibleKeys.lazy
-            .compactMap { SettingsStore.shared.availableModelsByProvider[$0] }
-            .first { !$0.isEmpty }
-
-        if let stored = storedList {
-            self.availableModels = stored
-        } else {
-            self.availableModels = ModelRepository.shared.defaultModels(for: currentProviderID)
-        }
+        self.availableModels = self.settings.availableModels(for: currentProviderID, task: .edit)
 
         // If current model not in list, select first available
         if !self.availableModels.contains(currentModel) {
@@ -321,20 +296,8 @@ struct RewriteModeView: View {
         }
     }
 
-    private func providerKeys(for providerID: String) -> [String] {
-        return ModelRepository.shared.providerKeys(for: providerID)
-    }
-
     private var builtInProvidersList: [(id: String, name: String)] {
-        ModelRepository.shared.builtInProvidersList(
-            includeAppleIntelligence: true,
-            appleIntelligenceAvailable: AppleIntelligenceService.isAvailable
-        ).filter { !self.isPrivateAIProviderID($0.id) }
-    }
-
-    private func isPrivateAIProviderID(_ providerID: String) -> Bool {
-        PrivateFeatures.privateAIProvider &&
-            providerID.trimmingCharacters(in: .whitespacesAndNewlines) == PrivateAIProviderFeature.shared.providerID
+        ModelRepository.shared.builtInProvidersList()
     }
 
     private var shortcutDisplay: String {
@@ -347,12 +310,12 @@ struct RewriteModeView: View {
             Button(action: { withAnimation(.easeInOut(duration: 0.2)) { self.showHowTo.toggle() } }) {
                 HStack {
                     Image(systemName: "questionmark.circle")
-                        .font(.caption)
+                        .font(.fluidSystem(.caption))
                     Text("How to use")
-                        .font(.caption)
+                        .font(.fluidSystem(.caption))
                     Spacer()
                     Image(systemName: self.showHowTo ? "chevron.up" : "chevron.down")
-                        .font(.caption2)
+                        .font(.fluidSystem(.caption2))
                 }
                 .foregroundStyle(self.isHoveringHowTo ? .primary : .secondary)
                 .padding(.horizontal, 16)
@@ -370,22 +333,22 @@ struct RewriteModeView: View {
                     // Create new text
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Create New Text")
-                            .font(.caption)
+                            .font(.fluidSystem(.caption))
                             .fontWeight(.semibold)
                             .foregroundStyle(.secondary)
 
                         HStack(spacing: 4) {
                             Text("Press")
-                                .font(.caption)
+                                .font(.fluidSystem(.caption))
                             Text(self.shortcutDisplay)
-                                .font(.caption)
+                                .font(.fluidSystem(.caption))
                                 .fontWeight(.medium)
                                 .padding(.horizontal, 6)
                                 .padding(.vertical, 2)
                                 .background(self.theme.palette.cardBackground.opacity(0.8))
                                 .cornerRadius(4)
                             Text("and speak what you want to write.")
-                                .font(.caption)
+                                .font(.fluidSystem(.caption))
                         }
                         .foregroundStyle(.primary.opacity(0.8))
 
@@ -396,22 +359,22 @@ struct RewriteModeView: View {
                     // Edit selected text
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Edit Selected Text")
-                            .font(.caption)
+                            .font(.fluidSystem(.caption))
                             .fontWeight(.semibold)
                             .foregroundStyle(.secondary)
 
                         HStack(spacing: 4) {
                             Text("Select text first, then press")
-                                .font(.caption)
+                                .font(.fluidSystem(.caption))
                             Text(self.shortcutDisplay)
-                                .font(.caption)
+                                .font(.fluidSystem(.caption))
                                 .fontWeight(.medium)
                                 .padding(.horizontal, 6)
                                 .padding(.vertical, 2)
                                 .background(Color.primary.opacity(0.1))
                                 .cornerRadius(4)
                             Text("and speak your instruction.")
-                                .font(.caption)
+                                .font(.fluidSystem(.caption))
                         }
                         .foregroundStyle(.primary.opacity(0.8))
 
@@ -433,7 +396,7 @@ struct RewriteModeView: View {
             Text("•")
                 .foregroundStyle(.secondary)
             Text(text)
-                .font(.caption)
+                .font(.fluidSystem(.caption))
                 .foregroundStyle(.primary.opacity(0.8))
         }
     }
@@ -450,7 +413,7 @@ struct RewriteModeView: View {
                     Spacer()
 
                     Image(systemName: self.isThinkingExpanded ? "chevron.up" : "chevron.down")
-                        .font(.caption2)
+                        .font(.fluidSystem(.caption2))
                         .foregroundStyle(.secondary.opacity(0.6))
                 }
                 .padding(.horizontal, 12)
@@ -462,7 +425,7 @@ struct RewriteModeView: View {
             if self.isThinkingExpanded {
                 ScrollView(.vertical, showsIndicators: true) {
                     Text(self.service.streamingThinkingText)
-                        .font(.system(size: 11))
+                        .font(.fluidSystem(size: 11))
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -474,7 +437,7 @@ struct RewriteModeView: View {
                 // Preview - first 100 chars
                 if !self.service.streamingThinkingText.isEmpty {
                     Text(String(self.service.streamingThinkingText.prefix(100)) + (self.service.streamingThinkingText.count > 100 ? "..." : ""))
-                        .font(.system(size: 11))
+                        .font(.fluidSystem(size: 11))
                         .foregroundStyle(.secondary.opacity(0.7))
                         .lineLimit(2)
                         .padding(.horizontal, 12)

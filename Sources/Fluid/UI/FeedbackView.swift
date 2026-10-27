@@ -1,324 +1,323 @@
-//
-//  FeedbackView.swift
-//  fluid
-//
-//  Extracted from ContentView.swift to reduce monolithic architecture.
-//  Created: 2025-12-14
-//
-
-import AppKit
 import SwiftUI
 
+/// One calm surface: what kind of note, the note, how to reach you, send. Extras live in a
+/// single quiet footer line so nothing competes with the message itself.
 struct FeedbackView: View {
     @Environment(\.theme) private var theme
+    @State private var category: FeedbackCategory = .issue
+    @State private var message = ""
+    @State private var email = ""
+    @State private var includeDetails = false
+    @State private var sending = false
+    @State private var sent = false
+    @State private var error: String?
+    @FocusState private var messageFocused: Bool
 
-    // MARK: - State Variables (moved from ContentView)
+    private static let starURL = URL(string: "https://github.com/altic-dev/Fluid-oss")
+    private static let sponsorURL = URL(string: "https://github.com/sponsors/altic-dev")
 
-    @State private var feedbackText: String = ""
-    @State private var feedbackEmail: String = ""
-    @State private var includeDebugLogs: Bool = false
-    @State private var isSendingFeedback: Bool = false
-    @State private var showFeedbackConfirmation: Bool = false
-    @State private var showFeedbackError: Bool = false
-    @State private var feedbackErrorMessage: String = ""
-    @State private var appear: Bool = false
+    private var draft: FeedbackSubmission {
+        FeedbackSubmission(
+            email: self.email,
+            message: self.message,
+            category: self.category,
+            appDetails: self.includeDetails ? FeedbackSubmission.appDetails : nil
+        )
+    }
+
+    private var messageCount: Int { self.message.utf16.count }
+    private var nearLimit: Bool { self.messageCount > FeedbackSubmission.messageLimit * 8 / 10 }
+    private var overLimit: Bool { self.messageCount > FeedbackSubmission.messageLimit }
+    private var emailLooksWrong: Bool { !self.email.isEmpty && !FeedbackSubmission.isValidEmail(self.email) }
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                // Header
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack {
-                        Image(systemName: "envelope.fill")
-                            .font(.system(size: 32))
-                            .foregroundStyle(self.theme.palette.accent)
-                        VStack(alignment: .leading) {
-                            Text("Send Feedback")
-                                .font(.system(size: 28, weight: .bold))
-                            Text("Help us improve FluidVoice")
-                                .font(.system(size: 16))
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                }
-                .padding(.bottom, 8)
-
-                // Friendly Message & GitHub CTA
-                ThemedCard(style: .prominent, hoverEffect: false) {
-                    VStack(alignment: .leading, spacing: 12) {
-                        HStack(spacing: 12) {
-                            Image(systemName: "heart.fill")
-                                .font(.system(size: 28))
-                                .foregroundStyle(.pink)
-
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text("We'd love to hear from you!")
-                                    .font(.system(size: 18, weight: .semibold))
-                                    .foregroundStyle(self.theme.palette.primaryText)
-
-                                Text("Your feedback helps us make FluidVoice even better")
-                                    .font(.system(size: 14))
-                                    .foregroundStyle(self.theme.palette.secondaryText)
-                            }
-                        }
-
-                        Divider()
-                            .padding(.vertical, 4)
-
-                        HStack(spacing: 12) {
-                            Image(systemName: "star.fill")
-                                .font(.system(size: 24))
-                                .foregroundStyle(.yellow)
-
-                            VStack(alignment: .leading, spacing: 6) {
-                                Text("Loving FluidVoice?")
-                                    .font(.system(size: 16, weight: .semibold))
-                                    .foregroundStyle(self.theme.palette.primaryText)
-
-                                Text("Give us a star on GitHub, or support continued free development to help make local dictation even better.")
-                                    .font(.system(size: 13))
-                                    .foregroundStyle(self.theme.palette.secondaryText)
-                                    .fixedSize(horizontal: false, vertical: true)
-                            }
-
-                            Spacer()
-
-                            HStack(spacing: 10) {
-                                if let githubURL = URL(string: "https://github.com/altic-dev/Fluid-oss") {
-                                    Link(destination: githubURL) {
-                                        HStack(spacing: 8) {
-                                            Image(systemName: "star.fill")
-                                            Text("Star on GitHub")
-                                                .fontWeight(.semibold)
-                                        }
-                                        .font(.system(size: 14))
-                                        .padding(.horizontal, 20)
-                                        .padding(.vertical, 10)
-                                    }
-                                    .fluidButton(.glass, size: .medium)
-                                    .buttonHoverEffect()
-                                }
-
-                                if let sponsorURL = URL(string: "https://github.com/sponsors/altic-dev") {
-                                    Link(destination: sponsorURL) {
-                                        HStack(spacing: 8) {
-                                            Image(systemName: "heart.fill")
-                                            Text("Support FluidVoice")
-                                                .fontWeight(.semibold)
-                                        }
-                                        .font(.system(size: 14))
-                                        .padding(.horizontal, 20)
-                                        .padding(.vertical, 10)
-                                    }
-                                    .fluidButton(.glass, size: .medium)
-                                    .buttonHoverEffect()
-                                    .help("Sponsor Altic on GitHub")
-                                }
-                            }
-                        }
-                    }
-                    .padding(20)
+            VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xl) {
+                VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
+                    Text("Make FluidVoice better.")
+                        .font(self.theme.typography.title)
+                        .foregroundStyle(self.theme.palette.primaryText)
+                    Text("Something in your way? Have an idea? Tell us.")
+                        .font(self.theme.typography.body)
+                        .foregroundStyle(self.theme.palette.secondaryText)
                 }
 
-                // Feedback Form
-                ThemedCard(style: .standard, hoverEffect: false) {
-                    VStack(alignment: .leading, spacing: 16) {
-                        VStack(alignment: .leading, spacing: 12) {
-                            Text("Email")
-                                .font(.headline)
-                                .fontWeight(.semibold)
-
-                            TextField("your.email@example.com", text: self.$feedbackEmail)
-                                .textFieldStyle(.roundedBorder)
-                                .font(.system(size: 14))
-
-                            Text("Feedback")
-                                .font(.headline)
-                                .fontWeight(.semibold)
-                                .padding(.top, 8)
-
-                            TextEditor(text: self.$feedbackText)
-                                .font(.system(size: 14))
-                                .frame(height: 120)
-                                .padding(12)
-                                .background(RoundedRectangle(cornerRadius: 8)
-                                    .fill(self.theme.palette.contentBackground)
-                                    .overlay(RoundedRectangle(cornerRadius: 8)
-                                        .strokeBorder(self.theme.palette.cardBorder.opacity(0.45), lineWidth: 1.2)))
-                                .scrollContentBackground(.hidden)
-                                .overlay(
-                                    Group {
-                                        if self.feedbackText.isEmpty {
-                                            Text("Share your thoughts, report bugs, or suggest features...")
-                                                .font(.subheadline)
-                                                .foregroundStyle(.secondary)
-                                                .padding(.leading, 4)
-                                        }
-                                    }
-                                    .allowsHitTesting(false)
-                                )
-
-                            // Debug logs option
-                            Toggle("Include debug logs", isOn: self.$includeDebugLogs)
-                                .toggleStyle(GlassToggleStyle())
-
-                            // Send Button
-                            HStack {
-                                Spacer()
-
-                                Button(action: {
-                                    Task {
-                                        await self.sendFeedback()
-                                    }
-                                }) {
-                                    HStack(spacing: 8) {
-                                        if self.isSendingFeedback {
-                                            ProgressView()
-                                                .fixedSize()
-                                                .scaleEffect(0.8)
-                                        } else {
-                                            Image(systemName: "paperplane.fill")
-                                        }
-                                        Text(self.isSendingFeedback ? "Sending..." : "Send Feedback")
-                                            .fontWeight(.semibold)
-                                    }
-                                    .padding(.horizontal, 20)
-                                    .padding(.vertical, 10)
-                                }
-                                .fluidButton(.glass, size: .medium)
-                                .disabled(self.feedbackText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
-                                    self.feedbackEmail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
-                                    self.isSendingFeedback)
-                                .buttonHoverEffect()
-                            }
-                        }
-                    }
-                    .padding(20)
-                }
-                .modifier(CardAppearAnimation(delay: 0.1, appear: self.$appear))
-            }
-            .padding(24)
-        }
-        .onAppear {
-            self.appear = true
-        }
-        .alert("Feedback Sent", isPresented: self.$showFeedbackConfirmation) {
-            Button("OK") {}
-        } message: {
-            Text("Thank you for helping us improve FluidVoice.")
-        }
-        .alert("Feedback Failed", isPresented: self.$showFeedbackError) {
-            Button("Try Again") {
-                Task {
-                    await self.sendFeedback()
-                }
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text(self.feedbackErrorMessage)
-        }
-    }
-
-    // MARK: - Feedback Functions
-
-    private func sendFeedback() async {
-        guard !self.feedbackEmail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-              !self.feedbackText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        else {
-            return
-        }
-
-        await MainActor.run {
-            self.isSendingFeedback = true
-        }
-
-        let feedbackData = self.createFeedbackData()
-        let success = await submitFeedback(data: feedbackData)
-
-        await MainActor.run {
-            self.isSendingFeedback = false
-            if success {
-                // Show confirmation and clear form
-                self.showFeedbackConfirmation = true
-                self.feedbackText = ""
-                self.feedbackEmail = ""
-                self.includeDebugLogs = false
-            } else {
-                // Show error to user - inputs are preserved for retry
-                self.feedbackErrorMessage = "We couldn't send your feedback. Please check your internet connection and try again."
-                self.showFeedbackError = true
-            }
-        }
-    }
-
-    private func createFeedbackData() -> [String: Any] {
-        var feedbackContent = self.feedbackText.trimmingCharacters(in: .whitespacesAndNewlines)
-
-        if self.includeDebugLogs {
-            feedbackContent += "\n\n--- Debug Information ---\n"
-            feedbackContent += "App Version: \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "Unknown")\n"
-            feedbackContent += "Build: \(Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "Unknown")\n"
-            feedbackContent += "macOS Version: \(ProcessInfo.processInfo.operatingSystemVersionString)\n"
-            feedbackContent += "Date: \(Date().formatted())\n\n"
-
-            // Add recent log entries
-            let logFileURL = FileLogger.shared.currentLogFileURL()
-            if FileManager.default.fileExists(atPath: logFileURL.path) {
-                do {
-                    let logContent = try String(contentsOf: logFileURL)
-                    let lines = logContent.components(separatedBy: .newlines)
-                    let recentLines = Array(lines.suffix(30)) // Last 30 lines
-                    feedbackContent += "Recent Log Entries:\n"
-                    feedbackContent += recentLines.joined(separator: "\n")
-                } catch {
-                    feedbackContent += "Could not read log file: \(error.localizedDescription)\n"
-                }
-            }
-        }
-
-        return [
-            "email_id": self.feedbackEmail.trimmingCharacters(in: .whitespacesAndNewlines),
-            "feedback": feedbackContent,
-        ]
-    }
-
-    private func submitFeedback(data: [String: Any]) async -> Bool {
-        guard let url = URL(string: "https://altic.dev/api/fluid/feedback") else {
-            DebugLogger.shared.error("Invalid feedback API URL", source: "FeedbackView")
-            return false
-        }
-
-        do {
-            var request = URLRequest(url: url)
-            request.httpMethod = "POST"
-            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            request.httpBody = try JSONSerialization.data(withJSONObject: data)
-
-            let (_, response) = try await URLSession.shared.data(for: request)
-
-            if let httpResponse = response as? HTTPURLResponse {
-                let success = (200...299).contains(httpResponse.statusCode)
-                if success {
-                    DebugLogger.shared.info("Feedback submitted successfully", source: "FeedbackView")
+                if self.sent {
+                    self.confirmation
                 } else {
-                    DebugLogger.shared.error(
-                        "Feedback submission failed with status: \(httpResponse.statusCode)",
-                        source: "FeedbackView"
-                    )
+                    self.categories
+                    self.form
                 }
-                return success
+
+                self.footer
             }
-            return false
-        } catch {
-            DebugLogger.shared.error(
-                "Network error submitting feedback: \(error.localizedDescription)",
-                source: "FeedbackView"
-            )
-            return false
+            .fluidPageContent(width: .form, alignment: .center)
+        }
+        .background(self.theme.palette.contentBackground)
+    }
+
+    // MARK: - Category
+
+    private var categories: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: self.theme.metrics.spacing.sm) { self.categoryChips }
+            VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) { self.categoryChips }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Feedback type")
+    }
+
+    private var categoryChips: some View {
+        ForEach(FeedbackCategory.allCases, id: \.self) { category in
+            let selected = self.category == category
+            Button {
+                self.category = category
+                self.messageFocused = true
+            } label: {
+                Label(category.rawValue, systemImage: category.icon)
+                    .font(self.theme.typography.bodySmallStrong)
+                    .foregroundStyle(selected ? self.theme.palette.primaryText : self.theme.palette.secondaryText)
+                    .padding(.horizontal, self.theme.metrics.spacing.lg)
+                    .frame(height: 34)
+                    .background(self.theme.palette.primaryText.opacity(selected ? 0.10 : 0.04), in: Capsule())
+                    .overlay(Capsule().strokeBorder(self.theme.palette.separator.opacity(selected ? 0.9 : 0.5), lineWidth: 1))
+                    .contentShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .meetingHoverFeedback()
+            .accessibilityAddTraits(selected ? .isSelected : [])
         }
     }
-}
 
-#Preview {
-    FeedbackView()
+    // MARK: - Form
+
+    private var form: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xl) {
+                self.messageField
+
+                VStack(alignment: .leading, spacing: self.theme.metrics.spacing.lg) {
+                    self.emailRow
+                    self.detailsRow
+                }
+            }
+            .padding(self.theme.metrics.spacing.xl)
+
+            Rectangle()
+                .fill(self.theme.palette.separator)
+                .frame(height: 1)
+
+            self.sendRow
+                .padding(.horizontal, self.theme.metrics.spacing.xl)
+                .padding(.vertical, self.theme.metrics.spacing.lg)
+        }
+        .background(self.surface)
+        .disabled(self.sending)
+    }
+
+    private var messageField: some View {
+        VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
+            Text(self.category.prompt)
+                .font(self.theme.typography.bodyStrong)
+                .foregroundStyle(self.theme.palette.primaryText)
+
+            ZStack(alignment: .topLeading) {
+                TextEditor(text: self.$message)
+                    .font(self.theme.typography.body)
+                    .scrollContentBackground(.hidden)
+                    .focused(self.$messageFocused)
+                    .padding(self.theme.metrics.spacing.sm)
+                    .frame(minHeight: 168, maxHeight: 240)
+                    .accessibilityLabel(self.category.prompt)
+                if self.message.isEmpty {
+                    Text(self.category.hint)
+                        .font(self.theme.typography.body)
+                        .foregroundStyle(self.theme.palette.tertiaryText)
+                        .padding(.horizontal, self.theme.metrics.spacing.md + 1)
+                        .padding(.vertical, self.theme.metrics.spacing.lg)
+                        .allowsHitTesting(false)
+                }
+            }
+            .background(self.fieldSurface(focused: self.messageFocused))
+
+            HStack(alignment: .firstTextBaseline) {
+                Text(self.overLimit ? "Please shorten your message before sending." : "Leave out passwords and private information.")
+                    .foregroundStyle(self.overLimit ? self.theme.palette.warning : self.theme.palette.tertiaryText)
+                Spacer(minLength: self.theme.metrics.spacing.sm)
+                if self.nearLimit {
+                    Text("\(self.messageCount) / \(FeedbackSubmission.messageLimit)")
+                        .monospacedDigit()
+                        .foregroundStyle(self.overLimit ? self.theme.palette.warning : self.theme.palette.tertiaryText)
+                }
+            }
+            .font(self.theme.typography.caption)
+        }
+    }
+
+    private var emailRow: some View {
+        VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
+            HStack(spacing: self.theme.metrics.spacing.sm) {
+                Text("Email")
+                    .font(self.theme.typography.bodyStrong)
+                    .foregroundStyle(self.theme.palette.primaryText)
+                Text("optional")
+                    .font(self.theme.typography.caption)
+                    .foregroundStyle(self.theme.palette.tertiaryText)
+            }
+            TextField("", text: self.$email, prompt: Text("you@example.com").foregroundColor(self.theme.palette.tertiaryText))
+                .textFieldStyle(.plain)
+                .font(self.theme.typography.body)
+                .padding(.horizontal, self.theme.metrics.spacing.md)
+                .frame(height: 38)
+                .background(self.fieldSurface(focused: false))
+                .accessibilityLabel("Your email, optional")
+            if self.emailLooksWrong {
+                Text("That doesn’t look like an email address.")
+                    .font(self.theme.typography.caption)
+                    .foregroundStyle(self.theme.palette.warning)
+            }
+        }
+    }
+
+    private var detailsRow: some View {
+        VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
+            Toggle(isOn: self.$includeDetails) {
+                HStack(spacing: self.theme.metrics.spacing.sm) {
+                    Text("Include app and macOS versions")
+                        .font(self.theme.typography.bodySmall)
+                        .foregroundStyle(self.theme.palette.primaryText)
+                    Text("No recordings or logs.")
+                        .font(self.theme.typography.caption)
+                        .foregroundStyle(self.theme.palette.tertiaryText)
+                }
+            }
+            .toggleStyle(.switch)
+            .controlSize(.small)
+            if self.includeDetails {
+                Text(FeedbackSubmission.appDetails)
+                    .font(self.theme.typography.codeCaption)
+                    .foregroundStyle(self.theme.palette.secondaryText)
+                    .textSelection(.enabled)
+            }
+        }
+    }
+
+    private var sendRow: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: self.theme.metrics.spacing.lg) {
+                self.deliveryNote
+                Spacer(minLength: 0)
+                self.sendButton
+            }
+            VStack(alignment: .leading, spacing: self.theme.metrics.spacing.md) {
+                self.deliveryNote
+                self.sendButton
+            }
+        }
+    }
+
+    @ViewBuilder private var deliveryNote: some View {
+        if let error {
+            Label(error, systemImage: "exclamationmark.circle")
+                .font(self.theme.typography.caption)
+                .foregroundStyle(self.theme.palette.warning)
+                .fixedSize(horizontal: false, vertical: true)
+        } else {
+            Text(self.sending ? "Sending…" : "Goes straight to the FluidVoice team.")
+                .font(self.theme.typography.caption)
+                .foregroundStyle(self.theme.palette.tertiaryText)
+        }
+    }
+
+    private var sendButton: some View {
+        Button { Task { await self.submit() } } label: {
+            HStack(spacing: self.theme.metrics.spacing.sm) {
+                if self.sending { ProgressView().controlSize(.small) }
+                Text(self.error == nil ? "Send feedback" : "Try again")
+            }
+        }
+        .fluidGlassAction(prominent: true)
+        .disabled(!self.draft.isValid || self.sending)
+        .keyboardShortcut(.return, modifiers: .command)
+    }
+
+    // MARK: - Confirmation
+
+    private var confirmation: some View {
+        VStack(alignment: .leading, spacing: self.theme.metrics.spacing.lg) {
+            Image(systemName: "checkmark.circle.fill")
+                .font(.system(size: 28, weight: .regular))
+                .foregroundStyle(self.theme.palette.success)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xs) {
+                Text("Thank you. It’s in.")
+                    .font(self.theme.typography.title)
+                    .foregroundStyle(self.theme.palette.primaryText)
+                Text("If we need more detail, we’ll reach you by email.")
+                    .font(self.theme.typography.body)
+                    .foregroundStyle(self.theme.palette.secondaryText)
+            }
+            Button("Send another") { self.sent = false }
+                .fluidGlassAction()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(self.theme.metrics.spacing.xxl)
+        .background(self.surface)
+        .accessibilityElement(children: .combine)
+    }
+
+    // MARK: - Footer
+
+    private var footer: some View {
+        HStack(spacing: self.theme.metrics.spacing.sm) {
+            Text("Enjoying FluidVoice?")
+            if let url = Self.starURL {
+                Link("Star it on GitHub", destination: url)
+            }
+            if let url = Self.sponsorURL {
+                Text("·").accessibilityHidden(true)
+                Link("Support development", destination: url)
+            }
+        }
+        .font(self.theme.typography.caption)
+        .foregroundStyle(self.theme.palette.tertiaryText)
+        .tint(self.theme.palette.secondaryText)
+        .padding(.top, self.theme.metrics.spacing.sm)
+    }
+
+    // MARK: - Surfaces
+
+    /// Flat: a hairline, no shadow, no material. The page stays quiet around the message.
+    private var surface: some View {
+        let shape = RoundedRectangle(cornerRadius: self.theme.metrics.corners.lg, style: .continuous)
+        return shape
+            .fill(self.theme.palette.cardBackground)
+            .overlay(shape.strokeBorder(self.theme.palette.separator, lineWidth: 1))
+    }
+
+    private func fieldSurface(focused: Bool) -> some View {
+        let shape = RoundedRectangle(cornerRadius: self.theme.metrics.corners.md, style: .continuous)
+        return shape
+            .fill(self.theme.palette.contentBackground)
+            .overlay(shape.strokeBorder(focused ? self.theme.palette.secondaryText.opacity(0.5) : self.theme.palette.separator, lineWidth: 1))
+    }
+
+    // MARK: - Submit
+
+    @MainActor private func submit() async {
+        guard !self.sending, self.draft.isValid else { return }
+        let submission = self.draft
+        self.sending = true
+        self.error = nil
+        defer { self.sending = false }
+        do {
+            try await FeedbackClient().send(submission)
+            self.sent = true
+            self.message = ""
+            self.email = ""
+            self.includeDetails = false
+        } catch {
+            self.error = error.localizedDescription
+        }
+    }
 }

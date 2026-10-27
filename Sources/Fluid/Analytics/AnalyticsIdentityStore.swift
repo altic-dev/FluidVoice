@@ -1,6 +1,6 @@
 import Foundation
 
-/// Stores anonymous analytics identifiers. This is intentionally NOT tied to any user identity.
+/// Persists the anonymous analytics ID across app updates.
 final class AnalyticsIdentityStore {
     nonisolated static let shared = AnalyticsIdentityStore()
 
@@ -14,7 +14,7 @@ final class AnalyticsIdentityStore {
     private init() {}
 
     nonisolated var anonymousInstallID: String {
-        if let existing = defaults.string(forKey: Keys.anonymousInstallID), existing.isEmpty == false {
+        if let existing = defaults.string(forKey: Keys.anonymousInstallID), !existing.isEmpty {
             return existing
         }
         let newID = UUID().uuidString
@@ -22,7 +22,7 @@ final class AnalyticsIdentityStore {
         return newID
     }
 
-    /// Returns true if this is the first time we've ever recorded an app open on this install.
+    /// Returns whether this is the first recorded launch.
     @discardableResult
     nonisolated func ensureFirstOpenRecorded() -> Bool {
         if self.defaults.object(forKey: Keys.firstOpenAt) == nil {
@@ -33,8 +33,7 @@ final class AnalyticsIdentityStore {
     }
 
     nonisolated var firstOpenAt: Date? {
-        let ts = self.defaults.double(forKey: Keys.firstOpenAt)
-        if ts <= 0 { return nil }
-        return Date(timeIntervalSince1970: ts)
+        let timestamp = self.defaults.double(forKey: Keys.firstOpenAt)
+        return timestamp > 0 ? Date(timeIntervalSince1970: timestamp) : nil
     }
 }

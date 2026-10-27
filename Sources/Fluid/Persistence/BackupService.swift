@@ -13,10 +13,16 @@ struct SettingsBackupPayload: Codable, Equatable {
     let savedProviders: [SettingsStore.SavedProvider]
     let modelReasoningConfigs: [String: SettingsStore.ModelReasoningConfig]
     let privateAIPrefixKVCacheEnabled: Bool?
+    let privateAIBoostEnabled: Bool?
+    let privateAIBackendPreference: SettingsStore.PrivateAIBackendPreference?
+    let privateAIContextTokenLimit: Int?
     let selectedSpeechModel: SettingsStore.SpeechModel
+    let selectedWhisperLanguageCode: String?
     let selectedCohereLanguage: SettingsStore.CohereLanguage
     let selectedNemotronLanguage: SettingsStore.NemotronLanguage?
     let selectedAppleSpeechLocaleIdentifier: String?
+    /// Stable final-meeting backend ID. Optional so backups from before backend selection decode.
+    let meetingTranscriptionBackendID: String?
     let hotkeyShortcut: HotkeyShortcut
     // Older backup files only contain hotkeyShortcut; nil restores that legacy single shortcut.
     // swiftlint:disable:next discouraged_optional_collection
@@ -36,39 +42,85 @@ struct SettingsBackupPayload: Codable, Equatable {
     let rewriteModeSelectedModel: String?
     let rewriteModeSelectedProviderID: String
     let rewriteModeLinkedToGlobal: Bool
-    let cancelRecordingHotkeyShortcut: HotkeyShortcut
+    // Optional so older backups preserve the user's current meeting shortcut.
+    let meetingRecordingHotkeyShortcut: HotkeyShortcut?
+    let meetingRecordingShortcutEnabled: Bool?
+    let cancelRecordingHotkeyShortcut: HotkeyShortcut?
+    // Optional so older backup files (which predate this setting) still decode.
+    let pasteLastTranscriptionHotkeyShortcut: HotkeyShortcut?
+    let pasteLastTranscriptionShortcutEnabled: Bool?
     let showThinkingTokens: Bool
     let hideFromDockAndAppSwitcher: Bool
     let showMainWindowAtLoginLaunch: Bool?
     let accentColorOption: SettingsStore.AccentColorOption
     let transcriptionStartSound: SettingsStore.TranscriptionStartSound
     let transcriptionSoundVolume: Float
-    let transcriptionSoundIndependentVolume: Bool
+    // Independent Volume was removed, but the key is still written (always false) so backups
+    // from this build decode on app versions that require it. Ignored on restore.
+    let transcriptionSoundIndependentVolume: Bool?
     let autoUpdateCheckEnabled: Bool
+    // Missing in older backups; preserve the user's current preference on restore.
+    var showUpdatePopups: Bool? = nil
     let betaReleasesEnabled: Bool
     let enableDebugLogs: Bool
     let shareAnonymousAnalytics: Bool
     let pressAndHoldMode: Bool
     let hotkeyMode: HotkeyActivationMode?
+    var holdSpaceToMute: Bool? = nil
     let enableStreamingPreview: Bool
+    // Optional so backups created before incremental Parakeet finalization still decode.
+    let experimentalParakeetUnifiedFinalEnabled: Bool?
+    // Optional to preserve compatibility with older backups.
+    let returnDictationToStartingField: Bool?
+    // Optional so backups created before History performance details still decode.
+    let showHistoryPerformanceMetrics: Bool?
+    // Optional so backups created before the silence filter still decode.
+    let skipSilentRecordingsEnabled: Bool?
     let enableAIStreaming: Bool
     let copyTranscriptionToClipboard: Bool
     let textInsertionMode: SettingsStore.TextInsertionMode
+    let spokenSendEnabled: Bool?
+    let spokenSendImmediatelyEnabled: Bool?
+    let spokenSendPhrase: String?
+    let spokenSendKey: SettingsStore.SpokenSendKey?
     let preferredInputDeviceUID: String?
+    // Optional so backups created before microphone priority ordering still decode.
+    // swiftlint:disable:next discouraged_optional_collection
+    let microphonePriority: [SettingsStore.MicrophonePriorityEntry]?
+    // Optional so backups created before microphone removal history still decode.
+    // swiftlint:disable:next discouraged_optional_collection
+    let suppressedMicrophoneUIDs: [String]?
     let preferredOutputDeviceUID: String?
+    let microphoneSelectionMode: SettingsStore.MicrophoneSelectionMode?
     let visualizerNoiseThreshold: Double
     let overlayPosition: SettingsStore.OverlayPosition
     let overlayBottomOffset: Double
     let overlaySize: SettingsStore.OverlaySize
+    let overlayMaterial: SettingsStore.OverlayMaterial?
+    let overlayGlassOpacity: Double?
+    let overlayTint: SettingsStore.OverlayTint?
+    let overlayHighlight: Double?
+    let overlayClosingAnimationEnabled: Bool?
+    let meetingOverlayPreference: MeetingOverlayPreference?
     let transcriptionPreviewCharLimit: Int
     let userTypingWPM: Int
     let saveTranscriptionHistory: Bool
     let saveAudioWithTranscriptionHistory: Bool?
     let audioHistoryBudgetGB: Double?
     let notifyAIProcessingFailures: Bool?
+    let showMicrophoneChangeAlerts: Bool?
+    let showPasteCheckAlerts: Bool?
     let weekendsDontBreakStreak: Bool
     let fillerWords: [String]
     let removeFillerWordsEnabled: Bool
+    let autoConvertPunctuationEnabled: Bool?
+    let literalDictationFormattingEnabled: Bool?
+    let punctuationDictionaryPrefix: String?
+    // swiftlint:disable:next discouraged_optional_collection
+    let punctuationDictionaryRules: [SettingsStore.PunctuationDictionaryRule]?
+    // Optional so backups created before spoken formatting actions still decode.
+    // swiftlint:disable:next discouraged_optional_collection
+    let spokenFormattingActionRules: [SettingsStore.SpokenFormattingActionRule]?
     let gaavModeEnabled: Bool
     let gaavLowercaseFirstLetterEnabled: Bool?
     let gaavRemoveTrailingPeriodEnabled: Bool?
@@ -76,6 +128,9 @@ struct SettingsBackupPayload: Codable, Equatable {
     let continuousDictationSpacingEnabled: Bool?
     let contextAwareCapitalizationEnabled: Bool?
     let pauseMediaDuringTranscription: Bool
+    let automaticDictionaryLearningEnabled: Bool?
+    let automaticDictionarySuggestionFrequency: SettingsStore.AutomaticDictionarySuggestionFrequency?
+    let pronunciationMatchingEnabled: Bool?
     let vocabularyBoostingEnabled: Bool
     let customDictionaryEntries: [SettingsStore.CustomDictionaryEntry]
     let selectedDictationPromptID: String?
@@ -86,6 +141,14 @@ struct SettingsBackupPayload: Codable, Equatable {
     let editPromptRoutingScope: SettingsStore.PromptRoutingScope?
     let defaultDictationPromptOverride: String?
     let defaultEditPromptOverride: String?
+    let fileTranscriptionSpeakerLabelsEnabled: Bool?
+    let fileTranscriptionExpectedSpeakerCount: Int?
+    // Additive fields: absence in an older backup preserves current preferences.
+    var meetingRecordingDefaults: MeetingRecordingDefaults? = nil
+    var privateAIIdleUnload: SettingsStore.PrivateAIIdleUnload? = nil
+    // A present empty map clears prompt overrides; an absent map preserves them.
+    // swiftlint:disable:next discouraged_optional_collection
+    var dictationPromptConfigurations: [String: SettingsStore.DictationPromptConfiguration]? = nil
 }
 
 struct AppBackupDocument: Codable, Equatable {
@@ -96,11 +159,15 @@ struct AppBackupDocument: Codable, Equatable {
     let promptProfiles: [SettingsStore.DictationPromptProfile]
     let appPromptBindings: [SettingsStore.AppPromptBinding]
     let transcriptionHistory: [TranscriptionHistoryEntry]
+    // Optional so backups created before pronunciation matching still decode.
+    // swiftlint:disable:next discouraged_optional_collection
+    let pronunciationProfiles: [PronunciationDictionaryProfile]?
 }
 
 enum BackupServiceError: LocalizedError {
     case unsupportedSchemaVersion(BackupFileVersion)
     case invalidJSON
+    case operationInProgress
 
     var errorDescription: String? {
         switch self {
@@ -108,24 +175,42 @@ enum BackupServiceError: LocalizedError {
             return "This backup uses an unsupported schema version (\(version.major).\(version.minor))."
         case .invalidJSON:
             return "The selected backup file is not a valid FluidVoice backup."
+        case .operationInProgress:
+            return "A backup import or export is already running. Wait for it to finish, then try again."
         }
     }
 }
 
+@MainActor
 final class BackupService {
     static let shared = BackupService()
 
+    private var operationInProgress = false
+
     private init() {}
 
-    func makeBackupDocument() -> AppBackupDocument {
-        AppBackupDocument(
+    private func beginOperation() throws {
+        guard !self.operationInProgress else { throw BackupServiceError.operationInProgress }
+        self.operationInProgress = true
+    }
+
+    func makeBackupDocument() async throws -> AppBackupDocument {
+        try self.beginOperation()
+        defer { self.operationInProgress = false }
+        try Task.checkCancellation()
+        try await TranscriptionHistoryStore.shared.waitUntilLoaded()
+        try Task.checkCancellation()
+        let pronunciationProfiles = await PronunciationDictionaryStore.shared.allProfiles()
+        try Task.checkCancellation()
+        return AppBackupDocument(
             schemaVersion: .current,
             appVersion: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "Unknown",
             exportedAt: Date(),
             settings: SettingsStore.shared.makeBackupPayload(),
             promptProfiles: SettingsStore.shared.dictationPromptProfiles,
             appPromptBindings: SettingsStore.shared.appPromptBindings,
-            transcriptionHistory: TranscriptionHistoryStore.shared.makeBackupPayload()
+            transcriptionHistory: TranscriptionHistoryStore.shared.makeBackupPayload(),
+            pronunciationProfiles: pronunciationProfiles
         )
     }
 
@@ -152,15 +237,42 @@ final class BackupService {
         }
     }
 
-    func restore(_ document: AppBackupDocument) throws {
+    func restore(_ document: AppBackupDocument) async throws {
+        try self.beginOperation()
+        defer { self.operationInProgress = false }
+        try Task.checkCancellation()
         try self.validate(document)
+        let asr = AppServices.shared.asr
+        let activityLease = try asr.beginSettingsBackupRestore()
+        defer { asr.releaseExclusiveActivity(activityLease) }
+        // A legacy backup represents the complete state from before voice
+        // profiles existed. Restoring it must therefore clear newer profiles
+        // instead of leaving them attached to restored dictionary entry IDs.
+        try await PronunciationDictionaryStore.shared.replaceAllProfiles(
+            document.pronunciationProfiles ?? []
+        )
+        // Profile replacement is a synchronous actor write once admitted. Finish
+        // the matching settings/History commit even if cancellation arrives during
+        // its actor hop; stopping here would leave a partially restored document.
+        let previousIdleUnload = SettingsStore.shared.privateAIIdleUnload
         SettingsStore.shared.restore(
             from: document.settings,
             promptProfiles: document.promptProfiles,
             appPromptBindings: document.appPromptBindings
         )
+        // Commit settings, History and synchronous observers together before
+        // yielding to another actor, keeping the settings/History snapshot consistent.
         TranscriptionHistoryStore.shared.restore(from: document.transcriptionHistory)
+        // Arm model retirement before admission reopens, including imports whose
+        // unchanged idle preference has no further actor hop. UI notification
+        // delivery must never decide whether the next capture uses stale state.
+        asr.handleSettingsBackupDidRestore()
         NotificationCenter.default.post(name: .settingsBackupDidRestore, object: nil)
+        if let idleUnload = document.settings.privateAIIdleUnload, idleUnload != previousIdleUnload {
+            // Match the preference UI's targeted rescheduling; do not use the
+            // general restore notification to change model timers.
+            await PrivateAIIntegrationService.idleUnloader.settingsChanged()
+        }
     }
 
     func suggestedFilename(for date: Date = Date()) -> String {

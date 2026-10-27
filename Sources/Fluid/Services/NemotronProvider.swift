@@ -38,7 +38,7 @@ final class NemotronProvider: TranscriptionProvider {
 
     private let repositoryOwner = "BarathwajAnandan"
     private let repositoryRevision = "main"
-    static let requiredFiles = [
+    nonisolated static let requiredFiles = [
         "metadata.json",
         "preprocessor.mlpackage",
         "encoder.mlpackage",
@@ -85,7 +85,7 @@ final class NemotronProvider: TranscriptionProvider {
         return Self.artifactsAreComplete(at: dir)
     }
 
-    static func artifactsAreComplete(at directory: URL) -> Bool {
+    nonisolated static func artifactsAreComplete(at directory: URL) -> Bool {
         guard HuggingFaceModelDownloader.artifactsAreComplete(
             root: directory,
             items: self.requiredFiles.map {
@@ -118,7 +118,7 @@ final class NemotronProvider: TranscriptionProvider {
         return true
     }
 
-    func prepare(progressHandler: ((Double) -> Void)? = nil) async throws {
+    func prepare(progressHandler: ((ModelPreparationProgress) -> Void)? = nil) async throws {
         try Task.checkCancellation()
         guard self.isReady == false else { return }
         guard let dir = self.cacheDirectory else {
@@ -150,6 +150,7 @@ final class NemotronProvider: TranscriptionProvider {
                 "Nemotron: artifacts missing; downloading from \(self.repositoryOwner)/\(self.repositoryName)",
                 source: "Nemotron"
             )
+            progressHandler?(.preparingDownload)
             let downloader = HuggingFaceModelDownloader(
                 owner: self.repositoryOwner,
                 repo: self.repositoryName,
@@ -159,18 +160,19 @@ final class NemotronProvider: TranscriptionProvider {
                 }
             )
             try await downloader.ensureModelsPresent(at: dir) { progress, _ in
-                progressHandler?(min(progress, 0.999))
+                progressHandler?(.downloading(progress))
             }
             try Task.checkCancellation()
             guard self.modelsExistOnDisk() else {
                 throw Self.makeError("Nemotron artifacts incomplete after download at \(dir.path).")
             }
-            progressHandler?(1.0)
+            progressHandler?(.optimizing)
         }
 
         self.maxTranscriptionSamples = Self.loadMaxAudioSamples(from: dir) ?? self.maxTranscriptionSamples
         let manager: NemotronStreamingAsrManager
         do {
+            progressHandler?(.loading)
             manager = try await self.loadManager(modelDirectory: dir, computeUnits: .cpuAndNeuralEngine)
         } catch {
             guard Self.shouldRetryWithoutNeuralEngine(error) else {
@@ -312,7 +314,10 @@ final class NemotronProvider: TranscriptionProvider {
 
             audioFile.framePosition = currentFrame
             try audioFile.read(into: buffer, frameCount: framesToRead)
-            try pendingSamples.append(contentsOf: Self.resampleBuffer(buffer, targetSampleRate: targetSampleRate))
+            try pendingSamples.append(contentsOf: AudioBufferConverter.monoSamples(
+                from: buffer,
+                targetSampleRate: targetSampleRate
+            ))
             while pendingSamples.count > self.maxTranscriptionSamples {
                 let end = self.chunkEnd(in: pendingSamples, offset: 0)
                 let text = try await self.transcribeSinglePass(Array(pendingSamples[..<end]))
@@ -341,15 +346,17 @@ final class NemotronProvider: TranscriptionProvider {
         if let manager = self.manager {
             await self.stopComponentProfilingIfNeeded(on: manager)
         }
-        if let dir = self.cacheDirectory {
-            if FileManager.default.fileExists(atPath: dir.path) {
-                try FileManager.default.removeItem(at: dir)
-            }
-        }
         self.manager = nil
         self.isReady = false
         self.streamedSampleCount = 0
         self.activeLanguageCode = nil
+        if let directory = self.cacheDirectory {
+            try await Task.detached(priority: .userInitiated) {
+                if FileManager.default.fileExists(atPath: directory.path) {
+                    try FileManager.default.removeItem(at: directory)
+                }
+            }.value
+        }
     }
 
     private func clearCompiledModelCache() {
@@ -559,57 +566,6 @@ final class NemotronProvider: TranscriptionProvider {
         Int((seconds * 1000).rounded())
     }
 
-    private static func resampleBuffer(_ buffer: AVAudioPCMBuffer, targetSampleRate: Double) throws -> [Float] {
-        let sourceFormat = buffer.format
-        guard let targetFormat = AVAudioFormat(
-            commonFormat: .pcmFormatFloat32,
-            sampleRate: targetSampleRate,
-            channels: 1,
-            interleaved: false
-        ) else {
-            throw Self.makeError("Failed to create target audio format.")
-        }
-
-        if sourceFormat.sampleRate == targetSampleRate,
-           sourceFormat.channelCount == 1,
-           sourceFormat.commonFormat == .pcmFormatFloat32
-        {
-            guard let channelData = buffer.floatChannelData else {
-                throw Self.makeError("Failed to access audio channel data.")
-            }
-            return Array(UnsafeBufferPointer(start: channelData[0], count: Int(buffer.frameLength)))
-        }
-
-        guard let converter = AVAudioConverter(from: sourceFormat, to: targetFormat) else {
-            throw Self.makeError("Failed to create audio converter.")
-        }
-        let ratio = targetSampleRate / sourceFormat.sampleRate
-        let capacity = AVAudioFrameCount((Double(buffer.frameLength) * ratio).rounded(.up)) + 1024
-        guard let outputBuffer = AVAudioPCMBuffer(pcmFormat: targetFormat, frameCapacity: capacity) else {
-            throw Self.makeError("Failed to allocate converted audio buffer.")
-        }
-
-        var consumedInput = false
-        var conversionError: NSError?
-        converter.convert(to: outputBuffer, error: &conversionError) { _, status in
-            if consumedInput {
-                status.pointee = .noDataNow
-                return nil
-            }
-            consumedInput = true
-            status.pointee = .haveData
-            return buffer
-        }
-
-        if let conversionError {
-            throw conversionError
-        }
-        guard let channelData = outputBuffer.floatChannelData else {
-            throw Self.makeError("Failed to access converted audio channel data.")
-        }
-        return Array(UnsafeBufferPointer(start: channelData[0], count: Int(outputBuffer.frameLength)))
-    }
-
     private static func loadMaxAudioSamples(from dir: URL) -> Int? {
         let url = dir.appendingPathComponent("metadata.json")
         guard
@@ -706,7 +662,7 @@ final class NemotronProvider: TranscriptionProvider {
         self.mode = mode
     }
 
-    func prepare(progressHandler: ((Double) -> Void)? = nil) async throws {
+    func prepare(progressHandler: ((ModelPreparationProgress) -> Void)? = nil) async throws {
         throw Self.makeError("Nemotron requires Apple Silicon.")
     }
 

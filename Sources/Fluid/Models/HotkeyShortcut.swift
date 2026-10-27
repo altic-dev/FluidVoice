@@ -238,7 +238,16 @@ extension HotkeyShortcut {
     }
 
     /// True when shortcut presses can race because one begins as the other's modifier prefix.
-    func conflictsWith(_ other: HotkeyShortcut) -> Bool {
+    func conflictsWith(_ other: HotkeyShortcut, includingKeyboardModifierPrefixes: Bool = false) -> Bool {
+        // Meeting chords cannot wait for a modifier-only dictation shortcut to disambiguate:
+        // that shortcut must keep starting capture immediately.
+        if includingKeyboardModifierPrefixes {
+            let modifierOnly = self.isModifierOnlyShortcut ? self : other
+            let keyed = self.isModifierOnlyShortcut ? other : self
+            if modifierOnly.isModifierOnlyShortcut, !keyed.isModifierOnlyShortcut, !keyed.isMouseShortcut,
+               let modifiers = modifierOnly.expectedModifierFlags, !modifiers.isEmpty,
+               modifiers.isSubset(of: keyed.relevantModifierFlags) { return true }
+        }
         if self.isModifierOnlyShortcut, other.isModifierOnlyShortcut {
             let lhs = Set(self.normalizedModifierKeyCodes)
             let rhs = Set(other.normalizedModifierKeyCodes)
@@ -275,6 +284,27 @@ extension HotkeyShortcut {
     var expectedModifierFlags: NSEvent.ModifierFlags? {
         guard let triggerFlag = self.modifierTriggerFlag else { return nil }
         return self.relevantModifierFlags.union(triggerFlag)
+    }
+
+    /// Physical letter/digit and editing keys need a modifier; punctuation and modifier-only keys remain available.
+    var requiresModifierForRecording: Bool {
+        guard !self.isMouseShortcut, !self.isModifierOnlyShortcut, self.relevantModifierFlags.isEmpty else { return false }
+        switch self.keyCode {
+        case 0...9, 11...23, 25, 26, 28, 29, 31, 32, 34...38, 40, 45, 46,
+             48, 49, 51, 53, 76, 82...89, 91, 92, 117:
+            return true
+        default:
+            return false
+        }
+    }
+
+    /// Meeting recording is a one-shot toggle, independent of dictation activation mode.
+    var isMeetingRecordingShortcut: Bool {
+        !self.isMouseShortcut && !self.isModifierOnlyShortcut && !self.relevantModifierFlags.isEmpty
+    }
+
+    func matchesRecordingShortcut(keyCode: UInt16, modifiers: NSEvent.ModifierFlags) -> Bool {
+        !self.requiresModifierForRecording && self.matches(keyCode: keyCode, modifiers: modifiers)
     }
 
     func matches(keyCode: UInt16, modifiers: NSEvent.ModifierFlags) -> Bool {

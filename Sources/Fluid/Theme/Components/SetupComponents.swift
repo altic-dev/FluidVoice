@@ -44,7 +44,7 @@ struct SetupStepView: View {
                     if self.status == .completed {
                         Image(systemName: "checkmark.circle.fill")
                             .foregroundStyle(self.statusColor)
-                            .font(.body.weight(.semibold))
+                            .font(.fluidSystem(.body).weight(.semibold))
                     } else if self.status == .inProgress {
                         ProgressView()
                             .controlSize(.small)
@@ -52,18 +52,18 @@ struct SetupStepView: View {
                             .tint(self.statusColor)
                     } else {
                         Text("\(self.step)")
-                            .font(.caption.weight(.bold))
+                            .font(.fluidSystem(.caption).weight(.bold))
                             .foregroundStyle(self.statusColor)
                     }
                 }
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(self.title)
-                        .font(.body.weight(.medium))
+                        .font(.fluidSystem(.body).weight(.medium))
                         .foregroundStyle(.primary)
 
                     Text(self.description)
-                        .font(.caption)
+                        .font(.fluidSystem(.caption))
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
                 }
@@ -73,7 +73,7 @@ struct SetupStepView: View {
                 // Action button or status badge
                 if self.status == .completed {
                     Label("Done", systemImage: "checkmark")
-                        .font(.caption.weight(.semibold))
+                        .font(.fluidSystem(.caption).weight(.semibold))
                         .foregroundStyle(.white)
                         .padding(.horizontal, 8)
                         .padding(.vertical, 4)
@@ -81,9 +81,9 @@ struct SetupStepView: View {
                 } else if self.showActionButton {
                     HStack(spacing: 3) {
                         Text(self.actionButtonTitle)
-                            .font(.caption.weight(.medium))
+                            .font(.fluidSystem(.caption).weight(.medium))
                         Image(systemName: "arrow.right")
-                            .font(.caption2.weight(.bold))
+                            .font(.fluidSystem(.caption2).weight(.bold))
                     }
                     .foregroundStyle(self.theme.palette.accent)
                     .padding(.horizontal, 8)
@@ -138,16 +138,16 @@ struct InstructionStep: View {
                     .frame(width: 22, height: 22)
 
                 Text("\(self.number)")
-                    .font(.caption.weight(.semibold))
+                    .font(.fluidSystem(.caption).weight(.semibold))
                     .foregroundStyle(self.theme.palette.accent)
             }
 
             VStack(alignment: .leading, spacing: 1) {
                 Text(self.title)
-                    .font(.subheadline.weight(.medium))
+                    .font(.fluidSystem(.subheadline).weight(.medium))
 
                 Text(self.description)
-                    .font(.caption)
+                    .font(.fluidSystem(.caption))
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
             }

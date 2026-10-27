@@ -46,122 +46,149 @@ extension AIEnhancementSettingsView {
 
     // MARK: - AI Configuration Card
 
-    var aiConfigurationCard: some View {
-        VStack(spacing: 14) {
-            ThemedCard(style: .prominent, hoverEffect: false) {
-                VStack(alignment: .leading, spacing: 16) {
-                    self.aiSetupHeader
-                    self.aiConfigurationSectionPicker
-
-                    Group {
-                        switch self.selectedConfigurationSection {
-                        case .providers:
-                            self.providerConfigurationContent
-                        case .advancedPrompts:
-                            self.promptsStepContent
-                        }
-                    }
-                    .transition(.opacity)
-                    .animation(.easeOut(duration: 0.12), value: self.selectedConfigurationSection)
+    @ViewBuilder var aiConfigurationCard: some View {
+        if self.selectedConfigurationSection == .providers, PrivateAIProviderFeature.shared.isAvailable {
+            VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xl) {
+                FluidIntelligenceLiveSection(
+                    controller: self.privateAIController,
+                    backendID: self.settings.privateAIBackendPreference.rawValue,
+                    isPrimary: self.primaryDefaultProviderID == PrivateAIProviderFeature.shared.providerID,
+                    isVerified: self.isPrivateAIModelVerified(self.privateAIController.selectedPrivateAIModel),
+                    makePrimary: { self.makePrimaryDefaultProvider(PrivateAIProviderFeature.shared.providerID, isPrivateAI: true) }
+                ) {
+                    self.privateAIManagementSettings(isBusy: self.privateAIController.isBusy)
                 }
-                .padding(16)
+                self.addedExternalProvidersSection
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        } else {
+            self.legacyAIConfigurationCard
         }
     }
 
-    private var aiSetupHeader: some View {
-        HStack(spacing: 12) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(self.theme.palette.contentBackground.opacity(0.82))
-                    .overlay(
-                        LinearGradient(
-                            colors: [.white.opacity(0.1), .clear],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .stroke(self.theme.palette.accent.opacity(0.35), lineWidth: 1)
-                    )
-
-                Image(systemName: "brain")
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(self.theme.palette.accent)
+    var addedExternalProvidersSection: some View {
+        VStack(alignment: .leading, spacing: self.theme.metrics.spacing.md) {
+            HStack {
+                if !self.viewModel.cachedAddedProviderItems.isEmpty {
+                    Text("Other providers").font(self.theme.typography.sectionTitle)
+                }
+                Spacer()
+                Button("Add Provider", systemImage: "plus") { self.showingAddProviderSheet = true }
+                    .fluidGlassAction()
+                    .disabled(self.viewModel.isFetchingModels || self.viewModel.isTestingConnection)
             }
-            .frame(width: 34, height: 34)
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text("AI Enhancement")
-                    .font(.title3)
-                    .fontWeight(.semibold)
-                    .foregroundStyle(self.theme.palette.primaryText)
-                Text("Set up providers and prompt behavior separately.")
-                    .font(.caption)
-                    .foregroundStyle(self.theme.palette.secondaryText)
-            }
-
-            Spacer()
-        }
-    }
-
-    private var aiConfigurationSectionPicker: some View {
-        HStack(spacing: 3) {
-            ForEach(AIEnhancementConfigurationSection.allCases) { section in
-                self.aiConfigurationSectionButton(section)
-            }
-        }
-        .padding(4)
-        .background(
-            Capsule(style: .continuous)
-                .fill(self.theme.palette.contentBackground.opacity(0.78))
-                .overlay(
-                    Capsule(style: .continuous)
-                        .stroke(self.theme.palette.cardBorder.opacity(0.24), lineWidth: 1)
+            ForEach(self.viewModel.cachedAddedProviderItems) { provider in
+                let item = ProviderItem(id: provider.id, name: provider.name, isBuiltIn: provider.isBuiltIn)
+                let setupIssue = DictationDefaultProvider.setupIssue(
+                    requiresAPIKey: !self.viewModel.isLocalEndpoint(self.providerBaseURL(for: item)),
+                    hasAPIKey: !self.viewModel.providerAPIKey(for: provider.id).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                    hasModel: !self.viewModel.selectedModel(for: provider.id).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                    isVerified: self.viewModel.connectionStatus(for: provider.id) == .success,
+                    verificationFailed: self.viewModel.connectionStatus(for: provider.id) == .failed
                 )
-        )
-        .frame(maxWidth: .infinity, alignment: .center)
-        .accessibilityElement(children: .contain)
+                HStack(spacing: self.theme.metrics.spacing.md) {
+                    self.providerLogoView(for: item).frame(width: 30, height: 30)
+                    Text(provider.name).font(self.theme.typography.bodySmallStrong)
+                    Spacer()
+                    if self.viewModel.connectionStatus(for: provider.id) == .testing {
+                        Text("Verifying…")
+                            .font(self.theme.typography.caption)
+                            .foregroundStyle(self.theme.palette.secondaryText)
+                    } else if let setupIssue {
+                        Label(setupIssue, systemImage: "exclamationmark.circle")
+                            .font(self.theme.typography.caption)
+                            .foregroundStyle(.red)
+                    }
+                    ProviderDefaultButton(
+                        isCurrent: self.primaryDefaultProviderID == provider.id,
+                        isEnabled: self.viewModel.canUseProviderWithoutVerification(provider.id)
+                            && !self.viewModel.isFetchingModels && !self.viewModel.isTestingConnection
+                    ) {
+                        self.makePrimaryDefaultProvider(provider.id, isPrivateAI: false)
+                    }
+                    Button("Manage") {
+                        self.viewModel.configureProvider(provider.id)
+                        self.managedExternalProviderID = provider.id
+                    }
+                    .fluidGlassAction()
+                    .disabled(self.viewModel.isFetchingModels || self.viewModel.isTestingConnection)
+                }
+                .padding(self.theme.metrics.spacing.lg)
+                .background(self.theme.palette.cardBackground, in: RoundedRectangle(cornerRadius: self.theme.metrics.corners.lg, style: .continuous))
+            }
+        }
+        .sheet(isPresented: self.$showingAddProviderSheet) {
+            AddProviderSheet(viewModel: self.viewModel) { id, name in
+                self.providerLogoView(for: ProviderItem(id: id, name: name, isBuiltIn: true))
+            }.appTheme(self.theme)
+        }
+        .sheet(isPresented: Binding(
+            get: { self.managedExternalProviderID != nil },
+            set: { if !$0 { self.closeExternalProviderManager() } }
+        )) {
+            self.externalProviderManager.appTheme(self.theme)
+        }
     }
 
-    private func aiConfigurationSectionButton(_ section: AIEnhancementConfigurationSection) -> some View {
-        let isSelected = self.selectedConfigurationSection == section
-        let isHovering = self.hoveredConfigurationSection == section
-        let tone = self.theme.palette.accent
-        let shape = Capsule(style: .continuous)
+    private func closeExternalProviderManager() {
+        guard !self.viewModel.isFetchingModels, !self.viewModel.isTestingConnection else { return }
+        if let providerID = self.managedExternalProviderID,
+           !self.viewModel.saveManagedProviderBeforeClosing(providerID)
+        { return }
+        self.viewModel.clearEditProviderDraft()
+        self.viewModel.showingAddModel = false
+        self.viewModel.newModelName = ""
+        self.viewModel.showingReasoningConfig = false
+        self.viewModel.finishConfiguringProvider()
+        self.managedExternalProviderID = nil
+    }
 
-        return Button {
-            self.selectedConfigurationSection = section
-        } label: {
-            HStack(spacing: 8) {
-                Image(systemName: section.systemImage)
-                    .font(.system(size: 12, weight: .semibold))
-                Text(section.title)
-                    .font(.system(size: 13, weight: .semibold))
+    private var externalProviderManager: some View {
+        FluidManagementSheet(
+            title: self.viewModel.cachedProviderItems.first(where: { $0.id == self.managedExternalProviderID })?.name ?? "Provider",
+            subtitle: "Connection and models.",
+            symbol: "network",
+            dismissDisabled: self.viewModel.isFetchingModels || self.viewModel.isTestingConnection,
+            height: 520,
+            close: self.closeExternalProviderManager
+        ) {
+            if let provider = self.viewModel.cachedProviderItems.first(where: { $0.id == self.managedExternalProviderID }) {
+                let item = ProviderItem(id: provider.id, name: provider.name, isBuiltIn: provider.isBuiltIn)
+                VStack(alignment: .leading, spacing: self.theme.metrics.spacing.lg) {
+                    self.providerDetailsSection(for: item, managementLayout: true)
+                        .disabled(self.viewModel.isFetchingModels || self.viewModel.isTestingConnection)
+                }
             }
-            .foregroundStyle(isSelected ? tone : (isHovering ? self.theme.palette.primaryText : self.theme.palette.secondaryText))
-            .frame(width: 176, height: 36)
-            .contentShape(shape)
-            .background(
-                shape
-                    .fill(isSelected ? tone.opacity(0.13) : (isHovering ? self.theme.palette.cardBackground.opacity(0.66) : .clear))
-                    .overlay(
-                        shape
-                            .stroke(isSelected ? tone.opacity(0.46) : (isHovering ? self.theme.palette.cardBorder.opacity(0.36) : .clear), lineWidth: 1)
-                    )
-                    .shadow(color: isSelected ? tone.opacity(0.18) : .clear, radius: 8, x: 0, y: 2)
-            )
         }
-        .buttonStyle(.plain)
-        .accessibilityLabel(section.title)
-        .accessibilityAddTraits(isSelected ? .isSelected : [])
-        .onHover { hovering in
-            self.hoveredConfigurationSection = hovering ? section : nil
+        .interactiveDismissDisabled()
+        .alert("Remove provider?", isPresented: self.$showingRemoveProviderConfirmation) {
+            Button("Cancel", role: .cancel) {}
+            Button("Remove", role: .destructive) {
+                guard self.viewModel.selectedProviderID == self.managedExternalProviderID,
+                      self.viewModel.deleteCurrentProvider()
+                else { return }
+                self.expandedProviderID = nil
+                self.closeExternalProviderManager()
+            }
+        } message: {
+            Text("This removes its saved API key and model setup, and clears any default or prompt assignments using it. Your prompts and shortcuts are kept. You can add the provider again later.")
         }
-        .animation(.easeOut(duration: 0.12), value: isHovering)
-        .animation(.easeOut(duration: 0.12), value: isSelected)
+        .onChange(of: self.viewModel.cachedProviderItems.map(\.id)) { _, ids in
+            if let id = self.managedExternalProviderID, !ids.contains(id) { self.closeExternalProviderManager() }
+        }
+    }
+
+    private var legacyAIConfigurationCard: some View {
+        VStack(alignment: .leading, spacing: FluidPageLayout.sectionSpacing) {
+            Group {
+                switch self.selectedConfigurationSection {
+                case .providers:
+                    self.providerConfigurationContent
+                case .advancedPrompts:
+                    self.promptsStepContent
+                }
+            }
+        }
     }
 
     private var providerConfigurationContent: some View {
@@ -171,9 +198,9 @@ extension AIEnhancementSettingsView {
             HStack(spacing: 12) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Providers")
-                        .font(.system(size: 14, weight: .semibold))
+                        .font(.fluidSystem(size: 14, weight: .semibold))
                     Text("Configure local models and API providers.")
-                        .font(.caption)
+                        .font(.fluidSystem(.caption))
                         .foregroundStyle(.secondary)
                 }
 
@@ -182,9 +209,9 @@ extension AIEnhancementSettingsView {
                 Button(action: { self.viewModel.showHelp.toggle() }) {
                     HStack(spacing: 5) {
                         Image(systemName: self.viewModel.showHelp ? "questionmark.circle.fill" : "questionmark.circle")
-                            .font(.system(size: 14))
+                            .font(.fluidSystem(size: 14))
                         Text("Help")
-                            .font(.caption)
+                            .font(.fluidSystem(.caption))
                             .fontWeight(.medium)
                     }
                     .foregroundStyle(self.viewModel.showHelp ? self.theme.palette.accent : .secondary)
@@ -215,13 +242,13 @@ extension AIEnhancementSettingsView {
                 self.aiSetupSummaryDivider
                 self.aiSetupSummaryItem(icon: "cloud", text: "Cloud models use provider APIs")
                 self.aiSetupSummaryDivider
-                self.aiSetupSummaryItem(icon: "keyboard", text: "Shortcuts choose when prompts run")
+                self.aiSetupSummaryItem(icon: "wand.and.stars", text: "Cleanup Styles choose what dictation uses")
             }
 
             VStack(alignment: .leading, spacing: 7) {
                 self.aiSetupSummaryItem(icon: "cpu", text: "Local models run on Mac")
                 self.aiSetupSummaryItem(icon: "cloud", text: "Cloud models use provider APIs")
-                self.aiSetupSummaryItem(icon: "keyboard", text: "Shortcuts choose when prompts run")
+                self.aiSetupSummaryItem(icon: "wand.and.stars", text: "Cleanup Styles choose what dictation uses")
             }
         }
         .padding(.horizontal, 2)
@@ -238,12 +265,12 @@ extension AIEnhancementSettingsView {
     private func aiSetupSummaryItem(icon: String, text: String) -> some View {
         HStack(spacing: 6) {
             Image(systemName: icon)
-                .font(.system(size: 11, weight: .semibold))
+                .font(.fluidSystem(size: 11, weight: .semibold))
                 .foregroundStyle(self.theme.palette.accent.opacity(0.95))
                 .frame(width: 14)
 
             Text(text)
-                .font(.system(size: 12, weight: .medium))
+                .font(.fluidSystem(size: 12, weight: .medium))
                 .foregroundStyle(self.theme.palette.secondaryText)
                 .lineLimit(1)
         }
@@ -253,9 +280,9 @@ extension AIEnhancementSettingsView {
         HStack(spacing: 10) {
             Image(systemName: "exclamationmark.triangle.fill")
                 .foregroundStyle(.orange)
-                .font(.system(size: 16))
+                .font(.fluidSystem(size: 16))
             Text("API key required for AI enhancement to work")
-                .font(.system(size: 13, weight: .medium))
+                .font(.fluidSystem(size: 13, weight: .medium))
                 .foregroundStyle(.orange)
             Spacer()
         }
@@ -270,10 +297,10 @@ extension AIEnhancementSettingsView {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 8) {
                 Image(systemName: "lightbulb.fill")
-                    .font(.system(size: 14))
+                    .font(.fluidSystem(size: 14))
                     .foregroundStyle(.yellow)
                 Text("Quick Start Guide")
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.fluidSystem(size: 13, weight: .semibold))
             }
 
             VStack(alignment: .leading, spacing: 8) {
@@ -304,26 +331,32 @@ extension AIEnhancementSettingsView {
                     .fill(self.theme.palette.accent.opacity(0.15))
                     .frame(width: 22, height: 22)
                 Text(number)
-                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                    .font(.fluidSystem(size: 11, weight: .bold, design: .rounded))
                     .foregroundStyle(self.theme.palette.accent)
             }
             Image(systemName: icon)
-                .font(.system(size: 11))
+                .font(.fluidSystem(size: 11))
                 .foregroundStyle(.secondary)
                 .frame(width: 16)
             Text(text)
-                .font(.system(size: 12))
+                .font(.fluidSystem(size: 12))
                 .foregroundStyle(.secondary)
         }
     }
 
     var providerStepContent: some View {
         VStack(alignment: .leading, spacing: 16) {
-            self.verifiedProvidersSection
+            if !PrivateAIProviderFeature.shared.isAvailable || !self.verifiedProviderItems.isEmpty {
+                self.verifiedProvidersSection
+            }
 
             self.allProvidersSection
 
-            if self.viewModel.showingEditProvider { self.editProviderSection }
+            if self.viewModel.showingEditProvider,
+               self.viewModel.selectedProviderID != PrivateAIProviderFeature.shared.providerID
+            {
+                self.editProviderSection
+            }
         }
         .padding(.top, 4)
     }
@@ -341,23 +374,23 @@ extension AIEnhancementSettingsView {
         return VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
                 Image(systemName: "square.grid.2x2")
-                    .font(.system(size: 11, weight: .medium))
+                    .font(.fluidSystem(size: 11, weight: .medium))
                     .foregroundStyle(self.theme.palette.secondaryText)
                 Text("All providers")
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(.fluidSystem(size: 12, weight: .semibold))
                     .foregroundStyle(self.theme.palette.secondaryText)
                 Text("(\(count))")
-                    .font(.system(size: 11, weight: .medium))
+                    .font(.fluidSystem(size: 11, weight: .medium))
                     .foregroundStyle(self.theme.palette.tertiaryText)
             }
 
             HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass")
-                    .font(.system(size: 11))
+                    .font(.fluidSystem(size: 11))
                     .foregroundStyle(.secondary)
                 TextField("Search providers", text: self.$providerSearchText)
                     .textFieldStyle(.plain)
-                    .font(.system(size: 12))
+                    .font(.fluidSystem(size: 12))
             }
             .padding(8)
             .background(
@@ -378,7 +411,7 @@ extension AIEnhancementSettingsView {
                         }
                         if filteredItems.isEmpty, !query.isEmpty {
                             Text("No providers match \"\(query)\"")
-                                .font(.caption)
+                                .font(.fluidSystem(.caption))
                                 .foregroundStyle(.secondary)
                                 .padding(.vertical, 12)
                                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -414,27 +447,27 @@ extension AIEnhancementSettingsView {
         return VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
                 Image(systemName: "checkmark.seal.fill")
-                    .font(.system(size: 11, weight: .medium))
+                    .font(.fluidSystem(size: 11, weight: .medium))
                     .foregroundStyle(Color.fluidGreen)
                 Text("Verified providers")
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(.fluidSystem(size: 12, weight: .semibold))
                     .foregroundStyle(self.theme.palette.secondaryText)
                 Text("(\(count))")
-                    .font(.system(size: 11, weight: .medium))
+                    .font(.fluidSystem(size: 11, weight: .medium))
                     .foregroundStyle(self.theme.palette.tertiaryText)
             }
 
             if verified.isEmpty {
                 HStack(spacing: 10) {
                     Image(systemName: "info.circle")
-                        .font(.system(size: 14))
+                        .font(.fluidSystem(size: 14))
                         .foregroundStyle(.secondary)
                     VStack(alignment: .leading, spacing: 2) {
                         Text("No verified providers yet")
-                            .font(.system(size: 13, weight: .medium))
+                            .font(.fluidSystem(size: 13, weight: .medium))
                             .foregroundStyle(.secondary)
                         Text("Set up a provider below and verify its connection")
-                            .font(.caption)
+                            .font(.fluidSystem(.caption))
                             .foregroundStyle(.tertiary)
                     }
                 }
@@ -471,13 +504,17 @@ extension AIEnhancementSettingsView {
 
     // Use cached provider items from ViewModel for scroll performance
     private var verifiedProviderItems: [ProviderItem] {
-        self.viewModel.cachedVerifiedProviderItems.map {
+        self.viewModel.cachedVerifiedProviderItems.filter {
+            !PrivateAIProviderFeature.shared.isAvailable || $0.id != PrivateAIProviderFeature.shared.providerID
+        }.map {
             ProviderItem(id: $0.id, name: $0.name, isBuiltIn: $0.isBuiltIn)
         }
     }
 
     private var unverifiedProviderItems: [ProviderItem] {
-        self.viewModel.cachedUnverifiedProviderItems.map {
+        self.viewModel.cachedUnverifiedProviderItems.filter {
+            !PrivateAIProviderFeature.shared.isAvailable || $0.id != PrivateAIProviderFeature.shared.providerID
+        }.map {
             ProviderItem(id: $0.id, name: $0.name, isBuiltIn: $0.isBuiltIn)
         }
     }
@@ -492,7 +529,7 @@ extension AIEnhancementSettingsView {
     ) -> some View {
         Button(action: action) {
             Image(systemName: systemName)
-                .font(.system(size: 12, weight: .semibold))
+                .font(.fluidSystem(size: 12, weight: .semibold))
                 .frame(width: AISettingsLayout.providerRowControlHeight, height: AISettingsLayout.providerRowControlHeight)
         }
         .buttonStyle(SquareIconButtonStyle())
@@ -516,7 +553,7 @@ extension AIEnhancementSettingsView {
                         .frame(width: 16, height: 16)
                 } else {
                     Image(systemName: "arrow.clockwise")
-                        .font(.system(size: 12, weight: .semibold))
+                        .font(.fluidSystem(size: 12, weight: .semibold))
                 }
             }
             .frame(width: AISettingsLayout.providerRowControlHeight, height: AISettingsLayout.providerRowControlHeight)
@@ -528,10 +565,8 @@ extension AIEnhancementSettingsView {
     }
 
     private func providerCard(_ item: ProviderItem) -> some View {
-        let isAppleDisabled = item.id == "apple-intelligence-disabled"
         let isPrivateAIProvider = item.id == PrivateAIProviderFeature.shared.providerID
-        let isComingSoon = isAppleDisabled
-        let isExpanded = self.expandedProviderID == item.id && !isAppleDisabled
+        let isExpanded = self.expandedProviderID == item.id
         let status = self.providerStatus(for: item)
         let borderColor = isExpanded
             ? self.theme.palette.accent.opacity(0.5)
@@ -539,40 +574,37 @@ extension AIEnhancementSettingsView {
         let statusView = HStack(spacing: 5) {
             if !status.icon.isEmpty {
                 Image(systemName: status.icon)
-                    .font(.system(size: 10))
+                    .font(.fluidSystem(size: 10))
             }
             Text(status.text)
         }
-        .font(.caption2)
+        .font(.fluidSystem(.caption2))
         .foregroundStyle(status.color)
 
         return VStack(alignment: .leading, spacing: 0) {
-            Button(action: { if !isComingSoon { self.toggleProviderExpansion(item.id) } }) {
+            Button(action: { self.toggleProviderExpansion(item.id) }) {
                 HStack(alignment: .center, spacing: 10) {
                     self.providerLogoView(for: item)
                         .frame(width: 34, height: 34)
 
                     HStack(spacing: 8) {
                         Text(item.name)
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundStyle(isComingSoon ? self.theme.palette.accent : self.theme.palette.primaryText)
+                            .font(.fluidSystem(size: 14, weight: .semibold))
+                            .foregroundStyle(self.theme.palette.primaryText)
 
                         statusView
                     }
 
                     Spacer()
 
-                    if !isComingSoon {
-                        Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(.secondary.opacity(0.7))
-                    }
+                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                        .font(.fluidSystem(size: 11, weight: .semibold))
+                        .foregroundStyle(.secondary.opacity(0.7))
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .disabled(isComingSoon)
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
 
@@ -614,12 +646,6 @@ extension AIEnhancementSettingsView {
     }
 
     private func providerStatus(for item: ProviderItem) -> (text: String, color: Color, icon: String) {
-        if item.id == "apple-intelligence-disabled" {
-            return ("Unavailable", .secondary, "lock.slash")
-        }
-        if item.id == "apple-intelligence" {
-            return ("On-device", .secondary, "lock.shield")
-        }
         switch self.viewModel.connectionStatus(for: item.id) {
         case .success:
             return ("Connection verified", Color.fluidGreen, "checkmark.circle.fill")
@@ -632,39 +658,37 @@ extension AIEnhancementSettingsView {
         }
     }
 
-    private var isComingSoonProvider: (ProviderItem) -> Bool {
-        { $0.id == "apple-intelligence-disabled" }
-    }
-
     private func toggleProviderExpansion(_ providerID: String) {
         if self.expandedProviderID == providerID {
             self.expandedProviderID = nil
             self.viewModel.clearEditProviderDraft()
             self.viewModel.setEditingAPIKey(false, for: providerID)
+            self.viewModel.finishConfiguringProvider()
         } else {
             self.expandedProviderID = providerID
-            self.selectProvider(providerID)
+            self.viewModel.configureProvider(providerID)
         }
     }
 
     private var privateAIRuntimeSection: some View {
-        let model = self.selectedPrivateAIModel
+        let model = self.privateAIController.selectedPrivateAIModel
         let status = self.privateAIModelStatus(for: model)
-        let isInstalled = PrivateAIIntegrationService.isModelInstalled(model)
-        let isDownloading = self.privateAILoadState.isDownloading(model.id)
-        let downloadProgress = self.privateAILoadState.downloadProgress(for: model.id)
-        let isLoading = self.privateAILoadState.isLoading(model.id)
-        let isLoaded = self.privateAILoadState.isLoaded(model.id)
-        let hasLoadFailure = self.privateAILoadState.failureMessage(for: model.id) != nil
+        let isInstalled = !self.privateAIController.privateAILoadState.needsDownload(model.id) && PrivateAIIntegrationService.isModelInstalled(model)
+        let isDownloading = self.privateAIController.privateAILoadState.isDownloading(model.id)
+        let downloadProgress = self.privateAIController.privateAILoadState.downloadProgress(for: model.id)
+        let isLoading = self.privateAIController.privateAILoadState.isLoading(model.id)
+        let isLoaded = self.privateAIController.privateAILoadState.isLoaded(model.id)
+        let hasLoadFailure = self.privateAIController.privateAILoadState.failureMessage(for: model.id) != nil
         let isVerified = self.isPrivateAIModelVerified(model)
         let isTesting = self.viewModel.isTestingConnection && self.viewModel.selectedProviderID == PrivateAIProviderFeature.shared.providerID
-        let isBusy = isDownloading || isLoading || isTesting
-        let canVerify = isInstalled && (!isVerified || hasLoadFailure) && !self.privateAISelectedModelID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let isBusy = self.privateAIController.isBusy || isDownloading || isLoading || isTesting
+        let hasUpdate = isInstalled && self.privateAIController.privateAIModelUpdateStatusByID[model.id]?.state == .updateAvailable
+        let canVerify = isInstalled && (!isVerified || hasLoadFailure) && !self.privateAIController.privateAISelectedModelID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
 
         return VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
                 Text("Model")
-                    .font(.system(size: 12, weight: .medium))
+                    .font(.fluidSystem(size: 12, weight: .medium))
                     .foregroundStyle(.secondary)
                     .frame(width: 50, alignment: .leading)
 
@@ -672,14 +696,17 @@ extension AIEnhancementSettingsView {
                     models: PrivateAIModelRegistry.modelIDs(),
                     selectedModel: self.privateAIModelBinding,
                     selectionEnabled: !isBusy,
+                    displayName: self.privateAIModelDisplayName,
                     controlWidth: 180,
                     controlHeight: AISettingsLayout.providerRowControlHeight
                 )
 
                 self.companionIconButton(systemName: "folder", help: "Open downloaded model folder") {
-                    self.revealPrivateAIModelFolder()
+                    self.privateAIController.revealPrivateAIModelFolder()
                 }
             }
+
+            self.privateAIBackendRow(isBusy: isBusy)
 
             if isDownloading || isLoading || isLoaded || hasLoadFailure || isVerified || !isInstalled {
                 self.privateAIModelStatusRow(
@@ -691,15 +718,18 @@ extension AIEnhancementSettingsView {
             }
 
             self.privateAIPrefixCacheRow(isBusy: isBusy)
+            if self.privateAIShowsBoostRow {
+                self.privateAIBoostRow(isBusy: isBusy)
+            }
 
             if self.viewModel.connectionStatus(for: PrivateAIProviderFeature.shared.providerID) == .failed,
                !self.viewModel.connectionErrorMessage.isEmpty
             {
                 HStack(spacing: 6) {
                     Image(systemName: "exclamationmark.triangle.fill")
-                        .font(.caption)
+                        .font(.fluidSystem(.caption))
                     Text(self.viewModel.connectionErrorMessage)
-                        .font(.caption)
+                        .font(.fluidSystem(.caption))
                 }
                 .foregroundStyle(.red)
                 .padding(10)
@@ -712,15 +742,19 @@ extension AIEnhancementSettingsView {
 
             if !isInstalled {
                 if model.canDownload {
-                    Button(action: { self.downloadPrivateAIModel(model) }) {
+                    Button(action: { self.privateAIController.downloadPrivateAIModel(model) }) {
                         HStack(spacing: 6) {
                             if isDownloading {
                                 ProgressView()
                                     .controlSize(.mini)
                                     .fixedSize()
                             }
-                            Text(isDownloading ? Self.downloadButtonText(progress: downloadProgress) : "Download & Verify")
-                                .font(.system(size: 11, weight: .semibold))
+                            Text(
+                                isDownloading
+                                    ? Self.downloadButtonText(progress: downloadProgress)
+                                    : "Download \(self.privateAIBackendShortName) & Verify"
+                            )
+                            .font(.fluidSystem(size: 11, weight: .semibold))
                         }
                     }
                     .fluidButton(.accent, size: .small)
@@ -728,14 +762,32 @@ extension AIEnhancementSettingsView {
                 } else {
                     HStack(spacing: 6) {
                         Image(systemName: "info.circle")
-                            .font(.caption)
+                            .font(.fluidSystem(.caption))
                         Text("Install the selected model to enable verification")
-                            .font(.caption)
+                            .font(.fluidSystem(.caption))
                     }
                     .foregroundStyle(.secondary)
                 }
+            } else if hasUpdate {
+                Button(action: { self.privateAIController.updatePrivateAIModel(model) }) {
+                    HStack(spacing: 6) {
+                        if isDownloading {
+                            ProgressView()
+                                .controlSize(.mini)
+                                .fixedSize()
+                        }
+                        Text(
+                            isDownloading
+                                ? Self.downloadButtonText(progress: downloadProgress)
+                                : "Update & Verify"
+                        )
+                        .font(.fluidSystem(size: 11, weight: .semibold))
+                    }
+                }
+                .fluidButton(.accent, size: .small)
+                .disabled(isBusy)
             } else if canVerify {
-                Button(action: { self.verifyPrivateAIConnection(model) }) {
+                Button(action: { self.privateAIController.verifyPrivateAIConnection(model) }) {
                     HStack(spacing: 6) {
                         if isTesting {
                             ProgressView()
@@ -743,7 +795,7 @@ extension AIEnhancementSettingsView {
                                 .fixedSize()
                         }
                         Text(isTesting ? "Loading..." : "Verify")
-                            .font(.system(size: 11, weight: .semibold))
+                            .font(.fluidSystem(size: 11, weight: .semibold))
                     }
                 }
                 .fluidButton(.accent, size: .small)
@@ -753,13 +805,86 @@ extension AIEnhancementSettingsView {
     }
 
     private func privateAIPrefixCacheRow(isBusy: Bool) -> some View {
-        HStack(spacing: 8) {
-            Toggle("Fast startup", isOn: self.privateAIPrefixCacheBinding)
+        HStack(alignment: .center, spacing: 8) {
+            Text("Faster first result")
+                .font(.fluidSystem(.caption))
+                .frame(width: 124, alignment: .leading)
+
+            Toggle("", isOn: self.privateAIPrefixCacheBinding)
                 .toggleStyle(.switch)
                 .controlSize(.mini)
-                .font(.caption)
+                .labelsHidden()
                 .disabled(isBusy)
-                .help("Keeps a reusable local prompt cache for faster first dictation.")
+                .help("Keeps Fluid-1 ready so your first dictation finishes sooner.")
+                .accessibilityLabel("Faster first result")
+
+            Spacer(minLength: 0)
+        }
+    }
+
+    private func privateAIBackendRow(isBusy: Bool) -> some View {
+        HStack(alignment: .center, spacing: 8) {
+            Text("Backend")
+                .font(.fluidSystem(.caption))
+                .frame(width: 124, alignment: .leading)
+
+            self.privateAIBackendPicker(isBusy: isBusy)
+                .frame(width: 190)
+
+            Text(self.settings.privateAIBackendPreference.detail)
+                .font(.fluidSystem(.caption2))
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+
+            Spacer(minLength: 0)
+        }
+    }
+
+    private func privateAIBackendPicker(isBusy: Bool) -> some View {
+        FluidDropdownPicker("Backend", selectedTitle: self.privateAIBackendBinding.wrappedValue.displayName, selection: self.privateAIBackendBinding) {
+            ForEach(self.privateAISelectableBackendPreferences) { preference in
+                Text(preference.displayName).tag(preference)
+            }
+        }
+        .fluidDropdownStyle()
+        .labelsHidden()
+        .disabled(isBusy)
+        .help("Local Fluid-1 runtime. Default is MLX on Apple Silicon.")
+    }
+
+    private var privateAISelectableBackendPreferences: [SettingsStore.PrivateAIBackendPreference] {
+        CPUArchitecture.isIntel ? [.llama] : [.mlx, .llama]
+    }
+
+    private var privateAIBackendShortName: String {
+        switch self.settings.privateAIBackendPreference {
+        case .auto:
+            return SettingsStore.PrivateAIBackendPreference.systemDefault == .mlx ? "MLX" : "llama.cpp"
+        case .llama:
+            return "llama.cpp"
+        case .mlx:
+            return "MLX"
+        }
+    }
+
+    private func privateAIBoostRow(isBusy: Bool) -> some View {
+        HStack(alignment: .center, spacing: 8) {
+            Text("Faster results")
+                .font(.fluidSystem(.caption))
+                .frame(width: 124, alignment: .leading)
+
+            Toggle("", isOn: self.privateAIBoostBinding)
+                .toggleStyle(.switch)
+                .controlSize(.mini)
+                .labelsHidden()
+                .disabled(isBusy)
+                .help("Uses extra local acceleration so Fluid-1 finishes faster.")
+                .accessibilityLabel("Faster results")
+
+            Text("Finishes dictation up to 15% faster. Uses about 100 MB more memory.")
+                .font(.fluidSystem(.caption2))
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
 
             Spacer(minLength: 0)
         }
@@ -780,7 +905,7 @@ extension AIEnhancementSettingsView {
                 }
 
                 Text(status.detail)
-                    .font(.caption)
+                    .font(.fluidSystem(.caption))
                     .lineLimit(2)
             }
 
@@ -788,7 +913,7 @@ extension AIEnhancementSettingsView {
                 self.privateAIDownloadProgressBar(progress: progress, color: status.color)
 
                 Text(Self.downloadProgressText(progress))
-                    .font(.caption2)
+                    .font(.fluidSystem(.caption2))
                     .lineLimit(1)
             }
         }
@@ -817,153 +942,101 @@ extension AIEnhancementSettingsView {
     private var privateAIPrefixCacheBinding: Binding<Bool> {
         Binding(
             get: { self.settings.privateAIPrefixKVCacheEnabled },
-            set: { enabled in
-                guard self.settings.privateAIPrefixKVCacheEnabled != enabled else { return }
-                self.settings.privateAIPrefixKVCacheEnabled = enabled
-                self.privateAILoadState = .idle
-                Task { @MainActor in
-                    await PrivateAIIntegrationService.shared.unloadCachedRuntime(
-                        reason: enabled ? "prefix cache enabled" : "prefix cache disabled"
-                    )
-                    self.viewModel.refreshProviderItems()
-                }
+            set: { self.privateAIController.setPrefixCacheEnabled($0) }
+        )
+    }
+
+    private var privateAIIdleUnloadBinding: Binding<SettingsStore.PrivateAIIdleUnload> {
+        Binding(
+            get: { self.settings.privateAIIdleUnload },
+            set: { option in
+                self.settings.privateAIIdleUnload = option
+                Task { await PrivateAIIntegrationService.idleUnloader.settingsChanged() }
             }
+        )
+    }
+
+    private var privateAIBoostBinding: Binding<Bool> {
+        Binding(
+            get: { self.settings.privateAIBoostEnabled },
+            set: { self.privateAIController.setBoostEnabled($0) }
+        )
+    }
+
+    private var privateAIBackendBinding: Binding<SettingsStore.PrivateAIBackendPreference> {
+        Binding(
+            get: { self.settings.privateAIBackendPreference },
+            set: { preference in
+                self.privateAIController.setPrivateAIBackendPreference(preference)
+            }
+        )
+    }
+
+    private var privateAIShowsBoostRow: Bool {
+        switch self.settings.privateAIBackendPreference {
+        case .llama:
+            return true
+        case .auto:
+            return CPUArchitecture.isIntel
+        case .mlx:
+            return false
+        }
+    }
+
+    private var privateAIContextTokenLimitBinding: Binding<Int> {
+        Binding(
+            get: { self.settings.privateAIContextTokenLimit },
+            set: { self.privateAIController.setContextTokenLimit($0) }
         )
     }
 
     private var privateAIModelBinding: Binding<String> {
         Binding(
-            get: { self.privateAISelectedModelID },
-            set: { self.persistPrivateAIModelSelection($0) }
+            get: { self.privateAIController.privateAISelectedModelID },
+            set: { self.privateAIController.persistPrivateAIModelSelection($0) }
         )
     }
 
-    private func refreshPrivateAIProviderModels() {
-        let providerKey = self.viewModel.providerKey(for: PrivateAIProviderFeature.shared.providerID)
-        let models = PrivateAIModelRegistry.modelIDs()
-        let selected = PrivateAIModelRegistry.canonicalModelID(for: self.privateAISelectedModelID) ?? PrivateAIModelRegistry.defaultModel.id
-
-        self.privateAISelectedModelID = selected
-        self.viewModel.availableModelsByProvider[providerKey] = models
-        self.viewModel.selectedModelByProvider[providerKey] = selected
-        self.viewModel.settings.availableModelsByProvider = self.viewModel.availableModelsByProvider
-        self.viewModel.settings.selectedModelByProvider = self.viewModel.selectedModelByProvider
-
-        if self.viewModel.selectedProviderID == PrivateAIProviderFeature.shared.providerID {
-            self.viewModel.availableModels = models
-            self.viewModel.selectedModel = selected
-        }
-
-        self.refreshPrivateAILoadState()
-        self.viewModel.refreshProviderItems()
-    }
-
-    private func downloadPrivateAIModel(_ model: PrivateAIRegisteredModel) {
-        guard model.canDownload else {
-            self.privateAILoadState = .failed(modelID: model.id, message: "Download URL is not configured yet.")
-            return
-        }
-
-        guard !self.privateAILoadState.isDownloading(model.id) else { return }
-
-        self.privateAILoadState = .downloading(
-            modelID: model.id,
-            progress: PrivateAIModelDownloadProgress(initialExpectedBytes: model.artifact.byteCount)
-        )
-        Task { @MainActor in
-            do {
-                DebugLogger.shared.info(
-                    "Private provider download button pressed model=\(model.id)",
-                    source: "AISettingsView"
-                )
-                _ = try await PrivateAIIntegrationService.prepareModel(model) { progress in
-                    await MainActor.run {
-                        guard self.privateAISelectedModelID == model.id else { return }
-                        self.privateAILoadState = .downloading(
-                            modelID: model.id,
-                            progress: progress.withFallbackExpectedBytes(model.artifact.byteCount)
-                        )
-                    }
-                }
-                guard self.privateAISelectedModelID == model.id else { return }
-                self.privateAILoadState = .loading(modelID: model.id)
-                let start = ContinuousClock.now
-                let verified = await self.viewModel.verifyPrivateAIProvider(model: model)
-                let latencyMilliseconds = Self.elapsedMilliseconds(since: start)
-                guard self.privateAISelectedModelID == model.id else { return }
-                if verified {
-                    self.privateAILoadState = .loaded(modelID: model.id, latencyMilliseconds: latencyMilliseconds)
-                } else {
-                    let message = self.viewModel.connectionErrorMessage.isEmpty
-                        ? "Model downloaded, but verification failed."
-                        : self.viewModel.connectionErrorMessage
-                    self.privateAILoadState = .failed(modelID: model.id, message: message)
-                }
-            } catch {
-                guard self.privateAISelectedModelID == model.id else { return }
-                self.privateAILoadState = .failed(
-                    modelID: model.id,
-                    message: Self.errorMessage(for: error)
-                )
-            }
-            self.viewModel.refreshProviderItems()
-        }
-    }
-
-    private func verifyPrivateAIConnection(_ model: PrivateAIRegisteredModel) {
-        self.privateAILoadState = .loading(modelID: model.id)
-        Task { @MainActor in
-            let start = ContinuousClock.now
-            let verified = await self.viewModel.verifyPrivateAIProvider(model: model)
-            let latencyMilliseconds = Self.elapsedMilliseconds(since: start)
-            guard self.privateAISelectedModelID == model.id else { return }
-            if verified {
-                self.privateAILoadState = .loaded(modelID: model.id, latencyMilliseconds: latencyMilliseconds)
-            } else {
-                let message = self.viewModel.connectionErrorMessage.isEmpty
-                    ? "Model verification failed."
-                    : self.viewModel.connectionErrorMessage
-                self.privateAILoadState = .failed(modelID: model.id, message: message)
-            }
-            self.viewModel.refreshProviderItems()
-        }
-    }
-
-    private var selectedPrivateAIModel: PrivateAIRegisteredModel {
-        PrivateAIModelRegistry.model(id: self.privateAISelectedModelID) ?? PrivateAIModelRegistry.defaultModel
+    private func privateAIModelDisplayName(_ modelID: String) -> String {
+        ModelDisplayName.forID(modelID)
     }
 
     private func isPrivateAIModelVerified(_ model: PrivateAIRegisteredModel) -> Bool {
-        guard PrivateAIIntegrationService.isModelInstalled(model) else { return false }
-        let key = self.viewModel.providerKey(for: PrivateAIProviderFeature.shared.providerID)
-        return self.viewModel.settings.verifiedProviderFingerprints[key] == PrivateAIProviderFeature.verificationFingerprint(for: model.id)
+        PrivateAIProviderPromptFormat.verifiedModelID(for: model.id, settings: self.viewModel.settings) != nil
     }
 
     private func privateAIModelStatus(
         for model: PrivateAIRegisteredModel
     ) -> PrivateAIProviderModelStatus {
-        if self.privateAILoadState.isDownloading(model.id) {
+        if self.privateAIController.privateAILoadState.isDownloading(model.id) {
             return PrivateAIProviderModelStatus(
                 detail: "Downloading model.",
                 color: self.theme.palette.accent
             )
         }
 
-        if self.privateAILoadState.isLoading(model.id) {
+        if self.privateAIController.privateAILoadState.isLoading(model.id) {
             return PrivateAIProviderModelStatus(
                 detail: "Loading...",
                 color: self.theme.palette.accent
             )
         }
 
-        if self.privateAILoadState.isLoaded(model.id) {
+        if self.privateAIController.privateAILoadState.isLoaded(model.id) {
             return PrivateAIProviderModelStatus(
-                detail: "Dictation-only model.",
+                detail: "For dictation only.",
                 color: Color.fluidGreen
             )
         }
 
-        if let message = self.privateAILoadState.failureMessage(for: model.id) {
+        if self.privateAIController.privateAILoadState.needsDownload(model.id) {
+            return PrivateAIProviderModelStatus(
+                detail: "Model files are missing. Download again to repair.",
+                color: self.theme.palette.secondaryText
+            )
+        }
+
+        if let message = self.privateAIController.privateAILoadState.failureMessage(for: model.id) {
             return PrivateAIProviderModelStatus(
                 detail: message,
                 color: .red
@@ -972,7 +1045,7 @@ extension AIEnhancementSettingsView {
 
         if self.isPrivateAIModelVerified(model) {
             return PrivateAIProviderModelStatus(
-                detail: "Dictation-only model.",
+                detail: "For dictation only.",
                 color: Color.fluidGreen
             )
         }
@@ -992,8 +1065,11 @@ extension AIEnhancementSettingsView {
         }
 
         if model.canDownload {
+            let size = model.artifact.byteCount.map {
+                " (\(ByteCountFormatter.string(fromByteCount: $0, countStyle: .file)))"
+            } ?? ""
             return PrivateAIProviderModelStatus(
-                detail: "Model not downloaded.",
+                detail: "\(self.privateAIBackendShortName) model not downloaded\(size).",
                 color: self.theme.palette.accent
             )
         }
@@ -1004,74 +1080,6 @@ extension AIEnhancementSettingsView {
         )
     }
 
-    private func revealPrivateAIModelFolder() {
-        let directoryURL = PrivateAIIntegrationService.modelDirectoryURL
-        do {
-            try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
-            NSWorkspace.shared.open(directoryURL)
-        } catch {
-            DebugLogger.shared.error(
-                "Failed to open Private AI Provider models folder: \(error.localizedDescription)",
-                source: "AISettingsView"
-            )
-        }
-    }
-
-    func refreshPrivateAILoadState() {
-        Task { @MainActor in
-            guard let loaded = await PrivateAIIntegrationService.shared.loadedModelState(),
-                  loaded.state == .ready
-            else {
-                self.privateAILoadState = .idle
-                return
-            }
-
-            self.privateAILoadState = .loaded(modelID: loaded.modelID, latencyMilliseconds: nil)
-        }
-    }
-
-    private func loadPrivateAIModel(_ model: PrivateAIRegisteredModel) {
-        guard PrivateAIIntegrationService.isModelInstalled(model) else {
-            self.privateAILoadState = .failed(modelID: model.id, message: "Model file is not installed.")
-            return
-        }
-
-        self.privateAILoadState = .loading(modelID: model.id)
-        Task { @MainActor in
-            do {
-                let start = ContinuousClock.now
-                let status = try await PrivateAIIntegrationService.shared.loadModel(model)
-                let latencyMilliseconds = Self.elapsedMilliseconds(since: start)
-                guard self.privateAISelectedModelID == model.id else { return }
-                switch status.state {
-                case .ready:
-                    self.privateAILoadState = .loaded(modelID: model.id, latencyMilliseconds: latencyMilliseconds)
-                default:
-                    self.privateAILoadState = .failed(
-                        modelID: model.id,
-                        message: status.message ?? "Model did not report ready."
-                    )
-                }
-            } catch {
-                guard self.privateAISelectedModelID == model.id else { return }
-                self.privateAILoadState = .failed(
-                    modelID: model.id,
-                    message: Self.errorMessage(for: error)
-                )
-            }
-            self.viewModel.refreshProviderItems()
-        }
-    }
-
-    private static func errorMessage(for error: Error) -> String {
-        if let localizedError = error as? LocalizedError,
-           let description = localizedError.errorDescription
-        {
-            return description
-        }
-        return String(describing: error)
-    }
-
     private static func downloadButtonText(progress: PrivateAIModelDownloadProgress?) -> String {
         PrivateAIModelDownloadProgressText.buttonTitle(for: progress)
     }
@@ -1080,64 +1088,8 @@ extension AIEnhancementSettingsView {
         PrivateAIModelDownloadProgressText.detailText(for: progress)
     }
 
-    private static func elapsedMilliseconds(since start: ContinuousClock.Instant) -> Int {
-        let elapsed = start.duration(to: ContinuousClock.now)
-        return Int(elapsed.components.seconds * 1000) + Int(elapsed.components.attoseconds / 1_000_000_000_000_000)
-    }
-
-    private func persistPrivateAIModelSelection(_ value: String) {
-        let model = PrivateAIModelRegistry.model(id: value) ?? PrivateAIModelRegistry.defaultModel
-        let providerKey = self.viewModel.providerKey(for: PrivateAIProviderFeature.shared.providerID)
-        let models = PrivateAIModelRegistry.modelIDs()
-
-        self.privateAISelectedModelID = model.id
-        UserDefaults.standard.set(model.id, forKey: PrivateAIIntegrationService.selectedModelDefaultsKey)
-        UserDefaults.standard.removeObject(forKey: PrivateAIIntegrationService.localModelPathDefaultsKey)
-
-        self.viewModel.availableModelsByProvider[providerKey] = models
-        self.viewModel.selectedModelByProvider[providerKey] = model.id
-        self.viewModel.settings.availableModelsByProvider = self.viewModel.availableModelsByProvider
-        self.viewModel.settings.selectedModelByProvider = self.viewModel.selectedModelByProvider
-
-        if self.viewModel.selectedProviderID == PrivateAIProviderFeature.shared.providerID {
-            self.viewModel.availableModels = models
-            self.viewModel.selectedModel = model.id
-        }
-        self.viewModel.resetVerification(for: PrivateAIProviderFeature.shared.providerID)
-        self.viewModel.refreshProviderItems()
-        if PrivateAIIntegrationService.isModelInstalled(model) {
-            self.loadPrivateAIModel(model)
-        } else {
-            self.privateAILoadState = .idle
-        }
-    }
-
-    private func providerDetailsSection(for item: ProviderItem) -> AnyView {
-        let isAppleDisabled = item.id == "apple-intelligence-disabled"
-        let isApple = item.id == "apple-intelligence"
+    private func providerDetailsSection(for item: ProviderItem, managementLayout: Bool = false) -> AnyView {
         let providerKey = self.viewModel.providerKey(for: item.id)
-        if isAppleDisabled {
-            return AnyView(
-                HStack(spacing: 10) {
-                    Image(systemName: "lock.slash")
-                        .font(.system(size: 14))
-                        .foregroundStyle(.secondary)
-                    Text("Apple Intelligence is unavailable on this device. Enable it in System Settings → Apple Intelligence & Siri.")
-                        .font(.system(size: 13))
-                        .foregroundStyle(.secondary)
-                }
-                .padding(12)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(self.theme.palette.contentBackground.opacity(0.6))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                .stroke(self.theme.palette.cardBorder.opacity(0.35), lineWidth: 1)
-                        )
-                )
-            )
-        }
         let isCustom = !ModelRepository.shared.isBuiltIn(item.id)
         let baseURL = self.viewModel.openAIBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)
         let isLocal = self.viewModel.isLocalEndpoint(baseURL)
@@ -1149,7 +1101,7 @@ extension AIEnhancementSettingsView {
         let hasName = isCustom ? !(self.viewModel.savedProviders.first { $0.id == item.id }?.name ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty : true
         let canFetchModels = hasName && (isLocal ? !baseURL.isEmpty : (hasAPIKey && !baseURL.isEmpty))
         let canVerify = hasModels && !self.viewModel.selectedModel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && canFetchModels
-        let isVerified = self.viewModel.connectionStatus(for: item.id) == .success
+        let isModelVerified = self.viewModel.isModelVerified(for: item.id)
         let apiKeyBinding = Binding(
             get: { self.viewModel.providerAPIKey(for: item.id) },
             set: { self.viewModel.updateProviderAPIKey($0, for: item.id, persistEmptyValue: true) }
@@ -1167,138 +1119,148 @@ extension AIEnhancementSettingsView {
             }
         )
 
-        return AnyView(VStack(alignment: .leading, spacing: 10) {
-            if isApple {
-                VStack(alignment: .leading, spacing: 10) {
-                    HStack(spacing: 10) {
-                        Image(systemName: "lock.shield.fill")
-                            .font(.system(size: 14))
-                            .foregroundStyle(Color.fluidGreen)
-                        Text("Apple Intelligence runs on-device and does not require an API key.")
-                            .font(.system(size: 13))
-                            .foregroundStyle(.secondary)
-                    }
-
-                    HStack(spacing: 10) {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .font(.system(size: 14))
-                            .foregroundStyle(.orange)
-                        Text("Output quality can be poor and inconsistent. Use it at your discretion.")
-                            .font(.system(size: 13, weight: .medium))
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                .padding(12)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(Color.fluidGreen.opacity(0.08))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                .stroke(Color.fluidGreen.opacity(0.2), lineWidth: 1)
-                        )
-                )
-                if !isVerified {
-                    Button("Verify") {
-                        self.viewModel.verifyAppleIntelligence()
-                    }
-                    .fluidButton(.glass, size: .compact)
-                }
-            } else {
+        return AnyView(VStack(alignment: .leading, spacing: managementLayout ? 20 : 10) {
+            Group {
                 if isCustom {
                     VStack(alignment: .leading, spacing: 8) {
                         HStack(spacing: 6) {
                             Image(systemName: "textformat")
-                                .font(.caption)
+                                .font(.fluidSystem(.caption))
                                 .foregroundStyle(.secondary)
                             Text("Provider Name")
-                                .font(.system(size: 12, weight: .medium))
+                                .font(.fluidSystem(size: 12, weight: .medium))
                                 .foregroundStyle(.secondary)
                         }
                         TextField("Custom Provider", text: nameBinding)
                             .textFieldStyle(.roundedBorder)
-                            .font(.system(size: 13))
+                            .font(.fluidSystem(size: 13))
                     }
 
                     VStack(alignment: .leading, spacing: 8) {
                         HStack(spacing: 6) {
                             Image(systemName: "link")
-                                .font(.caption)
+                                .font(.fluidSystem(.caption))
                                 .foregroundStyle(.secondary)
                             Text("Base URL")
-                                .font(.system(size: 12, weight: .medium))
+                                .font(.fluidSystem(size: 12, weight: .medium))
                                 .foregroundStyle(.secondary)
                         }
                         TextField("https://api.yourprovider.com/v1", text: baseURLBinding)
                             .textFieldStyle(.roundedBorder)
-                            .font(.system(size: 13, design: .monospaced))
+                            .font(.fluidSystem(size: 13, design: .monospaced))
                     }
                 }
 
                 VStack(alignment: .leading, spacing: 6) {
                     Text("API Key")
-                        .font(.system(size: 12, weight: .medium))
+                        .font(.fluidSystem(size: 12, weight: .medium))
                         .foregroundStyle(.secondary)
                     HStack(alignment: .center, spacing: 8) {
                         SecureField("Enter API key", text: apiKeyBinding)
-                            .textFieldStyle(.roundedBorder)
-                            .font(.system(size: 13))
-                            .frame(maxWidth: 200)
+                            .textFieldStyle(.plain)
+                            .font(.fluidSystem(size: 13))
+                            .padding(.horizontal, managementLayout ? 12 : 6)
+                            .frame(height: AISettingsLayout.providerRowControlHeight)
+                            .frame(maxWidth: managementLayout ? .infinity : 200)
+                            .background(self.theme.palette.cardBackground, in: RoundedRectangle(cornerRadius: self.theme.metrics.corners.sm))
+                            .overlay(RoundedRectangle(cornerRadius: self.theme.metrics.corners.sm).strokeBorder(self.theme.palette.cardBorder))
                             .onTapGesture {
                                 self.viewModel.ensureKeychainAccessForAPIKeyEdit()
                             }
                         if let websiteInfo = ModelRepository.shared.providerWebsiteURL(for: item.id),
                            let url = URL(string: websiteInfo.url)
                         {
-                            Button(action: { NSWorkspace.shared.open(url) }) {
-                                HStack(spacing: 4) {
-                                    Image(systemName: websiteInfo.label.contains("Guide") ? "book.fill" : "key.fill")
-                                        .font(.system(size: 10))
-                                    Text(websiteInfo.label)
-                                        .font(.system(size: 11, weight: .medium))
+                            if managementLayout {
+                                Button(websiteInfo.label, systemImage: "key") { NSWorkspace.shared.open(url) }
+                                    .buttonStyle(.plain)
+                                    .font(self.theme.typography.bodyStrong)
+                                    .foregroundStyle(self.theme.palette.accent)
+                                    .frame(width: 128, height: AISettingsLayout.providerRowControlHeight)
+                            } else {
+                                Button(action: { NSWorkspace.shared.open(url) }) {
+                                    HStack(spacing: 4) {
+                                        Image(systemName: websiteInfo.label.contains("Guide") ? "book.fill" : "key.fill")
+                                            .font(.fluidSystem(size: 10))
+                                        Text(websiteInfo.label)
+                                            .font(.fluidSystem(size: 11, weight: .medium))
+                                    }
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 5)
+                                    .background(
+                                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                            .fill(self.theme.palette.accent)
+                                    )
+                                    .foregroundStyle(.white)
                                 }
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 5)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                        .fill(self.theme.palette.accent)
-                                )
-                                .foregroundStyle(.white)
+                                .buttonStyle(.plain)
                             }
-                            .buttonStyle(.plain)
                         }
                     }
                 }
 
-                HStack(spacing: 8) {
+                (managementLayout ? AnyLayout(VStackLayout(alignment: .leading, spacing: 6)) : AnyLayout(HStackLayout(spacing: 8))) {
                     Text("Model")
-                        .font(.system(size: 12, weight: .medium))
+                        .font(.fluidSystem(size: 12, weight: .medium))
                         .foregroundStyle(.secondary)
-                        .frame(width: 50, alignment: .leading)
+                        .frame(width: managementLayout ? nil : 50, alignment: .leading)
 
-                    SearchableModelPicker(
-                        models: models,
-                        selectedModel: self.modelBinding(for: item.id),
-                        selectionEnabled: hasModels,
-                        controlWidth: 180,
-                        controlHeight: AISettingsLayout.providerRowControlHeight
-                    )
+                    HStack(spacing: 8) {
+                        SearchableModelPicker(
+                            models: models,
+                            selectedModel: self.modelBinding(for: item.id),
+                            selectionEnabled: hasModels,
+                            controlWidth: managementLayout ? 720 - 56 - 2 * AISettingsLayout.providerRowControlHeight - 32 : 180,
+                            controlHeight: AISettingsLayout.providerRowControlHeight
+                        )
 
-                    self.companionIconButton(
-                        isRefreshing: isRefreshing,
-                        disabled: isRefreshing || !canFetchModels,
-                        opacity: canFetchModels ? 1 : 0.45,
-                        help: "Refresh model list"
-                    ) {
-                        self.activateProvider(item.id)
-                        Task { await self.viewModel.fetchModelsForCurrentProvider() }
+                        self.companionIconButton(
+                            isRefreshing: isRefreshing,
+                            disabled: isRefreshing || !canFetchModels,
+                            opacity: canFetchModels ? 1 : 0.45,
+                            help: "Refresh model list"
+                        ) {
+                            self.viewModel.configureProvider(item.id)
+                            Task { await self.viewModel.fetchModelsForCurrentProvider() }
+                        }
+                        if managementLayout {
+                            self.companionIconButton(systemName: "plus", help: "Add model") {
+                                self.viewModel.newModelName = ""
+                                self.viewModel.showingAddModel.toggle()
+                            }
+                            .accessibilityLabel("Add model")
+                        }
                     }
                 }
 
-                HStack(spacing: 8) {
-                    Color.clear
-                        .frame(width: 50, alignment: .leading)
-                    self.reasoningButton(for: item.id)
+                if managementLayout, self.viewModel.showingAddModel {
+                    self.addModelSection
+                }
+
+                if managementLayout {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Reasoning")
+                            .font(self.theme.typography.captionStrong)
+                            .foregroundStyle(self.theme.palette.secondaryText)
+                        HStack(spacing: 8) {
+                            Text(self.viewModel.isReasoningEnabled(for: item.id) ? "Enabled" : "Not enabled")
+                                .font(self.theme.typography.body)
+                                .foregroundStyle(self.theme.palette.secondaryText)
+                            Spacer()
+                            Button("Configure…", systemImage: "gearshape") {
+                                self.viewModel.configureProvider(item.id)
+                                self.viewModel.openReasoningConfig()
+                            }
+                            .fluidButton(.compact, size: .small)
+                        }
+                        .padding(10)
+                        .background(self.theme.palette.cardBackground, in: RoundedRectangle(cornerRadius: self.theme.metrics.corners.sm))
+                        .overlay(RoundedRectangle(cornerRadius: self.theme.metrics.corners.sm).strokeBorder(self.theme.palette.cardBorder))
+                    }
+                } else {
+                    HStack(spacing: 8) {
+                        Color.clear.frame(width: 50, alignment: .leading)
+                        self.reasoningButton(for: item.id)
+                    }
                 }
 
                 if self.viewModel.showingReasoningConfig && self.viewModel.selectedProviderID == item.id {
@@ -1314,9 +1276,9 @@ extension AIEnhancementSettingsView {
                 if let error = self.viewModel.fetchModelsError, !error.isEmpty {
                     HStack(spacing: 6) {
                         Image(systemName: "exclamationmark.triangle.fill")
-                            .font(.caption)
+                            .font(.fluidSystem(.caption))
                         Text(error)
-                            .font(.caption)
+                            .font(.fluidSystem(.caption))
                     }
                     .foregroundStyle(.red)
                     .padding(10)
@@ -1328,49 +1290,66 @@ extension AIEnhancementSettingsView {
                 }
 
                 if canVerify {
-                    Button(action: {
-                        Task { await self.viewModel.testAPIConnection() }
-                    }) {
-                        HStack(spacing: 6) {
-                            if self.viewModel.isTestingConnection {
-                                ProgressView()
-                                    .controlSize(.mini)
-                                    .fixedSize()
-                            } else {
-                                Image(systemName: "checkmark.shield")
-                                    .font(.system(size: 12))
+                    if isModelVerified {
+                        Label("Model verified", systemImage: "checkmark.circle.fill")
+                            .font(self.theme.typography.bodyStrong)
+                            .foregroundStyle(Color.fluidGreen)
+                            .frame(maxWidth: managementLayout ? .infinity : nil, alignment: .trailing)
+                            .help("Successfully tested \(ModelDisplayName.forID(self.viewModel.selectedModel(for: item.id))) with this endpoint and API key.")
+                    } else {
+                        Button(action: {
+                            Task { await self.viewModel.testAPIConnection() }
+                        }) {
+                            HStack(spacing: 6) {
+                                if self.viewModel.isTestingConnection {
+                                    ProgressView()
+                                        .controlSize(.mini)
+                                        .fixedSize()
+                                } else {
+                                    Image(systemName: "checkmark.shield")
+                                        .font(.fluidSystem(size: 12))
+                                }
+                                Text(self.viewModel.isTestingConnection ? "Verifying…" : "Verify model")
+                                    .font(self.theme.typography.bodyStrong)
                             }
-                            Text(self.viewModel.isTestingConnection ? "Verifying..." : "Verify Connection")
-                                .font(.system(size: 13, weight: .semibold))
                         }
+                        .fluidGlassAction(prominent: true)
+                        .disabled(self.viewModel.isTestingConnection)
+                        .help("Optional: send a small request to test this model. You can use it without running this check.")
+                        .frame(maxWidth: managementLayout ? .infinity : nil, alignment: .trailing)
                     }
-                    .fluidButton(.accent, size: .small)
-                    .disabled(self.viewModel.isTestingConnection)
                 } else {
                     HStack(spacing: 6) {
                         Image(systemName: "info.circle")
-                            .font(.caption)
+                            .font(.fluidSystem(.caption))
                         Text(hasModels ? "Select a model to enable verification" : "Refresh models to enable verification")
-                            .font(.caption)
+                            .font(.fluidSystem(.caption))
                     }
                     .foregroundStyle(.secondary)
                 }
 
-                if isCustom {
+                if isCustom || managementLayout {
                     Divider()
                         .background(self.theme.palette.separator.opacity(0.5))
 
                     Button(role: .destructive) {
-                        self.viewModel.deleteCurrentProvider()
-                        self.expandedProviderID = nil
+                        if managementLayout {
+                            self.showingRemoveProviderConfirmation = true
+                        } else if self.viewModel.deleteCurrentProvider() {
+                            self.expandedProviderID = nil
+                        }
                     } label: {
                         HStack(spacing: 6) {
                             Image(systemName: "trash")
-                            Text("Delete Provider")
+                            Text("Remove provider")
                         }
-                        .font(.caption)
+                        .font(self.theme.typography.bodyStrong)
                     }
-                    .fluidCompactButton(foreground: .red, borderColor: .red.opacity(0.6))
+                    .fluidGlassAction()
+                    .foregroundStyle(.red)
+                    .tint(.red)
+                    .disabled(self.viewModel.isFetchingModels || self.viewModel.isTestingConnection)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
                 }
             }
         })
@@ -1379,12 +1358,12 @@ extension AIEnhancementSettingsView {
     private func providerErrorPreview(_ message: String, lineLimit: Int) -> some View {
         HStack(alignment: .top, spacing: 8) {
             Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 11, weight: .semibold))
+                .font(.fluidSystem(size: 11, weight: .semibold))
                 .foregroundStyle(.red)
                 .padding(.top, 2)
 
             Text(message)
-                .font(.system(size: 11, design: .monospaced))
+                .font(.fluidSystem(size: 11, design: .monospaced))
                 .foregroundStyle(.red.opacity(0.9))
                 .lineLimit(lineLimit)
                 .textSelection(.enabled)
@@ -1413,24 +1392,24 @@ extension AIEnhancementSettingsView {
                         )
 
                     Image(systemName: "plus")
-                        .font(.system(size: 16, weight: .semibold))
+                        .font(.fluidSystem(size: 16, weight: .semibold))
                         .foregroundStyle(self.theme.palette.accent)
                 }
                 .frame(width: 40, height: 40)
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Add Custom Provider")
-                        .font(.system(size: 14, weight: .semibold))
+                        .font(.fluidSystem(size: 14, weight: .semibold))
                         .foregroundStyle(self.theme.palette.primaryText)
                     Text("OpenAI-compatible endpoint")
-                        .font(.caption2)
+                        .font(.fluidSystem(.caption2))
                         .foregroundStyle(.secondary)
                 }
 
                 Spacer()
 
                 Image(systemName: "chevron.right")
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(.fluidSystem(size: 11, weight: .semibold))
                     .foregroundStyle(.secondary.opacity(0.7))
             }
             .padding(14)
@@ -1467,19 +1446,22 @@ extension AIEnhancementSettingsView {
     private func verifiedProviderRow(_ item: ProviderItem) -> some View {
         let providerKey = self.viewModel.providerKey(for: item.id)
         let models = self.viewModel.availableModelsByProvider[providerKey] ?? []
-        let isSelected = item.id == self.viewModel.selectedProviderID
         let isPrivateAIProvider = item.id == PrivateAIProviderFeature.shared.providerID
-        let fluidModel = self.selectedPrivateAIModel
+        let primaryPromptSelection = self.viewModel.dictationPromptSelection(for: .primary)
+        let isDefaultProvider = isPrivateAIProvider
+            ? primaryPromptSelection == .privateAI
+            : primaryPromptSelection == .default && item.id == self.settings.selectedProviderID
+        let fluidModel = self.privateAIController.selectedPrivateAIModel
         let fluidStatus = self.privateAIModelStatus(for: fluidModel)
-        let isFluidInstalled = PrivateAIIntegrationService.isModelInstalled(fluidModel)
-        let isFluidDownloading = self.privateAILoadState.isDownloading(fluidModel.id)
-        let fluidDownloadProgress = self.privateAILoadState.downloadProgress(for: fluidModel.id)
-        let isFluidLoading = self.privateAILoadState.isLoading(fluidModel.id)
-        let isFluidLoaded = self.privateAILoadState.isLoaded(fluidModel.id)
-        let hasFluidLoadFailure = self.privateAILoadState.failureMessage(for: fluidModel.id) != nil
+        let isFluidInstalled = !self.privateAIController.privateAILoadState.needsDownload(fluidModel.id) && PrivateAIIntegrationService.isModelInstalled(fluidModel)
+        let isFluidDownloading = self.privateAIController.privateAILoadState.isDownloading(fluidModel.id)
+        let fluidDownloadProgress = self.privateAIController.privateAILoadState.downloadProgress(for: fluidModel.id)
+        let isFluidLoading = self.privateAIController.privateAILoadState.isLoading(fluidModel.id)
+        let hasFluidLoadFailure = self.privateAIController.privateAILoadState.failureMessage(for: fluidModel.id) != nil
+        let hasFluidUpdate = self.privateAIController.privateAIModelUpdateStatusByID[fluidModel.id]?.state == .updateAvailable
         let isFluidVerified = self.isPrivateAIModelVerified(fluidModel)
         let isFluidTesting = self.viewModel.isTestingConnection && self.viewModel.selectedProviderID == PrivateAIProviderFeature.shared.providerID
-        let isFluidBusy = isFluidDownloading || isFluidLoading || isFluidTesting
+        let isFluidBusy = self.privateAIController.isBusy || isFluidDownloading || isFluidLoading || isFluidTesting
         let isRefreshing = self.viewModel.isFetchingModels && self.viewModel.selectedProviderID == item.id
         let baseURL = self.providerBaseURL(for: item).trimmingCharacters(in: .whitespacesAndNewlines)
         let isLocal = self.viewModel.isLocalEndpoint(baseURL)
@@ -1498,83 +1480,87 @@ extension AIEnhancementSettingsView {
 
                 HStack(spacing: 8) {
                     Text(item.name)
-                        .font(.system(size: 14, weight: .semibold))
+                        .font(.fluidSystem(size: 14, weight: .semibold))
                         .foregroundStyle(self.theme.palette.primaryText)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
 
                     Image(systemName: "checkmark.seal.fill")
-                        .font(.system(size: 12, weight: .semibold))
+                        .font(.fluidSystem(size: 12, weight: .semibold))
                         .foregroundStyle(Color.fluidGreen)
-
-                    if isSelected {
-                        Text("Active")
-                            .font(.caption2)
-                            .fontWeight(.semibold)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 3)
-                            .background(Capsule().fill(Color.fluidGreen.opacity(0.2)))
-                            .foregroundStyle(Color.fluidGreen)
-                    }
                 }
 
                 Spacer()
 
                 // Fixed action grid: companion icon, optional reasoning, primary action.
                 HStack(spacing: 8) {
+                    Button {
+                        guard !isDefaultProvider else { return }
+                        self.makePrimaryDefaultProvider(item.id, isPrivateAI: isPrivateAIProvider)
+                    } label: {
+                        Label(
+                            isDefaultProvider ? "Default" : "Use as default",
+                            systemImage: isDefaultProvider ? "checkmark.circle.fill" : "circle"
+                        )
+                        .font(.fluidSystem(.caption2).weight(.semibold))
+                        .lineLimit(1)
+                        .frame(width: 92, height: AISettingsLayout.providerRowControlHeight)
+                    }
+                    .fluidCompactButton(
+                        isReady: isDefaultProvider,
+                        foreground: isDefaultProvider ? self.theme.palette.accent : nil,
+                        borderColor: isDefaultProvider ? self.theme.palette.accent.opacity(0.5) : nil
+                    )
+                    .help(
+                        isDefaultProvider
+                            ? "Used by the main dictation shortcut"
+                            : "Use this provider for the main dictation shortcut"
+                    )
+
                     if isPrivateAIProvider {
                         SearchableModelPicker(
                             models: PrivateAIModelRegistry.modelIDs(),
                             selectedModel: self.privateAIModelBinding,
                             selectionEnabled: !isFluidBusy,
+                            displayName: self.privateAIModelDisplayName,
                             controlWidth: 180,
                             controlHeight: AISettingsLayout.providerRowControlHeight
                         )
 
                         self.companionIconButton(systemName: "folder", help: "Open downloaded model folder") {
-                            self.revealPrivateAIModelFolder()
+                            self.privateAIController.revealPrivateAIModelFolder()
                         }
                         .frame(width: iconColumnWidth, height: AISettingsLayout.providerRowControlHeight)
 
-                        Color.clear
-                            .frame(width: iconColumnWidth, height: AISettingsLayout.providerRowControlHeight)
-
-                        ZStack {
-                            if isFluidDownloading || !isFluidInstalled {
-                                Button(action: { self.downloadPrivateAIModel(fluidModel) }) {
-                                    HStack(spacing: 4) {
-                                        if isFluidDownloading {
-                                            ProgressView()
-                                                .controlSize(.mini)
-                                                .fixedSize()
-                                        }
-                                        Text(isFluidDownloading ? Self.downloadButtonText(progress: fluidDownloadProgress) : "Download")
-                                            .font(.system(size: 11, weight: .semibold))
-                                            .lineLimit(1)
-                                    }
-                                }
-                                .fluidButton(.accent, size: .small)
-                                .frame(width: actionColumnWidth, height: AISettingsLayout.providerRowControlHeight)
-                                .disabled(!fluidModel.canDownload || isFluidBusy)
-                                .help(fluidModel.canDownload ? "Download and verify selected model" : "Download URL is not configured yet")
-                            } else if !isFluidVerified || hasFluidLoadFailure {
-                                Button(action: { self.verifyPrivateAIConnection(fluidModel) }) {
-                                    HStack(spacing: 4) {
-                                        if isFluidLoading || isFluidTesting {
-                                            ProgressView()
-                                                .controlSize(.mini)
-                                                .fixedSize()
-                                        }
-                                        Text((isFluidLoading || isFluidTesting) ? "Loading" : "Verify")
-                                            .font(.system(size: 11, weight: .semibold))
-                                            .lineLimit(1)
-                                    }
-                                }
-                                .fluidButton(.accent, size: .small)
-                                .frame(width: actionColumnWidth, height: AISettingsLayout.providerRowControlHeight)
-                                .disabled(isFluidBusy)
-                                .help("Verify selected model")
+                        if hasFluidUpdate {
+                            self.companionIconButton(
+                                systemName: "arrow.down.circle",
+                                help: "Update and verify model"
+                            ) {
+                                self.privateAIController.updatePrivateAIModel(fluidModel)
                             }
+                            .disabled(isFluidBusy)
+                            .frame(width: iconColumnWidth, height: AISettingsLayout.providerRowControlHeight)
+                        } else {
+                            Color.clear
+                                .frame(width: iconColumnWidth, height: AISettingsLayout.providerRowControlHeight)
                         }
+
+                        Button(action: {
+                            self.viewModel.configureProvider(item.id)
+                            if isEditing {
+                                self.viewModel.clearEditProviderDraft()
+                            } else {
+                                self.viewModel.startEditingProvider()
+                            }
+                        }) {
+                            Text("Edit")
+                                .font(.fluidSystem(size: 12, weight: .semibold))
+                                .frame(width: actionColumnWidth, height: AISettingsLayout.providerRowControlHeight)
+                        }
+                        .buttonStyle(SquareIconButtonStyle())
                         .frame(width: actionColumnWidth, height: AISettingsLayout.providerRowControlHeight)
+                        .help("Edit provider")
                     } else {
                         SearchableModelPicker(
                             models: models,
@@ -1590,7 +1576,7 @@ extension AIEnhancementSettingsView {
                             opacity: canFetchModels ? 1 : 0.45,
                             help: "Refresh model list"
                         ) {
-                            self.activateProvider(item.id)
+                            self.viewModel.configureProvider(item.id)
                             Task { await self.viewModel.fetchModelsForCurrentProvider() }
                         }
                         .frame(width: iconColumnWidth, height: AISettingsLayout.providerRowControlHeight)
@@ -1599,7 +1585,7 @@ extension AIEnhancementSettingsView {
                             .frame(width: iconColumnWidth, height: AISettingsLayout.providerRowControlHeight)
 
                         Button(action: {
-                            self.activateProvider(item.id)
+                            self.viewModel.configureProvider(item.id)
                             if isEditing {
                                 self.viewModel.clearEditProviderDraft()
                                 self.viewModel.setEditingAPIKey(false, for: item.id)
@@ -1609,7 +1595,7 @@ extension AIEnhancementSettingsView {
                             }
                         }) {
                             Text("Edit")
-                                .font(.system(size: 12, weight: .semibold))
+                                .font(.fluidSystem(size: 12, weight: .semibold))
                                 .frame(width: actionColumnWidth, height: AISettingsLayout.providerRowControlHeight)
                         }
                         .buttonStyle(SquareIconButtonStyle())
@@ -1620,7 +1606,7 @@ extension AIEnhancementSettingsView {
                 .fixedSize(horizontal: true, vertical: false)
             }
 
-            if isPrivateAIProvider, isFluidDownloading || isFluidLoading || isFluidLoaded || hasFluidLoadFailure || isFluidVerified || !isFluidInstalled {
+            if isPrivateAIProvider, isFluidDownloading || isFluidLoading || hasFluidLoadFailure || !isFluidInstalled {
                 self.privateAIModelStatusRow(
                     status: fluidStatus,
                     progress: fluidDownloadProgress,
@@ -1630,7 +1616,18 @@ extension AIEnhancementSettingsView {
                 .padding(.top, 8)
             }
 
-            if !isPrivateAIProvider, isEditing {
+            if isPrivateAIProvider, isEditing {
+                Divider()
+                    .background(self.theme.palette.separator.opacity(0.5))
+                    .padding(.vertical, 10)
+
+                self.privateAIEditProviderSection(
+                    model: fluidModel,
+                    isInstalled: isFluidInstalled,
+                    isBusy: isFluidBusy,
+                    isVerified: isFluidVerified
+                )
+            } else if !isPrivateAIProvider, isEditing {
                 Divider()
                     .background(self.theme.palette.separator.opacity(0.5))
                     .padding(.vertical, 10)
@@ -1659,16 +1656,8 @@ extension AIEnhancementSettingsView {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .stroke(self.theme.palette.cardBorder.opacity(0.25), lineWidth: 0.8)
         )
-        .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(isSelected ? Color.fluidGreen.opacity(0.9) : .clear, lineWidth: 2)
-        )
         // Verified rows always have interactive elements, don't use drawingGroup
         .contentShape(Rectangle())
-        .onTapGesture {
-            self.activateProvider(item.id)
-            self.expandedProviderID = nil
-        }
     }
 
     private func providerBaseURL(for item: ProviderItem) -> String {
@@ -1700,7 +1689,7 @@ extension AIEnhancementSettingsView {
                     .frame(width: isFluid ? 34 : 26, height: isFluid ? 34 : 26)
             } else {
                 Text(self.providerInitials(for: item))
-                    .font(.system(size: 14, weight: .bold, design: .rounded))
+                    .font(.fluidSystem(size: 14, weight: .bold, design: .rounded))
                     .foregroundStyle(self.theme.palette.primaryText)
             }
         }
@@ -1741,9 +1730,6 @@ extension AIEnhancementSettingsView {
         }
         if id.contains("lmstudio") || name.contains("lm studio") || name.contains("lmstudio") {
             return Color(red: 0.15, green: 0.55, blue: 0.35) // Green
-        }
-        if id.contains("apple") || name.contains("apple intelligence") {
-            return Color(red: 0.6, green: 0.4, blue: 0.7) // Purple for Apple Intelligence
         }
         // Default fallback
         return Color(red: 0.9, green: 0.9, blue: 0.92)
@@ -1789,9 +1775,6 @@ extension AIEnhancementSettingsView {
         if id.contains("lmstudio") || name.contains("lm studio") || name.contains("lmstudio") {
             return "Provider_LMStudio"
         }
-        if id.contains("apple") || name.contains("apple intelligence") {
-            return "Provider_AppleIntelligence"
-        }
         if id.contains("compatible") || name.contains("compatible") {
             return "Provider_Compatible"
         }
@@ -1799,14 +1782,42 @@ extension AIEnhancementSettingsView {
         return nil
     }
 
-    private func selectProvider(_ providerID: String) {
-        self.viewModel.selectProvider(providerID)
-    }
-
     private func activateProvider(_ providerID: String) {
         self.viewModel.selectedProviderID = providerID
         self.viewModel.handleProviderChange(providerID)
         self.viewModel.connectionStatus = self.viewModel.connectionStatus(for: providerID)
+    }
+
+    // Match the main shortcut's routing without reading API keys or resolving an
+    // app-specific override in the view. Merely opening Manage never selects it.
+    private var primaryDefaultProviderID: String {
+        let selection = self.viewModel.dictationPromptSelection(for: .primary)
+        return DictationDefaultProvider.providerID(
+            selection: selection,
+            configuration: self.settings.dictationPromptConfiguration(for: selection),
+            selectedProviderID: self.settings.selectedProviderID,
+            privateProviderID: PrivateAIProviderFeature.shared.providerID
+        )
+    }
+
+    private func makePrimaryDefaultProvider(_ providerID: String, isPrivateAI: Bool) {
+        guard providerID != self.primaryDefaultProviderID,
+              !self.viewModel.isFetchingModels, !self.viewModel.isTestingConnection else { return }
+        if isPrivateAI {
+            guard !self.privateAIController.isBusy, self.viewModel.isPrivateAIPromptAvailable() else { return }
+            self.viewModel.setDictationPromptSelection(.privateAI, for: .primary)
+            return
+        }
+
+        guard self.viewModel.canUseProviderWithoutVerification(providerID),
+              self.viewModel.saveManagedProviderAPIKeyIfNeeded(providerID) else { return }
+        self.activateProvider(providerID)
+
+        var defaultConfiguration = self.settings.dictationPromptConfiguration(for: .default)
+        defaultConfiguration.providerID = ""
+        defaultConfiguration.modelName = ""
+        self.settings.setDictationPromptConfiguration(defaultConfiguration, for: .default)
+        self.viewModel.setDictationPromptSelection(.default, for: .primary)
     }
 
     private func modelBinding(for providerID: String) -> Binding<String> {
@@ -1825,11 +1836,11 @@ extension AIEnhancementSettingsView {
         let hasEnabledConfig = self.viewModel.isReasoningEnabled(for: providerID)
 
         return Button(action: {
-            self.activateProvider(providerID)
+            self.viewModel.configureProvider(providerID)
             self.viewModel.openReasoningConfig()
         }) {
             Image(systemName: hasEnabledConfig ? "brain.fill" : "brain")
-                .font(.system(size: 12, weight: .semibold))
+                .font(.fluidSystem(size: 12, weight: .semibold))
                 .foregroundStyle(hasEnabledConfig ? self.theme.palette.accent : self.theme.palette.primaryText)
                 .frame(width: AISettingsLayout.providerRowControlHeight, height: AISettingsLayout.providerRowControlHeight)
         }
@@ -1841,43 +1852,250 @@ extension AIEnhancementSettingsView {
     }
 
     var promptsStepContent: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 8) {
-                Image(systemName: "text.bubble.fill")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(self.theme.palette.accent)
-                Text("Advanced Prompts")
-                    .font(.system(size: 14, weight: .semibold))
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-
-                Button {
-                    self.isPromptProfilesHelpPresented.toggle()
-                } label: {
-                    Image(systemName: "info.circle")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(self.theme.palette.secondaryText.opacity(0.78))
-                        .frame(width: 22, height: 22)
-                        .contentShape(Circle())
-                }
-                .buttonStyle(.plain)
-                .help("About prompt profiles")
-                .popover(isPresented: self.$isPromptProfilesHelpPresented, arrowEdge: .top) {
-                    self.promptProfilesHelpPopover
-                }
-
-                Spacer()
-            }
-
-            self.advancedSettingsCard
-        }
+        self.advancedSettingsCard
     }
 
     var builtInProvidersList: [(id: String, name: String)] {
-        ModelRepository.shared.builtInProvidersList(
-            includeAppleIntelligence: true,
-            appleIntelligenceAvailable: self.viewModel.appleIntelligenceAvailable
+        ModelRepository.shared.builtInProvidersList()
+    }
+
+    private func privateAIManagementSettings(
+        isBusy: Bool
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 20) {
+            FluidManagementGroup(title: "Performance") {
+                Group {
+                    VStack(alignment: .leading, spacing: 20) {
+                        FluidManagementRow(title: "Backend", detail: self.settings.privateAIBackendPreference.detail) {
+                            self.privateAIBackendPicker(isBusy: isBusy).frame(width: 200)
+                        }
+                        Divider()
+                        FluidManagementRow(title: "Dictation window", detail: "\(self.privateAIContextCueText). Longer windows use more memory.") {
+                            self.privateAIContextControl(isBusy: isBusy)
+                        }
+                        Divider()
+                        FluidManagementRow(title: "Faster first result", detail: "Keep the model ready between dictations.") {
+                            Toggle("Faster first result", isOn: self.privateAIPrefixCacheBinding)
+                                .labelsHidden().toggleStyle(.switch).disabled(isBusy)
+                        }
+                        Divider()
+                        FluidManagementRow(title: "Free memory when idle", detail: "Experimental. Unloads the model after a quiet period and reloads it as you start speaking.") {
+                            Picker("Free memory when idle", selection: self.privateAIIdleUnloadBinding) {
+                                ForEach(SettingsStore.PrivateAIIdleUnload.allCases) { option in
+                                    Text(option.title).tag(option)
+                                }
+                            }
+                            .labelsHidden().frame(width: 200)
+                        }
+                        if self.privateAIShowsBoostRow {
+                            Divider()
+                            FluidManagementRow(title: "Faster results", detail: "Extra local acceleration. Uses more memory.") {
+                                Toggle("Faster results", isOn: self.privateAIBoostBinding)
+                                    .labelsHidden().toggleStyle(.switch).disabled(isBusy)
+                            }
+                        }
+                    }
+                    .padding(.top, 16)
+                }
+                .font(self.theme.typography.bodyStrong)
+            }
+        }
+    }
+
+    func privateAIEditProviderSection(
+        model: PrivateAIRegisteredModel,
+        isInstalled: Bool,
+        isBusy: Bool,
+        isVerified: Bool,
+        removalAllowed: Bool? = nil,
+        onDone: (() -> Void)? = nil
+    ) -> some View {
+        let canDelete = isInstalled && (removalAllowed ?? PrivateAIIntegrationService.canRemoveInstalledModel(model))
+
+        return VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 8) {
+                Image(systemName: "pencil.circle.fill")
+                    .font(.fluidSystem(size: 14))
+                    .foregroundStyle(self.theme.palette.accent)
+                Text(onDone == nil ? "Edit Provider" : "Advanced settings")
+                    .font(.fluidSystem(size: 14, weight: .semibold))
+                Spacer()
+            }
+
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(alignment: .center, spacing: 12) {
+                    self.privateAISettingLabel("Model", systemImage: "cube.box")
+
+                    SearchableModelPicker(
+                        models: PrivateAIModelRegistry.modelIDs(),
+                        selectedModel: self.privateAIModelBinding,
+                        selectionEnabled: !isBusy,
+                        displayName: self.privateAIModelDisplayName,
+                        controlWidth: 260,
+                        controlHeight: AISettingsLayout.providerRowControlHeight
+                    )
+
+                    Spacer(minLength: 0)
+                }
+
+                HStack(alignment: .center, spacing: 12) {
+                    self.privateAISettingLabel("Backend", systemImage: "cpu")
+
+                    self.privateAIBackendPicker(isBusy: isBusy)
+                        .frame(width: 210)
+
+                    Text(self.settings.privateAIBackendPreference.detail)
+                        .font(.fluidSystem(.caption2))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+
+                    Spacer(minLength: 0)
+                }
+
+                HStack(alignment: .center, spacing: 12) {
+                    self.privateAISettingLabel("Dictation window", systemImage: "memorychip")
+
+                    self.privateAIContextControl(isBusy: isBusy)
+
+                    HStack(alignment: .top, spacing: 5) {
+                        Image(systemName: "info.circle.fill")
+                            .font(.fluidSystem(size: 10, weight: .semibold))
+                            .padding(.top, 1)
+                        Text("\(self.privateAIContextCueText). Higher values help long transcripts but use more RAM.")
+                            .font(.fluidSystem(.caption2))
+                            .lineLimit(2)
+                    }
+                    .foregroundStyle(.secondary)
+
+                    Spacer(minLength: 0)
+                }
+
+                self.privateAIPrefixCacheRow(isBusy: isBusy)
+                if self.privateAIShowsBoostRow {
+                    self.privateAIBoostRow(isBusy: isBusy)
+                }
+            }
+
+            HStack(spacing: 8) {
+                if isVerified {
+                    Button {
+                        self.privateAIController.resetPrivateAIVerification(for: model)
+                        if onDone == nil { self.viewModel.clearEditProviderDraft() }
+                    } label: {
+                        HStack(spacing: 5) {
+                            Image(systemName: "arrow.counterclockwise")
+                            Text("Reset Verification")
+                        }
+                        .font(.fluidSystem(.caption))
+                    }
+                    .fluidCompactButton(foreground: .red, borderColor: .red.opacity(0.6))
+                    .disabled(isBusy)
+                }
+
+                if canDelete {
+                    Button(role: .destructive) {
+                        self.privateAIController.deletePrivateAIModel(model)
+                        if onDone == nil { self.viewModel.clearEditProviderDraft() }
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "trash")
+                            Text("Delete Model")
+                        }
+                        .font(.fluidSystem(.caption))
+                    }
+                    .fluidCompactButton(foreground: .red, borderColor: .red.opacity(0.6))
+                    .disabled(isBusy)
+                }
+
+                Spacer(minLength: 0)
+
+                if onDone == nil {
+                    Button {
+                        self.viewModel.clearEditProviderDraft()
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "checkmark")
+                            Text("Done")
+                        }
+                    }
+                    .fluidButton(.glass, size: .compact)
+                }
+            }
+        }
+    }
+
+    private func privateAISettingLabel(_ title: String, systemImage: String) -> some View {
+        HStack(spacing: 7) {
+            Image(systemName: systemImage)
+                .font(.fluidSystem(size: 12, weight: .medium))
+                .foregroundStyle(.secondary)
+                .frame(width: 16)
+            Text(title)
+                .font(.fluidSystem(size: 12, weight: .medium))
+                .foregroundStyle(.secondary)
+        }
+        .frame(width: 110, alignment: .leading)
+    }
+
+    private func privateAIContextControl(isBusy: Bool) -> some View {
+        HStack(spacing: 0) {
+            Button {
+                self.decreasePrivateAIContextTokenLimit()
+            } label: {
+                Image(systemName: "minus")
+                    .font(.fluidSystem(size: 11, weight: .semibold))
+                    .frame(width: 32, height: AISettingsLayout.providerRowControlHeight)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(isBusy || self.settings.privateAIContextTokenLimit <= SettingsStore.privateAIContextTokenLimitRange.lowerBound)
+
+            Text("\(self.settings.privateAIContextTokenLimit.formatted())")
+                .font(.fluidSystem(size: 13, weight: .semibold, design: .monospaced))
+                .frame(width: 74, height: AISettingsLayout.providerRowControlHeight)
+
+            Text("tokens")
+                .font(.fluidSystem(.caption))
+                .foregroundStyle(.secondary)
+                .frame(width: 48, height: AISettingsLayout.providerRowControlHeight, alignment: .leading)
+
+            Button {
+                self.increasePrivateAIContextTokenLimit()
+            } label: {
+                Image(systemName: "plus")
+                    .font(.fluidSystem(size: 11, weight: .semibold))
+                    .frame(width: 32, height: AISettingsLayout.providerRowControlHeight)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(isBusy || self.settings.privateAIContextTokenLimit >= SettingsStore.privateAIContextTokenLimitRange.upperBound)
+        }
+        .foregroundStyle(self.theme.palette.primaryText)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(self.theme.palette.elevatedCardBackground.opacity(0.9))
         )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(self.theme.palette.cardBorder.opacity(0.35), lineWidth: 0.8)
+        )
+        .fixedSize()
+        .help("How much raw dictation Fluid-1 can clean at once. Higher values help long transcripts but use more RAM and can slow first response.")
+    }
+
+    private func decreasePrivateAIContextTokenLimit() {
+        self.privateAIContextTokenLimitBinding.wrappedValue = self.settings.privateAIContextTokenLimit - SettingsStore.privateAIContextTokenLimitStep
+    }
+
+    private func increasePrivateAIContextTokenLimit() {
+        self.privateAIContextTokenLimitBinding.wrappedValue = self.settings.privateAIContextTokenLimit + SettingsStore.privateAIContextTokenLimitStep
+    }
+
+    private var privateAIContextCueText: String {
+        let estimatedWords = SettingsStore.estimatedPrivateAIDictationWords(for: self.settings.privateAIContextTokenLimit)
+        let estimatedMinutes = max(1, Int((Double(estimatedWords) / 150.0).rounded()))
+        let minuteText = estimatedMinutes == 1 ? "1 minute" : "\(estimatedMinutes) minutes"
+        return "Good for about \(estimatedWords.formatted()) words or \(minuteText) of dictation"
     }
 
     var editProviderSection: some View {
@@ -1891,10 +2109,10 @@ extension AIEnhancementSettingsView {
         return VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 8) {
                 Image(systemName: "pencil.circle.fill")
-                    .font(.system(size: 14))
+                    .font(.fluidSystem(size: 14))
                     .foregroundStyle(self.theme.palette.accent)
                 Text("Edit Provider")
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(.fluidSystem(size: 14, weight: .semibold))
                 Spacer()
             }
 
@@ -1904,30 +2122,30 @@ extension AIEnhancementSettingsView {
                         VStack(alignment: .leading, spacing: 6) {
                             HStack(spacing: 6) {
                                 Image(systemName: "textformat")
-                                    .font(.caption)
+                                    .font(.fluidSystem(.caption))
                                     .foregroundStyle(.secondary)
                                 Text("Name")
-                                    .font(.system(size: 12, weight: .medium))
+                                    .font(.fluidSystem(size: 12, weight: .medium))
                                     .foregroundStyle(.secondary)
                             }
                             TextField("Provider name", text: self.$viewModel.editProviderName)
                                 .textFieldStyle(.roundedBorder)
-                                .font(.system(size: 13))
+                                .font(.fluidSystem(size: 13))
                         }
                         .frame(maxWidth: 200)
 
                         VStack(alignment: .leading, spacing: 6) {
                             HStack(spacing: 6) {
                                 Image(systemName: "link")
-                                    .font(.caption)
+                                    .font(.fluidSystem(.caption))
                                     .foregroundStyle(.secondary)
                                 Text("Base URL")
-                                    .font(.system(size: 12, weight: .medium))
+                                    .font(.fluidSystem(size: 12, weight: .medium))
                                     .foregroundStyle(.secondary)
                             }
                             TextField("e.g., http://localhost:11434/v1", text: self.$viewModel.editProviderBaseURL)
                                 .textFieldStyle(.roundedBorder)
-                                .font(.system(size: 13, design: .monospaced))
+                                .font(.fluidSystem(size: 13, design: .monospaced))
                         }
                     }
                 }
@@ -1935,16 +2153,16 @@ extension AIEnhancementSettingsView {
                 VStack(alignment: .leading, spacing: 6) {
                     HStack(spacing: 6) {
                         Image(systemName: "key")
-                            .font(.caption)
+                            .font(.fluidSystem(.caption))
                             .foregroundStyle(.secondary)
                         Text("API Key")
-                            .font(.system(size: 12, weight: .medium))
+                            .font(.fluidSystem(size: 12, weight: .medium))
                             .foregroundStyle(.secondary)
                     }
                     HStack(alignment: .center, spacing: 8) {
                         SecureField("Enter API key", text: apiKeyBinding)
                             .textFieldStyle(.roundedBorder)
-                            .font(.system(size: 13))
+                            .font(.fluidSystem(size: 13))
                             .frame(maxWidth: 200)
                             .onTapGesture {
                                 self.viewModel.ensureKeychainAccessForAPIKeyEdit()
@@ -1955,9 +2173,9 @@ extension AIEnhancementSettingsView {
                             Button(action: { NSWorkspace.shared.open(url) }) {
                                 HStack(spacing: 4) {
                                     Image(systemName: websiteInfo.label.contains("Guide") ? "book.fill" : "key.fill")
-                                        .font(.system(size: 10))
+                                        .font(.fluidSystem(size: 10))
                                     Text(websiteInfo.label)
-                                        .font(.system(size: 11, weight: .medium))
+                                        .font(.fluidSystem(size: 11, weight: .medium))
                                 }
                                 .padding(.horizontal, 10)
                                 .padding(.vertical, 5)
@@ -1984,7 +2202,7 @@ extension AIEnhancementSettingsView {
                 }) {
                     HStack(spacing: 6) {
                         Image(systemName: "checkmark")
-                            .font(.system(size: 12, weight: .semibold))
+                            .font(.fluidSystem(size: 12, weight: .semibold))
                         Text("Save")
                     }
                 }
@@ -2010,7 +2228,7 @@ extension AIEnhancementSettingsView {
 
                 if !isBuiltIn {
                     Button(role: .destructive) {
-                        self.viewModel.deleteCurrentProvider()
+                        guard self.viewModel.deleteCurrentProvider() else { return }
                         self.viewModel.clearEditProviderDraft()
                         self.expandedProviderID = nil
                     } label: {
@@ -2018,7 +2236,7 @@ extension AIEnhancementSettingsView {
                             Image(systemName: "trash")
                             Text("Delete Provider")
                         }
-                        .font(.caption)
+                        .font(.fluidSystem(.caption))
                     }
                     .fluidCompactButton(foreground: .red, borderColor: .red.opacity(0.6))
                 }
@@ -2046,13 +2264,13 @@ extension AIEnhancementSettingsView {
 
     var appleIntelligenceBadge: some View {
         HStack(spacing: 8) {
-            Image(systemName: "apple.logo").font(.system(size: 14))
+            Image(systemName: "apple.logo").font(.fluidSystem(size: 14))
             Text("On-Device").fontWeight(.medium)
             Text("•").foregroundStyle(.secondary)
-            Image(systemName: "lock.shield.fill").font(.system(size: 12))
+            Image(systemName: "lock.shield.fill").font(.fluidSystem(size: 12))
             Text("Private").fontWeight(.medium)
         }
-        .font(.caption).foregroundStyle(Color.fluidGreen)
+        .font(.fluidSystem(.caption)).foregroundStyle(Color.fluidGreen)
         .padding(.horizontal, 12).padding(.vertical, 8)
         .background(RoundedRectangle(cornerRadius: 8).fill(Color.fluidGreen.opacity(0.15))
             .overlay(RoundedRectangle(cornerRadius: 8).stroke(
@@ -2064,7 +2282,7 @@ extension AIEnhancementSettingsView {
     var appleIntelligenceModelRow: some View {
         HStack(spacing: 12) {
             self.formLabel("Model:")
-            Text("System Language Model").foregroundStyle(.secondary).font(.system(.body))
+            Text("System Language Model").foregroundStyle(.secondary).font(.fluidSystem(.body))
             Spacer()
         }
     }
@@ -2085,7 +2303,7 @@ extension AIEnhancementSettingsView {
 
             if !ModelRepository.shared.isBuiltIn(self.viewModel.selectedProviderID) {
                 Button(action: { self.viewModel.deleteSelectedModel() }) {
-                    HStack(spacing: 4) { Image(systemName: "trash"); Text("Delete") }.font(.caption)
+                    HStack(spacing: 4) { Image(systemName: "trash"); Text("Delete") }.font(.fluidSystem(.caption))
                 }
                 .fluidCompactButton(foreground: .red, borderColor: .red.opacity(0.6))
                 .frame(minWidth: AISettingsLayout.compactActionMinWidth, minHeight: AISettingsLayout.controlHeight)
@@ -2105,7 +2323,7 @@ extension AIEnhancementSettingsView {
                     Image(systemName: self.viewModel.hasReasoningConfigForCurrentModel() ? "brain.fill" : "brain")
                     Text("Reasoning")
                 }
-                .font(.caption)
+                .font(.fluidSystem(.caption))
             }
             .fluidCompactButton(
                 foreground: self.viewModel.hasReasoningConfigForCurrentModel() ? self.theme.palette.accent : nil,
@@ -2146,15 +2364,15 @@ extension AIEnhancementSettingsView {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
                 Image(systemName: "brain.head.profile")
-                    .font(.system(size: 14))
+                    .font(.fluidSystem(size: 14))
                     .foregroundStyle(self.theme.palette.accent)
-                Text("Reasoning for \(self.viewModel.selectedModel)")
-                    .font(.system(size: 12, weight: .semibold))
+                Text("Reasoning for \(ModelDisplayName.forID(self.viewModel.selectedModel))")
+                    .font(.fluidSystem(size: 12, weight: .semibold))
                     .foregroundStyle(self.theme.palette.primaryText)
                 Spacer()
                 Button(action: { self.viewModel.showingReasoningConfig = false }) {
                     Image(systemName: "xmark")
-                        .font(.system(size: 10, weight: .medium))
+                        .font(.fluidSystem(size: 10, weight: .medium))
                         .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.plain)
@@ -2166,7 +2384,7 @@ extension AIEnhancementSettingsView {
                     .toggleStyle(.switch)
                     .controlSize(.small)
                 Text(self.viewModel.editingReasoningEnabled ? "Enabled" : "Disabled")
-                    .font(.caption)
+                    .font(.fluidSystem(.caption))
                     .foregroundStyle(self.viewModel.editingReasoningEnabled ? self.theme.palette.accent : .secondary)
             }
 
@@ -2175,43 +2393,47 @@ extension AIEnhancementSettingsView {
                     // Parameter type picker
                     HStack(spacing: 12) {
                         Text("Parameter")
-                            .font(.caption)
+                            .font(.fluidSystem(.caption))
                             .foregroundStyle(.secondary)
                             .frame(width: 70, alignment: .trailing)
 
-                        Picker("", selection: Binding(
-                            get: {
-                                if self.viewModel.editingReasoningParamName == "reasoning_effort" {
-                                    return "reasoning_effort"
-                                } else if self.viewModel.editingReasoningParamName == "enable_thinking" {
-                                    return "enable_thinking"
-                                } else {
-                                    return "custom"
-                                }
-                            },
-                            set: { newValue in
-                                if newValue == "custom" {
-                                    if self.viewModel.editingReasoningParamName == "reasoning_effort" ||
-                                        self.viewModel.editingReasoningParamName == "enable_thinking"
-                                    {
-                                        self.viewModel.editingReasoningParamName = ""
+                        FluidDropdownPicker(
+                            "Reasoning parameter",
+                            selectedTitle: ["reasoning_effort", "enable_thinking"].contains(self.viewModel.editingReasoningParamName) ? self.viewModel.editingReasoningParamName : "Custom...",
+                            selection: Binding(
+                                get: {
+                                    if self.viewModel.editingReasoningParamName == "reasoning_effort" {
+                                        return "reasoning_effort"
+                                    } else if self.viewModel.editingReasoningParamName == "enable_thinking" {
+                                        return "enable_thinking"
+                                    } else {
+                                        return "custom"
                                     }
-                                } else {
-                                    self.viewModel.editingReasoningParamName = newValue
-                                    // Set sensible default value when switching
-                                    if newValue == "reasoning_effort", !["none", "minimal", "low", "medium", "high"].contains(self.viewModel.editingReasoningParamValue) {
-                                        self.viewModel.editingReasoningParamValue = "low"
-                                    } else if newValue == "enable_thinking", !["true", "false"].contains(self.viewModel.editingReasoningParamValue) {
-                                        self.viewModel.editingReasoningParamValue = "true"
+                                },
+                                set: { newValue in
+                                    if newValue == "custom" {
+                                        if self.viewModel.editingReasoningParamName == "reasoning_effort" ||
+                                            self.viewModel.editingReasoningParamName == "enable_thinking"
+                                        {
+                                            self.viewModel.editingReasoningParamName = ""
+                                        }
+                                    } else {
+                                        self.viewModel.editingReasoningParamName = newValue
+                                        // Set sensible default value when switching
+                                        if newValue == "reasoning_effort", !["none", "minimal", "low", "medium", "high"].contains(self.viewModel.editingReasoningParamValue) {
+                                            self.viewModel.editingReasoningParamValue = "low"
+                                        } else if newValue == "enable_thinking", !["true", "false"].contains(self.viewModel.editingReasoningParamValue) {
+                                            self.viewModel.editingReasoningParamValue = "true"
+                                        }
                                     }
                                 }
-                            }
-                        )) {
+                            )
+                        ) {
                             Text("reasoning_effort").tag("reasoning_effort")
                             Text("enable_thinking").tag("enable_thinking")
                             Text("Custom...").tag("custom")
                         }
-                        .pickerStyle(.menu)
+                        .fluidDropdownStyle()
                         .labelsHidden()
                         .frame(width: 140)
                     }
@@ -2222,12 +2444,12 @@ extension AIEnhancementSettingsView {
                     {
                         HStack(spacing: 12) {
                             Text("Name")
-                                .font(.caption)
+                                .font(.fluidSystem(.caption))
                                 .foregroundStyle(.secondary)
                                 .frame(width: 70, alignment: .trailing)
                             TextField("e.g., thinking_budget", text: self.$viewModel.editingReasoningParamName)
                                 .textFieldStyle(.roundedBorder)
-                                .font(.caption)
+                                .font(.fluidSystem(.caption))
                                 .frame(width: 140)
                         }
                     }
@@ -2235,33 +2457,41 @@ extension AIEnhancementSettingsView {
                     // Value picker/field
                     HStack(spacing: 12) {
                         Text("Value")
-                            .font(.caption)
+                            .font(.fluidSystem(.caption))
                             .foregroundStyle(.secondary)
                             .frame(width: 70, alignment: .trailing)
 
                         if self.viewModel.editingReasoningParamName == "reasoning_effort" {
-                            Picker("", selection: self.$viewModel.editingReasoningParamValue) {
+                            FluidDropdownPicker(
+                                "Reasoning value",
+                                selectedTitle: self.viewModel.editingReasoningParamValue,
+                                selection: self.$viewModel.editingReasoningParamValue
+                            ) {
                                 Text("none").tag("none")
                                 Text("minimal").tag("minimal")
                                 Text("low").tag("low")
                                 Text("medium").tag("medium")
                                 Text("high").tag("high")
                             }
-                            .pickerStyle(.menu)
+                            .fluidDropdownStyle()
                             .labelsHidden()
                             .frame(width: 100)
                         } else if self.viewModel.editingReasoningParamName == "enable_thinking" {
-                            Picker("", selection: self.$viewModel.editingReasoningParamValue) {
+                            FluidDropdownPicker(
+                                "Reasoning value",
+                                selectedTitle: self.viewModel.editingReasoningParamValue,
+                                selection: self.$viewModel.editingReasoningParamValue
+                            ) {
                                 Text("true").tag("true")
                                 Text("false").tag("false")
                             }
-                            .pickerStyle(.menu)
+                            .fluidDropdownStyle()
                             .labelsHidden()
                             .frame(width: 100)
                         } else {
                             TextField("value", text: self.$viewModel.editingReasoningParamValue)
                                 .textFieldStyle(.roundedBorder)
-                                .font(.caption)
+                                .font(.fluidSystem(.caption))
                                 .frame(width: 100)
                         }
                     }
@@ -2272,14 +2502,14 @@ extension AIEnhancementSettingsView {
             HStack(spacing: 8) {
                 Button(action: { self.saveReasoningConfig() }) {
                     Text("Save")
-                        .font(.system(size: 12, weight: .semibold))
+                        .font(.fluidSystem(size: 12, weight: .semibold))
                 }
                 .fluidButton(.accent, size: .small)
                 .frame(minWidth: 60, minHeight: 26)
 
                 Button("Cancel") { self.viewModel.showingReasoningConfig = false }
                     .fluidButton(.compact, size: .compact)
-                    .font(.system(size: 12))
+                    .font(.fluidSystem(size: 12))
                     .frame(minWidth: 60, minHeight: 26)
             }
         }
@@ -2306,31 +2536,31 @@ extension AIEnhancementSettingsView {
         return VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 12) {
                 Button(action: { Task { await self.viewModel.testAPIConnection() } }) {
-                    Text(self.viewModel.isTestingConnection ? "Verifying..." : "Verify Connection")
-                        .font(.caption)
+                    Text(self.viewModel.isTestingConnection ? "Verifying…" : (self.viewModel.isModelVerified(for: self.viewModel.selectedProviderID) ? "Model verified" : "Verify model"))
+                        .font(.fluidSystem(.caption))
                         .fontWeight(.semibold)
                 }
                 .fluidCompactButton(isReady: true)
                 .frame(minWidth: AISettingsLayout.primaryActionMinWidth, minHeight: AISettingsLayout.controlHeight)
-                .disabled(self.viewModel.isTestingConnection ||
+                .disabled(self.viewModel.isTestingConnection || self.viewModel.isModelVerified(for: self.viewModel.selectedProviderID) ||
                     (!self.viewModel.isLocalEndpoint(self.viewModel.openAIBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)) &&
                         selectedProviderAPIKey.isEmpty))
             }
 
             // Connection Status Display
-            if self.viewModel.connectionStatus == .success {
+            if self.viewModel.isModelVerified(for: self.viewModel.selectedProviderID) {
                 HStack(spacing: 8) {
-                    Image(systemName: "checkmark.circle.fill").foregroundStyle(Color.fluidGreen).font(.caption)
-                    Text("Connection verified").font(.caption).foregroundStyle(Color.fluidGreen)
+                    Image(systemName: "checkmark.circle.fill").foregroundStyle(Color.fluidGreen).font(.fluidSystem(.caption))
+                    Text("Model verified").font(.fluidSystem(.caption)).foregroundStyle(Color.fluidGreen)
                 }
             } else if self.viewModel.connectionStatus == .failed {
                 HStack(spacing: 8) {
-                    Image(systemName: "exclamationmark.circle.fill").foregroundStyle(.red).font(.caption)
+                    Image(systemName: "exclamationmark.circle.fill").foregroundStyle(.red).font(.fluidSystem(.caption))
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("Connection failed").font(.caption).foregroundStyle(.red)
+                        Text("Connection failed").font(.fluidSystem(.caption)).foregroundStyle(.red)
                         if !self.viewModel.connectionErrorMessage.isEmpty {
                             Text(self.viewModel.connectionErrorMessage)
-                                .font(.caption2)
+                                .font(.fluidSystem(.caption2))
                                 .foregroundStyle(.red.opacity(0.8))
                                 .lineLimit(1)
                         }
@@ -2339,7 +2569,7 @@ extension AIEnhancementSettingsView {
             } else if self.viewModel.connectionStatus == .testing {
                 HStack(spacing: 8) {
                     ProgressView().frame(width: 16, height: 16)
-                    Text("Verifying...").font(.caption).foregroundStyle(self.theme.palette.accent)
+                    Text("Verifying...").font(.fluidSystem(.caption)).foregroundStyle(self.theme.palette.accent)
                 }
             }
 
@@ -2355,7 +2585,7 @@ extension AIEnhancementSettingsView {
         HStack(spacing: 8) {
             Button(action: { self.viewModel.handleAPIKeyButtonTapped() }) {
                 Label("Add or Modify API Key", systemImage: "key.fill")
-                    .labelStyle(.titleAndIcon).font(.caption)
+                    .labelStyle(.titleAndIcon).font(.fluidSystem(.caption))
             }
             .fluidCompactButton(isReady: true)
             .frame(minWidth: AISettingsLayout.primaryActionMinWidth, minHeight: AISettingsLayout.controlHeight)
@@ -2365,7 +2595,7 @@ extension AIEnhancementSettingsView {
             {
                 Button(action: { NSWorkspace.shared.open(url) }) {
                     Label(websiteInfo.label, systemImage: websiteInfo.label.contains("Download") ? "arrow.down.circle.fill" : (websiteInfo.label.contains("Guide") ? "book.fill" : "link"))
-                        .labelStyle(.titleAndIcon).font(.caption)
+                        .labelStyle(.titleAndIcon).font(.fluidSystem(.caption))
                 }
                 .fluidButton(.compact, size: .compact)
                 .frame(minWidth: AISettingsLayout.actionMinWidth, minHeight: AISettingsLayout.controlHeight)
@@ -2376,7 +2606,7 @@ extension AIEnhancementSettingsView {
     var apiKeyEditorSheet: some View {
         VStack(spacing: 14) {
             Text("Enter \(self.viewModel.providerDisplayName(for: self.viewModel.selectedProviderID)) API Key")
-                .font(.headline)
+                .font(.fluidSystem(.headline))
             SecureField("API Key (optional for local endpoints)", text: self.$viewModel.newProviderApiKey)
                 .textFieldStyle(.roundedBorder).frame(width: 300)
                 .onTapGesture {
@@ -2410,39 +2640,39 @@ extension AIEnhancementSettingsView {
         VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 8) {
                 Image(systemName: "plus.circle.fill")
-                    .font(.system(size: 14))
+                    .font(.fluidSystem(size: 14))
                     .foregroundStyle(self.theme.palette.accent)
                 Text("Add Custom Provider")
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(.fluidSystem(size: 14, weight: .semibold))
             }
 
             VStack(alignment: .leading, spacing: 12) {
                 VStack(alignment: .leading, spacing: 6) {
                     HStack(spacing: 6) {
                         Image(systemName: "link")
-                            .font(.caption)
+                            .font(.fluidSystem(.caption))
                             .foregroundStyle(.secondary)
                         Text("OpenAI-compatible base URL")
-                            .font(.system(size: 12, weight: .medium))
+                            .font(.fluidSystem(size: 12, weight: .medium))
                             .foregroundStyle(.secondary)
                     }
                     TextField("https://api.yourprovider.com/v1", text: self.$viewModel.newProviderBaseURL)
                         .textFieldStyle(.roundedBorder)
-                        .font(.system(size: 13, design: .monospaced))
+                        .font(.fluidSystem(size: 13, design: .monospaced))
                 }
 
                 VStack(alignment: .leading, spacing: 6) {
                     HStack(spacing: 6) {
                         Image(systemName: "key")
-                            .font(.caption)
+                            .font(.fluidSystem(.caption))
                             .foregroundStyle(.secondary)
                         Text("API Key (optional for local endpoints)")
-                            .font(.system(size: 12, weight: .medium))
+                            .font(.fluidSystem(size: 12, weight: .medium))
                             .foregroundStyle(.secondary)
                     }
                     SecureField("Enter API key", text: self.$viewModel.newProviderApiKey)
                         .textFieldStyle(.roundedBorder)
-                        .font(.system(size: 13))
+                        .font(.fluidSystem(size: 13))
                         .onTapGesture {
                             self.viewModel.ensureKeychainAccessForAPIKeyEdit()
                         }
@@ -2453,7 +2683,7 @@ extension AIEnhancementSettingsView {
                 Button(action: { self.saveNewProvider() }) {
                     HStack(spacing: 6) {
                         Image(systemName: "checkmark")
-                            .font(.system(size: 12, weight: .semibold))
+                            .font(.fluidSystem(size: 12, weight: .semibold))
                         Text("Save Provider")
                     }
                 }

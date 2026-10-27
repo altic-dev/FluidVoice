@@ -1,0 +1,1 @@
+Native source for the bundled onboarding film. Render offscreen with --render-frames evidence/frames --film --intro-only. The app embeds the exported film; do not launch the standalone preview for app verification.

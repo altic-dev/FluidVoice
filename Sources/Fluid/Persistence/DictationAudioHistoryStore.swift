@@ -47,6 +47,8 @@ final nonisolated class DictationAudioHistoryStore: @unchecked Sendable {
     private let appSupportFolder = "FluidVoice"
     private let audioFolder = "DictationAudioHistory"
     private let fileManager = FileManager.default
+    private let pendingSaveLock = NSLock()
+    private var pendingSaveFileNames: Set<String> = []
 
     private init() {}
 
@@ -57,10 +59,20 @@ final nonisolated class DictationAudioHistoryStore: @unchecked Sendable {
         model: String?
     ) throws -> DictationAudioMetadata {
         let directory = try self.audioDirectory()
-        let fileName = self.audioFileName(entryID: entryID, timestamp: timestamp)
+        let fileName = self.pendingSaveLock.withLock { () -> String in
+            let fileName = self.audioFileName(entryID: entryID, timestamp: timestamp)
+            self.pendingSaveFileNames.insert(fileName)
+            return fileName
+        }
         let url = directory.appendingPathComponent(fileName, isDirectory: false)
-        let data = Self.wavData(from: snapshot)
-        try data.write(to: url, options: .atomic)
+        let data: Data
+        do {
+            data = Self.wavData(from: snapshot)
+            try data.write(to: url, options: .atomic)
+        } catch {
+            self.completePendingSave(fileName: fileName)
+            throw error
+        }
 
         return DictationAudioMetadata(
             fileName: fileName,
@@ -72,6 +84,14 @@ final nonisolated class DictationAudioHistoryStore: @unchecked Sendable {
         )
     }
 
+    /// Keeps a completed WAV protected from orphan cleanup until its history
+    /// metadata has attached on the main actor.
+    func completePendingSave(fileName: String) {
+        self.pendingSaveLock.withLock {
+            self.pendingSaveFileNames.remove(fileName)
+        }
+    }
+
     func audioFileURL(for entry: TranscriptionHistoryEntry) -> URL? {
         guard let audio = entry.audio else { return nil }
         return self.audioFileURL(fileName: audio.fileName, createIfNeeded: false)
@@ -79,6 +99,11 @@ final nonisolated class DictationAudioHistoryStore: @unchecked Sendable {
 
     func audioFileExists(for entry: TranscriptionHistoryEntry) -> Bool {
         guard let url = self.audioFileURL(for: entry) else { return false }
+        return self.fileManager.fileExists(atPath: url.path)
+    }
+
+    func audioFileExists(fileName: String) -> Bool {
+        guard let url = self.audioFileURL(fileName: fileName, createIfNeeded: false) else { return false }
         return self.fileManager.fileExists(atPath: url.path)
     }
 
@@ -104,15 +129,30 @@ final nonisolated class DictationAudioHistoryStore: @unchecked Sendable {
             options: [.skipsHiddenFiles]
         )) ?? []
 
+        let pendingFileNames = self.pendingSaveLock.withLock { self.pendingSaveFileNames }
         var fileCount = 0
         var byteCount: Int64 = 0
-        for file in files where file.pathExtension.lowercased() == "wav" && !referencedFileNames.contains(file.lastPathComponent) {
+        for file in files where Self.shouldDeleteUnreferencedAudioFile(
+            fileName: file.lastPathComponent,
+            referencedFileNames: referencedFileNames,
+            pendingFileNames: pendingFileNames
+        ) {
             guard let removedBytes = self.deleteAudioFile(at: file) else { continue }
             fileCount += 1
             byteCount += removedBytes
         }
 
         return (fileCount, byteCount)
+    }
+
+    static func shouldDeleteUnreferencedAudioFile(
+        fileName: String,
+        referencedFileNames: Set<String>,
+        pendingFileNames: Set<String>
+    ) -> Bool {
+        URL(fileURLWithPath: fileName).pathExtension.lowercased() == "wav"
+            && !referencedFileNames.contains(fileName)
+            && !pendingFileNames.contains(fileName)
     }
 
     private func deleteAudioFile(at url: URL) -> Int64? {

@@ -7,18 +7,139 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		AD1130000000000000000004 /* OverlayCaptionPresentationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD1130000000000000000003 /* OverlayCaptionPresentationTests.swift */; };
+		AD1030000000000000000004 /* HoldToMutePresentationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD1030000000000000000003 /* HoldToMutePresentationTests.swift */; };
+		AD1030000000000000000002 /* HoldToMuteTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD1030000000000000000001 /* HoldToMuteTests.swift */; };
+		D63B0F8456B440F1A123B987 /* PronunciationModelRevisionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AFA73C8D5E7647C4AB125DEE /* PronunciationModelRevisionTests.swift */; };
+		5D4A9F54826FD6BB32CE13F8 /* SpeechModelInstallationSnapshotTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D47EF42AC1B641A705AC302 /* SpeechModelInstallationSnapshotTests.swift */; };
+		B51B7EE5BA8CE09BC09A47DB /* ProgressiveFileDownloaderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70362FCD2F941BFB800AD8E8 /* ProgressiveFileDownloaderTests.swift */; };
+		9F12D6C37B0166B549AECB61 /* ParakeetCompactModelDemoTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 16DE344948E4DBF0E1739769 /* ParakeetCompactModelDemoTests.swift */; };
+		209C92C604F912C74A733D21 /* ParakeetCompactModelSmokeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC9A7E0C9B501E87114F7A88 /* ParakeetCompactModelSmokeTests.swift */; };
+		67F6BBBA604C996A20BEE7AC /* ParakeetArchiveDownloaderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E3398800F76A93226E76A5C9 /* ParakeetArchiveDownloaderTests.swift */; };
+		EA91B858DDC9E68655DCA343 /* ParakeetSpeechModelCatalogTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6BF00D40A027DC3970C2D0AE /* ParakeetSpeechModelCatalogTests.swift */; };
+		24AFD1DFC6BFC9DB5BC6329B /* UpdateRollbackBackupTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 91C92FF93D3D21E0FD4D93EE /* UpdateRollbackBackupTests.swift */; };
+		563881F82B15C86EDB50E198 /* UpdateInstallationPipelineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F12B5FA911AD928DAFD058FB /* UpdateInstallationPipelineTests.swift */; };
+		7EAA9E7C4E4155A44F9CC415 /* UpdateAppReplacementTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8E4FCA0BC854678A142D944F /* UpdateAppReplacementTests.swift */; };
+		6AE26D3BB678D13615C41376 /* UpdateBundleValidatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 93E63CD61E6BD954698A8E63 /* UpdateBundleValidatorTests.swift */; };
+		75454216C2DD7BBBB1D76D42 /* SettingsBackupRoundTripTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4263717D7203AAA6B63D9330 /* SettingsBackupRoundTripTests.swift */; };
+		FEA4AB111222333444555504 /* MeetingModelResidencyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FEA4AB111222333444555503 /* MeetingModelResidencyTests.swift */; };
+		AB492EFF712C42EE91601004 /* MeetingSummaryDownloadTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB492EFF712C42EE91601003 /* MeetingSummaryDownloadTests.swift */; };
+		AB492EFF712C42EE91601002 /* MeetingSummaryInputTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB492EFF712C42EE91601001 /* MeetingSummaryInputTests.swift */; };
+		BE24123456789ABCDEF00002 /* MeetingSummaryProviderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE24123456789ABCDEF00001 /* MeetingSummaryProviderTests.swift */; };
+		F5E000000000000000000021 /* FluidServeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F5E000000000000000000020 /* FluidServeTests.swift */; };
+		BE24123456789ABCDEF00004 /* ModelTemperatureSupportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE24123456789ABCDEF00003 /* ModelTemperatureSupportTests.swift */; };
+		B1016A0000000000000000A2 /* LLMClientIdleConnectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1016A0000000000000000A1 /* LLMClientIdleConnectionTests.swift */; };
+		AEC300000000000000000003 /* FluidAEC3Bridge in Frameworks */ = {isa = PBXBuildFile; productRef = AEC300000000000000000002 /* FluidAEC3Bridge */; };
+		AEC300000000000000000004 /* FluidAEC3Bridge in Frameworks */ = {isa = PBXBuildFile; productRef = AEC300000000000000000002 /* FluidAEC3Bridge */; };
+		AEC3B0000000000000000002 /* MeetingAEC3Tests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AEC3B0000000000000000001 /* MeetingAEC3Tests.swift */; };
+		AEC3C0000000000000000002 /* WebRTCAEC3Notices in Resources */ = {isa = PBXBuildFile; fileRef = AEC3C0000000000000000001 /* WebRTCAEC3Notices */; };
 		7C078DA52E3B386A00FB7CAC /* FluidAudio in Frameworks */ = {isa = PBXBuildFile; productRef = 7C078DA42E3B386A00FB7CAC /* FluidAudio */; };
-		7C1C72F22EECBD1300E3BF4D /* SwiftWhisper in Frameworks */ = {isa = PBXBuildFile; productRef = 7C1C72F12EECBD1300E3BF4D /* SwiftWhisper */; };
 		7C3697892ED70F9C005874CE /* DynamicNotchKit in Frameworks */ = {isa = PBXBuildFile; productRef = 7C3697882ED70F9C005874CE /* DynamicNotchKit */; };
 		7C5AF14B2F15041600DE21B0 /* MediaRemoteAdapter in Frameworks */ = {isa = PBXBuildFile; productRef = 7C5AF14A2F15041600DE21B0 /* MediaRemoteAdapter */; };
+		7C5AF14C2F15041600DE21B0 /* MediaRemoteAdapter in Embed Frameworks */ = {isa = PBXBuildFile; productRef = 7C5AF14A2F15041600DE21B0 /* MediaRemoteAdapter */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		7C9A71022F58B00000FB7CAF /* TranscribeCpp in Frameworks */ = {isa = PBXBuildFile; productRef = 7C9A71012F58B00000FB7CAF /* TranscribeCpp */; };
 		7C91B0012F42AA0100C0DEF0 /* HotkeyShortcutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C91B0022F42AA0100C0DEF0 /* HotkeyShortcutTests.swift */; };
+		DAB600000000000000000001 /* DashboardLayoutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAB600000000000000000002 /* DashboardLayoutTests.swift */; };
+		FEB700000000000000000001 /* FeedbackClientTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FEB700000000000000000002 /* FeedbackClientTests.swift */; };
+		7C91B0A12F42AA0100C0DEF0 /* DeliveryTargetAssessmentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C91B0A22F42AA0100C0DEF0 /* DeliveryTargetAssessmentTests.swift */; };
+		C0DE89000000000000000002 /* SettingsNavigationStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE89000000000000000001 /* SettingsNavigationStateTests.swift */; };
 		7CDB0A2D2F3C4D5600FB7CAD /* DictationE2ETests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7CDB0A292F3C4D5600FB7CAD /* DictationE2ETests.swift */; };
+		B52000000000000000000002 /* PrivateAIDictationTokenBudgetTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B52000000000000000000001 /* PrivateAIDictationTokenBudgetTests.swift */; };
+		CD1C7A0000000000000000B2 /* CustomDictionaryManualEntryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD1C7A0000000000000000B1 /* CustomDictionaryManualEntryTests.swift */; };
 		7CDB0A2E2F3C4D5600FB7CAD /* AudioFixtureLoader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7CDB0A2A2F3C4D5600FB7CAD /* AudioFixtureLoader.swift */; };
 		86CAA2D4EF18433096185602 /* LLMClientRequestBodyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 343B29013F4441D6A797D12D /* LLMClientRequestBodyTests.swift */; };
 		7CAA000A2F99000000000001 /* NemotronCacheRecoveryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7CAA000B2F99000000000002 /* NemotronCacheRecoveryTests.swift */; };
+		272BFB5CB271489892CAE50C /* TemperatureSupportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 980330F3CE464336ADCE3E23 /* TemperatureSupportTests.swift */; };
+		A11A00000000000000000002 /* AnalyticsDatabaseTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A11A00000000000000000001 /* AnalyticsDatabaseTests.swift */; };
+		2E9B00000000000000000007 /* ZeppelinDataLayerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E9B00000000000000000006 /* ZeppelinDataLayerTests.swift */; };
+		2E9B00000000000000000009 /* SearchIndexTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E9B00000000000000000008 /* SearchIndexTests.swift */; };
+		2E9B0000000000000000000B /* AppSearchServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E9B0000000000000000000A /* AppSearchServiceTests.swift */; };
+		A62300000000000000000002 /* AudioBufferConverterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A62300000000000000000001 /* AudioBufferConverterTests.swift */; };
+		D1A600000000000000000202 /* SpeakerTurnMergingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1A600000000000000000201 /* SpeakerTurnMergingTests.swift */; };
+		D1A700000000000000000002 /* MeetingExistingAudioReplayTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1A700000000000000000001 /* MeetingExistingAudioReplayTests.swift */; };
+		F1BD00000000000000000002 /* StripThinkingTagsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1BD00000000000000000001 /* StripThinkingTagsTests.swift */; };
+		D1A600000000000000000204 /* MeetingWindowSelectorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1A600000000000000000203 /* MeetingWindowSelectorTests.swift */; };
+		A11CE0030000000000000002 /* NativeButtonStylesHitTargetTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A11CE0030000000000000001 /* NativeButtonStylesHitTargetTests.swift */; };
+		D1A600000000000000000206 /* MeetingRecoveryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1A600000000000000000205 /* MeetingRecoveryTests.swift */; };
+		B149D69C5977426AB8600002 /* MeetingAPIControllerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B149D69C5977426AB8600001 /* MeetingAPIControllerTests.swift */; };
+		BE0A00000000000000000002 /* MeetingTranscriptionBackendTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE0A00000000000000000001 /* MeetingTranscriptionBackendTests.swift */; };
+		C1A000000000000000000002 /* MeetingResultSidecarTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1A000000000000000000001 /* MeetingResultSidecarTests.swift */; };
+		C2A000000000000000000002 /* MeetingAnalysisManifestTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2A000000000000000000001 /* MeetingAnalysisManifestTests.swift */; };
+		FEA4AB111222333444555502 /* MeetingSpeakerVoiceMatcherTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FEA4AB111222333444555501 /* MeetingSpeakerVoiceMatcherTests.swift */; };
+		D9B100000000000000000002 /* VoiceModelDeletionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D9B100000000000000000001 /* VoiceModelDeletionTests.swift */; };
+		C2B100000000000000000002 /* MeetingTranscriptAssemblerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2B100000000000000000001 /* MeetingTranscriptAssemblerTests.swift */; };
+		C2B200000000000000000002 /* MeetingCanonicalPipelineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2B200000000000000000001 /* MeetingCanonicalPipelineTests.swift */; };
+		E3A000000000000000000002 /* MeetingParakeetNemotronBackendTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E3A000000000000000000001 /* MeetingParakeetNemotronBackendTests.swift */; };
+		E3A000000000000000000012 /* MeetingTextOverlapEchoVerdictProviderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E3A000000000000000000011 /* MeetingTextOverlapEchoVerdictProviderTests.swift */; };
+		E3A000000000000000000022 /* MeetingEpochAudioMaterializerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E3A000000000000000000021 /* MeetingEpochAudioMaterializerTests.swift */; };
+		E3A000000000000000000032 /* MeetingNemotronModelLocatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E3A000000000000000000031 /* MeetingNemotronModelLocatorTests.swift */; };
+		E3A000000000000000000042 /* MeetingNemotronRealModelSmokeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E3A000000000000000000041 /* MeetingNemotronRealModelSmokeTests.swift */; };
+		AD7A00000000000000000002 /* MeetingAutoDetectorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD7A00000000000000000001 /* MeetingAutoDetectorTests.swift */; };
+		A7D000000000000000000002 /* AudioTopologyDiagnosticsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7D000000000000000000001 /* AudioTopologyDiagnosticsTests.swift */; };
+		7E57C8BE6F444F6A9AC9FCB0 /* MeetingEchoSignalScorerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4AD7433B35340CEB85EA268 /* MeetingEchoSignalScorerTests.swift */; };
+		E5EC00000000000000000002 /* MeetingEchoVetoTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5EC00000000000000000001 /* MeetingEchoVetoTests.swift */; };
+		E5EC00000000000000000012 /* MeetingFallbackEchoProbeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5EC00000000000000000011 /* MeetingFallbackEchoProbeTests.swift */; };
+		E5EC00000000000000000022 /* MeetingNearFieldGateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5EC00000000000000000021 /* MeetingNearFieldGateTests.swift */; };
+		E5EC00000000000000000032 /* MeetingLiveSilenceEndpointTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5EC00000000000000000031 /* MeetingLiveSilenceEndpointTests.swift */; };
+		E5EC00000000000000000042 /* VoiceProcessingDuckingProbeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5EC00000000000000000041 /* VoiceProcessingDuckingProbeTests.swift */; };
+		E5EC00000000000000000052 /* VoiceProcessingSpeechDuckingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5EC00000000000000000051 /* VoiceProcessingSpeechDuckingTests.swift */; };
+		E5EC00000000000000000062 /* VoiceProcessingAsrQualityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5EC00000000000000000061 /* VoiceProcessingAsrQualityTests.swift */; };
+		E5EC00000000000000000072 /* ClockDomainProbeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5EC00000000000000000071 /* ClockDomainProbeTests.swift */; };
+		E5EC00000000000000000082 /* MeetingMicrophoneCaptureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5EC00000000000000000081 /* MeetingMicrophoneCaptureTests.swift */; };
+		5A3B00000000000000000002 /* MeetingVoiceProcessingCaptureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A3B00000000000000000001 /* MeetingVoiceProcessingCaptureTests.swift */; };
+		5A4B00000000000000000002 /* MeetingPhase4Tests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A4B00000000000000000001 /* MeetingPhase4Tests.swift */; };
+		5C67BA461CBF1149E733A4E9 /* MeetingEraBatchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2A50F33BD2347EECE0B3853C /* MeetingEraBatchTests.swift */; };
+		E5EC000000000000000000A2 /* MeetingTimelineDriftProbeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5EC000000000000000000A1 /* MeetingTimelineDriftProbeTests.swift */; };
+		E5EC00000000000000000092 /* ClockRegressionHelper.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5EC00000000000000000091 /* ClockRegressionHelper.swift */; };
+		A6E2246FA3744C7B3E2DB91C /* MeetingLiveTranscriptionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 355C1248D5386D1F815EB7D7 /* MeetingLiveTranscriptionTests.swift */; };
+		2952403C87FFDE41C1BC85D5 /* MeetingLiveReplayTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7BE63EB94BB280F38F5CB028 /* MeetingLiveReplayTests.swift */; };
+		F68E1D074EF74EBAB9C61702 /* MeetingAudioComparisonProbeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F68E1D074EF74EBAB9C61701 /* MeetingAudioComparisonProbeTests.swift */; };
+		C0DE63600000000000000002 /* AudioEngineRetirementDrainTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE63600000000000000001 /* AudioEngineRetirementDrainTests.swift */; };
+		DA7100020000000000000002 /* DirectAudioReliabilityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA7100010000000000000001 /* DirectAudioReliabilityTests.swift */; };
+		DA7200020000000000000002 /* AudioHardwareRecoveryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA7200010000000000000001 /* AudioHardwareRecoveryTests.swift */; };
+		7CFA1D0B2F500000C0DEF001 /* TypingServiceTransientPasteboardTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7CFA1D0B2F500000C0DEF002 /* TypingServiceTransientPasteboardTests.swift */; };
+		803000000000000000000002 /* MediaPlaybackServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 803000000000000000000001 /* MediaPlaybackServiceTests.swift */; };
+		0B05F11E000000000000A002 /* SupportedFileExtensionsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B05F11E000000000000A001 /* SupportedFileExtensionsTests.swift */; };
+		CD0E00000000000000000002 /* MeetingOverlayModelsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD0E00000000000000000001 /* MeetingOverlayModelsTests.swift */; };
+		CD0F00000000000000000002 /* MeetingProcessingConfigurationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD0F00000000000000000001 /* MeetingProcessingConfigurationTests.swift */; };
+		CD100000000000000000000002 /* MeetingProviderOptionsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD100000000000000000000001 /* MeetingProviderOptionsTests.swift */; };
+		CD110000000000000000000002 /* MeetingASRPreparationOwnerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD110000000000000000000001 /* MeetingASRPreparationOwnerTests.swift */; };
+		D2A000000000000000000002 /* MeetingReferenceSynchronizerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D2A000000000000000000001 /* MeetingReferenceSynchronizerTests.swift */; };
+		D2A000000000000000000004 /* MeetingStage05EvidenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D2A000000000000000000003 /* MeetingStage05EvidenceTests.swift */; };
+		D2A000000000000000000006 /* MeetingStage05SCKFrameAdapterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D2A000000000000000000005 /* MeetingStage05SCKFrameAdapterTests.swift */; };
+		CD110000000000000000000003 /* MeetingASRPreparationOwnerTests.swift in Sources (ASR baseline) */ = {isa = PBXBuildFile; fileRef = CD110000000000000000000001 /* MeetingASRPreparationOwnerTests.swift */; };
+		CD120000000000000000000002 /* MeetingReferenceAttributionContractsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD120000000000000000000001 /* MeetingReferenceAttributionContractsTests.swift */; };
+		E5EC000000000000000000B2 /* MeetingVoiceProcessingProbeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5EC000000000000000000B1 /* MeetingVoiceProcessingProbeTests.swift */; };
+		E5EC000000000000000000C2 /* MeetingSCKPairedDiagnosticsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5EC000000000000000000C1 /* MeetingSCKPairedDiagnosticsTests.swift */; };
+		F1A000000000000000000002 /* MeetingAudioChunkSinkTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1A000000000000000000001 /* MeetingAudioChunkSinkTests.swift */; };
+		F1A000000000000000000004 /* MeetingAudioAssetCompatibilityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1A000000000000000000003 /* MeetingAudioAssetCompatibilityTests.swift */; };
+		F1A000000000000000000006 /* MeetingAudioChunkLedgerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1A000000000000000000005 /* MeetingAudioChunkLedgerTests.swift */; };
+		F1A000000000000000000008 /* MeetingAudioChunkLedgerRecoveryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1A000000000000000000007 /* MeetingAudioChunkLedgerRecoveryTests.swift */; };
+		F1A00000000000000000000A /* MeetingPCMStoragePolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1A000000000000000000009 /* MeetingPCMStoragePolicyTests.swift */; };
+		E5EC000000000000000000D2 /* MeetingSCKPairedHardwareTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5EC000000000000000000D1 /* MeetingSCKPairedHardwareTests.swift */; };
+		803000000000000000000003 /* MediaRemoteAdapter in Frameworks */ = {isa = PBXBuildFile; productRef = 803000000000000000000004 /* MediaRemoteAdapter */; };
+		B51800000000000000000002 /* SpokenSendTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B51800000000000000000001 /* SpokenSendTests.swift */; };
+		B51900000000000000000002 /* PrivateAIProviderPromptFormatTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B51900000000000000000001 /* PrivateAIProviderPromptFormatTests.swift */; };
+		C0DE63700000000000000002 /* WhisperLanguageSelectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE63700000000000000001 /* WhisperLanguageSelectionTests.swift */; };
+		CACEC0010000000000000002 /* KeychainServiceCacheTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CACEC0010000000000000001 /* KeychainServiceCacheTests.swift */; };
+		FEED67600000000000000002 /* PasteDeliveryCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FEED67600000000000000001 /* PasteDeliveryCoordinatorTests.swift */; };
 		7CDB0A2F2F3C4D5600FB7CAD /* dictation_fixture.wav in Resources */ = {isa = PBXBuildFile; fileRef = 7CDB0A2B2F3C4D5600FB7CAD /* dictation_fixture.wav */; };
 		7CDB0A302F3C4D5600FB7CAD /* XCTest.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 7CDB0A2C2F3C4D5600FB7CAD /* XCTest.framework */; };
 		7CE006BD2E80EBE600DDCCD6 /* AppUpdater in Frameworks */ = {isa = PBXBuildFile; productRef = 7CE006BC2E80EBE600DDCCD6 /* AppUpdater */; };
+		86CAA2D4EF18433096185602 /* LLMClientRequestBodyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 343B29013F4441D6A797D12D /* LLMClientRequestBodyTests.swift */; };
+		A5B00000000000000000000B /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5B00000000000000000000C /* main.swift */; };
+		A5B000000000000000000024 /* MeetingReferenceSynchronizerReplayCLI.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5B000000000000000000025 /* MeetingReferenceSynchronizerReplayCLI.swift */; };
+		A5B000000000000000000013 /* FluidAudio in Frameworks */ = {isa = PBXBuildFile; productRef = 7C078DA42E3B386A00FB7CAC /* FluidAudio */; };
+		A5B000000000000000000014 /* DynamicNotchKit in Frameworks */ = {isa = PBXBuildFile; productRef = 7C3697882ED70F9C005874CE /* DynamicNotchKit */; };
+		A5B000000000000000000015 /* MediaRemoteAdapter in Frameworks */ = {isa = PBXBuildFile; productRef = 7C5AF14A2F15041600DE21B0 /* MediaRemoteAdapter */; };
+		A5B000000000000000000016 /* TranscribeCpp in Frameworks */ = {isa = PBXBuildFile; productRef = 7C9A71012F58B00000FB7CAF /* TranscribeCpp */; };
+		A5B000000000000000000017 /* AppUpdater in Frameworks */ = {isa = PBXBuildFile; productRef = 7CE006BC2E80EBE600DDCCD6 /* AppUpdater */; };
+		A5B000000000000000000018 /* MediaRemoteAdapter in Embed Frameworks */ = {isa = PBXBuildFile; productRef = 7C5AF14A2F15041600DE21B0 /* MediaRemoteAdapter */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		A5B000000000000000000023 /* XCTest.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 7CDB0A2C2F3C4D5600FB7CAD /* XCTest.framework */; };
+		D1C7A7100000000000000002 /* UpdatePromptIntegrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1C7A7100000000000000001 /* UpdatePromptIntegrationTests.swift */; };
+		C093F64545C6FDD2D79BF559 /* ParakeetArchiveInstallerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5F06B51CF3F45AF989D0CA7F /* ParakeetArchiveInstallerTests.swift */; };
+		640AB09C7781553DF72D1156 /* CompactSpeechModelArchiveTransportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01DEEE85A263FAED9ED5DEF8 /* CompactSpeechModelArchiveTransportTests.swift */; };
+		F5E000000000000000000014 /* fv-serve in Embed Helpers */ = {isa = PBXBuildFile; fileRef = F5E000000000000000000005 /* fv-serve */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -29,24 +150,220 @@
 			remoteGlobalIDString = 7C078D8E2E3B339200FB7CAC;
 			remoteInfo = fluid;
 		};
+		A5B000000000000000000021 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 7C078D872E3B339200FB7CAC /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A5B000000000000000000001;
+			remoteInfo = FluidASRBaselineHost;
+		};
+		F5E000000000000000000012 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 7C078D872E3B339200FB7CAC /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = F5E000000000000000000001;
+			remoteInfo = "fv-serve";
+		};
 /* End PBXContainerItemProxy section */
 
+/* Begin PBXCopyFilesBuildPhase section */
+		7C5AF14D2F15041600DE21B0 /* Embed Frameworks */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 10;
+			files = (
+				7C5AF14C2F15041600DE21B0 /* MediaRemoteAdapter in Embed Frameworks */,
+			);
+			name = "Embed Frameworks";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A5B000000000000000000008 /* Embed Frameworks */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 10;
+			files = (
+				A5B000000000000000000018 /* MediaRemoteAdapter in Embed Frameworks */,
+			);
+			name = "Embed Frameworks";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		F5E000000000000000000015 /* Embed Helpers */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = Contents/Helpers;
+			dstSubfolderSpec = 1;
+			files = (
+				F5E000000000000000000014 /* fv-serve in Embed Helpers */,
+			);
+			name = "Embed Helpers";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
 /* Begin PBXFileReference section */
-		7C078D8F2E3B339200FB7CAC /* FluidVoice Debug.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "FluidVoice Debug.app"; sourceTree = BUILT_PRODUCTS_DIR; };
-		7CDB0A202F3C4D5600FB7CAD /* FluidDictationIntegrationTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = FluidDictationIntegrationTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
-		7C91B0022F42AA0100C0DEF0 /* HotkeyShortcutTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HotkeyShortcutTests.swift; sourceTree = "<group>"; };
-		7CDB0A292F3C4D5600FB7CAD /* DictationE2ETests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DictationE2ETests.swift; sourceTree = "<group>"; };
+		AD1130000000000000000003 /* OverlayCaptionPresentationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OverlayCaptionPresentationTests.swift; sourceTree = "<group>"; };
+		AD1030000000000000000003 /* HoldToMutePresentationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HoldToMutePresentationTests.swift; sourceTree = "<group>"; };
+		AD1030000000000000000001 /* HoldToMuteTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HoldToMuteTests.swift; sourceTree = "<group>"; };
+		AFA73C8D5E7647C4AB125DEE /* PronunciationModelRevisionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PronunciationModelRevisionTests.swift; sourceTree = "<group>"; };
+		7D47EF42AC1B641A705AC302 /* SpeechModelInstallationSnapshotTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeechModelInstallationSnapshotTests.swift; sourceTree = "<group>"; };
+		70362FCD2F941BFB800AD8E8 /* ProgressiveFileDownloaderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProgressiveFileDownloaderTests.swift; sourceTree = "<group>"; };
+		16DE344948E4DBF0E1739769 /* ParakeetCompactModelDemoTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ParakeetCompactModelDemoTests.swift; sourceTree = "<group>"; };
+		BC9A7E0C9B501E87114F7A88 /* ParakeetCompactModelSmokeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ParakeetCompactModelSmokeTests.swift; sourceTree = "<group>"; };
+		E3398800F76A93226E76A5C9 /* ParakeetArchiveDownloaderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ParakeetArchiveDownloaderTests.swift; sourceTree = "<group>"; };
+		6BF00D40A027DC3970C2D0AE /* ParakeetSpeechModelCatalogTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ParakeetSpeechModelCatalogTests.swift; sourceTree = "<group>"; };
+		91C92FF93D3D21E0FD4D93EE /* UpdateRollbackBackupTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpdateRollbackBackupTests.swift; sourceTree = "<group>"; };
+		F12B5FA911AD928DAFD058FB /* UpdateInstallationPipelineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpdateInstallationPipelineTests.swift; sourceTree = "<group>"; };
+		8E4FCA0BC854678A142D944F /* UpdateAppReplacementTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpdateAppReplacementTests.swift; sourceTree = "<group>"; };
+		93E63CD61E6BD954698A8E63 /* UpdateBundleValidatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpdateBundleValidatorTests.swift; sourceTree = "<group>"; };
+		4263717D7203AAA6B63D9330 /* SettingsBackupRoundTripTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsBackupRoundTripTests.swift; sourceTree = "<group>"; };
+		FEA4AB111222333444555503 /* MeetingModelResidencyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingModelResidencyTests.swift; sourceTree = "<group>"; };
+		AB492EFF712C42EE91601003 /* MeetingSummaryDownloadTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingSummaryDownloadTests.swift; sourceTree = "<group>"; };
+		AB492EFF712C42EE91601001 /* MeetingSummaryInputTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingSummaryInputTests.swift; sourceTree = "<group>"; };
+		BE24123456789ABCDEF00001 /* MeetingSummaryProviderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingSummaryProviderTests.swift; sourceTree = "<group>"; };
+		F5E000000000000000000020 /* FluidServeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FluidServeTests.swift; sourceTree = "<group>"; };
+		BE24123456789ABCDEF00003 /* ModelTemperatureSupportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelTemperatureSupportTests.swift; sourceTree = "<group>"; };
+		B1016A0000000000000000A1 /* LLMClientIdleConnectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LLMClientIdleConnectionTests.swift; sourceTree = "<group>"; };
 		343B29013F4441D6A797D12D /* LLMClientRequestBodyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LLMClientRequestBodyTests.swift; sourceTree = "<group>"; };
 		7CAA000B2F99000000000002 /* NemotronCacheRecoveryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NemotronCacheRecoveryTests.swift; sourceTree = "<group>"; };
+		980330F3CE464336ADCE3E23 /* TemperatureSupportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TemperatureSupportTests.swift; sourceTree = "<group>"; };
+		A11A00000000000000000001 /* AnalyticsDatabaseTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnalyticsDatabaseTests.swift; sourceTree = "<group>"; };
+		2E9B00000000000000000006 /* ZeppelinDataLayerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ZeppelinDataLayerTests.swift; sourceTree = "<group>"; };
+		2E9B00000000000000000008 /* SearchIndexTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchIndexTests.swift; sourceTree = "<group>"; };
+		2E9B0000000000000000000A /* AppSearchServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppSearchServiceTests.swift; sourceTree = "<group>"; };
+		A62300000000000000000001 /* AudioBufferConverterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioBufferConverterTests.swift; sourceTree = "<group>"; };
+		D1A600000000000000000201 /* SpeakerTurnMergingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeakerTurnMergingTests.swift; sourceTree = "<group>"; };
+		D1A700000000000000000001 /* MeetingExistingAudioReplayTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingExistingAudioReplayTests.swift; sourceTree = "<group>"; };
+		F1BD00000000000000000001 /* StripThinkingTagsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StripThinkingTagsTests.swift; sourceTree = "<group>"; };
+		D1A600000000000000000203 /* MeetingWindowSelectorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingWindowSelectorTests.swift; sourceTree = "<group>"; };
+		A11CE0030000000000000001 /* NativeButtonStylesHitTargetTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeButtonStylesHitTargetTests.swift; sourceTree = "<group>"; };
+		D1A600000000000000000205 /* MeetingRecoveryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingRecoveryTests.swift; sourceTree = "<group>"; };
+		B149D69C5977426AB8600001 /* MeetingAPIControllerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingAPIControllerTests.swift; sourceTree = "<group>"; };
+		BE0A00000000000000000001 /* MeetingTranscriptionBackendTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingTranscriptionBackendTests.swift; sourceTree = "<group>"; };
+		C1A000000000000000000001 /* MeetingResultSidecarTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingResultSidecarTests.swift; sourceTree = "<group>"; };
+		C2A000000000000000000001 /* MeetingAnalysisManifestTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingAnalysisManifestTests.swift; sourceTree = "<group>"; };
+		FEA4AB111222333444555501 /* MeetingSpeakerVoiceMatcherTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingSpeakerVoiceMatcherTests.swift; sourceTree = "<group>"; };
+		D9B100000000000000000001 /* VoiceModelDeletionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceModelDeletionTests.swift; sourceTree = "<group>"; };
+		C2B100000000000000000001 /* MeetingTranscriptAssemblerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingTranscriptAssemblerTests.swift; sourceTree = "<group>"; };
+		C2B200000000000000000001 /* MeetingCanonicalPipelineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingCanonicalPipelineTests.swift; sourceTree = "<group>"; };
+		E3A000000000000000000001 /* MeetingParakeetNemotronBackendTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingParakeetNemotronBackendTests.swift; sourceTree = "<group>"; };
+		E3A000000000000000000011 /* MeetingTextOverlapEchoVerdictProviderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingTextOverlapEchoVerdictProviderTests.swift; sourceTree = "<group>"; };
+		E3A000000000000000000021 /* MeetingEpochAudioMaterializerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingEpochAudioMaterializerTests.swift; sourceTree = "<group>"; };
+		E3A000000000000000000031 /* MeetingNemotronModelLocatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingNemotronModelLocatorTests.swift; sourceTree = "<group>"; };
+		E3A000000000000000000041 /* MeetingNemotronRealModelSmokeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingNemotronRealModelSmokeTests.swift; sourceTree = "<group>"; };
+		AD7A00000000000000000001 /* MeetingAutoDetectorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingAutoDetectorTests.swift; sourceTree = "<group>"; };
+		A7D000000000000000000001 /* AudioTopologyDiagnosticsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioTopologyDiagnosticsTests.swift; sourceTree = "<group>"; };
+		B4AD7433B35340CEB85EA268 /* MeetingEchoSignalScorerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingEchoSignalScorerTests.swift; sourceTree = "<group>"; };
+		E5EC00000000000000000001 /* MeetingEchoVetoTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingEchoVetoTests.swift; sourceTree = "<group>"; };
+		E5EC00000000000000000011 /* MeetingFallbackEchoProbeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingFallbackEchoProbeTests.swift; sourceTree = "<group>"; };
+		E5EC00000000000000000021 /* MeetingNearFieldGateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingNearFieldGateTests.swift; sourceTree = "<group>"; };
+		E5EC00000000000000000031 /* MeetingLiveSilenceEndpointTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingLiveSilenceEndpointTests.swift; sourceTree = "<group>"; };
+		E5EC00000000000000000041 /* VoiceProcessingDuckingProbeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceProcessingDuckingProbeTests.swift; sourceTree = "<group>"; };
+		E5EC00000000000000000051 /* VoiceProcessingSpeechDuckingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceProcessingSpeechDuckingTests.swift; sourceTree = "<group>"; };
+		E5EC00000000000000000061 /* VoiceProcessingAsrQualityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceProcessingAsrQualityTests.swift; sourceTree = "<group>"; };
+		E5EC00000000000000000071 /* ClockDomainProbeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClockDomainProbeTests.swift; sourceTree = "<group>"; };
+		E5EC00000000000000000081 /* MeetingMicrophoneCaptureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingMicrophoneCaptureTests.swift; sourceTree = "<group>"; };
+		5A3B00000000000000000001 /* MeetingVoiceProcessingCaptureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingVoiceProcessingCaptureTests.swift; sourceTree = "<group>"; };
+		5A4B00000000000000000001 /* MeetingPhase4Tests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingPhase4Tests.swift; sourceTree = "<group>"; };
+		2A50F33BD2347EECE0B3853C /* MeetingEraBatchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingEraBatchTests.swift; sourceTree = "<group>"; };
+		E5EC000000000000000000A1 /* MeetingTimelineDriftProbeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingTimelineDriftProbeTests.swift; sourceTree = "<group>"; };
+		E5EC00000000000000000091 /* ClockRegressionHelper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClockRegressionHelper.swift; sourceTree = "<group>"; };
+		355C1248D5386D1F815EB7D7 /* MeetingLiveTranscriptionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingLiveTranscriptionTests.swift; sourceTree = "<group>"; };
+		7BE63EB94BB280F38F5CB028 /* MeetingLiveReplayTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingLiveReplayTests.swift; sourceTree = "<group>"; };
+		F68E1D074EF74EBAB9C61701 /* MeetingAudioComparisonProbeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingAudioComparisonProbeTests.swift; sourceTree = "<group>"; };
+		C0DE63600000000000000001 /* AudioEngineRetirementDrainTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioEngineRetirementDrainTests.swift; sourceTree = "<group>"; };
+		DA7100010000000000000001 /* DirectAudioReliabilityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DirectAudioReliabilityTests.swift; sourceTree = "<group>"; };
+		DA7200010000000000000001 /* AudioHardwareRecoveryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioHardwareRecoveryTests.swift; sourceTree = "<group>"; };
+		B51800000000000000000001 /* SpokenSendTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpokenSendTests.swift; sourceTree = "<group>"; };
+		B51900000000000000000001 /* PrivateAIProviderPromptFormatTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrivateAIProviderPromptFormatTests.swift; sourceTree = "<group>"; };
+		B52000000000000000000001 /* PrivateAIDictationTokenBudgetTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrivateAIDictationTokenBudgetTests.swift; sourceTree = "<group>"; };
+		C0DE63700000000000000001 /* WhisperLanguageSelectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WhisperLanguageSelectionTests.swift; sourceTree = "<group>"; };
+		CACEC0010000000000000001 /* KeychainServiceCacheTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainServiceCacheTests.swift; sourceTree = "<group>"; };
+		FEED67600000000000000001 /* PasteDeliveryCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PasteDeliveryCoordinatorTests.swift; sourceTree = "<group>"; };
+		7C078D8F2E3B339200FB7CAC /* FluidVoice Debug.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "FluidVoice Debug.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		7C91B0022F42AA0100C0DEF0 /* HotkeyShortcutTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HotkeyShortcutTests.swift; sourceTree = "<group>"; };
+		DAB600000000000000000002 /* DashboardLayoutTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardLayoutTests.swift; sourceTree = "<group>"; };
+		FEB700000000000000000002 /* FeedbackClientTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FeedbackClientTests.swift; sourceTree = "<group>"; };
+		7C91B0A22F42AA0100C0DEF0 /* DeliveryTargetAssessmentTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeliveryTargetAssessmentTests.swift; sourceTree = "<group>"; };
+		C0DE89000000000000000001 /* SettingsNavigationStateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsNavigationStateTests.swift; sourceTree = "<group>"; };
+		7CDB0A202F3C4D5600FB7CAD /* FluidDictationIntegrationTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = FluidDictationIntegrationTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		7CDB0A292F3C4D5600FB7CAD /* DictationE2ETests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DictationE2ETests.swift; sourceTree = "<group>"; };
+		CD1C7A0000000000000000B1 /* CustomDictionaryManualEntryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CustomDictionaryManualEntryTests.swift; sourceTree = "<group>"; };
+		7CFA1D0B2F500000C0DEF002 /* TypingServiceTransientPasteboardTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TypingServiceTransientPasteboardTests.swift; sourceTree = "<group>"; };
+		803000000000000000000001 /* MediaPlaybackServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaPlaybackServiceTests.swift; sourceTree = "<group>"; };
+		0B05F11E000000000000A001 /* SupportedFileExtensionsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SupportedFileExtensionsTests.swift; sourceTree = "<group>"; };
+		CD0E00000000000000000001 /* MeetingOverlayModelsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingOverlayModelsTests.swift; sourceTree = "<group>"; };
+		CD0F00000000000000000001 /* MeetingProcessingConfigurationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingProcessingConfigurationTests.swift; sourceTree = "<group>"; };
+		CD100000000000000000000001 /* MeetingProviderOptionsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingProviderOptionsTests.swift; sourceTree = "<group>"; };
+		CD110000000000000000000001 /* MeetingASRPreparationOwnerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingASRPreparationOwnerTests.swift; sourceTree = "<group>"; };
+		D2A000000000000000000001 /* MeetingReferenceSynchronizerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingReferenceSynchronizerTests.swift; sourceTree = "<group>"; };
+		D2A000000000000000000003 /* MeetingStage05EvidenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingStage05EvidenceTests.swift; sourceTree = "<group>"; };
+		D2A000000000000000000005 /* MeetingStage05SCKFrameAdapterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingStage05SCKFrameAdapterTests.swift; sourceTree = "<group>"; };
+		AEC3B0000000000000000001 /* MeetingAEC3Tests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingAEC3Tests.swift; sourceTree = "<group>"; };
+		AEC3C0000000000000000001 /* WebRTCAEC3Notices */ = {isa = PBXFileReference; lastKnownFileType = folder; name = WebRTCAEC3Notices; path = Vendor/WebRTCAudioProcessing/Notices; sourceTree = SOURCE_ROOT; };
+		CD120000000000000000000001 /* MeetingReferenceAttributionContractsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingReferenceAttributionContractsTests.swift; sourceTree = "<group>"; };
+		E5EC000000000000000000B1 /* MeetingVoiceProcessingProbeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingVoiceProcessingProbeTests.swift; sourceTree = "<group>"; };
+		E5EC000000000000000000C1 /* MeetingSCKPairedDiagnosticsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingSCKPairedDiagnosticsTests.swift; sourceTree = "<group>"; };
+		F1A000000000000000000001 /* MeetingAudioChunkSinkTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingAudioChunkSinkTests.swift; sourceTree = "<group>"; };
+		F1A000000000000000000003 /* MeetingAudioAssetCompatibilityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingAudioAssetCompatibilityTests.swift; sourceTree = "<group>"; };
+		F1A000000000000000000005 /* MeetingAudioChunkLedgerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingAudioChunkLedgerTests.swift; sourceTree = "<group>"; };
+		F1A000000000000000000007 /* MeetingAudioChunkLedgerRecoveryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingAudioChunkLedgerRecoveryTests.swift; sourceTree = "<group>"; };
+		F1A000000000000000000009 /* MeetingPCMStoragePolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingPCMStoragePolicyTests.swift; sourceTree = "<group>"; };
+		E5EC000000000000000000D1 /* MeetingSCKPairedHardwareTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingSCKPairedHardwareTests.swift; sourceTree = "<group>"; };
 		7CDB0A2A2F3C4D5600FB7CAD /* AudioFixtureLoader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioFixtureLoader.swift; sourceTree = "<group>"; };
 		7CDB0A2B2F3C4D5600FB7CAD /* dictation_fixture.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = dictation_fixture.wav; sourceTree = "<group>"; };
 		7CDB0A2C2F3C4D5600FB7CAD /* XCTest.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = XCTest.framework; path = Platforms/MacOSX.platform/Developer/Library/Frameworks/XCTest.framework; sourceTree = DEVELOPER_DIR; };
+		A5B000000000000000000005 /* FluidASRBaselineHost.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = FluidASRBaselineHost.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A5B00000000000000000000C /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
+		A5B000000000000000000025 /* MeetingReferenceSynchronizerReplayCLI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingReferenceSynchronizerReplayCLI.swift; sourceTree = "<group>"; };
+		A5B00000000000000000000D /* FluidASRBaselineHost.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = FluidASRBaselineHost.entitlements; sourceTree = "<group>"; };
+		A5B00000000000000000000E /* stage-inputs.sh */ = {isa = PBXFileReference; lastKnownFileType = text.script.sh; path = "stage-inputs.sh"; sourceTree = "<group>"; };
+		A5B00000000000000000000F /* placeholder.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = placeholder.json; sourceTree = "<group>"; };
+		A5B00000000000000000001D /* FluidASRBaselineTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = FluidASRBaselineTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		D1C7A7100000000000000001 /* UpdatePromptIntegrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpdatePromptIntegrationTests.swift; sourceTree = "<group>"; };
+		5F06B51CF3F45AF989D0CA7F /* ParakeetArchiveInstallerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ParakeetArchiveInstallerTests.swift; sourceTree = "<group>"; };
+		01DEEE85A263FAED9ED5DEF8 /* CompactSpeechModelArchiveTransportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompactSpeechModelArchiveTransportTests.swift; sourceTree = "<group>"; };
+		F5E000000000000000000005 /* fv-serve */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = "fv-serve"; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		A5B000000000000000000012 /* PBXFileSystemSynchronizedBuildFileExceptionSet */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				fluidApp.swift,
+			);
+			target = A5B000000000000000000001 /* FluidASRBaselineHost */;
+		};
+		F5E000000000000000000011 /* PBXFileSystemSynchronizedBuildFileExceptionSet */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Services/FluidServe/FluidServeCommand.swift,
+				Services/FluidServe/FluidServeMeetings.swift,
+				Services/FluidServe/FluidServeSkill.swift,
+			);
+			target = F5E000000000000000000001 /* fv-serve */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		7C078D912E3B339200FB7CAC /* Sources/Fluid */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				A5B000000000000000000012 /* PBXFileSystemSynchronizedBuildFileExceptionSet */,
+				F5E000000000000000000011 /* PBXFileSystemSynchronizedBuildFileExceptionSet */,
+			);
 			path = Sources/Fluid;
+			sourceTree = "<group>";
+		};
+		A5B000000000000000000020 /* FluidASRBaselineTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = FluidASRBaselineTests;
+			sourceTree = "<group>";
+		};
+		F5E000000000000000000010 /* Sources/FVServe */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = Sources/FVServe;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -56,9 +373,10 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				AEC300000000000000000003 /* FluidAEC3Bridge in Frameworks */,
 				7C3697892ED70F9C005874CE /* DynamicNotchKit in Frameworks */,
 				7C5AF14B2F15041600DE21B0 /* MediaRemoteAdapter in Frameworks */,
-				7C1C72F22EECBD1300E3BF4D /* SwiftWhisper in Frameworks */,
+				7C9A71022F58B00000FB7CAF /* TranscribeCpp in Frameworks */,
 				7CE006BD2E80EBE600DDCCD6 /* AppUpdater in Frameworks */,
 				7C078DA52E3B386A00FB7CAC /* FluidAudio in Frameworks */,
 			);
@@ -68,7 +386,36 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				803000000000000000000003 /* MediaRemoteAdapter in Frameworks */,
 				7CDB0A302F3C4D5600FB7CAD /* XCTest.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A5B000000000000000000007 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				AEC300000000000000000004 /* FluidAEC3Bridge in Frameworks */,
+				A5B000000000000000000014 /* DynamicNotchKit in Frameworks */,
+				A5B000000000000000000015 /* MediaRemoteAdapter in Frameworks */,
+				A5B000000000000000000016 /* TranscribeCpp in Frameworks */,
+				A5B000000000000000000017 /* AppUpdater in Frameworks */,
+				A5B000000000000000000013 /* FluidAudio in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A5B00000000000000000001F /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A5B000000000000000000023 /* XCTest.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		F5E000000000000000000007 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -79,6 +426,8 @@
 			isa = PBXGroup;
 			children = (
 				7C078D912E3B339200FB7CAC /* Sources/Fluid */,
+				F5E000000000000000000010 /* Sources/FVServe */,
+				AEC3C0000000000000000001 /* WebRTCAEC3Notices */,
 				7CDB0A242F3C4D5600FB7CAD /* Tests */,
 				7CDB0A282F3C4D5600FB7CAD /* Frameworks */,
 			);
@@ -89,6 +438,9 @@
 			children = (
 				7C078D8F2E3B339200FB7CAC /* FluidVoice Debug.app */,
 				7CDB0A202F3C4D5600FB7CAD /* FluidDictationIntegrationTests.xctest */,
+				A5B000000000000000000005 /* FluidASRBaselineHost.app */,
+				A5B00000000000000000001D /* FluidASRBaselineTests.xctest */,
+				F5E000000000000000000005 /* fv-serve */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -97,6 +449,8 @@
 			isa = PBXGroup;
 			children = (
 				7CDB0A252F3C4D5600FB7CAD /* FluidDictationIntegrationTests */,
+				A5B000000000000000000010 /* FluidASRBaselineHost */,
+				A5B000000000000000000020 /* FluidASRBaselineTests */,
 			);
 			path = Tests;
 			sourceTree = "<group>";
@@ -106,10 +460,114 @@
 			children = (
 				7CDB0A262F3C4D5600FB7CAD /* Helpers */,
 				7CDB0A272F3C4D5600FB7CAD /* Resources */,
+				D1C7A7100000000000000001 /* UpdatePromptIntegrationTests.swift */,
+				4263717D7203AAA6B63D9330 /* SettingsBackupRoundTripTests.swift */,
+				91C92FF93D3D21E0FD4D93EE /* UpdateRollbackBackupTests.swift */,
+				F12B5FA911AD928DAFD058FB /* UpdateInstallationPipelineTests.swift */,
+				8E4FCA0BC854678A142D944F /* UpdateAppReplacementTests.swift */,
+				93E63CD61E6BD954698A8E63 /* UpdateBundleValidatorTests.swift */,
+				7D47EF42AC1B641A705AC302 /* SpeechModelInstallationSnapshotTests.swift */,
+				70362FCD2F941BFB800AD8E8 /* ProgressiveFileDownloaderTests.swift */,
+				AFA73C8D5E7647C4AB125DEE /* PronunciationModelRevisionTests.swift */,
+				16DE344948E4DBF0E1739769 /* ParakeetCompactModelDemoTests.swift */,
+				BC9A7E0C9B501E87114F7A88 /* ParakeetCompactModelSmokeTests.swift */,
+				E3398800F76A93226E76A5C9 /* ParakeetArchiveDownloaderTests.swift */,
+				01DEEE85A263FAED9ED5DEF8 /* CompactSpeechModelArchiveTransportTests.swift */,
+				5F06B51CF3F45AF989D0CA7F /* ParakeetArchiveInstallerTests.swift */,
+				6BF00D40A027DC3970C2D0AE /* ParakeetSpeechModelCatalogTests.swift */,
 				7CDB0A292F3C4D5600FB7CAD /* DictationE2ETests.swift */,
+				CD1C7A0000000000000000B1 /* CustomDictionaryManualEntryTests.swift */,
 				7C91B0022F42AA0100C0DEF0 /* HotkeyShortcutTests.swift */,
+				AD1130000000000000000003 /* OverlayCaptionPresentationTests.swift */,
+				AD1030000000000000000003 /* HoldToMutePresentationTests.swift */,
+				AD1030000000000000000001 /* HoldToMuteTests.swift */,
+				DAB600000000000000000002 /* DashboardLayoutTests.swift */,
+				FEB700000000000000000002 /* FeedbackClientTests.swift */,
+				7C91B0A22F42AA0100C0DEF0 /* DeliveryTargetAssessmentTests.swift */,
+				C0DE89000000000000000001 /* SettingsNavigationStateTests.swift */,
 				343B29013F4441D6A797D12D /* LLMClientRequestBodyTests.swift */,
 				7CAA000B2F99000000000002 /* NemotronCacheRecoveryTests.swift */,
+				980330F3CE464336ADCE3E23 /* TemperatureSupportTests.swift */,
+				A11A00000000000000000001 /* AnalyticsDatabaseTests.swift */,
+				2E9B00000000000000000006 /* ZeppelinDataLayerTests.swift */,
+				2E9B00000000000000000008 /* SearchIndexTests.swift */,
+				2E9B0000000000000000000A /* AppSearchServiceTests.swift */,
+				A62300000000000000000001 /* AudioBufferConverterTests.swift */,
+				D1A600000000000000000201 /* SpeakerTurnMergingTests.swift */,
+				D1A700000000000000000001 /* MeetingExistingAudioReplayTests.swift */,
+				F1BD00000000000000000001 /* StripThinkingTagsTests.swift */,
+				D1A600000000000000000203 /* MeetingWindowSelectorTests.swift */,
+				A11CE0030000000000000001 /* NativeButtonStylesHitTargetTests.swift */,
+				D1A600000000000000000205 /* MeetingRecoveryTests.swift */,
+				B149D69C5977426AB8600001 /* MeetingAPIControllerTests.swift */,
+				BE0A00000000000000000001 /* MeetingTranscriptionBackendTests.swift */,
+				C1A000000000000000000001 /* MeetingResultSidecarTests.swift */,
+				C2A000000000000000000001 /* MeetingAnalysisManifestTests.swift */,
+				FEA4AB111222333444555501 /* MeetingSpeakerVoiceMatcherTests.swift */,
+				FEA4AB111222333444555503 /* MeetingModelResidencyTests.swift */,
+				AB492EFF712C42EE91601003 /* MeetingSummaryDownloadTests.swift */,
+				AB492EFF712C42EE91601001 /* MeetingSummaryInputTests.swift */,
+				BE24123456789ABCDEF00001 /* MeetingSummaryProviderTests.swift */,
+				F5E000000000000000000020 /* FluidServeTests.swift */,
+				BE24123456789ABCDEF00003 /* ModelTemperatureSupportTests.swift */,
+				B1016A0000000000000000A1 /* LLMClientIdleConnectionTests.swift */,
+				C2B100000000000000000001 /* MeetingTranscriptAssemblerTests.swift */,
+				D9B100000000000000000001 /* VoiceModelDeletionTests.swift */,
+				C2B200000000000000000001 /* MeetingCanonicalPipelineTests.swift */,
+				E3A000000000000000000001 /* MeetingParakeetNemotronBackendTests.swift */,
+				E3A000000000000000000011 /* MeetingTextOverlapEchoVerdictProviderTests.swift */,
+				E3A000000000000000000021 /* MeetingEpochAudioMaterializerTests.swift */,
+				E3A000000000000000000031 /* MeetingNemotronModelLocatorTests.swift */,
+				E3A000000000000000000041 /* MeetingNemotronRealModelSmokeTests.swift */,
+				AD7A00000000000000000001 /* MeetingAutoDetectorTests.swift */,
+				A7D000000000000000000001 /* AudioTopologyDiagnosticsTests.swift */,
+				B4AD7433B35340CEB85EA268 /* MeetingEchoSignalScorerTests.swift */,
+				E5EC00000000000000000001 /* MeetingEchoVetoTests.swift */,
+				E5EC00000000000000000011 /* MeetingFallbackEchoProbeTests.swift */,
+				E5EC00000000000000000021 /* MeetingNearFieldGateTests.swift */,
+				E5EC00000000000000000031 /* MeetingLiveSilenceEndpointTests.swift */,
+				E5EC00000000000000000041 /* VoiceProcessingDuckingProbeTests.swift */,
+				E5EC00000000000000000051 /* VoiceProcessingSpeechDuckingTests.swift */,
+				E5EC00000000000000000061 /* VoiceProcessingAsrQualityTests.swift */,
+				E5EC00000000000000000071 /* ClockDomainProbeTests.swift */,
+				E5EC00000000000000000081 /* MeetingMicrophoneCaptureTests.swift */,
+				5A3B00000000000000000001 /* MeetingVoiceProcessingCaptureTests.swift */,
+				5A4B00000000000000000001 /* MeetingPhase4Tests.swift */,
+				2A50F33BD2347EECE0B3853C /* MeetingEraBatchTests.swift */,
+				E5EC000000000000000000A1 /* MeetingTimelineDriftProbeTests.swift */,
+				E5EC00000000000000000091 /* ClockRegressionHelper.swift */,
+				355C1248D5386D1F815EB7D7 /* MeetingLiveTranscriptionTests.swift */,
+				7BE63EB94BB280F38F5CB028 /* MeetingLiveReplayTests.swift */,
+				F68E1D074EF74EBAB9C61701 /* MeetingAudioComparisonProbeTests.swift */,
+				C0DE63600000000000000001 /* AudioEngineRetirementDrainTests.swift */,
+				DA7100010000000000000001 /* DirectAudioReliabilityTests.swift */,
+				DA7200010000000000000001 /* AudioHardwareRecoveryTests.swift */,
+				7CFA1D0B2F500000C0DEF002 /* TypingServiceTransientPasteboardTests.swift */,
+				803000000000000000000001 /* MediaPlaybackServiceTests.swift */,
+				B51800000000000000000001 /* SpokenSendTests.swift */,
+				B51900000000000000000001 /* PrivateAIProviderPromptFormatTests.swift */,
+				B52000000000000000000001 /* PrivateAIDictationTokenBudgetTests.swift */,
+				C0DE63700000000000000001 /* WhisperLanguageSelectionTests.swift */,
+				CACEC0010000000000000001 /* KeychainServiceCacheTests.swift */,
+				0B05F11E000000000000A001 /* SupportedFileExtensionsTests.swift */,
+				FEED67600000000000000001 /* PasteDeliveryCoordinatorTests.swift */,
+				CD0E00000000000000000001 /* MeetingOverlayModelsTests.swift */,
+				CD0F00000000000000000001 /* MeetingProcessingConfigurationTests.swift */,
+				CD100000000000000000000001 /* MeetingProviderOptionsTests.swift */,
+				CD110000000000000000000001 /* MeetingASRPreparationOwnerTests.swift */,
+				D2A000000000000000000001 /* MeetingReferenceSynchronizerTests.swift */,
+				D2A000000000000000000003 /* MeetingStage05EvidenceTests.swift */,
+				D2A000000000000000000005 /* MeetingStage05SCKFrameAdapterTests.swift */,
+				AEC3B0000000000000000001 /* MeetingAEC3Tests.swift */,
+				CD120000000000000000000001 /* MeetingReferenceAttributionContractsTests.swift */,
+				E5EC000000000000000000B1 /* MeetingVoiceProcessingProbeTests.swift */,
+				E5EC000000000000000000C1 /* MeetingSCKPairedDiagnosticsTests.swift */,
+				F1A000000000000000000001 /* MeetingAudioChunkSinkTests.swift */,
+				F1A000000000000000000003 /* MeetingAudioAssetCompatibilityTests.swift */,
+				F1A000000000000000000005 /* MeetingAudioChunkLedgerTests.swift */,
+				F1A000000000000000000007 /* MeetingAudioChunkLedgerRecoveryTests.swift */,
+				F1A000000000000000000009 /* MeetingPCMStoragePolicyTests.swift */,
+				E5EC000000000000000000D1 /* MeetingSCKPairedHardwareTests.swift */,
 			);
 			path = FluidDictationIntegrationTests;
 			sourceTree = "<group>";
@@ -138,6 +596,26 @@
 			name = Frameworks;
 			sourceTree = "<group>";
 		};
+		A5B000000000000000000010 /* FluidASRBaselineHost */ = {
+			isa = PBXGroup;
+			children = (
+				A5B00000000000000000000C /* main.swift */,
+				A5B000000000000000000025 /* MeetingReferenceSynchronizerReplayCLI.swift */,
+				A5B00000000000000000000D /* FluidASRBaselineHost.entitlements */,
+				A5B00000000000000000000E /* stage-inputs.sh */,
+				A5B000000000000000000011 /* Inputs */,
+			);
+			path = FluidASRBaselineHost;
+			sourceTree = "<group>";
+		};
+		A5B000000000000000000011 /* Inputs */ = {
+			isa = PBXGroup;
+			children = (
+				A5B00000000000000000000F /* placeholder.json */,
+			);
+			path = Inputs;
+			sourceTree = "<group>";
+		};
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
@@ -147,22 +625,27 @@
 			buildPhases = (
 				7C078D8B2E3B339200FB7CAC /* Sources */,
 				7C078D8C2E3B339200FB7CAC /* Frameworks */,
+				7C5AF14D2F15041600DE21B0 /* Embed Frameworks */,
 				7C078D8D2E3B339200FB7CAC /* Resources */,
+				F5E000000000000000000015 /* Embed Helpers */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				F5E000000000000000000013 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				7C078D912E3B339200FB7CAC /* Sources/Fluid */,
 			);
 			name = fluid;
 			packageProductDependencies = (
+				AEC300000000000000000002 /* FluidAEC3Bridge */,
 				7C078DA42E3B386A00FB7CAC /* FluidAudio */,
 				7C3697882ED70F9C005874CE /* DynamicNotchKit */,
 				7CE006BC2E80EBE600DDCCD6 /* AppUpdater */,
-				7C1C72F12EECBD1300E3BF4D /* SwiftWhisper */,
+				7C9A71012F58B00000FB7CAF /* TranscribeCpp */,
 				7C5AF14A2F15041600DE21B0 /* MediaRemoteAdapter */,
+				2E9B00000000000000000004 /* ZeppelinEmbed */,
 			);
 			productName = FluidVoice;
 			productReference = 7C078D8F2E3B339200FB7CAC /* FluidVoice Debug.app */;
@@ -182,9 +665,84 @@
 				7CDB0A312F3C4D5600FB7CAD /* PBXTargetDependency */,
 			);
 			name = FluidDictationIntegrationTests;
+			packageProductDependencies = (
+				803000000000000000000004 /* MediaRemoteAdapter */,
+				2E9B00000000000000000005 /* ZeppelinEmbed */,
+			);
 			productName = FluidDictationIntegrationTests;
 			productReference = 7CDB0A202F3C4D5600FB7CAD /* FluidDictationIntegrationTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		A5B000000000000000000001 /* FluidASRBaselineHost */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A5B000000000000000000002 /* Build configuration list for PBXNativeTarget "FluidASRBaselineHost" */;
+			buildPhases = (
+				A5B000000000000000000006 /* Sources */,
+				A5B000000000000000000007 /* Frameworks */,
+				A5B000000000000000000008 /* Embed Frameworks */,
+				A5B000000000000000000009 /* Resources */,
+				A5B00000000000000000000A /* Stage ASR Baseline Inputs */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				7C078D912E3B339200FB7CAC /* Sources/Fluid */,
+			);
+			name = FluidASRBaselineHost;
+			packageProductDependencies = (
+				AEC300000000000000000002 /* FluidAEC3Bridge */,
+				7C078DA42E3B386A00FB7CAC /* FluidAudio */,
+				7C3697882ED70F9C005874CE /* DynamicNotchKit */,
+				7CE006BC2E80EBE600DDCCD6 /* AppUpdater */,
+				7C9A71012F58B00000FB7CAF /* TranscribeCpp */,
+				7C5AF14A2F15041600DE21B0 /* MediaRemoteAdapter */,
+			);
+			productName = FluidASRBaselineHost;
+			productReference = A5B000000000000000000005 /* FluidASRBaselineHost.app */;
+			productType = "com.apple.product-type.application";
+		};
+		A5B000000000000000000019 /* FluidASRBaselineTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A5B00000000000000000001A /* Build configuration list for PBXNativeTarget "FluidASRBaselineTests" */;
+			buildPhases = (
+				A5B00000000000000000001E /* Sources */,
+				A5B00000000000000000001F /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				A5B000000000000000000022 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				A5B000000000000000000020 /* FluidASRBaselineTests */,
+			);
+			name = FluidASRBaselineTests;
+			packageProductDependencies = (
+			);
+			productName = FluidASRBaselineTests;
+			productReference = A5B00000000000000000001D /* FluidASRBaselineTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		F5E000000000000000000001 /* fv-serve */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = F5E000000000000000000002 /* Build configuration list for PBXNativeTarget "fv-serve" */;
+			buildPhases = (
+				F5E000000000000000000006 /* Sources */,
+				F5E000000000000000000007 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				F5E000000000000000000010 /* Sources/FVServe */,
+			);
+			name = "fv-serve";
+			productName = "fv-serve";
+			productReference = F5E000000000000000000005 /* fv-serve */;
+			productType = "com.apple.product-type.tool";
 		};
 /* End PBXNativeTarget section */
 
@@ -202,6 +760,15 @@
 					7CDB0A1F2F3C4D5600FB7CAD = {
 						CreatedOnToolsVersion = 26.0;
 					};
+					A5B000000000000000000001 = {
+						CreatedOnToolsVersion = 26.0;
+					};
+					A5B000000000000000000019 = {
+						CreatedOnToolsVersion = 26.0;
+					};
+					F5E000000000000000000001 = {
+						CreatedOnToolsVersion = 26.0;
+					};
 				};
 			};
 			buildConfigurationList = 7C078D8A2E3B339200FB7CAC /* Build configuration list for PBXProject "Fluid" */;
@@ -214,11 +781,13 @@
 			mainGroup = 7C078D862E3B339200FB7CAC;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
+				AEC300000000000000000001 /* XCLocalSwiftPackageReference "WebRTCAudioProcessing" */,
 				7C078DA32E3B386A00FB7CAC /* XCRemoteSwiftPackageReference "FluidAudio" */,
 				7CE006BB2E80EBE600DDCCD6 /* XCRemoteSwiftPackageReference "AppUpdater" */,
 				7C3697872ED70F9C005874CE /* XCRemoteSwiftPackageReference "DynamicNotchKit" */,
-				7C1C72F02EECBD1300E3BF4D /* XCRemoteSwiftPackageReference "SwiftWhisper" */,
+				7C9A71002F58B00000FB7CAF /* XCRemoteSwiftPackageReference "transcribe-cpp-swift" */,
 				7C5AF1492F15041600DE21B0 /* XCRemoteSwiftPackageReference "mediaremote-adapter" */,
+				2E9B00000000000000000003 /* XCRemoteSwiftPackageReference "zeppelin-embed" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 7C078D902E3B339200FB7CAC /* Products */;
@@ -227,6 +796,9 @@
 			targets = (
 				7C078D8E2E3B339200FB7CAC /* fluid */,
 				7CDB0A1F2F3C4D5600FB7CAD /* FluidDictationIntegrationTests */,
+				A5B000000000000000000001 /* FluidASRBaselineHost */,
+				A5B000000000000000000019 /* FluidASRBaselineTests */,
+				F5E000000000000000000001 /* fv-serve */,
 			);
 		};
 /* End PBXProject section */
@@ -236,6 +808,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				AEC3C0000000000000000002 /* WebRTCAEC3Notices in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -247,7 +820,38 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		A5B000000000000000000009 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		A5B00000000000000000000A /* Stage ASR Baseline Inputs */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"$(FLUID_ASR_BASELINE_INPUTS)",
+				"$(SRCROOT)/Tests/FluidASRBaselineHost/stage-inputs.sh",
+			);
+			name = "Stage ASR Baseline Inputs";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/ASRBaselineInputs",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "\"$SRCROOT/Tests/FluidASRBaselineHost/stage-inputs.sh\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		7C078D8B2E3B339200FB7CAC /* Sources */ = {
@@ -262,10 +866,138 @@
 			buildActionMask = 2147483647;
 			files = (
 				7CDB0A2E2F3C4D5600FB7CAD /* AudioFixtureLoader.swift in Sources */,
+				D1C7A7100000000000000002 /* UpdatePromptIntegrationTests.swift in Sources */,
+				75454216C2DD7BBBB1D76D42 /* SettingsBackupRoundTripTests.swift in Sources */,
+				24AFD1DFC6BFC9DB5BC6329B /* UpdateRollbackBackupTests.swift in Sources */,
+				563881F82B15C86EDB50E198 /* UpdateInstallationPipelineTests.swift in Sources */,
+				7EAA9E7C4E4155A44F9CC415 /* UpdateAppReplacementTests.swift in Sources */,
+				6AE26D3BB678D13615C41376 /* UpdateBundleValidatorTests.swift in Sources */,
+				5D4A9F54826FD6BB32CE13F8 /* SpeechModelInstallationSnapshotTests.swift in Sources */,
+				B51B7EE5BA8CE09BC09A47DB /* ProgressiveFileDownloaderTests.swift in Sources */,
+				D63B0F8456B440F1A123B987 /* PronunciationModelRevisionTests.swift in Sources */,
+				9F12D6C37B0166B549AECB61 /* ParakeetCompactModelDemoTests.swift in Sources */,
+				209C92C604F912C74A733D21 /* ParakeetCompactModelSmokeTests.swift in Sources */,
+				67F6BBBA604C996A20BEE7AC /* ParakeetArchiveDownloaderTests.swift in Sources */,
+				640AB09C7781553DF72D1156 /* CompactSpeechModelArchiveTransportTests.swift in Sources */,
+				C093F64545C6FDD2D79BF559 /* ParakeetArchiveInstallerTests.swift in Sources */,
+				EA91B858DDC9E68655DCA343 /* ParakeetSpeechModelCatalogTests.swift in Sources */,
 				7CDB0A2D2F3C4D5600FB7CAD /* DictationE2ETests.swift in Sources */,
+				B52000000000000000000002 /* PrivateAIDictationTokenBudgetTests.swift in Sources */,
+				CD1C7A0000000000000000B2 /* CustomDictionaryManualEntryTests.swift in Sources */,
 				7C91B0012F42AA0100C0DEF0 /* HotkeyShortcutTests.swift in Sources */,
+				AD1130000000000000000004 /* OverlayCaptionPresentationTests.swift in Sources */,
+				AD1030000000000000000004 /* HoldToMutePresentationTests.swift in Sources */,
+				AD1030000000000000000002 /* HoldToMuteTests.swift in Sources */,
+				DAB600000000000000000001 /* DashboardLayoutTests.swift in Sources */,
+				FEB700000000000000000001 /* FeedbackClientTests.swift in Sources */,
+				7C91B0A12F42AA0100C0DEF0 /* DeliveryTargetAssessmentTests.swift in Sources */,
+				C0DE89000000000000000002 /* SettingsNavigationStateTests.swift in Sources */,
 				86CAA2D4EF18433096185602 /* LLMClientRequestBodyTests.swift in Sources */,
 				7CAA000A2F99000000000001 /* NemotronCacheRecoveryTests.swift in Sources */,
+				272BFB5CB271489892CAE50C /* TemperatureSupportTests.swift in Sources */,
+				A11A00000000000000000002 /* AnalyticsDatabaseTests.swift in Sources */,
+				2E9B00000000000000000007 /* ZeppelinDataLayerTests.swift in Sources */,
+				2E9B00000000000000000009 /* SearchIndexTests.swift in Sources */,
+				2E9B0000000000000000000B /* AppSearchServiceTests.swift in Sources */,
+				A62300000000000000000002 /* AudioBufferConverterTests.swift in Sources */,
+				D1A600000000000000000202 /* SpeakerTurnMergingTests.swift in Sources */,
+				D1A700000000000000000002 /* MeetingExistingAudioReplayTests.swift in Sources */,
+				F1BD00000000000000000002 /* StripThinkingTagsTests.swift in Sources */,
+				D1A600000000000000000204 /* MeetingWindowSelectorTests.swift in Sources */,
+				A11CE0030000000000000002 /* NativeButtonStylesHitTargetTests.swift in Sources */,
+				D1A600000000000000000206 /* MeetingRecoveryTests.swift in Sources */,
+				B149D69C5977426AB8600002 /* MeetingAPIControllerTests.swift in Sources */,
+				BE0A00000000000000000002 /* MeetingTranscriptionBackendTests.swift in Sources */,
+				C1A000000000000000000002 /* MeetingResultSidecarTests.swift in Sources */,
+				C2A000000000000000000002 /* MeetingAnalysisManifestTests.swift in Sources */,
+				FEA4AB111222333444555502 /* MeetingSpeakerVoiceMatcherTests.swift in Sources */,
+				FEA4AB111222333444555504 /* MeetingModelResidencyTests.swift in Sources */,
+				AB492EFF712C42EE91601004 /* MeetingSummaryDownloadTests.swift in Sources */,
+				AB492EFF712C42EE91601002 /* MeetingSummaryInputTests.swift in Sources */,
+				BE24123456789ABCDEF00002 /* MeetingSummaryProviderTests.swift in Sources */,
+				F5E000000000000000000021 /* FluidServeTests.swift in Sources */,
+				BE24123456789ABCDEF00004 /* ModelTemperatureSupportTests.swift in Sources */,
+				B1016A0000000000000000A2 /* LLMClientIdleConnectionTests.swift in Sources */,
+				C2B100000000000000000002 /* MeetingTranscriptAssemblerTests.swift in Sources */,
+				D9B100000000000000000002 /* VoiceModelDeletionTests.swift in Sources */,
+				C2B200000000000000000002 /* MeetingCanonicalPipelineTests.swift in Sources */,
+				E3A000000000000000000002 /* MeetingParakeetNemotronBackendTests.swift in Sources */,
+				E3A000000000000000000012 /* MeetingTextOverlapEchoVerdictProviderTests.swift in Sources */,
+				E3A000000000000000000022 /* MeetingEpochAudioMaterializerTests.swift in Sources */,
+				E3A000000000000000000032 /* MeetingNemotronModelLocatorTests.swift in Sources */,
+				E3A000000000000000000042 /* MeetingNemotronRealModelSmokeTests.swift in Sources */,
+				AD7A00000000000000000002 /* MeetingAutoDetectorTests.swift in Sources */,
+				A7D000000000000000000002 /* AudioTopologyDiagnosticsTests.swift in Sources */,
+				7E57C8BE6F444F6A9AC9FCB0 /* MeetingEchoSignalScorerTests.swift in Sources */,
+				E5EC00000000000000000002 /* MeetingEchoVetoTests.swift in Sources */,
+				E5EC00000000000000000012 /* MeetingFallbackEchoProbeTests.swift in Sources */,
+				E5EC00000000000000000022 /* MeetingNearFieldGateTests.swift in Sources */,
+				E5EC00000000000000000032 /* MeetingLiveSilenceEndpointTests.swift in Sources */,
+				E5EC00000000000000000042 /* VoiceProcessingDuckingProbeTests.swift in Sources */,
+				E5EC00000000000000000052 /* VoiceProcessingSpeechDuckingTests.swift in Sources */,
+				E5EC00000000000000000062 /* VoiceProcessingAsrQualityTests.swift in Sources */,
+				E5EC00000000000000000072 /* ClockDomainProbeTests.swift in Sources */,
+				E5EC00000000000000000082 /* MeetingMicrophoneCaptureTests.swift in Sources */,
+				5A3B00000000000000000002 /* MeetingVoiceProcessingCaptureTests.swift in Sources */,
+				5A4B00000000000000000002 /* MeetingPhase4Tests.swift in Sources */,
+				5C67BA461CBF1149E733A4E9 /* MeetingEraBatchTests.swift in Sources */,
+				E5EC000000000000000000A2 /* MeetingTimelineDriftProbeTests.swift in Sources */,
+				E5EC00000000000000000092 /* ClockRegressionHelper.swift in Sources */,
+				A6E2246FA3744C7B3E2DB91C /* MeetingLiveTranscriptionTests.swift in Sources */,
+				2952403C87FFDE41C1BC85D5 /* MeetingLiveReplayTests.swift in Sources */,
+				F68E1D074EF74EBAB9C61702 /* MeetingAudioComparisonProbeTests.swift in Sources */,
+				C0DE63600000000000000002 /* AudioEngineRetirementDrainTests.swift in Sources */,
+				DA7100020000000000000002 /* DirectAudioReliabilityTests.swift in Sources */,
+				DA7200020000000000000002 /* AudioHardwareRecoveryTests.swift in Sources */,
+				7CFA1D0B2F500000C0DEF001 /* TypingServiceTransientPasteboardTests.swift in Sources */,
+				803000000000000000000002 /* MediaPlaybackServiceTests.swift in Sources */,
+				B51800000000000000000002 /* SpokenSendTests.swift in Sources */,
+				B51900000000000000000002 /* PrivateAIProviderPromptFormatTests.swift in Sources */,
+				C0DE63700000000000000002 /* WhisperLanguageSelectionTests.swift in Sources */,
+				CACEC0010000000000000002 /* KeychainServiceCacheTests.swift in Sources */,
+				0B05F11E000000000000A002 /* SupportedFileExtensionsTests.swift in Sources */,
+				FEED67600000000000000002 /* PasteDeliveryCoordinatorTests.swift in Sources */,
+				CD0E00000000000000000002 /* MeetingOverlayModelsTests.swift in Sources */,
+				CD0F00000000000000000002 /* MeetingProcessingConfigurationTests.swift in Sources */,
+				CD100000000000000000000002 /* MeetingProviderOptionsTests.swift in Sources */,
+				CD110000000000000000000002 /* MeetingASRPreparationOwnerTests.swift in Sources */,
+				D2A000000000000000000002 /* MeetingReferenceSynchronizerTests.swift in Sources */,
+				D2A000000000000000000004 /* MeetingStage05EvidenceTests.swift in Sources */,
+				D2A000000000000000000006 /* MeetingStage05SCKFrameAdapterTests.swift in Sources */,
+				AEC3B0000000000000000002 /* MeetingAEC3Tests.swift in Sources */,
+				CD120000000000000000000002 /* MeetingReferenceAttributionContractsTests.swift in Sources */,
+				E5EC000000000000000000B2 /* MeetingVoiceProcessingProbeTests.swift in Sources */,
+				E5EC000000000000000000C2 /* MeetingSCKPairedDiagnosticsTests.swift in Sources */,
+				F1A000000000000000000002 /* MeetingAudioChunkSinkTests.swift in Sources */,
+				F1A000000000000000000004 /* MeetingAudioAssetCompatibilityTests.swift in Sources */,
+				F1A000000000000000000006 /* MeetingAudioChunkLedgerTests.swift in Sources */,
+				F1A000000000000000000008 /* MeetingAudioChunkLedgerRecoveryTests.swift in Sources */,
+				F1A00000000000000000000A /* MeetingPCMStoragePolicyTests.swift in Sources */,
+				E5EC000000000000000000D2 /* MeetingSCKPairedHardwareTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A5B000000000000000000006 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A5B00000000000000000000B /* main.swift in Sources */,
+				A5B000000000000000000024 /* MeetingReferenceSynchronizerReplayCLI.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A5B00000000000000000001E /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				CD110000000000000000000003 /* MeetingASRPreparationOwnerTests.swift in Sources (ASR baseline) */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		F5E000000000000000000006 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -276,6 +1008,16 @@
 			isa = PBXTargetDependency;
 			target = 7C078D8E2E3B339200FB7CAC /* fluid */;
 			targetProxy = 7CDB0A322F3C4D5600FB7CAD /* PBXContainerItemProxy */;
+		};
+		A5B000000000000000000022 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = A5B000000000000000000001 /* FluidASRBaselineHost */;
+			targetProxy = A5B000000000000000000021 /* PBXContainerItemProxy */;
+		};
+		F5E000000000000000000013 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = F5E000000000000000000001 /* fv-serve */;
+			targetProxy = F5E000000000000000000012 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -415,7 +1157,7 @@
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 30;
 				DEVELOPMENT_TEAM = V4J43B279J;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_CODE_COVERAGE = NO;
@@ -443,14 +1185,15 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 15.0;
-				MARKETING_VERSION = 1.5.1;
-				PRODUCT_BUNDLE_IDENTIFIER = com.FluidApp.app;
+				MARKETING_VERSION = "1.6.12";
+				PRODUCT_BUNDLE_IDENTIFIER = com.FluidApp.app.debug;
 				PRODUCT_NAME = "FluidVoice Debug";
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				REGISTER_APP_GROUPS = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) ARCH_ARM64";
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_OBJC_BRIDGING_HEADER = "Sources/Fluid/Fluid-Bridging-Header.h";
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
@@ -469,7 +1212,7 @@
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 30;
 				DEVELOPMENT_TEAM = V4J43B279J;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_CODE_COVERAGE = NO;
@@ -497,7 +1240,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 15.0;
-				MARKETING_VERSION = 1.5.1;
+				MARKETING_VERSION = "1.6.12";
 				PRODUCT_BUNDLE_IDENTIFIER = com.FluidApp.app;
 				PRODUCT_NAME = FluidVoice;
 				PROVISIONING_PROFILE_SPECIFIER = "";
@@ -505,6 +1248,7 @@
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) ARCH_ARM64";
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_OBJC_BRIDGING_HEADER = "Sources/Fluid/Fluid-Bridging-Header.h";
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
@@ -562,6 +1306,174 @@
 			};
 			name = Release;
 		};
+		A5B000000000000000000003 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ARCHS = "$(ARCHS_STANDARD)";
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = Tests/FluidASRBaselineHost/FluidASRBaselineHost.entitlements;
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = V4J43B279J;
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_CODE_COVERAGE = NO;
+				ENABLE_HARDENED_RUNTIME = YES;
+				FLUID_ASR_BASELINE_INPUTS = "$(SRCROOT)/Tests/FluidASRBaselineHost/Inputs";
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.FluidApp.ASRBaselineHost;
+				PRODUCT_MODULE_NAME = FluidASRBaselineHost;
+				PRODUCT_NAME = FluidASRBaselineHost;
+				PROVISIONING_PROFILE_SPECIFIER = "";
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) ARCH_ARM64 FLUID_ASR_BASELINE";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OBJC_BRIDGING_HEADER = "Sources/Fluid/Fluid-Bridging-Header.h";
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				VALID_ARCHS = "$(ARCHS_STANDARD)";
+			};
+			name = Debug;
+		};
+		A5B000000000000000000004 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ARCHS = "$(ARCHS_STANDARD)";
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = Tests/FluidASRBaselineHost/FluidASRBaselineHost.entitlements;
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = V4J43B279J;
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_CODE_COVERAGE = NO;
+				ENABLE_HARDENED_RUNTIME = YES;
+				FLUID_ASR_BASELINE_INPUTS = "$(SRCROOT)/Tests/FluidASRBaselineHost/Inputs";
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.FluidApp.ASRBaselineHost;
+				PRODUCT_MODULE_NAME = FluidASRBaselineHost;
+				PRODUCT_NAME = FluidASRBaselineHost;
+				PROVISIONING_PROFILE_SPECIFIER = "";
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) ARCH_ARM64 FLUID_ASR_BASELINE";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OBJC_BRIDGING_HEADER = "Sources/Fluid/Fluid-Bridging-Header.h";
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				VALID_ARCHS = "$(ARCHS_STANDARD)";
+			};
+			name = Release;
+		};
+		A5B00000000000000000001B /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ARCHS = "$(ARCHS_STANDARD)";
+				BUNDLE_LOADER = "$(BUILT_PRODUCTS_DIR)/FluidASRBaselineHost.app/Contents/MacOS/FluidASRBaselineHost";
+				CLANG_ENABLE_MODULES = YES;
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = V4J43B279J;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = FluidASRBaselineTests;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.FluidApp.FluidASRBaselineTests;
+				PRODUCT_NAME = FluidASRBaselineTests;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited) FLUID_ASR_BASELINE_TESTS";
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/FluidASRBaselineHost.app/Contents/MacOS/FluidASRBaselineHost";
+			};
+			name = Debug;
+		};
+		A5B00000000000000000001C /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ARCHS = "$(ARCHS_STANDARD)";
+				BUNDLE_LOADER = "$(BUILT_PRODUCTS_DIR)/FluidASRBaselineHost.app/Contents/MacOS/FluidASRBaselineHost";
+				CLANG_ENABLE_MODULES = YES;
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = V4J43B279J;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = FluidASRBaselineTests;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.FluidApp.FluidASRBaselineTests;
+				PRODUCT_NAME = FluidASRBaselineTests;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) FLUID_ASR_BASELINE_TESTS";
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/FluidASRBaselineHost.app/Contents/MacOS/FluidASRBaselineHost";
+			};
+			name = Release;
+		};
+		F5E000000000000000000003 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ARCHS = "$(ARCHS_STANDARD)";
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = V4J43B279J;
+				ENABLE_HARDENED_RUNTIME = YES;
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.FluidApp.fv-serve";
+				PRODUCT_MODULE_NAME = FVServe;
+				PRODUCT_NAME = "fv-serve";
+				SKIP_INSTALL = YES;
+				SWIFT_VERSION = 5.0;
+				VALID_ARCHS = "$(ARCHS_STANDARD)";
+			};
+			name = Debug;
+		};
+		F5E000000000000000000004 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ARCHS = "$(ARCHS_STANDARD)";
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = V4J43B279J;
+				ENABLE_HARDENED_RUNTIME = YES;
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.FluidApp.fv-serve";
+				PRODUCT_MODULE_NAME = FVServe;
+				PRODUCT_NAME = "fv-serve";
+				SKIP_INSTALL = YES;
+				SWIFT_VERSION = 5.0;
+				VALID_ARCHS = "$(ARCHS_STANDARD)";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -592,31 +1504,59 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
+		A5B000000000000000000002 /* Build configuration list for PBXNativeTarget "FluidASRBaselineHost" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A5B000000000000000000003 /* Debug */,
+				A5B000000000000000000004 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A5B00000000000000000001A /* Build configuration list for PBXNativeTarget "FluidASRBaselineTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A5B00000000000000000001B /* Debug */,
+				A5B00000000000000000001C /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		F5E000000000000000000002 /* Build configuration list for PBXNativeTarget "fv-serve" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				F5E000000000000000000003 /* Debug */,
+				F5E000000000000000000004 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 /* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		AEC300000000000000000001 /* XCLocalSwiftPackageReference "WebRTCAudioProcessing" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Vendor/WebRTCAudioProcessing;
+		};
+/* End XCLocalSwiftPackageReference section */
 
 /* Begin XCRemoteSwiftPackageReference section */
 		7C078DA32E3B386A00FB7CAC /* XCRemoteSwiftPackageReference "FluidAudio" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/altic-dev/FluidAudio.git";
 			requirement = {
-				branch = "B/cohere-coreml-asr";
-				kind = branch;
+				kind = revision;
+				revision = eb1e6628998e47022799d305b52c2680d3576801;
 			};
 		};
-		7C1C72F02EECBD1300E3BF4D /* XCRemoteSwiftPackageReference "SwiftWhisper" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/exPHAT/SwiftWhisper.git";
-			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 1.2.0;
-			};
-		};
+
+
 		7C3697872ED70F9C005874CE /* XCRemoteSwiftPackageReference "DynamicNotchKit" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/altic-dev/DynamicNotchKit.git";
 			requirement = {
-				branch = main;
-				kind = branch;
+				revision = 50dc8565469cc80bbbe3c0d5dd902585a2d67986;
+				kind = revision;
 			};
 		};
 		7C5AF1492F15041600DE21B0 /* XCRemoteSwiftPackageReference "mediaremote-adapter" */ = {
@@ -625,6 +1565,22 @@
 			requirement = {
 				branch = master;
 				kind = branch;
+			};
+		};
+		2E9B00000000000000000003 /* XCRemoteSwiftPackageReference "zeppelin-embed" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/zepdb/zeppelin-embed.git";
+			requirement = {
+				kind = exactVersion;
+				version = 0.4.1;
+			};
+		};
+		7C9A71002F58B00000FB7CAF /* XCRemoteSwiftPackageReference "transcribe-cpp-swift" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/altic-dev/transcribe-cpp-swift.git";
+			requirement = {
+				kind = exactVersion;
+				version = 0.1.2;
 			};
 		};
 		7CE006BB2E80EBE600DDCCD6 /* XCRemoteSwiftPackageReference "AppUpdater" */ = {
@@ -638,15 +1594,15 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		AEC300000000000000000002 /* FluidAEC3Bridge */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = AEC300000000000000000001 /* XCLocalSwiftPackageReference "WebRTCAudioProcessing" */;
+			productName = FluidAEC3Bridge;
+		};
 		7C078DA42E3B386A00FB7CAC /* FluidAudio */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 7C078DA32E3B386A00FB7CAC /* XCRemoteSwiftPackageReference "FluidAudio" */;
 			productName = FluidAudio;
-		};
-		7C1C72F12EECBD1300E3BF4D /* SwiftWhisper */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 7C1C72F02EECBD1300E3BF4D /* XCRemoteSwiftPackageReference "SwiftWhisper" */;
-			productName = SwiftWhisper;
 		};
 		7C3697882ED70F9C005874CE /* DynamicNotchKit */ = {
 			isa = XCSwiftPackageProductDependency;
@@ -658,10 +1614,30 @@
 			package = 7C5AF1492F15041600DE21B0 /* XCRemoteSwiftPackageReference "mediaremote-adapter" */;
 			productName = MediaRemoteAdapter;
 		};
+		803000000000000000000004 /* MediaRemoteAdapter */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 7C5AF1492F15041600DE21B0 /* XCRemoteSwiftPackageReference "mediaremote-adapter" */;
+			productName = MediaRemoteAdapter;
+		};
 		7CE006BC2E80EBE600DDCCD6 /* AppUpdater */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 7CE006BB2E80EBE600DDCCD6 /* XCRemoteSwiftPackageReference "AppUpdater" */;
 			productName = AppUpdater;
+		};
+		2E9B00000000000000000004 /* ZeppelinEmbed */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 2E9B00000000000000000003 /* XCRemoteSwiftPackageReference "zeppelin-embed" */;
+			productName = ZeppelinEmbed;
+		};
+		2E9B00000000000000000005 /* ZeppelinEmbed */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 2E9B00000000000000000003 /* XCRemoteSwiftPackageReference "zeppelin-embed" */;
+			productName = ZeppelinEmbed;
+		};
+		7C9A71012F58B00000FB7CAF /* TranscribeCpp */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 7C9A71002F58B00000FB7CAF /* XCRemoteSwiftPackageReference "transcribe-cpp-swift" */;
+			productName = TranscribeCpp;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

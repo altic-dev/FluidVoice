@@ -1,0 +1,1695 @@
+diff --git a/Sources/FluidAudio/Diarizer/Sortformer/SortformerDiarizerPipeline.swift b/Sources/FluidAudio/Diarizer/Sortformer/SortformerDiarizerPipeline.swift
+index 1609e7e..43c0d90 100644
+--- a/Sources/FluidAudio/Diarizer/Sortformer/SortformerDiarizerPipeline.swift
++++ b/Sources/FluidAudio/Diarizer/Sortformer/SortformerDiarizerPipeline.swift
+@@ -66,7 +66,7 @@ public final class SortformerDiarizer: Diarizer {
+     private var _models: SortformerModels?
+
+     // Native mel spectrogram (used when useNativePreprocessing is enabled)
+-    private let melSpectrogram = AudioMelSpectrogram()
++    private let melSpectrogram: AudioMelSpectrogram
+
+     // Audio buffering
+     private var audioBuffer: [Float] = []
+@@ -88,6 +88,7 @@ public final class SortformerDiarizer: Diarizer {
+         var timelineConfig = timelineConfig
+         timelineConfig.numSpeakers = config.numSpeakers
+         self.config = config
++        self.melSpectrogram = config.melFrontend.makeSpectrogram()
+         self.stateUpdater = SortformerStateUpdater(config: config)
+         self._state = SortformerStreamingState(config: config)
+         self._timeline = DiarizerTimeline(config: timelineConfig)
+@@ -96,17 +97,24 @@ public final class SortformerDiarizer: Diarizer {
+     /// Initialize with CoreML models (combined pipeline mode).
+     ///
+     /// - Parameters:
+-    ///   - mainModelPath: Path to Sortformer.mlpackage
++    ///   - mainModelPath: Path to `Sortformer.mlpackage`, or to an already compiled `.mlmodelc`
++    ///   - configuration: Optional CoreML configuration; used verbatim when supplied
++    /// - Throws: `CancellationError` if the task is cancelled before the model is published; the
++    ///   diarizer is then left uninitialized rather than half-initialized.
+     public func initialize(
+-        mainModelPath: URL
++        mainModelPath: URL,
++        configuration: MLModelConfiguration? = nil
+     ) async throws {
+         logger.info("Initializing Sortformer diarizer (combined pipeline mode)")
+
+         let loadedModels = try await SortformerModels.load(
+             config: config,
+-            mainModelPath: mainModelPath
++            mainModelPath: mainModelPath,
++            configuration: configuration
+         )
+
++        try Task.checkCancellation()
++
+         // Use withLock helper to avoid direct NSLock usage in async context
+         withLock {
+             self._models = loadedModels
+@@ -450,6 +458,14 @@ public final class SortformerDiarizer: Diarizer {
+
+             // Trim embeddings to actual length
+             let embLength = output.chunkLength
++            guard embLength >= 0,
++                  embLength <= output.chunkEmbeddings.count / config.preEncoderDims
++            else {
++                throw SortformerError.inferenceFailed(
++                    "Model reported invalid chunk embedding length \(embLength) for "
++                        + "\(output.chunkEmbeddings.count / config.preEncoderDims) available frames"
++                )
++            }
+             let chunkEmbs = Array(output.chunkEmbeddings.prefix(embLength * config.preEncoderDims))
+
+             // Update state with correct context values
+@@ -690,6 +706,14 @@ public final class SortformerDiarizer: Diarizer {
+
+                 // Trim embeddings to actual length
+                 let embLength = output.chunkLength
++                guard embLength >= 0,
++                      embLength <= output.chunkEmbeddings.count / config.preEncoderDims
++                else {
++                    throw SortformerError.inferenceFailed(
++                        "Model reported invalid chunk embedding length \(embLength) for "
++                            + "\(output.chunkEmbeddings.count / config.preEncoderDims) available frames"
++                    )
++                }
+                 let chunkEmbs = Array(output.chunkEmbeddings.prefix(embLength * config.preEncoderDims))
+
+                 // Compute left/right context for prediction extraction
+@@ -767,9 +791,14 @@ public final class SortformerDiarizer: Diarizer {
+
+         guard audioBuffer.count >= samplesNeeded else { return }
+
++        let expectedFrameCount = config.melFrontend.family == .nemotron3Diarization
++            ? config.melFrontend.storageFrameCount(sampleCount: audioBuffer.count)
++            : nil
+         let (mel, melLength, _) = melSpectrogram.computeFlatTransposed(
+             audio: audioBuffer,
+-            lastAudioSample: lastAudioSample
++            lastAudioSample: lastAudioSample,
++            paddingMode: .center,
++            expectedFrameCount: expectedFrameCount
+         )
+
+         guard melLength > 0 else { return }
+@@ -884,7 +913,9 @@ public final class SortformerDiarizer: Diarizer {
+         guard audioBuffer.count >= config.melWindow else {
+             return 0
+         }
+-        // Use center-padded frame count formula matching AudioMelSpectrogram.computeFlatTransposed
++        if config.melFrontend.family == .nemotron3Diarization {
++            return config.melFrontend.storageFrameCount(sampleCount: audioBuffer.count)
++        }
+         let paddedCount = audioBuffer.count + melSpectrogram.nFFT
+         return 1 + (paddedCount - config.melWindow) / config.melStride
+     }
+diff --git a/Sources/FluidAudio/Diarizer/Sortformer/SortformerModelGeometry.swift b/Sources/FluidAudio/Diarizer/Sortformer/SortformerModelGeometry.swift
+new file mode 100644
+index 0000000..d24b147
+--- /dev/null
++++ b/Sources/FluidAudio/Diarizer/Sortformer/SortformerModelGeometry.swift
+@@ -0,0 +1,443 @@
++@preconcurrency import CoreML
++import Foundation
++
++// MARK: - Feature Names
++
++/// CoreML feature names resolved against a concrete Sortformer-family model.
++///
++/// Two export families are supported:
++/// - the shipped Streaming Sortformer exports (`speaker_preds[_out]`, `chunk_pre_encoder_*`)
++/// - locally converted Nemotron exports (`spkcache_fifo_chunk_preds`, `chunk_pre_encode_*`)
++public struct SortformerFeatureNames: Sendable, Equatable {
++    public let chunk: String
++    public let chunkLengths: String
++    public let spkcache: String
++    public let spkcacheLengths: String
++    public let fifo: String
++    public let fifoLengths: String
++    public let predictions: String
++    public let chunkEmbeddings: String
++    public let chunkEmbeddingLengths: String
++
++    /// Accepted aliases, most-preferred first.
++    enum Alias {
++        static let chunk = ["chunk", "chunk_in", "audio_signal"]
++        static let chunkLengths = ["chunk_lengths", "chunk_length", "audio_signal_lengths"]
++        static let spkcache = ["spkcache", "spkcache_in", "speaker_cache"]
++        static let spkcacheLengths = ["spkcache_lengths", "spkcache_length", "speaker_cache_lengths"]
++        static let fifo = ["fifo", "fifo_in", "fifo_queue"]
++        static let fifoLengths = ["fifo_lengths", "fifo_length", "fifo_queue_lengths"]
++
++        static let predictions = [
++            "speaker_preds_out",
++            "speaker_preds",
++            "spkcache_fifo_chunk_preds",
++            "spkcache_fifo_chunk_preds_out",
++            "preds",
++        ]
++        static let chunkEmbeddings = [
++            "chunk_pre_encoder_embs_out",
++            "chunk_pre_encoder_embs",
++            "chunk_pre_encode_embs",
++            "chunk_pre_encode_embs_out",
++        ]
++        static let chunkEmbeddingLengths = [
++            "chunk_pre_encoder_lengths_out",
++            "chunk_pre_encoder_lengths",
++            "chunk_pre_encode_lengths",
++            "chunk_pre_encode_lengths_out",
++        ]
++    }
++}
++
++// MARK: - Tensor Spec
++
++/// One multi-array feature exactly as the model declares it.
++///
++/// The shape is stored verbatim so validation can distinguish "the model says 512" from "the model
++/// left this axis flexible" from "the model is not even rank-3".
++public struct SortformerTensorSpec: Sendable, Equatable {
++    public let name: String
++    /// Shape as declared by the model. A non-positive entry means the axis is unconstrained.
++    public let shape: [Int]
++    public let dataType: MLMultiArrayDataType
++
++    public init(name: String, shape: [Int], dataType: MLMultiArrayDataType) {
++        self.name = name
++        self.shape = shape
++        self.dataType = dataType
++    }
++
++    init(name: String, constraint: MLMultiArrayConstraint) {
++        self.init(name: name, shape: constraint.shape.map(\.intValue), dataType: constraint.dataType)
++    }
++
++    /// `true` when the model declares `[1, time, features]`, the layout every input buffer uses.
++    public var isBatchOneRank3: Bool {
++        shape.count == 3 && shape[0] == 1
++    }
++
++    /// Time axis, or `nil` when the tensor is not a fixed rank-3 batch-1 shape.
++    public var timeDimension: Int? { fixedAxis(1) }
++
++    /// Feature axis, or `nil` when the tensor is not a fixed rank-3 batch-1 shape.
++    public var featureDimension: Int? { fixedAxis(2) }
++
++    /// `true` when the model declares exactly `[1]`, the layout of every length feature.
++    public var isSingleElement: Bool {
++        shape == [1]
++    }
++
++    public var shapeDescription: String {
++        "[" + shape.map(String.init).joined(separator: ", ") + "]"
++    }
++
++    private func fixedAxis(_ axis: Int) -> Int? {
++        guard isBatchOneRank3, shape[axis] > 0 else { return nil }
++        return shape[axis]
++    }
++}
++
++// MARK: - Model Geometry
++
++/// Tensor geometry read from a model's `MLModelDescription`.
++///
++/// Nothing here is inferred from a file name or a README — every value comes from the compiled
++/// model's own feature descriptions. Axes the model leaves unconstrained are preserved as declared
++/// and are *rejected* by ``validate(against:)`` rather than skipped, because the runtime allocates
++/// fixed-size input buffers and cannot adapt to a flexible axis.
++public struct SortformerModelGeometry: Sendable {
++    public let chunk: SortformerTensorSpec
++    public let chunkLengths: SortformerTensorSpec
++    public let spkcache: SortformerTensorSpec
++    public let spkcacheLengths: SortformerTensorSpec
++    public let fifo: SortformerTensorSpec
++    public let fifoLengths: SortformerTensorSpec
++    public let predictions: SortformerTensorSpec
++    public let chunkEmbeddings: SortformerTensorSpec
++    public let chunkEmbeddingLengths: SortformerTensorSpec
++
++    public init(
++        chunk: SortformerTensorSpec,
++        chunkLengths: SortformerTensorSpec,
++        spkcache: SortformerTensorSpec,
++        spkcacheLengths: SortformerTensorSpec,
++        fifo: SortformerTensorSpec,
++        fifoLengths: SortformerTensorSpec,
++        predictions: SortformerTensorSpec,
++        chunkEmbeddings: SortformerTensorSpec,
++        chunkEmbeddingLengths: SortformerTensorSpec
++    ) {
++        self.chunk = chunk
++        self.chunkLengths = chunkLengths
++        self.spkcache = spkcache
++        self.spkcacheLengths = spkcacheLengths
++        self.fifo = fifo
++        self.fifoLengths = fifoLengths
++        self.predictions = predictions
++        self.chunkEmbeddings = chunkEmbeddings
++        self.chunkEmbeddingLengths = chunkEmbeddingLengths
++    }
++
++    public var names: SortformerFeatureNames {
++        SortformerFeatureNames(
++            chunk: chunk.name,
++            chunkLengths: chunkLengths.name,
++            spkcache: spkcache.name,
++            spkcacheLengths: spkcacheLengths.name,
++            fifo: fifo.name,
++            fifoLengths: fifoLengths.name,
++            predictions: predictions.name,
++            chunkEmbeddings: chunkEmbeddings.name,
++            chunkEmbeddingLengths: chunkEmbeddingLengths.name
++        )
++    }
++
++    /// The five `[1, time, features]` tensors the runtime binds fixed-size buffers to.
++    var tensors: [SortformerTensorSpec] {
++        [chunk, spkcache, fifo, predictions, chunkEmbeddings]
++    }
++
++    /// The four `Int32 [1]` length features.
++    var lengthFeatures: [SortformerTensorSpec] {
++        [chunkLengths, spkcacheLengths, fifoLengths, chunkEmbeddingLengths]
++    }
++
++    /// Mel frames per chunk, i.e. the `chunk` input's time dimension.
++    public var chunkMelFrames: Int? { chunk.timeDimension }
++    /// Mel filterbank count, i.e. the `chunk` input's feature dimension.
++    public var melFeatures: Int? { chunk.featureDimension }
++    /// Speaker cache capacity, i.e. the `spkcache` input's time dimension.
++    public var spkcacheLen: Int? { spkcache.timeDimension }
++    /// FIFO capacity, i.e. the `fifo` input's time dimension.
++    public var fifoLen: Int? { fifo.timeDimension }
++    /// Speaker slots, i.e. the prediction output's trailing dimension.
++    public var numSpeakers: Int? { predictions.featureDimension }
++    /// Prediction rows, i.e. the prediction output's time dimension.
++    public var predictionFrames: Int? { predictions.timeDimension }
++    /// Encoder frames emitted per chunk, i.e. the chunk embedding output's time dimension.
++    public var chunkEncoderFrames: Int? { chunkEmbeddings.timeDimension }
++
++    /// Pre-encoder embedding width, or `nil` when the model's own tensors disagree (or leave the
++    /// axis flexible). A disagreement is never resolved by picking a side — ``validate(against:)``
++    /// checks each tensor's width individually and reports every offender.
++    public var preEncoderDims: Int? {
++        let widths = Set([spkcache.featureDimension, fifo.featureDimension, chunkEmbeddings.featureDimension])
++        guard widths.count == 1, let width = widths.first else { return nil }
++        return width
++    }
++
++    /// Human-readable dump, used by the opt-in real-model smoke test and by load-failure logs.
++    public var debugDescription: String {
++        func line(_ label: String, _ spec: SortformerTensorSpec) -> String {
++            "\(label)[\(spec.name)]: \(spec.shapeDescription) \(spec.dataType.fluidName)"
++        }
++        return [
++            line("chunk", chunk),
++            line("chunk_lengths", chunkLengths),
++            line("spkcache", spkcache),
++            line("spkcache_lengths", spkcacheLengths),
++            line("fifo", fifo),
++            line("fifo_lengths", fifoLengths),
++            line("preds", predictions),
++            line("embs", chunkEmbeddings),
++            line("emb_lengths", chunkEmbeddingLengths),
++        ].joined(separator: "\n")
++    }
++}
++
++// MARK: - Inspection
++
++extension SortformerModelGeometry {
++
++    /// Read the geometry of a loaded Sortformer-family model from its own description.
++    ///
++    /// - Throws: `SortformerError.modelLoadFailed` when a required input or output is missing, or is
++    ///   not a multi-array.
++    public static func inspect(model: MLModel) throws -> SortformerModelGeometry {
++        let description = model.modelDescription
++        let inputs = description.inputDescriptionsByName
++        let outputs = description.outputDescriptionsByName
++
++        func input(_ aliases: [String]) throws -> SortformerTensorSpec {
++            try spec(aliases, in: inputs, kind: "input")
++        }
++        func output(_ aliases: [String]) throws -> SortformerTensorSpec {
++            try spec(aliases, in: outputs, kind: "output")
++        }
++
++        return SortformerModelGeometry(
++            chunk: try input(SortformerFeatureNames.Alias.chunk),
++            chunkLengths: try input(SortformerFeatureNames.Alias.chunkLengths),
++            spkcache: try input(SortformerFeatureNames.Alias.spkcache),
++            spkcacheLengths: try input(SortformerFeatureNames.Alias.spkcacheLengths),
++            fifo: try input(SortformerFeatureNames.Alias.fifo),
++            fifoLengths: try input(SortformerFeatureNames.Alias.fifoLengths),
++            predictions: try output(SortformerFeatureNames.Alias.predictions),
++            chunkEmbeddings: try output(SortformerFeatureNames.Alias.chunkEmbeddings),
++            chunkEmbeddingLengths: try output(SortformerFeatureNames.Alias.chunkEmbeddingLengths)
++        )
++    }
++
++    private static func spec(
++        _ aliases: [String],
++        in descriptions: [String: MLFeatureDescription],
++        kind: String
++    ) throws -> SortformerTensorSpec {
++        for alias in aliases {
++            guard let description = descriptions[alias] else { continue }
++            guard let constraint = description.multiArrayConstraint else {
++                throw SortformerError.modelLoadFailed("\(kind.capitalized) '\(alias)' is not a multi-array")
++            }
++            return SortformerTensorSpec(name: alias, constraint: constraint)
++        }
++        let available = descriptions.keys.sorted().joined(separator: ", ")
++        throw SortformerError.modelLoadFailed(
++            "Model has no \(kind) matching any of [\(aliases.joined(separator: ", "))]. Available: [\(available)]"
++        )
++    }
++}
++
++// MARK: - Validation
++
++extension SortformerModelGeometry {
++
++    /// Data types the runtime can read a float output from.
++    ///
++    /// `int32` is deliberately excluded: a quantized-to-integer prediction or embedding tensor would
++    /// decode to garbage probabilities rather than fail loudly.
++    static let supportedFloatOutputTypes: [MLMultiArrayDataType] = [.float16, .float32, .double]
++
++    /// Check that a configuration can actually drive this model.
++    ///
++    /// Every mismatch is collected so a misconfigured run reports the full picture in one error
++    /// instead of one dimension per attempt.
++    ///
++    /// - Throws: `SortformerError.configurationError` listing every mismatch.
++    public func validate(against config: SortformerConfig) throws {
++        try config.validateGeometry()
++        var problems: [String] = []
++
++        /// Require a fixed `[1, time, features]` shape and match it against the configuration.
++        func checkTensor(
++            _ label: String,
++            _ spec: SortformerTensorSpec,
++            time: Int,
++            timeLabel: String,
++            features: Int,
++            featuresLabel: String
++        ) {
++            guard spec.isBatchOneRank3 else {
++                problems.append(
++                    "\(label) '\(spec.name)' must be rank-3 [1, \(time), \(features)] but the model declares "
++                        + spec.shapeDescription
++                )
++                return
++            }
++            checkAxis(label, spec, timeLabel, spec.timeDimension, time)
++            checkAxis(label, spec, featuresLabel, spec.featureDimension, features)
++        }
++
++        func checkAxis(
++            _ label: String, _ spec: SortformerTensorSpec, _ axisLabel: String, _ actual: Int?, _ expected: Int
++        ) {
++            guard let actual else {
++                problems.append(
++                    "\(label) '\(spec.name)' \(axisLabel) is not a fixed dimension "
++                        + "(model declares \(spec.shapeDescription), config expects \(expected))"
++                )
++                return
++            }
++            guard actual != expected else { return }
++            problems.append("\(label) '\(spec.name)' \(axisLabel): model=\(actual) config=\(expected)")
++        }
++
++        checkTensor(
++            "chunk input", chunk,
++            time: config.chunkMelFrames, timeLabel: "mel frames",
++            features: config.melFeatures, featuresLabel: "mel features")
++        checkTensor(
++            "spkcache input", spkcache,
++            time: config.spkcacheLen, timeLabel: "cache length",
++            features: config.preEncoderDims, featuresLabel: "pre-encoder dims")
++        checkTensor(
++            "fifo input", fifo,
++            time: config.fifoLen, timeLabel: "fifo length",
++            features: config.preEncoderDims, featuresLabel: "pre-encoder dims")
++        checkTensor(
++            "predictions output", predictions,
++            time: config.predictionFrames, timeLabel: "prediction frames",
++            features: config.numSpeakers, featuresLabel: "speaker count")
++        checkTensor(
++            "chunk embeddings output", chunkEmbeddings,
++            time: config.chunkEncoderFrames, timeLabel: "encoder frames",
++            features: config.preEncoderDims, featuresLabel: "pre-encoder dims")
++
++        // The copy path into the model's input buffers is float32-only.
++        for spec in [chunk, spkcache, fifo] where spec.dataType != .float32 {
++            problems.append(
++                "input '\(spec.name)' dtype \(spec.dataType.fluidName) is unsupported (expected float32)")
++        }
++
++        for spec in [predictions, chunkEmbeddings]
++        where !Self.supportedFloatOutputTypes.contains(spec.dataType) {
++            problems.append(
++                "output '\(spec.name)' dtype \(spec.dataType.fluidName) is unsupported "
++                    + "(expected float16, float32 or double)")
++        }
++
++        // Every length feature is bound as a single Int32 element in both directions.
++        for spec in lengthFeatures {
++            if !spec.isSingleElement {
++                problems.append(
++                    "length feature '\(spec.name)' must be shape [1] but the model declares "
++                        + spec.shapeDescription)
++            }
++            if spec.dataType != .int32 {
++                problems.append(
++                    "length feature '\(spec.name)' dtype \(spec.dataType.fluidName) is unsupported "
++                        + "(expected int32)")
++            }
++        }
++
++        guard problems.isEmpty else {
++            throw SortformerError.configurationError(
++                "Sortformer model/config mismatch: " + problems.joined(separator: "; ")
++                    + ". Model geometry:\n\(debugDescription)"
++            )
++        }
++    }
++}
++
++// MARK: - Output Reading
++
++extension SortformerModelGeometry {
++
++    /// Read a float output regardless of whether the export emits Float32 or Float16.
++    ///
++    /// Nemotron emits Float16 predictions and embeddings; the shipped Sortformer exports emit Float32
++    /// predictions and (depending on the conversion) Float16 embeddings.
++    static func floatScalars(from provider: MLFeatureProvider, named name: String) -> [Float]? {
++        guard let value = provider.featureValue(for: name) else { return nil }
++
++        if let scalars = value.shapedArrayValue(of: Float32.self)?.scalars {
++            return scalars
++        }
++
++        #if arch(arm64)
++        if #available(macOS 15.0, iOS 18.0, *),
++            let scalars = value.shapedArrayValue(of: Float16.self)?.scalars
++        {
++            return scalars.map { Float($0) }
++        }
++        #endif
++
++        guard let array = value.multiArrayValue else { return nil }
++        return floatScalars(from: array)
++    }
++
++    /// Element-wise fallback for data types without a `MLShapedArray` fast path.
++    static func floatScalars(from array: MLMultiArray) -> [Float]? {
++        guard array.dataType.isReadableAsFloat else { return nil }
++        var scalars = [Float](repeating: 0, count: array.count)
++        for index in 0..<array.count {
++            scalars[index] = array[index].floatValue
++        }
++        return scalars
++    }
++
++    /// Read the first element of an integer output (chunk embedding lengths).
++    static func firstInt(from provider: MLFeatureProvider, named name: String) -> Int? {
++        guard let value = provider.featureValue(for: name) else { return nil }
++
++        if let scalar = value.shapedArrayValue(of: Int32.self)?.scalars.first {
++            return Int(scalar)
++        }
++        if let array = value.multiArrayValue, array.count > 0 {
++            return array[0].intValue
++        }
++        return nil
++    }
++}
++
++// MARK: - Data Type Helpers
++
++extension MLMultiArrayDataType {
++    /// Short name for diagnostics (`description` is not stable across SDKs).
++    var fluidName: String {
++        switch self {
++        case .float32: return "float32"
++        case .float16: return "float16"
++        case .double: return "double"
++        case .int32: return "int32"
++        default: return "unknown(\(rawValue))"
++        }
++    }
++
++    var isReadableAsFloat: Bool {
++        switch self {
++        case .float32, .float16, .double: return true
++        default: return false
++        }
++    }
++}
+diff --git a/Sources/FluidAudio/Diarizer/Sortformer/SortformerModelInference.swift b/Sources/FluidAudio/Diarizer/Sortformer/SortformerModelInference.swift
+index 0973292..5d12941 100644
+--- a/Sources/FluidAudio/Diarizer/Sortformer/SortformerModelInference.swift
++++ b/Sources/FluidAudio/Diarizer/Sortformer/SortformerModelInference.swift
+@@ -17,6 +17,9 @@ public struct SortformerModels {
+     /// Time taken to compile/load models
+     public let compilationDuration: TimeInterval
+
++    /// Tensor geometry and feature names read from `mainModel`'s own description.
++    public let geometry: SortformerModelGeometry
++
+     /// Cached buffers
+     private let memoryOptimizer: ANEMemoryOptimizer
+     private let chunkArray: MLMultiArray
+@@ -26,6 +29,8 @@ public struct SortformerModels {
+     private let spkcacheArray: MLMultiArray
+     private let spkcacheLengthArray: MLMultiArray
+
++    /// - Throws: `SortformerError.modelLoadFailed` if the model's inputs/outputs are unrecognized, or
++    ///   `SortformerError.configurationError` if `config` does not match the model's declared shapes.
+     public init(
+         config: SortformerConfig,
+         main: MLModel,
+@@ -34,6 +39,11 @@ public struct SortformerModels {
+         self.mainModel = main
+         self.compilationDuration = compilationDuration
+
++        try config.validateGeometry()
++        let geometry = try SortformerModelGeometry.inspect(model: main)
++        try geometry.validate(against: config)
++        self.geometry = geometry
++
+         self.memoryOptimizer = .init()
+         self.chunkArray = try memoryOptimizer.createAlignedArray(
+             shape: [1, NSNumber(value: config.chunkMelFrames), NSNumber(value: config.melFeatures)], dataType: .float32)
+@@ -56,10 +66,12 @@ extension SortformerModels {
+     /// Load models from local file paths (combined pipeline mode).
+     ///
+     /// - Parameters:
+-    ///   - preprocessorPath: Path to SortformerPreprocessor.mlpackage
+-    ///   - mainModelPath: Path to Sortformer.mlpackage
+-    ///   - configuration: Optional MLModel configuration
++    ///   - config: Sortformer configuration; validated against the model's declared shapes
++    ///   - mainModelPath: Path to `Sortformer.mlpackage` (compiled on load) or to an already
++    ///     compiled `Sortformer.mlmodelc` directory (loaded as-is)
++    ///   - configuration: Optional MLModel configuration; used verbatim when supplied
+     /// - Returns: Loaded SortformerModels
++    /// - Throws: `CancellationError` if the enclosing task is cancelled before the model is returned.
+     public static func load(
+         config: SortformerConfig,
+         mainModelPath: URL,
+@@ -69,16 +81,36 @@ extension SortformerModels {
+
+         let startTime = Date()
+
+-        // Compile mlpackage to mlmodelc first
+-        logger.info("Compiling main model...")
+-        let compiledMainModelURL = try await MLModel.compileModel(at: mainModelPath)
++        try Task.checkCancellation()
++
++        // An `.mlmodelc` directory is already compiled; anything else (`.mlpackage`, `.mlmodel`)
++        // goes through the compiler.
++        let compiledMainModelURL: URL
++        if mainModelPath.pathExtension.lowercased() == "mlmodelc" {
++            logger.info("Using pre-compiled main model")
++            compiledMainModelURL = mainModelPath
++        } else {
++            logger.info("Compiling main model...")
++            compiledMainModelURL = try await MLModel.compileModel(at: mainModelPath)
++        }
+
+-        // Load main model - .all lets CoreML pick optimal compute units
+-        let mainConfig = MLModelConfiguration()
+-        mainConfig.computeUnits = .all
+-        let mainModel = try MLModel(contentsOf: compiledMainModelURL, configuration: mainConfig)
++        try Task.checkCancellation()
++
++        // Honor a caller-supplied configuration; otherwise keep the historical default where
++        // .all lets CoreML pick optimal compute units.
++        let mainConfig: MLModelConfiguration
++        if let configuration {
++            mainConfig = configuration
++        } else {
++            mainConfig = MLModelConfiguration()
++            mainConfig.computeUnits = .all
++        }
++        let mainModel = try await MLModel.load(contentsOf: compiledMainModelURL, configuration: mainConfig)
+         logger.info("Loaded main Sortformer model")
+
++        // Loading can take tens of seconds; don't hand a model back to a caller that gave up.
++        try Task.checkCancellation()
++
+         let duration = Date().timeIntervalSince(startTime)
+         logger.info("Models loaded in \(String(format: "%.2f", duration))s")
+
+@@ -225,71 +257,37 @@ extension SortformerModels {
+         // Create speaker cache length input
+         spkcacheLengthArray[0] = NSNumber(value: Int32(spkcacheLength))
+
+-        // Run inference
++        // Run inference using the feature names resolved from the model's own description, so both
++        // the shipped Sortformer exports and Nemotron-style exports work unchanged.
++        let names = geometry.names
+         let inputFeatures = try MLDictionaryFeatureProvider(dictionary: [
+-            "chunk": MLFeatureValue(multiArray: chunkArray),
+-            "chunk_lengths": MLFeatureValue(multiArray: chunkLengthArray),
+-            "spkcache": MLFeatureValue(multiArray: spkcacheArray),
+-            "spkcache_lengths": MLFeatureValue(multiArray: spkcacheLengthArray),
+-            "fifo": MLFeatureValue(multiArray: fifoArray),
+-            "fifo_lengths": MLFeatureValue(multiArray: fifoLengthArray),
++            names.chunk: MLFeatureValue(multiArray: chunkArray),
++            names.chunkLengths: MLFeatureValue(multiArray: chunkLengthArray),
++            names.spkcache: MLFeatureValue(multiArray: spkcacheArray),
++            names.spkcacheLengths: MLFeatureValue(multiArray: spkcacheLengthArray),
++            names.fifo: MLFeatureValue(multiArray: fifoArray),
++            names.fifoLengths: MLFeatureValue(multiArray: fifoLengthArray),
+         ])
+
+         let output = try mainModel.prediction(from: inputFeatures)
+
+-        // Extract outputs (names must match CoreML Sortformer model)
+-        // Note: Output names use _out suffix to avoid macOS 26+ BNNS compiler error
+-        // where input and output tensors cannot share the same name
+-
+-        // Chunk embeddings may be Float16 (head module uses fp16) or Float32
+-        let chunkEmbeddings: [Float]
+-        let predictions: [Float]
+-        let chunkEmbeddingsLength: Int
+-
+-        // Get speaker probabilities
+-        if let preds = output.featureValue(for: "speaker_preds_out")?.shapedArrayValue(of: Float32.self)?.scalars {
+-            predictions = preds
+-        } else if let preds = output.featureValue(for: "speaker_preds")?.shapedArrayValue(of: Float32.self)?.scalars {
+-            predictions = preds
+-        } else {
+-            throw SortformerError.inferenceFailed("Missing speaker_preds or speaker_preds_out")
++        // Predictions and embeddings may be Float16 (Nemotron, and fp16 head modules) or Float32.
++        guard let predictions = SortformerModelGeometry.floatScalars(from: output, named: names.predictions)
++        else {
++            throw SortformerError.inferenceFailed("Missing or unreadable output '\(names.predictions)'")
+         }
+
+-        // Get chunk length
+-        if let length = output.featureValue(for: "chunk_pre_encoder_lengths_out")?.shapedArrayValue(
+-            of: Int32.self)?.scalars.first
+-        {
+-            chunkEmbeddingsLength = Int(length)
+-        } else if let length = output.featureValue(for: "chunk_pre_encoder_lengths")?.shapedArrayValue(
+-            of: Int32.self)?.scalars.first
+-        {
+-            chunkEmbeddingsLength = Int(length)
+-        } else {
+-            throw SortformerError.inferenceFailed("Missing chunk_pre_encoder_lengths or chunk_pre_encoder_lengths_out")
++        guard
++            let chunkEmbeddingsLength = SortformerModelGeometry.firstInt(
++                from: output, named: names.chunkEmbeddingLengths)
++        else {
++            throw SortformerError.inferenceFailed("Missing or unreadable output '\(names.chunkEmbeddingLengths)'")
+         }
+
+-        // Get acoustic embeddings
+-        if let fp32 = output.featureValue(for: "chunk_pre_encoder_embs_out")?.shapedArrayValue(of: Float32.self)?
+-            .scalars
+-        {
+-            chunkEmbeddings = fp32
+-        } else if let fp32 = output.featureValue(for: "chunk_pre_encoder_embs")?.shapedArrayValue(of: Float32.self)?
+-            .scalars
+-        {
+-            chunkEmbeddings = fp32
+-        } else {
+-            #if arch(arm64)
+-            if #available(macOS 15.0, iOS 18.0, *),
+-                let fp16 = output.featureValue(for: "chunk_pre_encoder_embs_out")?.shapedArrayValue(of: Float16.self)?
+-                    .scalars
+-            {
+-                chunkEmbeddings = fp16.map { Float($0) }
+-            } else {
+-                throw SortformerError.inferenceFailed("Missing chunk_pre_encoder_embs_out")
+-            }
+-            #else
+-            throw SortformerError.inferenceFailed("Missing chunk_pre_encoder_embs_out")
+-            #endif
++        guard
++            let chunkEmbeddings = SortformerModelGeometry.floatScalars(from: output, named: names.chunkEmbeddings)
++        else {
++            throw SortformerError.inferenceFailed("Missing or unreadable output '\(names.chunkEmbeddings)'")
+         }
+
+         return MainModelOutput(
+diff --git a/Sources/FluidAudio/Diarizer/Sortformer/SortformerNemotronConfig.swift b/Sources/FluidAudio/Diarizer/Sortformer/SortformerNemotronConfig.swift
+new file mode 100644
+index 0000000..497f619
+--- /dev/null
++++ b/Sources/FluidAudio/Diarizer/Sortformer/SortformerNemotronConfig.swift
+@@ -0,0 +1,156 @@
++import Foundation
++
++/// Configuration for locally converted Nemotron streaming diarization exports.
++///
++/// Nemotron is a Sortformer-family model with a different tensor geometry (8 speaker slots, a much
++/// longer chunk, a larger speaker cache). Everything in ``SortformerConfig/NemotronGeometry`` is
++/// transcribed from an actual `MLModel` description, not from a file name or a README — the model's
++/// own descriptions are authoritative and are re-validated at load time by
++/// ``SortformerModelGeometry/validate(against:)``.
++///
++/// - Important: Only *runtime* compatibility (feature names, shapes, dtypes, streaming state layout)
++///   is covered here. Exact mel front-end and cache-configuration parity with the upstream NeMo
++///   checkpoint cannot be claimed without the `.nemo` file and reference mel fixtures.
++extension SortformerConfig {
++
++    /// Tensor geometry of the Nemotron diarization export.
++    ///
++    /// Reference model description (`nemotron_diar_fp16.mlpackage`):
++    /// - in  `chunk`                      Float32 [1, 3040, 128]
++    /// - in  `chunk_lengths`              Int32   [1]
++    /// - in  `spkcache`                   Float32 [1, 264, 512]
++    /// - in  `spkcache_lengths`           Int32   [1]
++    /// - in  `fifo`                       Float32 [1, 40, 512]
++    /// - in  `fifo_lengths`               Int32   [1]
++    /// - out `spkcache_fifo_chunk_preds`  Float16 [1, 684, 8]
++    /// - out `chunk_pre_encode_embs`      Float16 [1, 380, 512]
++    /// - out `chunk_pre_encode_lengths`   Int32   [1]
++    ///
++    /// 3040 mel frames / subsampling 8 = 380 encoder frames = 0 left + 340 core + 40 right, and
++    /// 264 + 40 + 380 = 684 prediction rows.
++    public enum NemotronGeometry {
++        public static let numSpeakers = 8
++        public static let chunkLen = 340
++        public static let chunkLeftContext = 0
++        public static let chunkRightContext = 40
++        public static let fifoLen = 40
++        public static let spkcacheLen = 264
++
++        /// Mel frames on the `chunk` input: (340 + 0 + 40) * 8.
++        public static let chunkMelFrames = 3040
++        /// Encoder frames on the `chunk_pre_encode_embs` output: 3040 / 8.
++        public static let chunkEncoderFrames = 380
++        /// Rows on the `spkcache_fifo_chunk_preds` output: 264 + 40 + 380.
++        public static let predictionFrames = 684
++
++        /// Update periods the streaming state updater can run safely with this geometry.
++        ///
++        /// `SortformerStateUpdater` pops `max(spkcacheUpdatePeriod, contextLength - fifoLen)` frames,
++        /// capped at `contextLength`, so any period in `[1, fifoLen + chunkLen]` keeps the FIFO and
++        /// speaker cache within their declared capacities. A period below `chunkLen` only makes the
++        /// cache update lag one chunk behind; it never pops more than the FIFO holds.
++        public static let spkcacheUpdatePeriodRange = 1...(fifoLen + chunkLen)
++
++        /// Update period assigned by the reference Nemotron conversion script.
++        ///
++        /// - Important: This value is **not** verified against the upstream NeMo checkpoint; it is
++        ///   recorded here only so callers can pass it explicitly. See the note on
++        ///   ``SortformerConfig/nemotron(spkcacheUpdatePeriod:spkcacheSilFramesPerSpk:predScoreThreshold:silenceThreshold:scoresBoostLatest:strongBoostRate:weakBoostRate:minPosScoresRate:debugMode:)``
++        ///   for how it differs from the generic initializer's clamp.
++        public static let referenceScriptSpkcacheUpdatePeriod = 300
++
++        /// Reject an update period the streaming updater cannot run with this geometry.
++        static func validate(spkcacheUpdatePeriod: Int) throws {
++            guard spkcacheUpdatePeriodRange.contains(spkcacheUpdatePeriod) else {
++                throw SortformerError.configurationError(
++                    "spkcacheUpdatePeriod \(spkcacheUpdatePeriod) is outside the range supported by the "
++                        + "Nemotron geometry [\(spkcacheUpdatePeriodRange.lowerBound), "
++                        + "\(spkcacheUpdatePeriodRange.upperBound)] "
++                        + "(chunkLen=\(chunkLen), fifoLen=\(fifoLen))"
++                )
++            }
++        }
++    }
++
++    /// Build a configuration for a Nemotron export.
++    ///
++    /// The tensor geometry is pinned to ``NemotronGeometry``. The parameters below are *not* derivable
++    /// from tensor sizes — they come from the conversion/NeMo streaming configuration — so they are
++    /// required rather than guessed from a size formula.
++    ///
++    /// ## Update period: 300 vs 340
++    ///
++    /// The reference conversion script assigns `spkcache_update_period = 300`
++    /// (``NemotronGeometry/referenceScriptSpkcacheUpdatePeriod``), which is *below* this geometry's
++    /// `chunkLen` of 340. ``SortformerConfig/init(modelVariant:numSpeakers:chunkLen:chunkLeftContext:chunkRightContext:fifoLen:spkcacheLen:spkcacheUpdatePeriod:silenceThreshold:spkcacheSilFramesPerSpk:predScoreThreshold:scoresBoostLatest:strongBoostRate:weakBoostRate:minPosScoresRate:debugMode:)``
++    /// clamps any period up to `chunkLen`, so the generic path would silently turn 300 into 340 — a
++    /// different streaming cadence (340 drains the FIFO completely on each update, 300 leaves the
++    /// 40-frame FIFO full). This factory does **not** clamp: it validates the value against
++    /// ``NemotronGeometry/spkcacheUpdatePeriodRange`` and keeps it exactly as given, so passing 300
++    /// yields 300 and passing an unusable value throws.
++    ///
++    /// - Important: Keeping the value the reference script uses is a *runtime* compatibility measure
++    ///   only. It does not establish numerical parity with the upstream NeMo checkpoint: that would
++    ///   require the `.nemo` file and reference fixtures, neither of which is checked here.
++    ///
++    /// - Parameters:
++    ///   - spkcacheUpdatePeriod: Frames popped from the FIFO into the speaker cache per update.
++    ///     Must be within ``NemotronGeometry/spkcacheUpdatePeriodRange`` = `[1, 380]`; it is used
++    ///     verbatim, never clamped.
++    ///   - spkcacheSilFramesPerSpk: Silence placeholder frames reserved per speaker during cache
++    ///     compression. Must satisfy `spkcacheLen / numSpeakers - value > 0`, i.e. `< 33`.
++    ///   - predScoreThreshold: Probability clamp used when scoring cached frames for compression.
++    ///   - silenceThreshold: Summed-probability threshold below which a frame updates the silence profile.
++    ///   - debugMode: Enable verbose logging.
++    /// - Throws: `SortformerError.configurationError` if the resulting geometry is unusable.
++    public static func nemotron(
++        spkcacheUpdatePeriod: Int,
++        spkcacheSilFramesPerSpk: Int,
++        predScoreThreshold: Float,
++        silenceThreshold: Float = 0.2,
++        scoresBoostLatest: Float = 0.05,
++        strongBoostRate: Float = 0.75,
++        weakBoostRate: Float = 1.5,
++        minPosScoresRate: Float = 0.5,
++        debugMode: Bool = false
++    ) throws -> SortformerConfig {
++        try NemotronGeometry.validate(spkcacheUpdatePeriod: spkcacheUpdatePeriod)
++        guard (0..<33).contains(spkcacheSilFramesPerSpk),
++            predScoreThreshold.isFinite, predScoreThreshold > 0, predScoreThreshold < 1
++        else {
++            throw SortformerError.configurationError("Invalid Nemotron cache scoring configuration")
++        }
++        var config = SortformerConfig(
++            // Nemotron is local-path only: there is no HuggingFace bundle to resolve.
++            modelVariant: nil,
++            melFrontend: .nemotron3Diarization,
++            numSpeakers: NemotronGeometry.numSpeakers,
++            chunkLen: NemotronGeometry.chunkLen,
++            chunkLeftContext: NemotronGeometry.chunkLeftContext,
++            chunkRightContext: NemotronGeometry.chunkRightContext,
++            fifoLen: NemotronGeometry.fifoLen,
++            spkcacheLen: NemotronGeometry.spkcacheLen,
++            spkcacheUpdatePeriod: spkcacheUpdatePeriod,
++            silenceThreshold: silenceThreshold,
++            spkcacheSilFramesPerSpk: spkcacheSilFramesPerSpk,
++            predScoreThreshold: predScoreThreshold,
++            scoresBoostLatest: scoresBoostLatest,
++            strongBoostRate: strongBoostRate,
++            weakBoostRate: weakBoostRate,
++            minPosScoresRate: minPosScoresRate,
++            debugMode: debugMode
++        )
++
++        // Preserve the caller's explicit reference cadence after the generic legacy clamp.
++        config.spkcacheUpdatePeriod = spkcacheUpdatePeriod
++        guard config.spkcacheLen == NemotronGeometry.spkcacheLen else {
++            throw SortformerError.configurationError(
++                "spkcacheSilFramesPerSpk \(spkcacheSilFramesPerSpk) forces spkcacheLen to "
++                    + "\(config.spkcacheLen), but the model requires \(NemotronGeometry.spkcacheLen)"
++            )
++        }
++
++        try config.validateGeometry()
++        return config
++    }
++}
+diff --git a/Sources/FluidAudio/Diarizer/Sortformer/SortformerStateUpdater.swift b/Sources/FluidAudio/Diarizer/Sortformer/SortformerStateUpdater.swift
+index 64ce647..b93d932 100644
+--- a/Sources/FluidAudio/Diarizer/Sortformer/SortformerStateUpdater.swift
++++ b/Sources/FluidAudio/Diarizer/Sortformer/SortformerStateUpdater.swift
+@@ -43,6 +43,21 @@ public struct SortformerStateUpdater {
+         let currentSpkcacheLength = state.spkcacheLength
+         let currentFifoLength = state.fifoLength
+
++        guard chunk.count.isMultiple(of: fcDModel) else {
++            throw SortformerError.insufficientChunkLength(
++                "Chunk embedding buffer has \(chunk.count) scalars, not a multiple of width \(fcDModel)"
++            )
++        }
++        guard currentSpkcacheLength >= 0,
++              currentFifoLength >= 0,
++              state.spkcache.count == currentSpkcacheLength * fcDModel,
++              state.fifo.count == currentFifoLength * fcDModel,
++              state.spkcachePreds == nil || state.spkcachePreds?.count == currentSpkcacheLength * numSpeakers,
++              state.fifoPreds == nil || state.fifoPreds?.count == currentFifoLength * numSpeakers
++        else {
++            throw SortformerError.invalidState("Streaming state lengths do not match their embedding/prediction buffers")
++        }
++
+         // Extract FIFO predictions if FIFO exists
+         if currentFifoLength > 0 {
+             let fifoPredsStart = currentSpkcacheLength * numSpeakers
+@@ -61,6 +76,13 @@ public struct SortformerStateUpdater {
+         let rc = rightContext
+         let coreFrames = (chunk.count / fcDModel) - lc - rc
+
++        guard lc >= 0, rc >= 0, coreFrames > 0, coreFrames <= config.chunkLen else {
++            throw SortformerError.insufficientChunkLength(
++                "Invalid encoded chunk geometry: total=\(chunk.count / fcDModel), left=\(lc), "
++                    + "core=\(coreFrames), right=\(rc), maximumCore=\(config.chunkLen)"
++            )
++        }
++
+         // Extract core embeddings only (frames lc..<lc+coreFrames)
+         let embsStartIdx = lc * fcDModel
+         let embsEndIdx = (lc + coreFrames) * fcDModel
+diff --git a/Sources/FluidAudio/Diarizer/Sortformer/SortformerTypes.swift b/Sources/FluidAudio/Diarizer/Sortformer/SortformerTypes.swift
+index c345113..cbab9c0 100644
+--- a/Sources/FluidAudio/Diarizer/Sortformer/SortformerTypes.swift
++++ b/Sources/FluidAudio/Diarizer/Sortformer/SortformerTypes.swift
+@@ -1,5 +1,135 @@
+ import Foundation
+
++// MARK: - Mel Frontend Contract
++
++/// Immutable host-side feature contract for a Sortformer-family export.
++///
++/// The CoreML graph starts after feature extraction, so these values are part of the model ABI just
++/// as much as its tensor shapes. `family` deliberately remains part of the value even when two
++/// exports currently share the same numbers; this prevents a new model from silently inheriting a
++/// different model family's defaults.
++public struct SortformerMelFrontendContract: Sendable, Equatable {
++    public enum Family: String, Sendable {
++        case streamingSortformer
++        case nemotron3Diarization
++    }
++
++    public enum Padding: String, Sendable {
++        case centeredConstant
++    }
++
++    public enum Window: String, Sendable {
++        case symmetricHann
++    }
++
++    public enum MelScale: String, Sendable {
++        case slaneyNormalized
++    }
++
++    public enum LogGuard: String, Sendable {
++        case additive
++    }
++
++    public enum Normalization: String, Sendable {
++        case none
++    }
++
++    public let family: Family
++    public let sampleRate: Int
++    public let featureCount: Int
++    public let fftLength: Int
++    public let windowLength: Int
++    public let hopLength: Int
++    public let preemphasis: Float
++    public let dither: Float
++    public let padding: Padding
++    public let window: Window
++    public let melScale: MelScale
++    public let magnitudePower: Float
++    public let logGuard: LogGuard
++    public let logGuardValue: Float
++    public let normalization: Normalization
++    public let padTo: Int
++    public let padValue: Float
++
++    private init(family: Family) {
++        self.family = family
++        self.sampleRate = 16_000
++        self.featureCount = 128
++        self.fftLength = 512
++        self.windowLength = 400
++        self.hopLength = 160
++        self.preemphasis = 0.97
++        self.dither = 0
++        self.padding = .centeredConstant
++        self.window = .symmetricHann
++        self.melScale = .slaneyNormalized
++        self.magnitudePower = 2
++        self.logGuard = .additive
++        self.logGuardValue = powf(2, -24)
++        self.normalization = .none
++        self.padTo = 0
++        self.padValue = 0
++    }
++
++    public static let streamingSortformer = SortformerMelFrontendContract(family: .streamingSortformer)
++
++    /// Host contract extracted from Nemotron-3's NeMo preprocessor configuration.
++    ///
++    /// Dither is frozen to zero for deterministic inference. NeMo's configured 25 ms window and
++    /// 10 ms hop produce mel frames; the encoder's 8x feature stacking is what produces the 80 ms
++    /// diarization cadence.
++    public static let nemotron3Diarization = SortformerMelFrontendContract(family: .nemotron3Diarization)
++
++    /// Number of valid NeMo feature frames for an unpadded signal.
++    public func validFrameCount(sampleCount: Int) -> Int {
++        guard sampleCount > 0 else { return 0 }
++        return sampleCount / hopLength
++    }
++
++    /// Number of physical frames emitted by centered STFT before NeMo masks the final frame.
++    public func storageFrameCount(sampleCount: Int) -> Int {
++        guard sampleCount > 0 else { return 0 }
++        return validFrameCount(sampleCount: sampleCount) + 1
++    }
++
++    func makeSpectrogram() -> AudioMelSpectrogram {
++        AudioMelSpectrogram(
++            sampleRate: sampleRate,
++            nMels: featureCount,
++            nFFT: fftLength,
++            hopLength: hopLength,
++            winLength: windowLength,
++            preemph: preemphasis,
++            padTo: padTo,
++            logFloor: logGuardValue,
++            logFloorMode: .additive,
++            windowPeriodic: false
++        )
++    }
++}
++
++// MARK: - Saturating Arithmetic
++
++extension Int {
++    /// `self + other`, pinned to `Int.min`/`Int.max` instead of trapping.
++    ///
++    /// Used only by `SortformerConfig.init`, whose clamping must survive absurd inputs long enough
++    /// for `validateGeometry()` to describe them. Identical to `+` for every non-overflowing pair.
++    static func fluidSaturatingAdd(_ lhs: Int, _ rhs: Int) -> Int {
++        let (value, overflow) = lhs.addingReportingOverflow(rhs)
++        guard overflow else { return value }
++        return rhs > 0 ? .max : .min
++    }
++
++    /// `lhs * rhs`, pinned to `Int.min`/`Int.max` instead of trapping.
++    static func fluidSaturatingMultiply(_ lhs: Int, _ rhs: Int) -> Int {
++        let (value, overflow) = lhs.multipliedReportingOverflow(by: rhs)
++        guard overflow else { return value }
++        return (lhs > 0) == (rhs > 0) ? .max : .min
++    }
++}
++
+ // MARK: - Configuration
+
+ /// Configuration for Sortformer streaming diarization.
+@@ -13,8 +143,14 @@ public struct SortformerConfig: Sendable {
+
+     public let modelVariant: ModelVariant?
+
+-    /// Number of speaker slots (fixed at 4 for current model)
+-    public let numSpeakers: Int = 4
++    /// Host-side preprocessing ABI paired with this model export.
++    public let melFrontend: SortformerMelFrontendContract
++
++    /// Number of speaker slots.
++    ///
++    /// Must match the trailing dimension of the model's prediction output. The shipped Sortformer
++    /// exports use 4; other exports (e.g. a locally converted Nemotron model) may use more.
++    public let numSpeakers: Int
+
+     /// Pre-encoder embedding dimension
+     public let preEncoderDims: Int = 512
+@@ -56,16 +192,16 @@ public struct SortformerConfig: Sendable {
+     // MARK: - Audio Parameters
+
+     /// Sample rate in Hz
+-    public let sampleRate: Int = 16000
++    public var sampleRate: Int { melFrontend.sampleRate }
+
+     /// Mel spectrogram window size in samples (25ms)
+-    public let melWindow: Int = 400
++    public var melWindow: Int { melFrontend.windowLength }
+
+     /// Mel spectrogram stride in samples (10ms)
+-    public let melStride: Int = 160
++    public var melStride: Int { melFrontend.hopLength }
+
+     /// Number of mel filterbank features
+-    public let melFeatures: Int = 128
++    public var melFeatures: Int { melFrontend.featureCount }
+
+     // MARK: - Thresholds
+
+@@ -104,6 +240,17 @@ public struct SortformerConfig: Sendable {
+         chunkLen * subsamplingFactor
+     }
+
++    /// Encoder (post-subsampling) frames produced for one chunk, including left/right context.
++    /// This is the second dimension of the model's chunk embedding output.
++    public var chunkEncoderFrames: Int {
++        chunkLen + chunkLeftContext + chunkRightContext
++    }
++
++    /// Rows in the model's prediction output: speaker cache + FIFO + chunk encoder frames.
++    public var predictionFrames: Int {
++        spkcacheLen + fifoLen + chunkEncoderFrames
++    }
++
+     /// Frame duration in seconds
+     public var frameDurationSeconds: Float {
+         Float(subsamplingFactor) * Float(melStride) / Float(sampleRate)
+@@ -197,6 +344,8 @@ public struct SortformerConfig: Sendable {
+     /// - Warning: If you don't use one of the default configurations, you must use a local model converted with that configuration.
+     public init(
+         modelVariant: ModelVariant? = .fastV2_1,
++        melFrontend: SortformerMelFrontendContract = .streamingSortformer,
++        numSpeakers: Int = 4,
+         chunkLen: Int = 6,
+         chunkLeftContext: Int = 1,
+         chunkRightContext: Int = 7,
+@@ -213,6 +362,8 @@ public struct SortformerConfig: Sendable {
+         debugMode: Bool = false
+     ) {
+         self.modelVariant = modelVariant
++        self.melFrontend = melFrontend
++        self.numSpeakers = max(1, numSpeakers)
+         self.chunkLen = max(1, chunkLen)
+         self.chunkLeftContext = chunkLeftContext
+         self.chunkRightContext = chunkRightContext
+@@ -226,15 +377,140 @@ public struct SortformerConfig: Sendable {
+         self.weakBoostRate = weakBoostRate
+         self.minPosScoresRate = minPosScoresRate
+
+-        // The following parameters must meet certain constraints
+-        self.spkcacheLen = max(spkcacheLen, (1 + self.spkcacheSilFramesPerSpk) * self.numSpeakers)
+-        self.spkcacheUpdatePeriod = max(min(spkcacheUpdatePeriod, self.fifoLen + self.chunkLen), self.chunkLen)
++        // The following parameters must meet certain constraints. The arithmetic saturates instead of
++        // trapping so that extreme inputs reach `validateGeometry()` and are reported; for every
++        // in-range configuration the result is identical to plain `+` and `*`.
++        let silencePlaceholders = Int.fluidSaturatingMultiply(
++            Int.fluidSaturatingAdd(1, self.spkcacheSilFramesPerSpk), self.numSpeakers)
++        self.spkcacheLen = max(spkcacheLen, silencePlaceholders)
++        let fifoPlusChunk = Int.fluidSaturatingAdd(self.fifoLen, self.chunkLen)
++        self.spkcacheUpdatePeriod = max(min(spkcacheUpdatePeriod, fifoPlusChunk), self.chunkLen)
+     }
+
++    /// Whether two configurations describe the same model tensor geometry.
++    ///
++    /// Compares every dimension that shapes a CoreML input or output, so a configuration that only
++    /// differs in tuning knobs (thresholds, boost rates, debug mode) is still compatible, while one
++    /// that would need a differently-shaped export is not.
+     public func isCompatible(with other: SortformerConfig) -> Bool {
+-        return
+-            (self.chunkMelFrames == other.chunkMelFrames && self.fifoLen == other.fifoLen
+-            && self.spkcacheLen == other.spkcacheLen)
++        return self.melFrontend == other.melFrontend
++            && self.numSpeakers == other.numSpeakers
++            && self.chunkMelFrames == other.chunkMelFrames
++            && self.melFeatures == other.melFeatures
++            && self.fifoLen == other.fifoLen
++            && self.spkcacheLen == other.spkcacheLen
++            && self.preEncoderDims == other.preEncoderDims
++            && self.subsamplingFactor == other.subsamplingFactor
++            && self.chunkEncoderFrames == other.chunkEncoderFrames
++    }
++
++    /// Validate that the configured geometry can drive the streaming state updater safely.
++    ///
++    /// This checks only self-consistency; it does not know anything about a particular model file.
++    /// Use ``SortformerModelGeometry/validate(against:)`` for that.
++    ///
++    /// - Throws: `SortformerError.configurationError` describing every violated constraint.
++    public func validateGeometry() throws {
++        var problems: [String] = []
++
++        if numSpeakers < 1 {
++            problems.append("numSpeakers must be >= 1 (got \(numSpeakers))")
++        }
++        if chunkLen < 1 {
++            problems.append("chunkLen must be >= 1 (got \(chunkLen))")
++        }
++        if chunkLeftContext < 0 {
++            problems.append("chunkLeftContext must be >= 0 (got \(chunkLeftContext))")
++        }
++        if chunkRightContext < 0 {
++            problems.append("chunkRightContext must be >= 0 (got \(chunkRightContext))")
++        }
++        if fifoLen < 1 {
++            problems.append("fifoLen must be >= 1 (got \(fifoLen))")
++        }
++        if spkcacheLen < 1 {
++            problems.append("spkcacheLen must be >= 1 (got \(spkcacheLen))")
++        }
++        if spkcacheSilFramesPerSpk < 0 {
++            problems.append("spkcacheSilFramesPerSpk must be >= 0 (got \(spkcacheSilFramesPerSpk))")
++        }
++
++        // Cache compression budgets one slice of the speaker cache per speaker and reserves
++        // `spkcacheSilFramesPerSpk` of it for silence placeholders; the remainder must stay positive.
++        if numSpeakers >= 1, spkcacheLen >= 1, spkcacheSilFramesPerSpk >= 0 {
++            let perSpeaker = spkcacheLen / numSpeakers - spkcacheSilFramesPerSpk
++            if perSpeaker <= 0 {
++                problems.append(
++                    "spkcacheLen / numSpeakers - spkcacheSilFramesPerSpk must be > 0 "
++                        + "(\(spkcacheLen) / \(numSpeakers) - \(spkcacheSilFramesPerSpk) = \(perSpeaker))"
++                )
++            }
++        }
++
++        // Every derived size is computed with overflow reporting *before* anything uses it, so an
++        // absurd configuration produces a listed problem instead of trapping. `nil` means "this size
++        // overflowed"; a problem has already been recorded for it and dependent checks are skipped.
++        func sum(_ label: String, _ values: Int...) -> Int? {
++            var total = 0
++            for value in values {
++                let (next, overflow) = total.addingReportingOverflow(value)
++                if overflow {
++                    problems.append("\(label) overflows Int (\(values.map(String.init).joined(separator: " + ")))")
++                    return nil
++                }
++                total = next
++            }
++            return total
++        }
++
++        func product(_ label: String, _ lhs: Int?, _ rhs: Int) -> Int? {
++            guard let lhs else { return nil }
++            let (value, overflow) = lhs.multipliedReportingOverflow(by: rhs)
++            if overflow {
++                problems.append("\(label) overflows Int (\(lhs) * \(rhs))")
++                return nil
++            }
++            return value
++        }
++
++        // `fifoLen + chunkLen` bounds the update period; it is also the FIFO buffer's reserved size.
++        let fifoPlusChunk = sum("fifoLen + chunkLen", fifoLen, chunkLen)
++        if let fifoPlusChunk {
++            // The lower bound is 1, not chunkLen: `SortformerStateUpdater` raises the pop length to
++            // `contextLength - fifoCapacity` when the period is smaller, so a shorter period only
++            // changes cache cadence, it cannot pop more frames than the FIFO holds. The default
++            // initializer still clamps to `>= chunkLen`; configurations that intentionally keep a
++            // smaller reference period (see `SortformerConfig.nemotron`) set it explicitly.
++            if spkcacheUpdatePeriod < 1 || spkcacheUpdatePeriod > fifoPlusChunk {
++                problems.append(
++                    "spkcacheUpdatePeriod must be within [1, fifoLen + chunkLen] = "
++                        + "[1, \(fifoPlusChunk)] (got \(spkcacheUpdatePeriod))"
++                )
++            }
++        }
++
++        // chunkMelFrames = (chunkLen + chunkLeftContext + chunkRightContext) * subsamplingFactor
++        let encoderFrames = sum("chunkEncoderFrames", chunkLen, chunkLeftContext, chunkRightContext)
++        let melFrames = product("chunkMelFrames", encoderFrames, subsamplingFactor)
++        _ = product("chunk input element count", melFrames, melFeatures)
++
++        // predictionFrames = spkcacheLen + fifoLen + chunkEncoderFrames, and the prediction buffer.
++        let predictionRows = encoderFrames.flatMap { sum("predictionFrames", spkcacheLen, fifoLen, $0) }
++        _ = product("prediction element count", predictionRows, numSpeakers)
++
++        // Streaming buffers reserved in `SortformerStreamingState`.
++        _ = product("fifo buffer element count", fifoPlusChunk, preEncoderDims)
++        _ = product(
++            "spkcache buffer element count",
++            sum("spkcacheLen + spkcacheUpdatePeriod", spkcacheLen, spkcacheUpdatePeriod),
++            preEncoderDims)
++        _ = product("chunk embedding element count", encoderFrames, preEncoderDims)
++
++        guard problems.isEmpty else {
++            throw SortformerError.configurationError(
++                "Invalid Sortformer geometry: " + problems.joined(separator: "; ")
++            )
++        }
+     }
+ }
+
+@@ -313,6 +589,7 @@ public struct SortformerFeatureLoader: Sendable {
+     private let rc: Int
+     private let chunkLen: Int
+     private let melFeatures: Int
++    private let emitsPartialTail: Bool
+
+     private let featSeq: [Float]
+     private let featLength: Int
+@@ -326,14 +603,29 @@ public struct SortformerFeatureLoader: Sendable {
+         self.rc = config.chunkRightContext * config.subsamplingFactor
+         self.chunkLen = config.chunkLen * config.subsamplingFactor
+         self.melFeatures = config.melFeatures
++        self.emitsPartialTail = config.melFrontend.family == .nemotron3Diarization
+
+         self.startFeat = 0
+         self.endFeat = 0
+-        (self.featSeq, self.featLength, self.featSeqLength) = AudioMelSpectrogram().computeFlatTransposed(audio: audio)
+-        // numChunks accounts for right context requirement: need endFeat + rc <= featLength
+-        // Chunk n has endFeat = (n+1) * chunkLen, so valid when (n+1) * chunkLen + rc <= featLength
+-        // numChunks = floor((featLength - rc) / chunkLen)
+-        self.numChunks = max(0, (self.featLength - self.rc) / self.chunkLen)
++        let frontend = config.melFrontend
++        if self.emitsPartialTail {
++            let storageFrames = frontend.storageFrameCount(sampleCount: audio.count)
++            let features = frontend.makeSpectrogram().computeFlatTransposed(
++                audio: audio,
++                paddingMode: .center,
++                expectedFrameCount: storageFrames
++            )
++            self.featSeq = features.mel
++            self.featLength = min(frontend.validFrameCount(sampleCount: audio.count), features.numFrames)
++            self.featSeqLength = self.featLength
++            self.numChunks = self.featLength == 0 ? 0 : (self.featLength + self.chunkLen - 1) / self.chunkLen
++        } else {
++            let features = frontend.makeSpectrogram().computeFlatTransposed(audio: audio)
++            self.featSeq = features.mel
++            self.featLength = features.melLength
++            self.featSeqLength = features.numFrames
++            self.numChunks = max(0, (self.featLength - self.rc) / self.chunkLen)
++        }
+     }
+
+     public mutating func next() -> (chunkFeatures: [Float], chunkLength: Int, leftOffset: Int, rightOffset: Int)? {
+@@ -343,11 +635,12 @@ public struct SortformerFeatureLoader: Sendable {
+         // Need at least one core frame
+         guard endFeat > startFeat else { return nil }
+
+-        // Require full right context (same as streaming getNextChunkFeatures)
+-        guard endFeat + rc <= featLength else { return nil }
++        if !emitsPartialTail {
++            guard endFeat + rc <= featLength else { return nil }
++        }
+
+         let leftOffset = min(lc, startFeat)
+-        let rightOffset = rc
++        let rightOffset = min(rc, featLength - endFeat)
+
+         let chunkStartFrame = startFeat - leftOffset
+         let chunkEndFrame = endFeat + rightOffset
+@@ -384,10 +677,10 @@ public struct StreamingUpdateResult: Sendable {
+     public let numSpeakers: Int
+
+     /// Number of confirmed frames
+-    public var confirmedFrameCount: Int { confirmed.count / numSpeakers }  // Assumes 4 speakers
++    public var confirmedFrameCount: Int { confirmed.count / numSpeakers }
+
+     /// Number of tentative frames
+-    public var tentativeFrameCount: Int { tentative.count / numSpeakers }  // Assumes 4 speakers
++    public var tentativeFrameCount: Int { tentative.count / numSpeakers }
+
+     public init(confirmed: [Float], tentative: [Float], numSpeakers: Int = 4) {
+         self.confirmed = confirmed
+diff --git a/Tests/FluidAudioTests/Diarizer/Sortformer/SortformerNemotronCompatibilityTests.swift b/Tests/FluidAudioTests/Diarizer/Sortformer/SortformerNemotronCompatibilityTests.swift
+new file mode 100644
+index 0000000..72578da
+--- /dev/null
++++ b/Tests/FluidAudioTests/Diarizer/Sortformer/SortformerNemotronCompatibilityTests.swift
+@@ -0,0 +1,229 @@
++import CoreML
++import Foundation
++import XCTest
++@testable import FluidAudio
++
++final class SortformerNemotronCompatibilityTests: XCTestCase {
++    private func configuration() throws -> SortformerConfig {
++        // Explicit cache parameters for contract testing, not a claim of NeMo parity.
++        try .nemotron(spkcacheUpdatePeriod: 300, spkcacheSilFramesPerSpk: 3, predScoreThreshold: 0.25)
++    }
++
++    private func geometry(
++        chunkShape: [Int] = [1, 3040, 128],
++        fifoShape: [Int] = [1, 40, 512],
++        lengthShape: [Int] = [1],
++        lengthType: MLMultiArrayDataType = .int32,
++        predictionType: MLMultiArrayDataType = .float16
++    ) -> SortformerModelGeometry {
++        SortformerModelGeometry(
++            chunk: .init(name: "chunk", shape: chunkShape, dataType: .float32),
++            chunkLengths: .init(name: "chunk_lengths", shape: lengthShape, dataType: lengthType),
++            spkcache: .init(name: "spkcache", shape: [1, 264, 512], dataType: .float32),
++            spkcacheLengths: .init(name: "spkcache_lengths", shape: [1], dataType: .int32),
++            fifo: .init(name: "fifo", shape: fifoShape, dataType: .float32),
++            fifoLengths: .init(name: "fifo_lengths", shape: [1], dataType: .int32),
++            predictions: .init(name: "spkcache_fifo_chunk_preds", shape: [1, 684, 8], dataType: predictionType),
++            chunkEmbeddings: .init(name: "chunk_pre_encode_embs", shape: [1, 380, 512], dataType: .float16),
++            chunkEmbeddingLengths: .init(name: "chunk_pre_encode_lengths", shape: [1], dataType: .int32)
++        )
++    }
++
++    func testExplicitNemotronCadenceAndLegacyDefaults() throws {
++        let config = try configuration()
++        XCTAssertEqual(config.melFrontend.family, .nemotron3Diarization)
++        XCTAssertEqual(SortformerConfig.default.melFrontend.family, .streamingSortformer)
++        XCTAssertEqual(config.numSpeakers, 8)
++        XCTAssertEqual(config.chunkMelFrames, 3040)
++        XCTAssertEqual(config.predictionFrames, 684)
++        XCTAssertEqual(config.spkcacheUpdatePeriod, 300)
++        XCTAssertNil(config.modelVariant)
++        XCTAssertEqual(SortformerConfig.default.numSpeakers, 4)
++        XCTAssertEqual(SortformerConfig(chunkLen: 340, spkcacheUpdatePeriod: 300).spkcacheUpdatePeriod, 340)
++        XCTAssertThrowsError(try geometry().validate(against: .default))
++        XCTAssertNoThrow(try geometry().validate(against: config))
++    }
++
++    func testNemotronFrontendContractIsFrozenToExtractedNeMoConfiguration() throws {
++        let frontend = try configuration().melFrontend
++        XCTAssertEqual(frontend.sampleRate, 16_000)
++        XCTAssertEqual(frontend.featureCount, 128)
++        XCTAssertEqual(frontend.fftLength, 512)
++        XCTAssertEqual(frontend.windowLength, 400)
++        XCTAssertEqual(frontend.hopLength, 160)
++        XCTAssertEqual(frontend.preemphasis, 0.97)
++        XCTAssertEqual(frontend.dither, 0)
++        XCTAssertEqual(frontend.padding, .centeredConstant)
++        XCTAssertEqual(frontend.window, .symmetricHann)
++        XCTAssertEqual(frontend.melScale, .slaneyNormalized)
++        XCTAssertEqual(frontend.magnitudePower, 2)
++        XCTAssertEqual(frontend.logGuard, .additive)
++        XCTAssertEqual(frontend.logGuardValue, powf(2, -24))
++        XCTAssertEqual(frontend.normalization, .none)
++        XCTAssertEqual(frontend.padTo, 0)
++        XCTAssertEqual(frontend.padValue, 0)
++        XCTAssertEqual(frontend.validFrameCount(sampleCount: 16_000), 100)
++        XCTAssertEqual(frontend.storageFrameCount(sampleCount: 16_000), 101)
++        // The older `(L + nFFT - windowLength) / hop` approximation returns 102 here.
++        XCTAssertEqual(frontend.validFrameCount(sampleCount: 16_100), 100)
++        XCTAssertEqual(frontend.storageFrameCount(sampleCount: 16_100), 101)
++    }
++
++    func testOfflineFeatureLoaderEmitsRightContextAgainAsFinalCoreTail() throws {
++        let config = try configuration()
++        // Exactly one fixed model window: 3040 valid 10 ms mel frames. NeMo chunks by the
++        // 2720-frame core, so the final 320 frames must be emitted a second time as core after
++        // serving as the first call's right context.
++        let audio = [Float](repeating: 0.125, count: config.chunkMelFrames * config.melStride)
++        var loader = SortformerFeatureLoader(config: config, audio: audio)
++
++        XCTAssertEqual(loader.numChunks, 2)
++        let first = try XCTUnwrap(loader.next())
++        XCTAssertEqual(first.chunkLength, config.chunkMelFrames)
++        XCTAssertEqual(first.leftOffset, 0)
++        XCTAssertEqual(first.rightOffset, config.chunkRightContext * config.subsamplingFactor)
++        XCTAssertEqual(first.chunkFeatures.count, config.chunkMelFrames * config.melFeatures)
++
++        let tail = try XCTUnwrap(loader.next())
++        XCTAssertEqual(tail.chunkLength, config.chunkRightContext * config.subsamplingFactor)
++        XCTAssertEqual(tail.leftOffset, 0)
++        XCTAssertEqual(tail.rightOffset, 0)
++        XCTAssertEqual(tail.chunkFeatures.count, tail.chunkLength * config.melFeatures)
++        XCTAssertNil(loader.next())
++    }
++
++    func testNemotronStateCadenceLeavesExactlyFifoCapacity() throws {
++        let config = try configuration()
++        let updater = SortformerStateUpdater(config: config)
++        var state = SortformerStreamingState(config: config)
++        let chunk = [Float](repeating: 0.25, count: config.chunkEncoderFrames * config.preEncoderDims)
++        let predictions = [Float](repeating: 0.1, count: config.predictionFrames * config.numSpeakers)
++
++        let first = try updater.streamingUpdate(
++            state: &state,
++            chunk: chunk,
++            preds: predictions,
++            leftContext: config.chunkLeftContext,
++            rightContext: config.chunkRightContext
++        )
++        XCTAssertEqual(first.confirmedFrameCount, config.chunkLen)
++        XCTAssertEqual(first.tentativeFrameCount, config.chunkRightContext)
++        XCTAssertEqual(state.spkcacheLength, config.spkcacheLen)
++        XCTAssertEqual(state.fifoLength, config.fifoLen)
++
++        _ = try updater.streamingUpdate(
++            state: &state,
++            chunk: chunk,
++            preds: predictions,
++            leftContext: config.chunkLeftContext,
++            rightContext: config.chunkRightContext
++        )
++        XCTAssertEqual(state.spkcacheLength, config.spkcacheLen)
++        XCTAssertEqual(state.fifoLength, config.fifoLen)
++        XCTAssertEqual(state.spkcache.count, config.spkcacheLen * config.preEncoderDims)
++        XCTAssertEqual(state.fifo.count, config.fifoLen * config.preEncoderDims)
++    }
++
++    func testPartialEncodedTailUsesReportedLengthNotFixedCapacity() throws {
++        let config = try configuration()
++        let updater = SortformerStateUpdater(config: config)
++        var state = SortformerStreamingState(config: config)
++        let partialFrames = 5
++
++        let result = try updater.streamingUpdate(
++            state: &state,
++            chunk: [Float](repeating: 1, count: partialFrames * config.preEncoderDims),
++            preds: [Float](repeating: 0.2, count: partialFrames * config.numSpeakers),
++            leftContext: 0,
++            rightContext: 0
++        )
++
++        XCTAssertEqual(result.confirmedFrameCount, partialFrames)
++        XCTAssertEqual(result.tentativeFrameCount, 0)
++        XCTAssertEqual(state.fifoLength, partialFrames)
++        XCTAssertEqual(state.fifo.count, partialFrames * config.preEncoderDims)
++    }
++
++    func testModelGeometryRejectsInvalidRanksAndDisagreeingWidths() throws {
++        let config = try configuration()
++        for shape in [[3040, 128], [2, 3040, 128], [1, -1, 128], [1, 3040, 64]] {
++            XCTAssertThrowsError(try geometry(chunkShape: shape).validate(against: config))
++        }
++        XCTAssertThrowsError(try geometry(fifoShape: [1, 40, 256]).validate(against: config))
++        XCTAssertThrowsError(try geometry(lengthShape: [1, 1]).validate(against: config))
++        XCTAssertThrowsError(try geometry(lengthType: .float32).validate(against: config))
++        XCTAssertThrowsError(try geometry(predictionType: .int32).validate(against: config))
++    }
++
++    func testExtremeGeometryThrowsInsteadOfOverflowing() throws {
++        var config = try configuration()
++        config.chunkLeftContext = Int.max
++        config.chunkRightContext = Int.max
++        XCTAssertThrowsError(try config.validateGeometry())
++        XCTAssertThrowsError(try geometry().validate(against: config))
++        config = try configuration()
++        config.spkcacheSilFramesPerSpk = Int.min
++        XCTAssertThrowsError(try config.validateGeometry())
++        for silenceFrames in [Int.min, -1, 33, Int.max] {
++            XCTAssertThrowsError(try SortformerConfig.nemotron(
++                spkcacheUpdatePeriod: 300, spkcacheSilFramesPerSpk: silenceFrames, predScoreThreshold: 0.25
++            ))
++        }
++    }
++
++    func testFloat16PredictionValuesAreReadWithoutAnotherSigmoid() throws {
++        let values = try MLMultiArray(shape: [1, 3], dataType: .float16)
++        values[0] = 0
++        values[1] = 0.25
++        values[2] = 1
++        let provider = try MLDictionaryFeatureProvider(dictionary: ["preds": values])
++        let decoded = try XCTUnwrap(SortformerModelGeometry.floatScalars(from: provider, named: "preds"))
++        XCTAssertEqual(decoded, [0, 0.25, 1])
++        let integers = try MLMultiArray(shape: [1], dataType: .int32)
++        XCTAssertNil(SortformerModelGeometry.floatScalars(from: integers))
++    }
++
++    func testRealNemotronArtifactLoadsWithSuppliedComputeConfiguration() async throws {
++        guard let path = ProcessInfo.processInfo.environment["NEMOTRON_DIARIZATION_MODEL_PATH"] else {
++            throw XCTSkip("Set NEMOTRON_DIARIZATION_MODEL_PATH for real-artifact metadata validation")
++        }
++        let configuration = MLModelConfiguration()
++        configuration.computeUnits = .cpuOnly
++        let models = try await SortformerModels.load(
++            config: self.configuration(), mainModelPath: URL(fileURLWithPath: path), configuration: configuration
++        )
++        XCTAssertEqual(models.geometry.numSpeakers, 8)
++        XCTAssertEqual(models.geometry.predictions.dataType, .float16)
++        XCTAssertEqual(models.geometry.names.predictions, "spkcache_fifo_chunk_preds")
++        XCTAssertEqual(models.mainModel.configuration.computeUnits, .cpuOnly)
++        XCTAssertThrowsError(try models.geometry.validate(against: .default))
++    }
++
++    func testRealNemotronArtifactProcessesFixedWindowAndCoreTail() async throws {
++        guard let path = ProcessInfo.processInfo.environment["NEMOTRON_DIARIZATION_MODEL_PATH"] else {
++            throw XCTSkip("Set NEMOTRON_DIARIZATION_MODEL_PATH for real-artifact inference validation")
++        }
++        let config = try self.configuration()
++        let modelConfiguration = MLModelConfiguration()
++        modelConfiguration.computeUnits = .cpuOnly
++        let models = try await SortformerModels.load(
++            config: config,
++            mainModelPath: URL(fileURLWithPath: path),
++            configuration: modelConfiguration
++        )
++        let diarizer = SortformerDiarizer(config: config)
++        diarizer.initialize(models: models)
++
++        // One fixed 3040-frame model window is 380 encoder frames. The first call confirms 340
++        // and uses 40 as right context; the loader must issue those 40 again as the final core tail.
++        let samples = (0..<(config.chunkMelFrames * config.melStride)).map {
++            Float(sin(Double($0) * 2 * .pi * 220 / Double(config.sampleRate))) * 0.05
++        }
++        let timeline = try diarizer.processComplete(samples)
++
++        XCTAssertEqual(timeline.numFinalizedFrames, config.chunkLen + config.chunkRightContext)
++        XCTAssertEqual(timeline.numTentativeFrames, 0)
++        XCTAssertEqual(diarizer.state.spkcacheLength, config.spkcacheLen)
++        XCTAssertEqual(diarizer.state.fifoLength, 0)
++    }
++}
+diff --git a/Tests/FluidAudioTests/Diarizer/Sortformer/SortformerStateUpdaterTests.swift b/Tests/FluidAudioTests/Diarizer/Sortformer/SortformerStateUpdaterTests.swift
+index 66288f3..61198dc 100644
+--- a/Tests/FluidAudioTests/Diarizer/Sortformer/SortformerStateUpdaterTests.swift
++++ b/Tests/FluidAudioTests/Diarizer/Sortformer/SortformerStateUpdaterTests.swift
+@@ -76,7 +76,7 @@ final class SortformerStateUpdaterTests: XCTestCase {
+         var state = SortformerStreamingState(config: config)
+
+         // Provide enough chunk data but insufficient predictions
+-        let chunkFrames = config.coreFrames + config.chunkLeftContext + config.chunkRightContext
++        let chunkFrames = config.chunkEncoderFrames
+         let chunk = [Float](repeating: 0, count: chunkFrames * config.preEncoderDims)
+         let preds = [Float](repeating: 0, count: 1)  // Way too short
+
+@@ -107,7 +107,7 @@ final class SortformerStateUpdaterTests: XCTestCase {
+         var state = SortformerStreamingState(config: config)
+
+         // Build valid-sized inputs
+-        let totalChunkFrames = config.coreFrames + config.chunkLeftContext + config.chunkRightContext
++        let totalChunkFrames = config.chunkEncoderFrames
+         let chunk = [Float](repeating: 0, count: totalChunkFrames * config.preEncoderDims)
+         let predsFrames = totalChunkFrames  // spkcache=0, fifo=0, so preds matches chunk frames
+         let preds = [Float](repeating: 0, count: predsFrames * config.numSpeakers)
+@@ -121,8 +121,37 @@ final class SortformerStateUpdaterTests: XCTestCase {
+         )
+
+         XCTAssertEqual(
+-            result.confirmed.count, config.coreFrames * config.numSpeakers,
+-            "Confirmed should have coreFrames * numSpeakers elements"
++            result.confirmed.count, config.chunkLen * config.numSpeakers,
++            "Confirmed should have chunkLen * numSpeakers elements"
+         )
+     }
++
++    func testStreamingUpdateRejectsEmbeddingScalarRemainder() {
++        let config = SortformerConfig.default
++        let updater = SortformerStateUpdater(config: config)
++        var state = SortformerStreamingState(config: config)
++
++        XCTAssertThrowsError(try updater.streamingUpdate(
++            state: &state,
++            chunk: [Float](repeating: 0, count: config.chunkEncoderFrames * config.preEncoderDims - 1),
++            preds: [Float](repeating: 0, count: config.predictionFrames * config.numSpeakers),
++            leftContext: config.chunkLeftContext,
++            rightContext: config.chunkRightContext
++        ))
++    }
++
++    func testStreamingUpdateRejectsStateLengthBufferMismatch() {
++        let config = SortformerConfig.default
++        let updater = SortformerStateUpdater(config: config)
++        var state = SortformerStreamingState(config: config)
++        state.fifoLength = 1
++
++        XCTAssertThrowsError(try updater.streamingUpdate(
++            state: &state,
++            chunk: [Float](repeating: 0, count: config.chunkEncoderFrames * config.preEncoderDims),
++            preds: [Float](repeating: 0, count: config.predictionFrames * config.numSpeakers),
++            leftContext: config.chunkLeftContext,
++            rightContext: config.chunkRightContext
++        ))
++    }
+ }
+diff --git a/Tests/FluidAudioTests/Diarizer/Sortformer/SortformerTests.swift b/Tests/FluidAudioTests/Diarizer/Sortformer/SortformerTests.swift
+index 81d5882..657aa71 100644
+--- a/Tests/FluidAudioTests/Diarizer/Sortformer/SortformerTests.swift
++++ b/Tests/FluidAudioTests/Diarizer/Sortformer/SortformerTests.swift
+@@ -33,10 +33,12 @@ final class SortformerTests: XCTestCase {
+             streamingChunks.append(mel)
+         }
+
+-        // 3. Compare
+-        XCTAssertEqual(batchChunks.count, streamingChunks.count, "Chunk count mismatch")
++        // 3. Compare every chunk the non-finalized streaming path can currently emit. The complete
++        // file loader intentionally emits additional partial tail chunks; the streaming path emits
++        // those only during finalization after padding supplies the missing future context.
++        XCTAssertGreaterThanOrEqual(batchChunks.count, streamingChunks.count)
+
+-        for i in 0..<batchChunks.count {
++        for i in 0..<streamingChunks.count {
+             let batch = batchChunks[i]
+             let stream = streamingChunks[i]

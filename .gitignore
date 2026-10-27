@@ -210,7 +210,12 @@ create_dmg_only.sh
 # Scratch directory
 scratch/
 
+# Maintained local dependency workspaces (patches are exported separately)
+.local-dependencies/
+
 assets/
+!Sources/Fluid/AppIcon.icon/Assets/
+!Sources/Fluid/AppIcon.icon/Assets/*.svg
 .swiftpm/
 scripts/
 
@@ -223,3 +228,12 @@ sample/
 .codex
 AGENTS.md
 builds/
+
+# Internal Markdown plans and reports stay local by default
+*.md
+!README.md
+!CONTRIBUTING.md
+!.github/pull_request_template.md
+
+# Local Claude Code settings and worktrees
+.claude/

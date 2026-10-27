@@ -41,7 +41,7 @@ enum AudioFixtureLoader {
            inputFormat.commonFormat == desiredFormat.commonFormat
         {
             let buffer = try readAllFrames(file: inputFile, format: inputFormat)
-            return try extractMonoFloatSamples(buffer: buffer)
+            return try self.extractMonoFloatSamples(buffer: buffer)
         }
 
         guard let converter = AVAudioConverter(from: inputFormat, to: desiredFormat) else {
@@ -73,7 +73,7 @@ enum AudioFixtureLoader {
             throw LoaderError.unsupportedAudio(conversionError.localizedDescription)
         }
 
-        return try extractMonoFloatSamples(buffer: outputBuffer)
+        return try self.extractMonoFloatSamples(buffer: outputBuffer)
     }
 
     private static func readAllFrames(file: AVAudioFile, format: AVAudioFormat) throws -> AVAudioPCMBuffer {

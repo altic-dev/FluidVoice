@@ -4,6 +4,7 @@ import SwiftUI
 struct FluidWindowSizing: Equatable {
     let minWidth: CGFloat
     let minHeight: CGFloat
+    var maximumSize: NSSize? = nil
 
     var minSize: NSSize {
         NSSize(width: self.minWidth, height: self.minHeight)
@@ -35,16 +36,18 @@ private struct FluidWindowSizingBridge: NSViewRepresentable {
     }
 }
 
-private final class FluidWindowSizingNSView: NSView {
+final class FluidWindowSizingNSView: NSView {
     var sizing: FluidWindowSizing {
         didSet {
-            self.applySizing()
+            guard self.sizing != oldValue else { return }
+            self.scheduleSizing()
         }
     }
 
     private weak var observedWindow: NSWindow?
-    private var resizeObserver: NSObjectProtocol?
+    private var windowObservers: [NSObjectProtocol] = []
     private var isApplyingSizing = false
+    private var isSizingScheduled = false
 
     init(sizing: FluidWindowSizing) {
         self.sizing = sizing
@@ -63,7 +66,7 @@ private final class FluidWindowSizingNSView: NSView {
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         self.observeWindowIfNeeded()
-        self.applySizing()
+        self.scheduleSizing()
     }
 
     private func observeWindowIfNeeded() {
@@ -73,36 +76,47 @@ private final class FluidWindowSizingNSView: NSView {
         self.observedWindow = self.window
 
         guard let window else { return }
-        self.resizeObserver = NotificationCenter.default.addObserver(
-            forName: NSWindow.didResizeNotification,
-            object: window,
-            queue: .main
-        ) { [weak self] _ in
-            self?.applySizing()
+        self.windowObservers = [NSWindow.didResizeNotification, NSWindow.didExitFullScreenNotification].map { name in
+            NotificationCenter.default.addObserver(forName: name, object: window, queue: .main) { [weak self] _ in
+                self?.scheduleSizing()
+            }
         }
     }
 
     private func removeResizeObserver() {
-        if let resizeObserver {
-            NotificationCenter.default.removeObserver(resizeObserver)
+        for observer in self.windowObservers {
+            NotificationCenter.default.removeObserver(observer)
         }
-        self.resizeObserver = nil
+        self.windowObservers.removeAll()
+    }
+
+    private func scheduleSizing() {
+        guard !self.isSizingScheduled else { return }
+        self.isSizingScheduled = true
+        // NSWindow bounds must not change inside SwiftUI's constraint/layout pass.
+        // One deferred application reads the latest sizing and current window.
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.isSizingScheduled = false
+            self.applySizing()
+        }
     }
 
     private func applySizing() {
-        guard !self.isApplyingSizing, let window else { return }
+        guard !self.isApplyingSizing, let window, !window.styleMask.contains(.fullScreen) else { return }
 
         self.isApplyingSizing = true
         defer { self.isApplyingSizing = false }
 
         let minSize = self.sizing.minSize
-        window.minSize = minSize
+        if window.minSize != minSize { window.minSize = minSize }
+        let maximumSize = self.sizing.maximumSize ?? NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        if window.maxSize != maximumSize { window.maxSize = maximumSize }
 
         let frame = window.frame
-        guard frame.width < minSize.width || frame.height < minSize.height else { return }
-
-        let targetWidth = max(frame.width, minSize.width)
-        let targetHeight = max(frame.height, minSize.height)
+        let targetWidth = min(max(frame.width, minSize.width), maximumSize.width)
+        let targetHeight = min(max(frame.height, minSize.height), maximumSize.height)
+        guard frame.width != targetWidth || frame.height != targetHeight else { return }
         let targetFrame = NSRect(
             x: frame.midX - targetWidth / 2,
             y: frame.midY - targetHeight / 2,

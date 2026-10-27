@@ -10,14 +10,22 @@ import Foundation
 
 // MARK: - File Transcription Entry Model
 
-struct FileTranscriptionEntry: Codable, Identifiable, Equatable {
+nonisolated struct FileTranscriptionEntry: Codable, Identifiable, Equatable {
     let id: UUID
     let timestamp: Date
     let fileName: String
+    /// User-facing name; never changes the source file or its original filename.
+    var customTitle: String?
+    var searchRevision: UInt64?
+    var displayTitle: String { self.customTitle ?? self.fileName }
     let duration: TimeInterval
     let processingTime: TimeInterval
     let confidence: Float
     let text: String
+    /// Speaker-attributed segments when diarization was enabled; empty otherwise.
+    let speakerSegments: [SpeakerTranscriptSegment]
+    let speakerLabelingNotice: String?
+    let speakerLabelingGaps: [SpeakerTranscriptGap]
 
     init(
         id: UUID = UUID(),
@@ -26,7 +34,10 @@ struct FileTranscriptionEntry: Codable, Identifiable, Equatable {
         duration: TimeInterval,
         processingTime: TimeInterval,
         confidence: Float,
-        text: String
+        text: String,
+        speakerSegments: [SpeakerTranscriptSegment] = [],
+        speakerLabelingNotice: String? = nil,
+        speakerLabelingGaps: [SpeakerTranscriptGap] = []
     ) {
         self.id = id
         self.timestamp = timestamp
@@ -35,6 +46,9 @@ struct FileTranscriptionEntry: Codable, Identifiable, Equatable {
         self.processingTime = processingTime
         self.confidence = confidence
         self.text = text
+        self.speakerSegments = speakerSegments
+        self.speakerLabelingNotice = speakerLabelingNotice
+        self.speakerLabelingGaps = speakerLabelingGaps
     }
 
     init(from result: TranscriptionResult) {
@@ -45,15 +59,61 @@ struct FileTranscriptionEntry: Codable, Identifiable, Equatable {
         self.processingTime = result.processingTime
         self.confidence = result.confidence
         self.text = result.text
+        self.speakerSegments = result.speakerSegments
+        self.speakerLabelingNotice = result.speakerLabelingNotice
+        self.speakerLabelingGaps = result.speakerLabelingGaps
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id, timestamp, fileName, duration, processingTime, confidence, text, speakerSegments
+        case speakerLabelingNotice, speakerLabelingGaps, customTitle, searchRevision
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try c.decode(UUID.self, forKey: .id)
+        self.timestamp = try c.decode(Date.self, forKey: .timestamp)
+        self.fileName = try c.decode(String.self, forKey: .fileName)
+        self.customTitle = try c.decodeIfPresent(String.self, forKey: .customTitle)
+        self.searchRevision = try c.decodeIfPresent(UInt64.self, forKey: .searchRevision)
+        self.duration = try c.decode(TimeInterval.self, forKey: .duration)
+        self.processingTime = try c.decode(TimeInterval.self, forKey: .processingTime)
+        self.confidence = try c.decode(Float.self, forKey: .confidence)
+        self.text = try c.decode(String.self, forKey: .text)
+        // Older history entries predate speaker labels — tolerate a missing key.
+        self.speakerSegments = try c.decodeIfPresent([SpeakerTranscriptSegment].self, forKey: .speakerSegments) ?? []
+        self.speakerLabelingNotice = try c.decodeIfPresent(String.self, forKey: .speakerLabelingNotice)
+        self.speakerLabelingGaps = try c.decodeIfPresent([SpeakerTranscriptGap].self, forKey: .speakerLabelingGaps) ?? []
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(self.id, forKey: .id)
+        try c.encode(self.timestamp, forKey: .timestamp)
+        try c.encode(self.fileName, forKey: .fileName)
+        try c.encodeIfPresent(self.customTitle, forKey: .customTitle)
+        try c.encodeIfPresent(self.searchRevision, forKey: .searchRevision)
+        try c.encode(self.duration, forKey: .duration)
+        try c.encode(self.processingTime, forKey: .processingTime)
+        try c.encode(self.confidence, forKey: .confidence)
+        try c.encode(self.text, forKey: .text)
+        if !self.speakerSegments.isEmpty {
+            try c.encode(self.speakerSegments, forKey: .speakerSegments)
+        }
+        try c.encodeIfPresent(self.speakerLabelingNotice, forKey: .speakerLabelingNotice)
+        if !self.speakerLabelingGaps.isEmpty {
+            try c.encode(self.speakerLabelingGaps, forKey: .speakerLabelingGaps)
+        }
     }
 
     /// Preview text for list display (first 80 chars)
     var previewText: String {
-        let trimmed = self.text.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.count > 80 {
-            return String(trimmed.prefix(77)) + "..."
+        let leadingTrimmed = self.text.drop(while: { $0.isWhitespace })
+        let prefix = leadingTrimmed.prefix(81)
+        if prefix.count > 80, !leadingTrimmed.dropFirst(80).allSatisfy(\.isWhitespace) {
+            return String(prefix.prefix(77)) + "..."
         }
-        return trimmed
+        return String(prefix.prefix(80)).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     /// Relative time string for display
@@ -80,7 +140,10 @@ struct FileTranscriptionEntry: Codable, Identifiable, Equatable {
             duration: self.duration,
             processingTime: self.processingTime,
             fileName: self.fileName,
-            timestamp: self.timestamp
+            timestamp: self.timestamp,
+            speakerSegments: self.speakerSegments,
+            speakerLabelingNotice: self.speakerLabelingNotice,
+            speakerLabelingGaps: self.speakerLabelingGaps
         )
     }
 }
@@ -89,9 +152,12 @@ struct FileTranscriptionEntry: Codable, Identifiable, Equatable {
 
 @MainActor
 final class FileTranscriptionHistoryStore: ObservableObject {
+    // Explicitly nonisolated: on macOS 15.4+ the synthesized main-actor deinit can abort until the OS runtime has the fix (swiftlang/swift#88036).
+    nonisolated deinit {}
+
     static let shared = FileTranscriptionHistoryStore()
 
-    private let defaults = UserDefaults.standard
+    private let defaults: UserDefaults
     private let maxEntries = 50
 
     private enum Keys {
@@ -101,7 +167,8 @@ final class FileTranscriptionHistoryStore: ObservableObject {
     @Published private(set) var entries: [FileTranscriptionEntry] = []
     @Published var selectedEntryID: UUID?
 
-    private init() {
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
         self.loadEntries()
     }
 
@@ -132,6 +199,17 @@ final class FileTranscriptionHistoryStore: ObservableObject {
         )
     }
 
+    func renameEntry(id: UUID, to title: String) {
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              let index = self.entries.firstIndex(where: { $0.id == id }),
+              self.entries[index].displayTitle != trimmed else { return }
+        self.entries[index].customTitle = trimmed
+        let revision = self.entries[index].searchRevision ?? 1
+        self.entries[index].searchRevision = revision == .max ? .max : revision + 1
+        self.saveEntries()
+    }
+
     func deleteEntry(id: UUID) {
         self.entries.removeAll { $0.id == id }
         if self.selectedEntryID == id {
@@ -150,13 +228,21 @@ final class FileTranscriptionHistoryStore: ObservableObject {
     // MARK: - Persistence
 
     private func loadEntries() {
+        // Skip an entry this build cannot read instead of emptying the history;
+        // the next save would persist an empty list.
         guard let data = self.defaults.data(forKey: Keys.fileTranscriptionHistory),
-              let decoded = try? JSONDecoder().decode([FileTranscriptionEntry].self, from: data)
+              let decoded = PersistedHistory.decode(FileTranscriptionEntry.self, from: data)
         else {
             self.entries = []
             return
         }
-        self.entries = decoded
+        self.entries = decoded.entries
+        if decoded.skipped > 0 {
+            DebugLogger.shared.info(
+                "Skipped \(decoded.skipped) unreadable file transcription entries",
+                source: "FileTranscriptionHistoryStore"
+            )
+        }
     }
 
     private func saveEntries() {

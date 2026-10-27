@@ -1,0 +1,146 @@
+@testable import FluidVoice_Debug
+import XCTest
+
+// Regression tests for the Anthropic `temperature` deprecation handling.
+// Newer Anthropic models (Opus 4.7+, every Claude 5 model, Fable/Mythos) reject the
+// `temperature` parameter with HTTP 400 "`temperature` is deprecated for this model."
+// See https://github.com/altic-dev/FluidVoice/issues/285 (Opus 4.7) — the same failure
+// recurred for Sonnet 5 and then Haiku 5.5 (issue #1100) because the check listed
+// individual model IDs, so it is now version-based.
+// Sonnet 4.6 and older still accept `temperature` (verified against the live API)
+// and must keep receiving the app's tuned values.
+
+@MainActor
+final class TemperatureSupportTests: XCTestCase {
+    // These tests cover the name-list fallback, so they read an empty learned store.
+    // `ModelTemperatureSupport.shared` holds the test host's saved values, which win over the name list.
+    private var suiteName: String!
+    private var emptySupport: ModelTemperatureSupport!
+
+    override func setUpWithError() throws {
+        try super.setUpWithError()
+        self.suiteName = "TemperatureSupportTests.\(UUID().uuidString)"
+        self.emptySupport = try ModelTemperatureSupport(defaults: XCTUnwrap(UserDefaults(suiteName: self.suiteName)))
+    }
+
+    override func tearDown() {
+        UserDefaults().removePersistentDomain(forName: self.suiteName)
+        super.tearDown()
+    }
+
+    func testTemperatureUnsupported_newerAnthropicModels() {
+        let unsupported = [
+            "claude-opus-4-7",
+            "claude-opus-4-8",
+            "claude-sonnet-5",
+            "claude-sonnet-5-5",
+            "claude-opus-5",
+            "claude-opus-5-5",
+            "claude-haiku-5-5",
+            "claude-fable-5",
+            "claude-mythos-5",
+            // Provider-prefixed and dotted IDs (e.g. OpenRouter) must match too
+            "anthropic/claude-sonnet-5",
+            "anthropic/claude-haiku-5.5",
+            "anthropic/claude-opus-5.5",
+            "anthropic/claude-opus-4.7",
+            "anthropic/claude-opus-4.8",
+            "anthropic/claude-opus-4.8-fast",
+            // Issue #1100: Claude 5 models that were never listed individually
+            "claude-haiku-5-5",
+            "claude-opus-5-5",
+            "claude-sonnet-5-5",
+            "claude-opus-5",
+            "anthropic/claude-haiku-5.5",
+            "us.anthropic.claude-haiku-5-5-v1:0",
+            // Future versions must not need another code change
+            "claude-opus-4-10",
+            "claude-haiku-6",
+        ]
+        for model in unsupported {
+            XCTAssertTrue(
+                SettingsStore.shared.isTemperatureUnsupported(model, baseURL: "https://api.example.test/v1", support: self.emptySupport),
+                "\(model) rejects `temperature` — sending it fails with HTTP 400"
+            )
+        }
+    }
+
+    func testTemperatureUnsupported_openAIReasoningModels() {
+        for model in ["o1", "o3-mini", "gpt-5", "gpt-6-luna", "gpt-6-sol", "gpt-6-astra", "openai/gpt-6-luna", "openai/gpt-oss-120b"] {
+            XCTAssertTrue(
+                SettingsStore.shared.isTemperatureUnsupported(model, baseURL: "https://api.example.test/v1", support: self.emptySupport),
+                "\(model) is a reasoning model and must not receive `temperature`"
+            )
+        }
+    }
+
+    func testIsReasoningModel_doesNotMatchEveryOpenAIModel() {
+        // Regression: isReasoningModel matched the whole "openai/" prefix, so
+        // every OpenAI model on a provider like OpenRouter was mis-classified
+        // as a reasoning model and lost temperature control. Only actual
+        // reasoning model families should match.
+        let nonReasoning = [
+            "gpt-4o",
+            "gpt-4o-mini",
+            "gpt-4.1",
+            "chatgpt-4o-latest",
+            // Provider-prefixed (e.g. OpenRouter) non-reasoning IDs — the bug case
+            "openai/gpt-4o",
+            "openai/gpt-4.1",
+            "openai/gpt-4o-mini",
+            "openai/chatgpt-4o-latest",
+        ]
+        for model in nonReasoning {
+            XCTAssertFalse(
+                SettingsStore.shared.isReasoningModel(model),
+                "\(model) is not a reasoning model and must keep temperature control"
+            )
+        }
+
+        // Control: known reasoning models still classify as reasoning, both
+        // bare and provider-prefixed.
+        let reasoning = [
+            "o1", "o3-mini", "o4-mini", "gpt-5", "gpt-5-mini",
+            "openai/o3", "openai/o3-mini", "openai/gpt-5", "openai/gpt-oss-120b",
+            "deepseek/deepseek-reasoner",
+        ]
+        for model in reasoning {
+            XCTAssertTrue(
+                SettingsStore.shared.isReasoningModel(model),
+                "\(model) is a reasoning model"
+            )
+        }
+    }
+
+    func testTemperatureSupported_olderAndNonAnthropicModels() {
+        let supported = [
+            "gpt-4.1",
+            "claude-sonnet-4-6",
+            "claude-sonnet-4-20250514",
+            "claude-haiku-4-5",
+            "claude-haiku-4-5-20251001",
+            "claude-opus-4-6",
+            "claude-opus-4-1-20250805",
+            "claude-opus-4-20250514",
+            "claude-3-5-haiku-20241022",
+            "claude-3-7-sonnet-20250219",
+            "claude-opus-4-5-20251101",
+            "gemini-2.5-flash",
+            "llama3",
+            // OpenRouter-prefixed non-reasoning OpenAI models keep temperature
+            "openai/gpt-4o",
+            "openai/gpt-4.1",
+            // Dotted OpenRouter IDs for models that still accept temperature
+            "anthropic/claude-sonnet-4.6",
+            "anthropic/claude-sonnet-4.5",
+            "anthropic/claude-opus-4.5",
+            "anthropic/claude-haiku-4.5",
+        ]
+        for model in supported {
+            XCTAssertFalse(
+                SettingsStore.shared.isTemperatureUnsupported(model, baseURL: "https://api.example.test/v1", support: self.emptySupport),
+                "\(model) still supports `temperature` and should keep receiving it"
+            )
+        }
+    }
+}

@@ -1,0 +1,76 @@
+{
+  "exitStatus": 0,
+  "report": {
+    "acceptedSampleCount": 737,
+    "application": {
+      "backwardsTimestampCount": 0,
+      "coverageFraction": 1,
+      "deliveredDurationSeconds": 5.1999999999999771,
+      "firstChannelCount": 2,
+      "firstPresentationSeconds": 169340.14785104099,
+      "firstSampleRateHz": 48000,
+      "formatChangeCount": 0,
+      "gapCount": 93,
+      "gapDurationSeconds": 1.7322599500657621e-09,
+      "invalidTimestampCount": 0,
+      "jitterObservationCount": 259,
+      "lastPresentationEndSeconds": 169345.34785104098,
+      "malformedMetadataCount": 0,
+      "maxAbsoluteJitterSeconds": 0.01998691666405648,
+      "meanAbsoluteJitterSeconds": 0.002437802284724938,
+      "overlapCount": 166,
+      "sampleCount": 260,
+      "timestampSpanSeconds": 5.1999999999825377,
+      "validTimestampCount": 260
+    },
+    "boundedMaximumSamples": 20000,
+    "crossTrack": {
+      "aecEvaluated": false,
+      "firstPresentationOffsetSeconds": 0.15400312567362562,
+      "lastPresentationOffsetSeconds": 0.042003125679912046,
+      "relativeSpanDriftPPM": -21538.461537324973,
+      "sharedClockEstablished": false,
+      "timestampRelationship": "independent PTS origins; measured offset/drift only"
+    },
+    "droppedAfterBoundCount": 0,
+    "enabled": true,
+    "failOpen": true,
+    "microphone": {
+      "backwardsTimestampCount": 0,
+      "coverageFraction": 1,
+      "deliveredDurationSeconds": 5.0879999999999956,
+      "firstChannelCount": 1,
+      "firstPresentationSeconds": 169340.30185416667,
+      "firstSampleRateHz": 48000,
+      "formatChangeCount": 0,
+      "gapCount": 440,
+      "gapDurationSeconds": 9.5615799999837492e-10,
+      "invalidTimestampCount": 0,
+      "jitterObservationCount": 476,
+      "lastPresentationEndSeconds": 169345.38985416666,
+      "malformedMetadataCount": 0,
+      "maxAbsoluteJitterSeconds": 0.0019029583178150154,
+      "meanAbsoluteJitterSeconds": 8.0990108485100049e-05,
+      "overlapCount": 36,
+      "sampleCount": 477,
+      "timestampSpanSeconds": 5.0879999999888241,
+      "validTimestampCount": 477
+    },
+    "provenance": {
+      "applicationSelectionConfirmed": true,
+      "captureMethod": "screenCaptureKit",
+      "scope": "selectedApplicationDisplay"
+    },
+    "rawPCMRetained": false,
+    "reasons": [
+      "diagnostic-only",
+      "no raw PCM or transcript retention",
+      "shared clock not established",
+      "acoustic delay and AEC not evaluated"
+    ],
+    "rejectedProvenanceCount": 0,
+    "schemaVersion": 2,
+    "transcriptRetained": false
+  },
+  "status": "success"
+}

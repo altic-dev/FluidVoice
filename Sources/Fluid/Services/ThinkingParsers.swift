@@ -4,7 +4,7 @@ import Foundation
 
 /// Protocol for parsing thinking tokens from LLM streaming responses.
 /// Different model families have different patterns for thinking tokens.
-protocol ThinkingParser {
+nonisolated protocol ThinkingParser {
     /// Process a content chunk during streaming.
     /// - Parameters:
     ///   - chunk: The new content chunk from the stream
@@ -29,7 +29,7 @@ protocol ThinkingParser {
 
 // MARK: - Parser State
 
-enum ThinkingParserState {
+nonisolated enum ThinkingParserState {
     case initial // Haven't determined if we're in thinking or content yet
     case inThinking // Currently inside thinking section
     case inContent // Currently in main content
@@ -38,7 +38,7 @@ enum ThinkingParserState {
 // MARK: - Parser Factory
 
 /// Factory to create the appropriate parser and extra parameters based on model name
-enum ThinkingParserFactory {
+nonisolated enum ThinkingParserFactory {
     /// Create a parser appropriate for the given model
     static func createParser(for model: String) -> ThinkingParser {
         let modelLower = model.lowercased()
@@ -61,10 +61,15 @@ enum ThinkingParserFactory {
             return SeparateFieldThinkingParser()
         }
 
-        // OpenAI reasoning models (o1, o3, gpt-5): use SeparateFieldThinkingParser
-        if SettingsStore.shared.isReasoningModel(model) &&
-            (modelLower.contains("gpt-5") || modelLower.contains("o1") || modelLower.contains("o3") || modelLower.contains("gpt-oss"))
-        {
+        // OpenAI reasoning models (o1, o3, o4, gpt-5): use SeparateFieldThinkingParser
+        var family = modelLower
+        if let slash = family.firstIndex(of: "/") {
+            family = String(family[family.index(after: slash)...])
+        }
+        let isOpenAIReasoningModel = family.hasPrefix("gpt-5") ||
+            family.contains("gpt-5.") || family.hasPrefix("o1") ||
+            family.hasPrefix("o3") || family.hasPrefix("o4") || family.contains("gpt-oss")
+        if isOpenAIReasoningModel {
             DebugLogger.shared.debug("ThinkingParser: Using SeparateFieldParser for reasoning model '\(model)'", source: "LLMClient")
             return SeparateFieldThinkingParser()
         }
@@ -107,7 +112,9 @@ enum ThinkingParserFactory {
 
 /// Standard parser for models that use `<think>...</think>` or `<thinking>...</thinking>` tags.
 /// Used by: DeepSeek, Qwen, Claude (when thinking enabled), most open models
-struct StandardThinkingParser: ThinkingParser {
+nonisolated struct StandardThinkingParser: ThinkingParser {
+    private var sawOpeningTag = false
+
     mutating func processChunk(
         _ chunk: String,
         currentState: ThinkingParserState,
@@ -131,6 +138,7 @@ struct StandardThinkingParser: ThinkingParser {
                 // Remove processed part including open tag
                 tagBuffer = String(tagBuffer[openRange.upperBound...])
                 newState = .inThinking
+                self.sawOpeningTag = true
             }
         }
 
@@ -175,8 +183,19 @@ struct StandardThinkingParser: ThinkingParser {
     }
 
     func finalize(thinkingBuffer: [String], contentBuffer: [String], finalState: ThinkingParserState) -> (thinking: String, content: String) {
-        let thinking = thinkingBuffer.joined()
+        var thinking = thinkingBuffer.joined()
         var content = contentBuffer.joined()
+
+        // Chat templates that open the think block in the prompt (e.g. Qwen3 Thinking-2507)
+        // stream "reasoning</think>answer" with no opening tag. Split on that close the same
+        // way stripThinkingTags does for non-streaming responses.
+        let firstClose = ["</think>", "</thinking>"]
+            .compactMap { content.range(of: $0) }
+            .min { $0.lowerBound < $1.lowerBound }
+        if !self.sawOpeningTag, let closeRange = firstClose {
+            thinking += content[..<closeRange.lowerBound]
+            content = String(content[closeRange.upperBound...])
+        }
 
         // Strip any remaining stray tags
         content = content.replacingOccurrences(of: "</think>", with: "")
@@ -194,7 +213,7 @@ struct StandardThinkingParser: ThinkingParser {
 /// Parser for Nemotron/Nemo models that output thinking WITHOUT an opening <think> tag.
 /// Pattern: `thinking content</think>actual response`
 /// Everything before `</think>` is thinking, everything after is content.
-struct NemoThinkingParser: ThinkingParser {
+nonisolated struct NemoThinkingParser: ThinkingParser {
     mutating func processChunk(
         _ chunk: String,
         currentState: ThinkingParserState,
@@ -278,7 +297,7 @@ struct NemoThinkingParser: ThinkingParser {
 
 /// Parser for models that don't use thinking tokens at all.
 /// Everything is content.
-struct NoThinkingParser: ThinkingParser {
+nonisolated struct NoThinkingParser: ThinkingParser {
     mutating func processChunk(
         _ chunk: String,
         currentState: ThinkingParserState,
@@ -298,7 +317,7 @@ struct NoThinkingParser: ThinkingParser {
 /// Parser for models that use separate fields (reasoning_content, thought, etc.)
 /// instead of inline tags like <think>.
 /// Used by: OpenAI o1/o3/gpt-5, DeepSeek (official API).
-struct SeparateFieldThinkingParser: ThinkingParser {
+nonisolated struct SeparateFieldThinkingParser: ThinkingParser {
     mutating func processChunk(
         _ chunk: String,
         currentState: ThinkingParserState,

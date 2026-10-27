@@ -8,8 +8,8 @@ import FluidAudio
 final class ParakeetVocabularyStore {
     static let shared = ParakeetVocabularyStore()
 
-    struct VocabularyConfig: Codable, Sendable {
-        struct Term: Codable, Hashable, Sendable {
+    nonisolated struct VocabularyConfig: Codable, Sendable {
+        nonisolated struct Term: Codable, Hashable, Sendable {
             let text: String
             let weight: Float?
             let aliases: [String]
@@ -74,7 +74,7 @@ final class ParakeetVocabularyStore {
         }
     }
 
-    private enum Defaults {
+    private nonisolated enum Defaults {
         // Balanced defaults to reduce over-biasing while still improving rare terms.
         static let alpha: Float = 2.8
         static let minCtcScore: Float = -2.2
@@ -148,6 +148,19 @@ final class ParakeetVocabularyStore {
         return Self.normalizeUserTerms(parsed.terms, maxTerms: Defaults.maxTerms)
     }
 
+    /// Search reads a bounded snapshot without creating files or blocking the UI.
+    @concurrent nonisolated static func readSearchTerms() async throws -> [VocabularyConfig.Term] {
+        guard let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else { return [] }
+        let url = base.appendingPathComponent("FluidVoice/parakeet_custom_vocabulary.json")
+        guard FileManager.default.fileExists(atPath: url.path) else { return [] }
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+        let limit = 2 * 1024 * 1024
+        guard let data = try handle.read(upToCount: limit + 1), data.count <= limit else { return [] }
+        let parsed = try JSONDecoder().decode(VocabularyConfig.self, from: data)
+        return Self.normalizeUserTerms(parsed.terms, maxTerms: Defaults.maxTerms)
+    }
+
     /// Saves user-managed boost terms while keeping tuning backend-controlled.
     func saveUserBoostTerms(_ terms: [VocabularyConfig.Term]) throws {
         let normalizedTerms = Self.normalizeUserTerms(terms, maxTerms: Defaults.maxTerms)
@@ -192,9 +205,9 @@ final class ParakeetVocabularyStore {
             source: "ParakeetVocabularyStore"
         )
 
-        let mergedTerms = self.mergeAndNormalizeTerms(jsonTerms: parsed.terms, dictionaryEntries: SettingsStore.shared.customDictionaryEntries)
+        let mergedTerms = Self.normalizedBoostTerms(parsed.terms)
         DebugLogger.shared.debug(
-            "ParakeetVocabularyStore: merged terms=\(mergedTerms.count), dictionaryEntries=\(SettingsStore.shared.customDictionaryEntries.count)",
+            "ParakeetVocabularyStore: normalized explicit boost terms=\(mergedTerms.count)",
             source: "ParakeetVocabularyStore"
         )
 
@@ -209,14 +222,10 @@ final class ParakeetVocabularyStore {
         )
     }
 
-    private func mergeAndNormalizeTerms(
-        jsonTerms: [VocabularyConfig.Term],
-        dictionaryEntries: [SettingsStore.CustomDictionaryEntry]
-    ) -> [VocabularyConfig.Term] {
-        DebugLogger.shared.debug(
-            "ParakeetVocabularyStore: merge input jsonTerms=\(jsonTerms.count), dictionaryEntries=\(dictionaryEntries.count)",
-            source: "ParakeetVocabularyStore"
-        )
+    /// Normalizes only terms explicitly added to Custom Words Boosting.
+    /// Basic Instant Replacements are deterministic post-ASR rules and must never
+    /// become fuzzy Parakeet vocabulary candidates.
+    static func normalizedBoostTerms(_ jsonTerms: [VocabularyConfig.Term]) -> [VocabularyConfig.Term] {
         var mergedByText: [String: VocabularyConfig.Term] = [:]
 
         func normalizeAliases(_ aliases: [String], excluding text: String) -> [String] {
@@ -255,26 +264,12 @@ final class ParakeetVocabularyStore {
             upsert(term)
         }
 
-        for entry in dictionaryEntries {
-            let replacement = entry.replacement.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !replacement.isEmpty else { continue }
-            let aliases = entry.triggers
-                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                .filter { !$0.isEmpty }
-            upsert(VocabularyConfig.Term(text: replacement, weight: 8.0, aliases: aliases))
-        }
-
-        let merged = mergedByText.values.sorted { lhs, rhs in
+        return mergedByText.values.sorted { lhs, rhs in
             lhs.text.localizedCaseInsensitiveCompare(rhs.text) == .orderedAscending
         }
-        DebugLogger.shared.debug(
-            "ParakeetVocabularyStore: merge output count=\(merged.count)",
-            source: "ParakeetVocabularyStore"
-        )
-        return merged
     }
 
-    private static func normalizeUserTerms(_ terms: [VocabularyConfig.Term], maxTerms: Int) -> [VocabularyConfig.Term] {
+    private nonisolated static func normalizeUserTerms(_ terms: [VocabularyConfig.Term], maxTerms: Int) -> [VocabularyConfig.Term] {
         var seen: Set<String> = []
         var normalized: [VocabularyConfig.Term] = []
         normalized.reserveCapacity(min(terms.count, maxTerms))

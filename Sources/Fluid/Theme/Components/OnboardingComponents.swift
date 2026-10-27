@@ -1,6 +1,33 @@
 import AppKit
 import SwiftUI
 
+enum FluidOnboardingLayout {
+    static let footerHorizontalInset: CGFloat = 56
+    static let footerBottomInset: CGFloat = 56
+}
+
+struct OnboardingModelInfoTooltip: View {
+    let text: String
+    let font: Font
+
+    var body: some View {
+        Text(self.text)
+            .font(self.font)
+            .foregroundStyle(.white.opacity(0.92))
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(12)
+            .frame(width: 260, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(Color(red: 0.075, green: 0.085, blue: 0.11))
+                    .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.white.opacity(0.16), lineWidth: 1))
+            )
+            .shadow(color: .black.opacity(0.3), radius: 8, y: 4)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+    }
+}
+
 struct FluidOnboardingLandingHero<Actions: View>: View {
     @Environment(\.theme) private var theme
 
@@ -34,7 +61,7 @@ struct FluidOnboardingLandingHero<Actions: View>: View {
 
             if !self.eyebrow.isEmpty {
                 Text(self.eyebrow)
-                    .font(.system(size: 14, weight: .bold))
+                    .font(.fluidSystem(size: 14, weight: .bold))
                     .tracking(4.2)
                     .foregroundStyle(FluidOnboardingLandingColors.blue.opacity(0.72))
                     .textCase(.uppercase)
@@ -43,13 +70,13 @@ struct FluidOnboardingLandingHero<Actions: View>: View {
 
             VStack(spacing: 4) {
                 Text(self.title)
-                    .font(.system(size: 52, weight: .semibold))
+                    .font(.fluidSystem(size: 52, weight: .semibold))
                     .foregroundStyle(.white)
                     .multilineTextAlignment(.center)
                     .minimumScaleFactor(0.82)
 
                 Text(self.accentTitle)
-                    .font(.system(size: 50, weight: .semibold))
+                    .font(.fluidSystem(size: 50, weight: .semibold))
                     .italic()
                     .foregroundStyle(FluidOnboardingLandingColors.blue)
                     .multilineTextAlignment(.center)
@@ -63,7 +90,7 @@ struct FluidOnboardingLandingHero<Actions: View>: View {
                 Text(self.firstDetail)
                 Text(self.secondDetail)
             }
-            .font(.system(size: 22, weight: .medium))
+            .font(.fluidSystem(size: 22, weight: .medium))
             .foregroundStyle(Color.white.opacity(0.70))
             .multilineTextAlignment(.center)
             .lineLimit(1)
@@ -86,7 +113,11 @@ struct FluidOnboardingLandingBackdrop: View {
 
     var body: some View {
         ZStack {
+            Rectangle()
+                .fill(.ultraThinMaterial)
+
             Color(red: 0.012, green: 0.019, blue: 0.031)
+                .opacity(0.88)
 
             RadialGradient(
                 colors: [
@@ -109,7 +140,84 @@ struct FluidOnboardingLandingBackdrop: View {
                 endRadius: 520
             )
         }
+        // A crisp card edge: the old feathered mask let the window's rectangle show through
+        // the fade, which read as a second, uglier boundary on light desktops.
+        .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)
+        }
         .ignoresSafeArea()
+    }
+}
+
+struct FluidOnboardingWindowTransparency: NSViewRepresentable {
+    func makeNSView(context _: Context) -> NSView {
+        FluidOnboardingWindowTransparencyView()
+    }
+
+    func updateNSView(_: NSView, context _: Context) {}
+}
+
+private final class FluidOnboardingWindowTransparencyView: NSView {
+    private struct WindowSnapshot {
+        let isOpaque: Bool
+        let backgroundColor: NSColor
+        let hasShadow: Bool
+        let hiddenButtons: [NSWindow.ButtonType: Bool]
+    }
+
+    private static let windowButtons: [NSWindow.ButtonType] = [.closeButton, .miniaturizeButton, .zoomButton]
+
+    private weak var observedWindow: NSWindow?
+    private var snapshot: WindowSnapshot?
+
+    deinit {
+        self.restoreWindow()
+    }
+
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        if self.observedWindow !== newWindow {
+            self.restoreWindow()
+        }
+        super.viewWillMove(toWindow: newWindow)
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        guard let window else { return }
+
+        if self.observedWindow !== window {
+            self.observedWindow = window
+            self.snapshot = WindowSnapshot(
+                isOpaque: window.isOpaque,
+                backgroundColor: window.backgroundColor,
+                hasShadow: window.hasShadow,
+                hiddenButtons: Dictionary(uniqueKeysWithValues: Self.windowButtons.map {
+                    ($0, window.standardWindowButton($0)?.isHidden ?? false)
+                })
+            )
+        }
+
+        window.isOpaque = false
+        window.backgroundColor = .clear
+        window.hasShadow = true
+        // Onboarding is a single guided flow; the traffic lights only break the card illusion.
+        for button in Self.windowButtons {
+            window.standardWindowButton(button)?.isHidden = true
+        }
+    }
+
+    private func restoreWindow() {
+        guard let window = self.observedWindow, let snapshot else { return }
+        window.isOpaque = snapshot.isOpaque
+        window.backgroundColor = snapshot.backgroundColor
+        window.hasShadow = snapshot.hasShadow
+        for (button, wasHidden) in snapshot.hiddenButtons {
+            window.standardWindowButton(button)?.isHidden = wasHidden
+        }
+        self.observedWindow = nil
+        self.snapshot = nil
     }
 }
 
@@ -346,7 +454,7 @@ private final class LandingPrimaryNSButton: NSButton {
         self.attributedTitle = NSAttributedString(
             string: title,
             attributes: [
-                .font: NSFont.systemFont(ofSize: 18, weight: .semibold),
+                .font: NSFont.fluidSystemFont(ofSize: 18, weight: .semibold),
                 .foregroundColor: NSColor.white,
             ]
         )
@@ -430,7 +538,7 @@ private struct FluidOnboardingPortalGlow: View {
 }
 
 enum FluidOnboardingLandingColors {
-    static let blue = Color(red: 0.10, green: 0.46, blue: 1.0)
+    static let blue = FluidBrandColors.blue
 }
 
 private struct OnboardingSelectableSurfaceModifier: ViewModifier {
@@ -512,11 +620,11 @@ private struct OnboardingSecondaryButtonModifier: ViewModifier {
     func body(content: Content) -> some View {
         if let controlSize {
             content
-                .buttonStyle(.bordered)
+                .fluidOutlinedButton()
                 .controlSize(controlSize)
         } else {
             content
-                .buttonStyle(.bordered)
+                .fluidOutlinedButton()
         }
     }
 }

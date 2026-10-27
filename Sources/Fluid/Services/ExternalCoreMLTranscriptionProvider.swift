@@ -22,7 +22,7 @@ final class ExternalCoreMLTranscriptionProvider: TranscriptionProvider {
         self.modelOverride = modelOverride
     }
 
-    func prepare(progressHandler: ((Double) -> Void)? = nil) async throws {
+    func prepare(progressHandler: ((ModelPreparationProgress) -> Void)? = nil) async throws {
         try Task.checkCancellation()
         guard self.isReady == false else { return }
 
@@ -71,6 +71,7 @@ final class ExternalCoreMLTranscriptionProvider: TranscriptionProvider {
                 "ExternalCoreML: loading Cohere models [splitCompute=\(computeSummary), maxAudioSamples=\(self.loadedManifest?.maxAudioSamples ?? 0)]",
                 source: "ExternalCoreML"
             )
+            progressHandler?(.loading)
             try await manager.loadModels(from: directory, computeConfiguration: spec.computeConfiguration)
             try Task.checkCancellation()
             self.cohereManager = manager
@@ -178,54 +179,34 @@ final class ExternalCoreMLTranscriptionProvider: TranscriptionProvider {
     }
 
     func clearCache() async throws {
-        let model = self.modelOverride ?? SettingsStore.shared.selectedSpeechModel
-        guard let spec = model.externalCoreMLSpec,
-              let directory = Self.artifactsDirectory(for: model, spec: spec)
-        else {
-            self.isReady = false
-            self.cohereManager = nil
-            return
-        }
-
-        let compiledDirectory = CohereTranscribeAsrModels.compiledArtifactsDirectory(for: directory)
-
-        if FileManager.default.fileExists(atPath: compiledDirectory.path) {
-            DebugLogger.shared.info(
-                "ExternalCoreML: clearing compiled cache at \(compiledDirectory.path)",
-                source: "ExternalCoreML"
-            )
-            try FileManager.default.removeItem(at: compiledDirectory)
-        }
-
-        if FileManager.default.fileExists(atPath: directory.path), spec.isAppManagedArtifactsDirectory(directory) {
-            DebugLogger.shared.info(
-                "ExternalCoreML: removing downloaded artifacts at \(directory.path)",
-                source: "ExternalCoreML"
-            )
-            try FileManager.default.removeItem(at: directory)
-        } else if FileManager.default.fileExists(atPath: directory.path) {
-            DebugLogger.shared.warning(
-                "ExternalCoreML: skipping deletion for non-managed artifacts directory at \(directory.path)",
-                source: "ExternalCoreML"
-            )
-        }
-
         self.isReady = false
         self.cohereManager = nil
         self.loadedManifest = nil
         self.coherePromptTemplate = []
         self.cohereLanguageTokenIDs = [:]
-        DebugLogger.shared.info(
-            "ExternalCoreML: provider reset after cache clear",
-            source: "ExternalCoreML"
-        )
+        let model = self.modelOverride ?? SettingsStore.shared.selectedSpeechModel
+        guard let spec = model.externalCoreMLSpec,
+              let directory = Self.artifactsDirectory(for: model, spec: spec)
+        else { return }
+        let compiledDirectory = CohereTranscribeAsrModels.compiledArtifactsDirectory(for: directory)
+        let isManaged = spec.isAppManagedArtifactsDirectory(directory)
+        try await Task.detached(priority: .userInitiated) {
+            let manager = FileManager.default
+            if manager.fileExists(atPath: compiledDirectory.path) {
+                try manager.removeItem(at: compiledDirectory)
+            }
+            if isManaged, manager.fileExists(atPath: directory.path) {
+                try manager.removeItem(at: directory)
+            }
+        }.value
+        DebugLogger.shared.info("ExternalCoreML: cleared app-managed cache for \(model.displayName)", source: "ExternalCoreML")
     }
 
     private func ensureArtifactsPresent(
         for model: SettingsStore.SpeechModel,
         spec: ExternalCoreMLASRModelSpec,
         at directory: URL,
-        progressHandler: ((Double) -> Void)?
+        progressHandler: ((ModelPreparationProgress) -> Void)?
     ) async throws {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let isManagedDirectory = spec.isAppManagedArtifactsDirectory(directory)
@@ -278,6 +259,7 @@ final class ExternalCoreMLTranscriptionProvider: TranscriptionProvider {
             "ExternalCoreML: downloading missing artifacts from \(owner)/\(repo)",
             source: "ExternalCoreML"
         )
+        progressHandler?(.preparingDownload)
 
         let downloader = HuggingFaceModelDownloader(
             owner: owner,
@@ -292,10 +274,11 @@ final class ExternalCoreMLTranscriptionProvider: TranscriptionProvider {
             )
             // The managed-cache stamp below is part of installation truth. Keep the transfer
             // below 100% until structural validation succeeds and that stamp is persisted.
-            progressHandler?(min(progress, 0.999))
+            progressHandler?(.downloading(progress))
         }
         try Task.checkCancellation()
 
+        progressHandler?(.optimizing)
         do {
             try spec.validateArtifactsOrThrow(at: directory)
         } catch {
@@ -306,7 +289,6 @@ final class ExternalCoreMLTranscriptionProvider: TranscriptionProvider {
             spec.persistArtifactBundleStamp(at: directory)
         }
         SettingsStore.shared.setExternalCoreMLArtifactsDirectory(directory, for: model)
-        progressHandler?(1.0)
     }
 
     private static func artifactsDirectory(
@@ -453,7 +435,7 @@ final class ExternalCoreMLTranscriptionProvider: TranscriptionProvider {
 
     init(modelOverride: SettingsStore.SpeechModel? = nil) {}
 
-    func prepare(progressHandler: ((Double) -> Void)? = nil) async throws {
+    func prepare(progressHandler: ((ModelPreparationProgress) -> Void)? = nil) async throws {
         throw NSError(
             domain: "ExternalCoreMLTranscriptionProvider",
             code: -1,

@@ -1,0 +1,51 @@
+{
+  "eligibleSessionCount": 0,
+  "excludedSessions": [
+    {
+      "ordinal": 0,
+      "reasons": [
+        "delayUnresolved",
+        "driftUnscored",
+        "unstablePath",
+        "linearPathUnlearnable"
+      ]
+    }
+  ],
+  "maximumIneligibleSessionFraction": 0.25,
+  "metrics": [],
+  "minimumExposureSeconds": 1.0,
+  "outcome": "rejected",
+  "pathsRetained": false,
+  "rawPCMRetained": false,
+  "reasonCounts": {
+    "delayUnresolved": 1,
+    "driftUnscored": 1,
+    "linearPathUnlearnable": 1,
+    "noEligibleSessions": 1,
+    "unstablePath": 1
+  },
+  "route": "builtInSpeakerMicrophone",
+  "schemaVersion": 1,
+  "sessionCount": 1,
+  "thresholdSnapshot": {
+    "maximumClippingFraction": 0.01,
+    "maximumDriftPPM": 100.0,
+    "maximumHeldOutLinearResidualFraction": 0.75,
+    "maximumIneligibleSessionFraction": 0.25,
+    "maximumPCMSamples": 1000000,
+    "maximumRenderLeadSeconds": 0.1,
+    "maximumSearchDelaySeconds": 0.5,
+    "maximumUncorrectedOffsetSeconds": 0.02,
+    "minimumBandCoherence": 0.1,
+    "minimumDelayObservationCount": 3,
+    "minimumExcitationRMS": 0.001,
+    "minimumExposureSeconds": 1.0,
+    "minimumPathStabilityFraction": 0.5,
+    "minimumTimingBlockCount": 3,
+    "minimumValidCoverageFraction": 0.99,
+    "requireDeliveryJitter": true,
+    "safetyMarginSeconds": 0.02
+  },
+  "topology": "pairedScreenCaptureKit",
+  "transcriptRetained": false
+}

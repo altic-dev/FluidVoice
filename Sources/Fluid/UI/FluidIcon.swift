@@ -202,7 +202,7 @@ struct FluidIconAdvanced: View {
 #Preview("Fluid Icon Variants") {
     VStack(spacing: 20) {
         Text("Standard Geometric F")
-            .font(.headline)
+            .font(.fluidSystem(.headline))
 
         HStack(spacing: 20) {
             FluidIcon(size: 24, color: .white)
@@ -214,7 +214,7 @@ struct FluidIconAdvanced: View {
         }
 
         Text("Advanced Angular F")
-            .font(.headline)
+            .font(.fluidSystem(.headline))
 
         HStack(spacing: 20) {
             FluidIconAdvanced(size: 24, color: .white)

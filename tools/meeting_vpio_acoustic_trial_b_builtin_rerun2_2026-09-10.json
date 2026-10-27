@@ -1,0 +1,320 @@
+{
+  "caveats" : [
+    "Trial B renders known local PCM through this process's own VPIO output path; it does not route another application's audio and says nothing about whether Apple's echo reference receives other-process playback.",
+    "attenuationDB compares an electrical reference against an acoustic capture and is uncalibrated. Only differences between variants measured back-to-back on one unchanged rig are readable, and even those are confounded by speaker level, room, and AGC.",
+    "A single run establishes neither echo cancellation nor its absence. Treat every number as configuration and coupling evidence pending the paired ScreenCaptureKit topology comparison."
+  ],
+  "postRollSeconds" : 0.6,
+  "preRollSeconds" : 0.3,
+  "renderVolume" : 0.5,
+  "runs" : [
+    {
+      "captureWindow" : {
+        "contributingSegmentCount" : 38,
+        "coverage" : 0.984468201754386,
+        "frameCount" : 182400,
+        "overlapFrameCount" : 0,
+        "resyncedSegmentCount" : 0,
+        "startHostSeconds" : 150637.13146808336,
+        "synthesizedFrameCount" : 0,
+        "writtenFrameCount" : 179567
+      },
+      "control" : {
+        "applied" : true,
+        "appliedAGCEnabled" : true,
+        "appliedBypass" : false,
+        "readbackAGCEnabled" : true,
+        "readbackAGCRawValue" : 1,
+        "readbackAGCStatus" : 0,
+        "readbackBypass" : false,
+        "readbackBypassRawValue" : 0,
+        "readbackBypassStatus" : 0,
+        "requestedAGCEnabled" : true,
+        "requestedBypass" : false
+      },
+      "reasons" : [
+        "captureGap",
+        "captureWindowIncomplete"
+      ],
+      "render" : {
+        "combinedPeak" : 0.03125,
+        "defaultOutputDeviceID" : 87,
+        "mixerChannelCount" : 2,
+        "mixerSampleRate" : 48000,
+        "outputConnectionCount" : 1,
+        "outputDeviceID" : 87,
+        "outputRouteConfirmed" : true,
+        "outputVolumeReadable" : true,
+        "reasons" : [
+
+        ],
+        "renderStartHostSeconds" : 150637.63146808336,
+        "renderStartResolved" : true,
+        "sampleRate" : 48000,
+        "scheduledFrameCount" : 139200,
+        "systemVolume" : 0.25,
+        "tapFrameCount" : 139200,
+        "tapInvalidHostTimeCount" : 0,
+        "tapPeak" : 0.0883883461356163,
+        "tapRMS" : 0.03194666943073746,
+        "volume" : 0.5
+      },
+      "valid" : false,
+      "variant" : "vpioActive"
+    },
+    {
+      "captureWindow" : {
+        "contributingSegmentCount" : 38,
+        "coverage" : 0.9781578947368421,
+        "frameCount" : 182400,
+        "overlapFrameCount" : 0,
+        "resyncedSegmentCount" : 0,
+        "startHostSeconds" : 150642.155443125,
+        "synthesizedFrameCount" : 0,
+        "writtenFrameCount" : 178416
+      },
+      "control" : {
+        "applied" : true,
+        "appliedAGCEnabled" : false,
+        "appliedBypass" : false,
+        "readbackAGCEnabled" : false,
+        "readbackAGCRawValue" : 0,
+        "readbackAGCStatus" : 0,
+        "readbackBypass" : false,
+        "readbackBypassRawValue" : 0,
+        "readbackBypassStatus" : 0,
+        "requestedAGCEnabled" : false,
+        "requestedBypass" : false
+      },
+      "reasons" : [
+        "captureGap",
+        "captureWindowIncomplete"
+      ],
+      "render" : {
+        "combinedPeak" : 0.03125,
+        "defaultOutputDeviceID" : 87,
+        "mixerChannelCount" : 2,
+        "mixerSampleRate" : 48000,
+        "outputConnectionCount" : 1,
+        "outputDeviceID" : 87,
+        "outputRouteConfirmed" : true,
+        "outputVolumeReadable" : true,
+        "reasons" : [
+
+        ],
+        "renderStartHostSeconds" : 150642.655443125,
+        "renderStartResolved" : true,
+        "sampleRate" : 48000,
+        "scheduledFrameCount" : 139200,
+        "systemVolume" : 0.25,
+        "tapFrameCount" : 139200,
+        "tapInvalidHostTimeCount" : 0,
+        "tapPeak" : 0.0883883461356163,
+        "tapRMS" : 0.03194666943073746,
+        "volume" : 0.5
+      },
+      "valid" : false,
+      "variant" : "vpioActiveNoAGC"
+    },
+    {
+      "captureWindow" : {
+        "contributingSegmentCount" : 39,
+        "coverage" : 1,
+        "frameCount" : 182400,
+        "overlapFrameCount" : 0,
+        "resyncedSegmentCount" : 0,
+        "startHostSeconds" : 150647.158084375,
+        "synthesizedFrameCount" : 0,
+        "writtenFrameCount" : 182400
+      },
+      "control" : {
+        "applied" : true,
+        "appliedAGCEnabled" : true,
+        "appliedBypass" : true,
+        "readbackAGCEnabled" : true,
+        "readbackAGCRawValue" : 1,
+        "readbackAGCStatus" : 0,
+        "readbackBypass" : true,
+        "readbackBypassRawValue" : 1,
+        "readbackBypassStatus" : 0,
+        "requestedAGCEnabled" : true,
+        "requestedBypass" : true
+      },
+      "measurement" : {
+        "analysisFrameCount" : 114970,
+        "analysisStartFrame" : 26570,
+        "attenuationDB" : 51.67431417015087,
+        "attenuationUncertaintyDB" : 4.129742150956794,
+        "bands" : [
+          {
+            "attenuationDB" : 51.72175227690992,
+            "binCount" : 5,
+            "capturedEnergyFraction" : 0.2118404211751727,
+            "coherence" : 0.07052537638508652,
+            "coherent" : false,
+            "frameCount" : 223,
+            "highHz" : 400,
+            "lowHz" : 180,
+            "reasons" : [
+              "bandCoherenceBelowFloor"
+            ],
+            "referenceEnergyFraction" : 0.19497064849912396,
+            "supportFraction" : 0.7130044843049327,
+            "supported" : true,
+            "supportedCellCount" : 795
+          },
+          {
+            "attenuationDB" : 54.44255103269122,
+            "binCount" : 11,
+            "capturedEnergyFraction" : 0.14465508528394677,
+            "coherence" : 0.17504443829361027,
+            "coherent" : false,
+            "frameCount" : 223,
+            "highHz" : 900,
+            "lowHz" : 400,
+            "reasons" : [
+              "bandCoherenceBelowFloor"
+            ],
+            "referenceEnergyFraction" : 0.24910014839465808,
+            "supportFraction" : 0.7276803913575214,
+            "supported" : true,
+            "supportedCellCount" : 1785
+          },
+          {
+            "attenuationDB" : 55.857771433088324,
+            "binCount" : 19,
+            "capturedEnergyFraction" : 0.07163047360368306,
+            "coherence" : 0.2851466393895651,
+            "coherent" : false,
+            "frameCount" : 223,
+            "highHz" : 1800,
+            "lowHz" : 900,
+            "reasons" : [
+              "bandCoherenceBelowFloor"
+            ],
+            "referenceEnergyFraction" : 0.1708677667574621,
+            "supportFraction" : 0.6676894028793958,
+            "supported" : true,
+            "supportedCellCount" : 2829
+          },
+          {
+            "attenuationDB" : 54.705440476719,
+            "binCount" : 38,
+            "capturedEnergyFraction" : 0.09306935749061682,
+            "coherence" : 0.8934269210718394,
+            "coherent" : true,
+            "frameCount" : 223,
+            "highHz" : 3600,
+            "lowHz" : 1800,
+            "reasons" : [
+
+            ],
+            "referenceEnergyFraction" : 0.17026913930966597,
+            "supportFraction" : 0.5168751475100307,
+            "supported" : true,
+            "supportedCellCount" : 4380
+          },
+          {
+            "binCount" : 90,
+            "capturedEnergyFraction" : 0.09997534815634505,
+            "coherence" : 0.911874959696126,
+            "coherent" : false,
+            "frameCount" : 223,
+            "highHz" : 7800,
+            "lowHz" : 3600,
+            "reasons" : [
+              "bandSupportBelowThreshold"
+            ],
+            "referenceEnergyFraction" : 0.18694681849886505,
+            "supportFraction" : 0.13477827603388143,
+            "supported" : false,
+            "supportedCellCount" : 2705
+          }
+        ],
+        "capturedFrameCount" : 182400,
+        "capturedNoiseFloorRMS" : 0.0001129639713326469,
+        "capturedPeak" : 0.0005520954146049917,
+        "capturedRMS" : 0.00012377530219964683,
+        "coherentBandCount" : 1,
+        "delay" : {
+          "firstHalfSignedSeconds" : 2.0833333333333333e-05,
+          "maxLagSeconds" : 0.5,
+          "peakToMedianRatio" : 255.57161520341677,
+          "quantizationSeconds" : 2.0833333333333333e-05,
+          "reasons" : [
+            "splitHalfDelayDisagreement"
+          ],
+          "resolved" : false,
+          "secondHalfSignedSeconds" : 0.05285416666666667,
+          "signedSeconds" : 0.05291666666666667,
+          "uncertaintySeconds" : 0.026416666666666668
+        },
+        "reasons" : [
+          "splitHalfDelayDisagreement",
+          "tooFewCoherentBands"
+        ],
+        "referenceFrameCount" : 182400,
+        "referencePeak" : 0.125,
+        "referenceRMS" : 0.03946822136640549,
+        "sampleRate" : 48000,
+        "schemaVersion" : 1,
+        "signalToNoiseFloorDB" : 1.196240784447919,
+        "supportedBandCount" : 4,
+        "valid" : false
+      },
+      "reasons" : [
+        "splitHalfDelayDisagreement",
+        "tooFewCoherentBands"
+      ],
+      "render" : {
+        "combinedPeak" : 0.03125,
+        "defaultOutputDeviceID" : 87,
+        "mixerChannelCount" : 2,
+        "mixerSampleRate" : 48000,
+        "outputConnectionCount" : 1,
+        "outputDeviceID" : 87,
+        "outputRouteConfirmed" : true,
+        "outputVolumeReadable" : true,
+        "reasons" : [
+
+        ],
+        "renderStartHostSeconds" : 150647.658084375,
+        "renderStartResolved" : true,
+        "sampleRate" : 48000,
+        "scheduledFrameCount" : 139200,
+        "systemVolume" : 0.25,
+        "tapFrameCount" : 139200,
+        "tapInvalidHostTimeCount" : 0,
+        "tapPeak" : 0.0883883461356163,
+        "tapRMS" : 0.03194666943073746,
+        "volume" : 0.5
+      },
+      "valid" : false,
+      "variant" : "vpioBypassed"
+    }
+  ],
+  "schemaVersion" : 1,
+  "settleSeconds" : 0.35,
+  "stimulus" : {
+    "chirpEndHz" : 7800,
+    "chirpFrameCount" : 48000,
+    "chirpStartHz" : 180,
+    "gapFrameCount" : 9600,
+    "leadingSilenceFrameCount" : 9600,
+    "measuredPeak" : 0.25,
+    "measuredRMS" : 0.09035877883434296,
+    "safetyMaximumRMS" : 0.15000000596046448,
+    "safetyMinimumRMS" : 0.019999999552965164,
+    "safetyPeakLimit" : 0.3499999940395355,
+    "sampleRate" : 48000,
+    "schemaVersion" : 1,
+    "seed" : 6853810188858556417,
+    "speechF0EndHz" : 145,
+    "speechF0StartHz" : 115,
+    "speechLikeFrameCount" : 57600,
+    "targetPeak" : 0.25,
+    "totalFrameCount" : 139200,
+    "trailingSilenceFrameCount" : 14400,
+    "withinSafetyBounds" : true
+  }
+}

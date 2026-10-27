@@ -1,0 +1,12 @@
+Name: Perfetto
+URL: https://github.com/google/perfetto/
+Version: N/A
+Revision: DEPS
+Update Mechanism: Manual
+License: blessing, BSD-3-Clause, Apache-2.0
+License File: LICENSE
+Security Critical: yes
+Shipped: yes
+License Android Compatible: yes
+Description: Performance instrumentation and logging for Google client platforms
+Local Modifications: None

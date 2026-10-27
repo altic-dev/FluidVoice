@@ -14,7 +14,7 @@ final class HuggingFaceModelDownloader {
         let size: Int64?
     }
 
-    struct ModelItem {
+    nonisolated struct ModelItem: Sendable {
         let path: String
         let isDirectory: Bool
     }
@@ -208,7 +208,10 @@ final class HuggingFaceModelDownloader {
                 downloadedBytes += expectedFileBytes
                 let pct = min(maximumIncompleteProgress, Double(downloadedBytes) / Double(totalBytes))
                 onProgress?(pct, rel)
-                DebugLogger.shared.info(String(format: "[ModelDL] Overall progress: %.1f%% (\(Self.formatBytes(downloadedBytes))/\(Self.formatBytes(totalBytes)))", pct * 100.0), source: "ModelDownloader")
+                DebugLogger.shared.info(
+                    String(format: "[ModelDL] Overall progress: %.1f%% (\(Self.formatBytes(downloadedBytes))/\(Self.formatBytes(totalBytes)))", pct * 100.0),
+                    source: "ModelDownloader"
+                )
             }
         }
 
@@ -282,19 +285,14 @@ final class HuggingFaceModelDownloader {
     private func downloadFile(relativePath: String, to destination: URL, perFileProgress: ((Double) -> Void)? = nil) async throws {
         let fileURL = self.baseResolveURL.appendingPathComponent(relativePath)
 
-        let delegate = DownloadProgressDelegate { totalBytesWritten, totalBytesExpected in
-            guard totalBytesExpected > 0 else { return }
-            perFileProgress?(min(1.0, Double(totalBytesWritten) / Double(totalBytesExpected)))
-        }
-        let session = URLSession(configuration: .default, delegate: delegate, delegateQueue: nil)
-        defer { session.finishTasksAndInvalidate() }
-
         var temporaryURL: URL?
         do {
-            let result = try await withTaskCancellationHandler {
-                try await session.download(from: fileURL)
-            } onCancel: {
-                session.invalidateAndCancel()
+            let result = try await ProgressiveFileDownloader.download(
+                from: fileURL,
+                configuration: .default
+            ) { totalBytesWritten, totalBytesExpected in
+                guard totalBytesExpected > 0 else { return }
+                perFileProgress?(min(1.0, Double(totalBytesWritten) / Double(totalBytesExpected)))
             }
             temporaryURL = result.0
             let response = result.1
@@ -319,7 +317,6 @@ final class HuggingFaceModelDownloader {
             if let temporaryURL {
                 try? FileManager.default.removeItem(at: temporaryURL)
             }
-            session.invalidateAndCancel()
             if Task.isCancelled || Self.isCancellationError(error) {
                 throw CancellationError()
             }
@@ -327,7 +324,7 @@ final class HuggingFaceModelDownloader {
         }
     }
 
-    static func artifactsAreComplete(root: URL, items: [ModelItem]) -> Bool {
+    nonisolated static func artifactsAreComplete(root: URL, items: [ModelItem]) -> Bool {
         items.allSatisfy { item in
             Self.artifactIsComplete(
                 at: root.appendingPathComponent(item.path, isDirectory: item.isDirectory),
@@ -336,7 +333,7 @@ final class HuggingFaceModelDownloader {
         }
     }
 
-    static func artifactIsComplete(at url: URL, isDirectory: Bool) -> Bool {
+    nonisolated static func artifactIsComplete(at url: URL, isDirectory: Bool) -> Bool {
         guard isDirectory else { return self.fileHasContents(at: url) }
 
         if url.pathExtension == "mlpackage" {
@@ -389,7 +386,7 @@ final class HuggingFaceModelDownloader {
         return false
     }
 
-    private static func fileHasContents(at url: URL) -> Bool {
+    private nonisolated static func fileHasContents(at url: URL) -> Bool {
         guard
             let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
             let type = attributes[.type] as? FileAttributeType,
@@ -467,7 +464,7 @@ final class HuggingFaceModelDownloader {
     /// only 512 bytes are read). There is no `URLResponse` for a cached file, so only the
     /// content is inspected, not a `Content-Type`. Returns `false` (treat as valid) on any
     /// read error, so an unreadable file is never deleted on uncertainty.
-    static func cachedFileIsMarkup(at fileURL: URL) -> Bool {
+    nonisolated static func cachedFileIsMarkup(at fileURL: URL) -> Bool {
         guard let handle = try? FileHandle(forReadingFrom: fileURL) else {
             return false
         }
@@ -534,7 +531,7 @@ final class HuggingFaceModelDownloader {
     /// catches `<!doctype`, `<html`, `<head>`, `<body>`, `<script>`, `<meta>`, comments
     /// (`<!-- -->`) and XML / `<?xml` declarations, not just the two prefixes we used to
     /// match. See issue #353.
-    static func looksLikeHTML(_ data: Data) -> Bool {
+    nonisolated static func looksLikeHTML(_ data: Data) -> Bool {
         var bytes = [UInt8](data.prefix(512))
         if bytes.starts(with: [0xef, 0xbb, 0xbf]) {
             bytes.removeFirst(3)
@@ -562,23 +559,6 @@ final class HuggingFaceModelDownloader {
             NSLocalizedDescriptionKey:
                 "Could not download \(relativePath): \(detail). A network proxy or firewall may be blocking model downloads.",
         ])
-    }
-
-    private final class DownloadProgressDelegate: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
-        private let onProgress: (Int64, Int64) -> Void
-
-        init(onProgress: @escaping (Int64, Int64) -> Void) {
-            self.onProgress = onProgress
-        }
-
-        func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {
-            // The async URLSession API owns completion; this delegate only reports bytes.
-        }
-
-        func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didWriteData bytesWritten: Int64, totalBytesWritten: Int64, totalBytesExpectedToWrite: Int64) {
-            guard totalBytesExpectedToWrite > 0 else { return }
-            self.onProgress(totalBytesWritten, totalBytesExpectedToWrite)
-        }
     }
 
     private func headExpectedLength(relativePath: String) async throws -> Int64 {
@@ -635,6 +615,178 @@ final class HuggingFaceModelDownloader {
         if b >= mb { return String(format: "%.2f MB", b / mb) }
         if b >= kb { return String(format: "%.2f KB", b / kb) }
         return "\(bytes) B"
+    }
+}
+
+/// Uses URLSession's delegate API directly so large-file byte progress is delivered
+/// continuously. The async download convenience only surfaced file completion here.
+final nonisolated class ProgressiveFileDownloader: @unchecked Sendable {
+    private final class TaskHolder: @unchecked Sendable {
+        private let lock = NSLock()
+        private var task: URLSessionDownloadTask?
+        private var isCancelled = false
+
+        func setTask(_ task: URLSessionDownloadTask) {
+            self.lock.withLock {
+                if self.isCancelled {
+                    task.cancel()
+                } else {
+                    self.task = task
+                }
+            }
+        }
+
+        func cancel() {
+            self.lock.withLock {
+                self.isCancelled = true
+                self.task?.cancel()
+            }
+        }
+    }
+
+    final class Delegate: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
+        typealias Completion = @Sendable (Result<(URL, URLResponse), Error>) -> Void
+
+        private let onProgress: @Sendable (Int64, Int64) -> Void
+        private let maximumBytes: Int64?
+        private let lock = NSLock()
+        private var completion: Completion?
+        private var downloadResult: Result<(URL, URLResponse), Error>?
+        private var exceededByteLimit = false
+        weak var session: URLSession?
+
+        init(
+            maximumBytes: Int64?,
+            onProgress: @escaping @Sendable (Int64, Int64) -> Void,
+            completion: @escaping Completion
+        ) {
+            self.maximumBytes = maximumBytes
+            self.onProgress = onProgress
+            self.completion = completion
+        }
+
+        func urlSession(
+            _ session: URLSession,
+            downloadTask: URLSessionDownloadTask,
+            didWriteData bytesWritten: Int64,
+            totalBytesWritten: Int64,
+            totalBytesExpectedToWrite: Int64
+        ) {
+            if let maximumBytes, totalBytesWritten > maximumBytes || totalBytesExpectedToWrite > maximumBytes {
+                self.lock.withLock { self.exceededByteLimit = true }
+                downloadTask.cancel()
+                return
+            }
+            self.onProgress(totalBytesWritten, totalBytesExpectedToWrite)
+        }
+
+        func urlSession(
+            _ session: URLSession,
+            downloadTask: URLSessionDownloadTask,
+            didFinishDownloadingTo location: URL
+        ) {
+            guard let response = downloadTask.response else {
+                self.storeResult(.failure(URLError(.badServerResponse)))
+                return
+            }
+
+            self.retainDownload(at: location, response: response)
+        }
+
+        @discardableResult
+        func retainDownload(at location: URL, response: URLResponse) -> URL? {
+            do {
+                if let maximumBytes {
+                    let attributes = try FileManager.default.attributesOfItem(atPath: location.path)
+                    guard let size = attributes[.size] as? NSNumber, size.int64Value <= maximumBytes else {
+                        self.lock.withLock { self.exceededByteLimit = true }
+                        self.storeResult(.failure(URLError(.dataLengthExceedsMaximum)))
+                        return nil
+                    }
+                }
+                let retainedURL = try ProgressiveFileDownloader.retainDownloadedFile(at: location)
+                self.storeResult(.success((retainedURL, response)))
+                return retainedURL
+            } catch {
+                self.storeResult(.failure(error))
+                return nil
+            }
+        }
+
+        func urlSession(
+            _ session: URLSession,
+            task: URLSessionTask,
+            didCompleteWithError error: Error?
+        ) {
+            if let error {
+                let retainedFile = self.lock.withLock { () -> URL? in
+                    defer { self.downloadResult = nil }
+                    if case let .success((url, _)) = self.downloadResult { return url }
+                    return nil
+                }
+                if let retainedFile { try? FileManager.default.removeItem(at: retainedFile) }
+                let exceedsLimit = self.lock.withLock { self.exceededByteLimit }
+                self.finish(.failure(exceedsLimit ? URLError(.dataLengthExceedsMaximum) : error))
+            } else {
+                let result = self.lock.withLock { self.downloadResult }
+                self.finish(result ?? .failure(URLError(.badServerResponse)))
+            }
+            session.finishTasksAndInvalidate()
+        }
+
+        private func storeResult(_ result: Result<(URL, URLResponse), Error>) {
+            self.lock.withLock {
+                self.downloadResult = result
+            }
+        }
+
+        private func finish(_ result: Result<(URL, URLResponse), Error>) {
+            let completion = self.lock.withLock { () -> Completion? in
+                defer { self.completion = nil }
+                return self.completion
+            }
+            completion?(result)
+        }
+    }
+
+    static func retainDownloadedFile(
+        at location: URL,
+        fileManager: FileManager = .default
+    ) throws -> URL {
+        let retainedURL = fileManager.temporaryDirectory
+            .appendingPathComponent("FluidVoiceDownload-\(UUID().uuidString)")
+        try fileManager.moveItem(at: location, to: retainedURL)
+        return retainedURL
+    }
+
+    static func download(
+        from url: URL,
+        configuration: URLSessionConfiguration,
+        maximumBytes: Int64? = nil,
+        onProgress: @escaping @Sendable (Int64, Int64) -> Void
+    ) async throws -> (URL, URLResponse) {
+        let taskHolder = TaskHolder()
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                let delegate = Delegate(
+                    maximumBytes: maximumBytes,
+                    onProgress: onProgress,
+                    completion: { continuation.resume(with: $0) }
+                )
+                let session = URLSession(
+                    configuration: configuration,
+                    delegate: delegate,
+                    delegateQueue: nil
+                )
+                delegate.session = session
+
+                let task = session.downloadTask(with: url)
+                taskHolder.setTask(task)
+                task.resume()
+            }
+        } onCancel: {
+            taskHolder.cancel()
+        }
     }
 }
 

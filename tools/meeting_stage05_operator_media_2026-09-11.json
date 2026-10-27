@@ -1,0 +1,54 @@
+{
+  "acousticGate": {
+    "eligibleSessionCount": 0,
+    "exitStatus": 2,
+    "outcome": "rejected",
+    "reasonCounts": {
+      "delayUnresolved": 1,
+      "driftUnscored": 1,
+      "insufficientCoverage": 1,
+      "linearPathUnscored": 1,
+      "noEligibleSessions": 1,
+      "unstablePath": 1
+    },
+    "sessionCount": 1
+  },
+  "aec3Authorized": false,
+  "analyzerSHA256": "172b3b611e004c061c13ec59682e2c390d8d992a8c58d9abe721b2759df3885c",
+  "callbackAdapter": {
+    "captureAcceptedCallbackCount": 1313,
+    "captureValidSampleCount": 224085,
+    "eligibleForAECTrial": false,
+    "mockAuthorized": true,
+    "mockBoundaryCount": 0,
+    "mockFrozenFrameCount": 6,
+    "mockProcessedFrameCount": 1400,
+    "referenceClockDriftPPM": 0,
+    "referenceClockDriftPresent": true,
+    "renderAcceptedCallbackCount": 703,
+    "renderBeforeCaptureValid": true,
+    "renderValidSampleCount": 224960,
+    "synchronizerEpochCount": 1,
+    "synchronizerFailedOpen": false,
+    "synchronizerInputFrameCount": 2016,
+    "synchronizerOutputFrameCount": 1406,
+    "trackSampleCount": 224960
+  },
+  "capture": {
+    "exitStatus": 0,
+    "status": "success"
+  },
+  "fixtureAllowlistCount": 2,
+  "offlineAnalyzerInvocationCount": 2,
+  "privacy": {
+    "identitiesRetained": false,
+    "pathsRetained": false,
+    "rawPCMRetained": false,
+    "titlesRetained": false,
+    "transcriptRetained": false,
+    "urlsRetained": false
+  },
+  "schemaVersion": 1,
+  "signalAnalysisCount": 1,
+  "testSHA256": "8a5d4064e2bb3338852a62f7736c26054f02bc45f11cf387e3743963b4b53a62"
+}

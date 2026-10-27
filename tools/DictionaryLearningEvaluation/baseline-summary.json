@@ -1,0 +1,52 @@
+{
+  "companion_revision": "9725fb6",
+  "model": "parakeet-tdt-0.6b-v3-coreml",
+  "hardware": "Apple M5 Max",
+  "multilingual": {
+    "clips": 27,
+    "languages": 8,
+    "timed_words": 536,
+    "targets": 11,
+    "trials": 26,
+    "counts": {
+      "text": {
+        "tn": 545,
+        "tp": 19,
+        "fp": 2,
+        "fn": 2
+      },
+      "audio70": {
+        "tn": 546,
+        "fn": 18,
+        "tp": 3,
+        "fp": 1
+      },
+      "combined_fallback": {
+        "tn": 545,
+        "tp": 19,
+        "fp": 2,
+        "fn": 2
+      }
+    },
+    "label_source": "reference-to-ASR edit alignment; approximate"
+  },
+  "held_out_name": {
+    "enrolled": "Huang",
+    "later_ASR": "Hong Kong",
+    "hits_at_or_above_0_70": 0,
+    "limitation": "diagnostic from one interview, not a representative name corpus"
+  },
+  "release_search": {
+    "calls": 28,
+    "window_seconds": 14.88,
+    "profiles_per_call": 1,
+    "median_ms": 0.516542,
+    "min_ms": 0.494125,
+    "max_ms": 0.668917,
+    "excludes": [
+      "encoding",
+      "text reconciliation",
+      "Stop scheduling"
+    ]
+  }
+}

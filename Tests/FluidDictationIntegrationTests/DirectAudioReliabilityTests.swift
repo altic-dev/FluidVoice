@@ -1,0 +1,1761 @@
+import Combine
+import CoreAudio
+@testable import FluidVoice_Debug
+import Foundation
+import XCTest
+
+final class DirectAudioReliabilityTests: XCTestCase {
+    func testPipelineCorrelationIsInheritedAndRestoredAcrossConcurrentRequests() async {
+        let original = DebugLogger.pipelineID
+        let values = await withTaskGroup(of: String?.self, returning: [String?].self) { group in
+            for id in ["pipeline-a", "pipeline-b"] {
+                group.addTask {
+                    await DebugLogger.$pipelineID.withValue(id) {
+                        await Task.yield()
+                        return await Task { DebugLogger.pipelineID }.value
+                    }
+                }
+            }
+            var values: [String?] = []
+            for await value in group {
+                values.append(value)
+            }
+            return values
+        }
+        XCTAssertEqual(Set(values.compactMap { $0 }), ["pipeline-a", "pipeline-b"])
+        XCTAssertEqual(DebugLogger.pipelineID, original)
+    }
+
+    func testPipelineCorrelationCanCrossDispatchWithoutLeakingToNextWork() async {
+        let values: [String?] = await DebugLogger.$pipelineID.withValue("pipeline-a") {
+            let captured = DebugLogger.pipelineID
+            return await withCheckedContinuation { continuation in
+                DispatchQueue.global().async {
+                    let before = DebugLogger.pipelineID
+                    let inside = DebugLogger.$pipelineID.withValue(captured) { DebugLogger.pipelineID }
+                    let after = DebugLogger.pipelineID
+                    continuation.resume(returning: [before, inside, after])
+                }
+            }
+        }
+        XCTAssertEqual(values, [nil, "pipeline-a", nil])
+    }
+
+    @MainActor
+    func testAIStreamPreviewCoalescesBurstIntoOneMainActorUpdate() async {
+        var publishedText: [String] = []
+        let preview = DictationAIStreamPreviewBuffer(minimumUpdateInterval: 0, initialUpdateDelay: 0) { text in
+            publishedText.append(text)
+        }
+
+        preview.append("Fluid")
+        preview.append("Voice")
+        preview.append(" benchmark")
+        preview.flush()
+        await Task.yield()
+
+        XCTAssertEqual(publishedText, ["FluidVoice benchmark"])
+    }
+
+    @MainActor
+    func testAIStreamPreviewFlushesShortGenerationWithoutQueuedUIWork() async {
+        var publishedText: [String] = []
+        let preview = DictationAIStreamPreviewBuffer(minimumUpdateInterval: 60, initialUpdateDelay: 60) { text in
+            publishedText.append(text)
+        }
+
+        preview.append("Exact output")
+        XCTAssertTrue(publishedText.isEmpty)
+
+        preview.flush()
+        preview.flush()
+        await Task.yield()
+
+        XCTAssertEqual(publishedText, ["Exact output"])
+    }
+
+    @MainActor
+    func testAIStreamPreviewReturnsToNormalCadenceAfterStartupGrace() async {
+        var publishedText: [String] = []
+        let preview = DictationAIStreamPreviewBuffer(minimumUpdateInterval: 60, initialUpdateDelay: 0) { text in
+            publishedText.append(text)
+        }
+
+        preview.append("First")
+        await Task.yield()
+        preview.append(" second")
+        await Task.yield()
+
+        XCTAssertEqual(publishedText, ["First"])
+        preview.flush()
+        XCTAssertEqual(publishedText, ["First", "First second"])
+    }
+
+    @MainActor
+    func testCaptureSettledEventDoesNotInvalidateWholeASRService() {
+        let service = ASRService()
+        var settledEventCount = 0
+        var objectChangeCount = 0
+        let settledCancellable = service.audioCaptureStateDidSettle.sink {
+            settledEventCount += 1
+        }
+        let objectCancellable = service.objectWillChange.sink {
+            objectChangeCount += 1
+        }
+
+        service.audioCaptureStateDidSettle.send()
+
+        XCTAssertEqual(settledEventCount, 1)
+        XCTAssertEqual(objectChangeCount, 0)
+        withExtendedLifetime((settledCancellable, objectCancellable)) {}
+    }
+
+    func testStopUIInvalidationGateFinishesExactlyOnce() {
+        var gate = ASRStopUIInvalidationGate()
+
+        XCTAssertFalse(gate.isDeferring)
+        XCTAssertFalse(gate.finish())
+        gate.begin()
+        XCTAssertTrue(gate.isDeferring)
+        XCTAssertTrue(gate.finish())
+        XCTAssertFalse(gate.isDeferring)
+        XCTAssertFalse(gate.finish())
+    }
+
+    func testStopUIInvalidationGateWaitsForOutputPipelineHold() {
+        var gate = ASRStopUIInvalidationGate()
+
+        gate.holdForOutputPipeline()
+        gate.begin()
+
+        XCTAssertFalse(gate.finish())
+        XCTAssertTrue(gate.isDeferring)
+        XCTAssertTrue(gate.releaseOutputPipelineHold())
+        XCTAssertFalse(gate.isDeferring)
+        XCTAssertFalse(gate.releaseOutputPipelineHold())
+    }
+
+    func testStopUIInvalidationGateForceFinishBoundsHeldPipeline() {
+        var gate = ASRStopUIInvalidationGate()
+
+        gate.holdForOutputPipeline()
+        gate.begin()
+        XCTAssertFalse(gate.finish())
+
+        XCTAssertTrue(gate.forceFinish())
+        XCTAssertFalse(gate.isDeferring)
+        XCTAssertFalse(gate.forceFinish())
+    }
+
+    @MainActor
+    func testFinalTranscriptionStatusRunsAfterDelay() async {
+        var operationCount = 0
+        let task = scheduleDeferredMainActorOperation(afterNanoseconds: 0) {
+            operationCount += 1
+        }
+
+        await task.value
+
+        XCTAssertEqual(operationCount, 1)
+    }
+
+    @MainActor
+    func testCancelledFinalTranscriptionStatusHasNoSideEffect() async {
+        var operationCount = 0
+        let task = scheduleDeferredMainActorOperation(afterNanoseconds: 60_000_000_000) {
+            operationCount += 1
+        }
+
+        task.cancel()
+        await task.value
+
+        XCTAssertEqual(operationCount, 0)
+    }
+
+    @MainActor
+    func testDelayedFinalStatusCannotChangeANewerRecording() async {
+        var currentSession = 7
+        let stoppingSession = currentSession
+        var overlay = "Recording"
+        let staleTask = scheduleDeferredMainActorOperation(
+            afterNanoseconds: 0,
+            shouldRun: { currentSession == stoppingSession }
+        ) { overlay = "Transcribing" }
+        currentSession = 8
+        await staleTask.value
+        XCTAssertEqual(overlay, "Recording")
+
+        let currentTask = scheduleDeferredMainActorOperation(
+            afterNanoseconds: 0,
+            shouldRun: { currentSession == 8 }
+        ) { overlay = "Transcribing" }
+        await currentTask.value
+        XCTAssertEqual(overlay, "Transcribing")
+    }
+
+    @MainActor
+    func testStalledStreamingDrainIsBoundedWithoutCancellingProvider() async {
+        let lifecycle = StreamingTaskLifecycle()
+        var providerContinuation: CheckedContinuation<Void, Never>?
+        var providerWasCancelled = false
+        var completions = 0
+        lifecycle.schedule(sessionID: 7, delayNanoseconds: 0) { _ in
+            await withCheckedContinuation { providerContinuation = $0 }
+            providerWasCancelled = Task.isCancelled
+        } completion: { _ in completions += 1 }
+        while providerContinuation == nil {
+            await Task.yield()
+        }
+
+        let completed = await lifecycle.drain(sessionID: 7, timeoutNanoseconds: 1_000_000)
+        XCTAssertFalse(completed)
+        XCTAssertTrue(lifecycle.hasActiveWork, "Timeout must retain the provider and its incremental state")
+        XCTAssertEqual(lifecycle.pendingDrainCount, 0, "Timed-out waiters must be removed")
+        XCTAssertEqual(completions, 0)
+        XCTAssertFalse(lifecycle.schedule(sessionID: 8, delayNanoseconds: 0) { _ in
+            XCTFail("A replacement must not race the stalled provider")
+        } completion: { _ in })
+
+        let resumedDrain = Task { @MainActor in
+            await lifecycle.drain(sessionID: 7, timeoutNanoseconds: 60_000_000_000)
+        }
+        await Task.yield()
+        providerContinuation?.resume()
+        let recovered = await resumedDrain.value
+        XCTAssertTrue(recovered)
+        XCTAssertFalse(providerWasCancelled)
+        XCTAssertEqual(completions, 1)
+        XCTAssertFalse(lifecycle.hasActiveWork)
+        XCTAssertEqual(lifecycle.pendingDrainCount, 0, "Completion must retire its timer/waiter")
+    }
+
+    @MainActor
+    func testTimedOutHandoffWakesStartsButKeepsBufferOwnedUntilRecovery() async throws {
+        let gate = RecordingBufferHandoffGate()
+        let token = try XCTUnwrap(gate.begin())
+        var wokeInRecovery = false
+        let waitingStart = Task { @MainActor in
+            await gate.waitUntilAvailable()
+            wokeInRecovery = gate.isRecovering
+        }
+        while gate.pendingWaiterCount == 0 {
+            await Task.yield()
+        }
+        gate.markTimedOut(token)
+        await waitingStart.value
+        XCTAssertTrue(wokeInRecovery)
+        XCTAssertTrue(gate.isActive)
+        XCTAssertNil(gate.begin(), "Timeout must not release the PCM to another capture")
+        XCTAssertEqual(gate.pendingWaiterCount, 0)
+
+        let otherGate = RecordingBufferHandoffGate()
+        let staleToken = try XCTUnwrap(otherGate.begin())
+        gate.complete(staleToken)
+        XCTAssertTrue(gate.isRecovering)
+        gate.complete(token)
+        XCTAssertFalse(gate.isRecovering)
+        XCTAssertFalse(gate.isActive)
+        let nextToken = try XCTUnwrap(gate.begin())
+        gate.markTimedOut(token)
+        XCTAssertFalse(gate.isRecovering, "An old timeout cannot affect a fresh recording")
+        gate.complete(nextToken)
+    }
+
+    @MainActor
+    func testStreamingIdleSchedulerCancelsWithoutLaunchingOrActiveDrain() async {
+        let lifecycle = StreamingTaskLifecycle()
+        var operationStarted = false
+
+        XCTAssertTrue(lifecycle.schedule(
+            sessionID: 7,
+            delayNanoseconds: 60_000_000_000
+        ) { _ in
+            operationStarted = true
+        } completion: { _ in })
+        XCTAssertTrue(lifecycle.hasScheduledIdleWork)
+
+        XCTAssertTrue(lifecycle.cancelScheduler())
+        var mainActorSentinelRan = false
+        let sentinelTask = Task { @MainActor in
+            mainActorSentinelRan = true
+        }
+        let activeTask = lifecycle.activeTaskToDrain(sessionID: 7)
+
+        XCTAssertNil(activeTask)
+        XCTAssertFalse(mainActorSentinelRan, "An idle drain must not yield the main actor")
+        await sentinelTask.value
+        XCTAssertFalse(operationStarted)
+        XCTAssertFalse(lifecycle.hasScheduledIdleWork)
+        XCTAssertFalse(lifecycle.hasActiveWork)
+    }
+
+    @MainActor
+    func testStreamingActiveWorkDrainsWithoutCancellation() async {
+        let lifecycle = StreamingTaskLifecycle()
+        var operationStarted = false
+        var operationWasCancelled = false
+        var operationContinuation: CheckedContinuation<Void, Never>?
+        var completionCount = 0
+
+        XCTAssertTrue(lifecycle.schedule(
+            sessionID: 11,
+            delayNanoseconds: 0
+        ) { _ in
+            operationStarted = true
+            await withCheckedContinuation { continuation in
+                operationContinuation = continuation
+            }
+            operationWasCancelled = Task.isCancelled
+        } completion: { _ in
+            completionCount += 1
+        })
+
+        while operationStarted == false {
+            await Task.yield()
+        }
+        XCTAssertTrue(lifecycle.hasActiveWork)
+        XCTAssertFalse(lifecycle.cancelScheduler())
+
+        let drainTask = Task { @MainActor in
+            await lifecycle.drain(sessionID: 11, timeoutNanoseconds: 60_000_000_000)
+        }
+        await Task.yield()
+        XCTAssertEqual(completionCount, 0)
+
+        operationContinuation?.resume()
+        let drainedActiveWork = await drainTask.value
+        XCTAssertTrue(drainedActiveWork)
+
+        XCTAssertFalse(operationWasCancelled)
+        XCTAssertEqual(completionCount, 1)
+        XCTAssertFalse(lifecycle.hasActiveWork)
+    }
+
+    func testStreamingWorkStateRejectsStaleProviderAndOperationMutations() throws {
+        var state = StreamingTranscriptionWorkState()
+        state.beginSession(31)
+        let firstOperation = UUID()
+        let firstProviderGenerationValue = state.beginOperation(
+            sessionID: 31,
+            operationID: firstOperation
+        )
+        let firstProviderGeneration = try XCTUnwrap(firstProviderGenerationValue)
+        XCTAssertTrue(state.canPublish(
+            sessionID: 31,
+            operationID: firstOperation,
+            providerGeneration: firstProviderGeneration
+        ))
+
+        state.invalidateProvider()
+        XCTAssertFalse(state.canPublish(
+            sessionID: 31,
+            operationID: firstOperation,
+            providerGeneration: firstProviderGeneration
+        ))
+        XCTAssertTrue(state.finishOperation(sessionID: 31, operationID: firstOperation))
+
+        let secondOperation = UUID()
+        let secondProviderGeneration = state.beginOperation(
+            sessionID: 31,
+            operationID: secondOperation
+        )
+        _ = try XCTUnwrap(secondProviderGeneration)
+        XCTAssertFalse(state.finishOperation(sessionID: 31, operationID: firstOperation))
+        XCTAssertTrue(state.ownsOperation(sessionID: 31, operationID: secondOperation))
+
+        XCTAssertTrue(state.finishOperation(sessionID: 31, operationID: secondOperation))
+        state.endSession(31)
+        state.beginSession(32)
+        XCTAssertFalse(state.ownsOperation(sessionID: 31, operationID: secondOperation))
+    }
+
+    func testStreamingWorkStatePublishesOnlyForRunningCurrentSession() throws {
+        var state = StreamingTranscriptionWorkState()
+        state.beginSession(41)
+        let operationID = UUID()
+        let providerGeneration = try XCTUnwrap(state.beginOperation(
+            sessionID: 41,
+            operationID: operationID
+        ))
+
+        XCTAssertTrue(state.canPublishPreview(
+            sessionID: 41,
+            operationID: operationID,
+            providerGeneration: providerGeneration,
+            isRunning: true,
+            schedulingSessionID: 41
+        ))
+        XCTAssertFalse(state.canPublishPreview(
+            sessionID: 41,
+            operationID: operationID,
+            providerGeneration: providerGeneration,
+            isRunning: false,
+            schedulingSessionID: 41
+        ))
+        XCTAssertFalse(state.canPublishPreview(
+            sessionID: 41,
+            operationID: operationID,
+            providerGeneration: providerGeneration,
+            isRunning: true,
+            schedulingSessionID: nil
+        ))
+        XCTAssertFalse(state.canPublishPreview(
+            sessionID: 41,
+            operationID: operationID,
+            providerGeneration: providerGeneration,
+            isRunning: true,
+            schedulingSessionID: 42
+        ))
+
+        state.invalidateProvider()
+        XCTAssertFalse(state.canPublishPreview(
+            sessionID: 41,
+            operationID: operationID,
+            providerGeneration: providerGeneration,
+            isRunning: true,
+            schedulingSessionID: 41
+        ))
+    }
+
+    @MainActor
+    func testStoppedLateStreamingSuccessSkipsPreviewWorkAndStillDrains() async throws {
+        let lifecycle = StreamingTaskLifecycle()
+        var state = StreamingTranscriptionWorkState()
+        state.beginSession(51)
+        var isRunning = true
+        var schedulingSessionID: Int? = 51
+        var operationContinuation: CheckedContinuation<Void, Never>?
+        var formatCount = 0
+        var publishCount = 0
+        var cleanupCount = 0
+        var rearmCount = 0
+
+        XCTAssertTrue(lifecycle.schedule(
+            sessionID: 51,
+            delayNanoseconds: 0
+        ) { operationID in
+            guard let providerGeneration = state.beginOperation(
+                sessionID: 51,
+                operationID: operationID
+            ) else {
+                XCTFail("Expected the late success operation to own the session")
+                return
+            }
+            await withCheckedContinuation { continuation in
+                operationContinuation = continuation
+            }
+            guard state.canPublishPreview(
+                sessionID: 51,
+                operationID: operationID,
+                providerGeneration: providerGeneration,
+                isRunning: isRunning,
+                schedulingSessionID: schedulingSessionID
+            ) else { return }
+            formatCount += 1
+            publishCount += 1
+        } completion: { operationID in
+            if state.finishOperation(sessionID: 51, operationID: operationID) {
+                cleanupCount += 1
+            }
+            if isRunning, schedulingSessionID == 51 {
+                rearmCount += 1
+            }
+        })
+
+        while operationContinuation == nil {
+            await Task.yield()
+        }
+        isRunning = false
+        schedulingSessionID = nil
+        let activeTask = try XCTUnwrap(lifecycle.activeTaskToDrain(sessionID: 51))
+        operationContinuation?.resume()
+        _ = await activeTask.result
+
+        XCTAssertEqual(formatCount, 0)
+        XCTAssertEqual(publishCount, 0)
+        XCTAssertEqual(cleanupCount, 1)
+        XCTAssertEqual(rearmCount, 0)
+        XCTAssertFalse(lifecycle.hasActiveWork)
+    }
+
+    @MainActor
+    func testStoppedLateStreamingFailureSkipsFailureMutationAndStillDrains() async throws {
+        let lifecycle = StreamingTaskLifecycle()
+        var state = StreamingTranscriptionWorkState()
+        state.beginSession(52)
+        var isRunning = true
+        var schedulingSessionID: Int? = 52
+        var operationContinuation: CheckedContinuation<Void, Never>?
+        var fallbackCount = 0
+        var failureMutationCount = 0
+        var cleanupCount = 0
+        var rearmCount = 0
+
+        XCTAssertTrue(lifecycle.schedule(
+            sessionID: 52,
+            delayNanoseconds: 0
+        ) { operationID in
+            guard let providerGeneration = state.beginOperation(
+                sessionID: 52,
+                operationID: operationID
+            ) else {
+                XCTFail("Expected the late failure operation to own the session")
+                return
+            }
+            await withCheckedContinuation { continuation in
+                operationContinuation = continuation
+            }
+            guard state.canPublishPreview(
+                sessionID: 52,
+                operationID: operationID,
+                providerGeneration: providerGeneration,
+                isRunning: isRunning,
+                schedulingSessionID: schedulingSessionID
+            ) else { return }
+            fallbackCount += 1
+            failureMutationCount += 1
+        } completion: { operationID in
+            if state.finishOperation(sessionID: 52, operationID: operationID) {
+                cleanupCount += 1
+            }
+            if isRunning, schedulingSessionID == 52 {
+                rearmCount += 1
+            }
+        })
+
+        while operationContinuation == nil {
+            await Task.yield()
+        }
+        isRunning = false
+        schedulingSessionID = nil
+        let activeTask = try XCTUnwrap(lifecycle.activeTaskToDrain(sessionID: 52))
+        operationContinuation?.resume()
+        _ = await activeTask.result
+
+        XCTAssertEqual(fallbackCount, 0)
+        XCTAssertEqual(failureMutationCount, 0)
+        XCTAssertEqual(cleanupCount, 1)
+        XCTAssertEqual(rearmCount, 0)
+        XCTAssertFalse(lifecycle.hasActiveWork)
+    }
+
+    @MainActor
+    func testCancelledPendingStartWakesWithoutCompletingBufferHandoff() async throws {
+        let gate = RecordingBufferHandoffGate()
+        let token = try XCTUnwrap(gate.begin())
+        var waiterReturned = false
+        let waiter = Task { @MainActor in
+            await gate.waitUntilAvailable()
+            waiterReturned = true
+        }
+        while gate.pendingWaiterCount == 0 {
+            await Task.yield()
+        }
+        XCTAssertFalse(waiterReturned)
+
+        gate.releasePendingWaiters()
+        await waiter.value
+
+        XCTAssertTrue(waiterReturned)
+        XCTAssertTrue(gate.isActive)
+        gate.complete(token)
+        XCTAssertFalse(gate.isActive)
+    }
+
+    @MainActor
+    func testBufferHandoffRejectsStaleCompletionAndReleasesOnOwnerCompletion() async throws {
+        let gate = RecordingBufferHandoffGate()
+        let ownerToken = try XCTUnwrap(gate.begin())
+        let otherGate = RecordingBufferHandoffGate()
+        let staleToken = try XCTUnwrap(otherGate.begin())
+        var waiterReturned = false
+        let waiter = Task { @MainActor in
+            await gate.waitUntilAvailable()
+            waiterReturned = true
+        }
+        while gate.pendingWaiterCount == 0 {
+            await Task.yield()
+        }
+
+        gate.complete(staleToken)
+        XCTAssertTrue(gate.isActive)
+        XCTAssertFalse(waiterReturned)
+
+        gate.complete(ownerToken)
+        await waiter.value
+        XCTAssertTrue(waiterReturned)
+        XCTAssertFalse(gate.isActive)
+    }
+
+    @MainActor
+    func testStreamingLifecycleContinuesCadenceAfterOperationCompletion() async {
+        let lifecycle = StreamingTaskLifecycle()
+        var operationCount = 0
+        var completionCount = 0
+
+        XCTAssertTrue(lifecycle.schedule(
+            sessionID: 19,
+            delayNanoseconds: 0
+        ) { _ in
+            operationCount += 1
+        } completion: { _ in
+            completionCount += 1
+            _ = lifecycle.schedule(
+                sessionID: 19,
+                delayNanoseconds: 0
+            ) { _ in
+                operationCount += 1
+            } completion: { _ in
+                completionCount += 1
+            }
+        })
+
+        while completionCount < 2 {
+            await Task.yield()
+        }
+        XCTAssertEqual(operationCount, 2)
+        XCTAssertEqual(completionCount, 2)
+        XCTAssertFalse(lifecycle.hasScheduledIdleWork)
+        XCTAssertFalse(lifecycle.hasActiveWork)
+    }
+
+    func testCaptureStoppedCallbackDoesNotReenqueueOnMainActor() throws {
+        let repositoryRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let source = try String(
+            contentsOf: repositoryRoot
+                .appendingPathComponent("Sources/Fluid/Services/ASRService.swift"),
+            encoding: .utf8
+        )
+        let callbackSection = try XCTUnwrap(
+            source.components(separatedBy: "capture_stopped_callback_request").last?
+                .components(separatedBy: "capture_stopped_callback_return").first
+        )
+
+        XCTAssertTrue(callbackSection.contains("onCaptureStopped?()"))
+        XCTAssertFalse(callbackSection.contains("await "))
+        XCTAssertFalse(callbackSection.contains("Task {"))
+    }
+
+    func testNormalOutputHandlesOverlayAfterAwaitingPasteDispatch() throws {
+        let repositoryRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let source = try String(
+            contentsOf: repositoryRoot
+                .appendingPathComponent("Sources/Fluid/ContentView.swift"),
+            encoding: .utf8
+        )
+        let normalOutputSection = try XCTUnwrap(
+            source.components(separatedBy: "if spokenSendAllowed {").last?
+                .components(separatedBy: "if spokenSendRequested, !spokenSendAllowed").first
+        )
+        let pasteIndex = try XCTUnwrap(normalOutputSection.range(of: "typeOutputPlanToActiveField("))
+        let dispatchResultIndex = try XCTUnwrap(normalOutputSection.range(of: "didTypeExternally = deliveryResult.wasDispatched"))
+        let deliveryHandlerIndex = try XCTUnwrap(normalOutputSection.range(of: "self.handleTypingDelivery("))
+
+        XCTAssertLessThan(pasteIndex.lowerBound, dispatchResultIndex.lowerBound)
+        XCTAssertLessThan(dispatchResultIndex.lowerBound, deliveryHandlerIndex.lowerBound)
+        XCTAssertTrue(normalOutputSection.contains("deliveryResult = await self.asr.typeOutputPlanToActiveField("))
+        XCTAssertTrue(normalOutputSection.contains("deliveryResult.wasDispatched ? .inserted : .insertionFailed"))
+        XCTAssertFalse(normalOutputSection.contains("Task { @MainActor in"))
+        XCTAssertFalse(
+            normalOutputSection[pasteIndex.lowerBound..<deliveryHandlerIndex.lowerBound]
+                .contains("updateTranscriptionText(\"\")")
+        )
+
+        let deliveryHandlerSection = try XCTUnwrap(
+            source.components(separatedBy: "private func handleTypingDelivery(").last?
+                .components(separatedBy: "private func hideOverlayAfterOutput()").first
+        )
+        XCTAssertTrue(deliveryHandlerSection.contains("self.overlayLifecycleID == expectedOverlayLifecycleID"))
+        XCTAssertTrue(normalOutputSection
+            .contains("shouldHideOverlay: deliveryResult.wasDispatched && !shouldShowAIProcessingFailure && !stopOverlay.didRequestHide && !spokenSendRequested"))
+        XCTAssertTrue(deliveryHandlerSection.contains("guard shouldHideOverlay else { return }"))
+        XCTAssertFalse(deliveryHandlerSection.contains("await self.menuBarManager.beginProcessingCompletionAndHideOverlay"))
+
+        let menuBarSource = try String(
+            contentsOf: repositoryRoot
+                .appendingPathComponent("Sources/Fluid/Services/MenuBarManager.swift"),
+            encoding: .utf8
+        )
+        let completionSection = try XCTUnwrap(
+            menuBarSource.components(separatedBy: "func beginProcessingCompletionAndHideOverlay() {").last?
+                .components(separatedBy: "func finishProcessingAndHideOverlay() async {").first
+        )
+        // Completion routes through hide(), which must fall back to an immediate
+        // hide unless the opt-in closing animation is enabled.
+        XCTAssertTrue(completionSection.contains("NotchOverlayManager.shared.hide()"))
+        let notchManagerSource = try String(
+            contentsOf: repositoryRoot
+                .appendingPathComponent("Sources/Fluid/Services/NotchOverlayManager.swift"),
+            encoding: .utf8
+        )
+        let hideSection = try XCTUnwrap(
+            notchManagerSource.components(separatedBy: "func hide() {").last?
+                .components(separatedBy: "func hideImmediately() {").first
+        )
+        XCTAssertTrue(hideSection.contains("guard SettingsStore.shared.overlayClosingAnimationEnabled else {"))
+        XCTAssertTrue(hideSection.contains("self.hideImmediately()"))
+
+        let postStopSection = try XCTUnwrap(
+            source.components(separatedBy: "let transcribedText = await asr.stop").last?
+                .components(separatedBy: "guard transcribedText.trimmingCharacters").first
+        )
+        XCTAssertFalse(postStopSection.contains("updateTranscriptionText(\"\")"))
+    }
+
+    func testSlowAIStatusAndPreviewAreScopedToCurrentOverlayLifecycle() throws {
+        let repositoryRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let source = try String(
+            contentsOf: repositoryRoot
+                .appendingPathComponent("Sources/Fluid/ContentView.swift"),
+            encoding: .utf8
+        )
+        let slowStatusSection = try XCTUnwrap(
+            source.components(separatedBy: "private func makeAIProcessingFeedback(").last?
+                .components(separatedBy: "private func prepareOverlayForASRStop(").first
+        )
+
+        XCTAssertTrue(slowStatusSection.contains("self.overlayLifecycleID == lifecycleID"))
+        XCTAssertTrue(slowStatusSection.contains("self.menuBarManager.setProcessing(true)"))
+        XCTAssertTrue(slowStatusSection.contains("let streamPreview = DictationAIStreamPreviewBuffer"))
+
+        let stopSection = try XCTUnwrap(
+            source.components(separatedBy: "private func stopAndProcessTranscription(").last?
+                .components(separatedBy: "private func makeAIProcessingFeedback(").first
+        )
+        let lifecycleSnapshotIndex = try XCTUnwrap(
+            stopSection.range(of: "let expectedOverlayLifecycleID = self.overlayLifecycleID")
+        )
+        let ASRStopIndex = try XCTUnwrap(stopSection.range(of: "let transcribedText = await asr.stop"))
+        XCTAssertLessThan(lifecycleSnapshotIndex.lowerBound, ASRStopIndex.lowerBound)
+        XCTAssertEqual(
+            stopSection.components(separatedBy: "let expectedOverlayLifecycleID = self.overlayLifecycleID").count,
+            2
+        )
+    }
+
+    func testPromptTestReusesDelayedFeedbackAndScopesAllOverlayCleanup() throws {
+        let repositoryRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let source = try String(
+            contentsOf: repositoryRoot.appendingPathComponent("Sources/Fluid/ContentView.swift"),
+            encoding: .utf8
+        )
+        // Formatting may wrap this call; the same arguments and lifecycle binding must remain.
+        let compactSource = source.filter { !$0.isWhitespace }
+        XCTAssertTrue(compactSource.contains(
+            "awaitself.routePromptTestResult(transcribedText,sessionID:promptTestSessionID,lifecycleID:expectedOverlayLifecycleID)"
+        ))
+        let routingSection = try XCTUnwrap(
+            source.components(separatedBy: "private func routePromptTestResult(").last?
+                .components(separatedBy: "private func makeAIProcessingFeedback(").first
+        )
+        XCTAssertTrue(routingSection.contains("await self.processDictationPromptTest(text, lifecycleID: lifecycleID)"))
+        XCTAssertTrue(routingSection.contains("acceptsResult(for: sessionID)"))
+        let promptTestSection = try XCTUnwrap(
+            source.components(separatedBy: "private func processDictationPromptTest(").last?
+                .components(separatedBy: "private func makeAIProcessingFeedback(").first
+        )
+        let feedbackIndex = try XCTUnwrap(promptTestSection.range(of:
+            "let refiningStatusTask = self.makeAIProcessingFeedback(lifecycleID: lifecycleID).statusTask"
+        ))
+        let providerIndex = try XCTUnwrap(promptTestSection.range(of: "try await self.processTextWithAI("))
+        XCTAssertLessThan(feedbackIndex.lowerBound, providerIndex.lowerBound)
+
+        let cleanup = try XCTUnwrap(
+            promptTestSection.components(separatedBy: "defer {").last?
+                .components(separatedBy: "        do {").first
+        )
+        XCTAssertTrue(cleanup.contains("refiningStatusTask.cancel()"))
+        XCTAssertTrue(cleanup.contains("promptTest.isProcessing = false"))
+        // Both missing-provider and success/error cleanup must leave a newer overlay alone.
+        let scopedHide = "if self.overlayLifecycleID == lifecycleID {\n" +
+            "                self.menuBarManager.setProcessing(false)\n            }"
+        XCTAssertEqual(promptTestSection.components(separatedBy: scopedHide).count - 1, 2)
+        XCTAssertFalse(promptTestSection.contains("setProcessing(true)"), "Fast prompt tests must keep delayed feedback")
+        XCTAssertFalse(promptTestSection.contains("typeOutput"))
+        XCTAssertFalse(promptTestSection.contains("ClipboardService"))
+        XCTAssertFalse(promptTestSection.contains("TranscriptionHistoryStore"))
+    }
+
+    func testDictionaryTrackingStartsAfterDeliveryCallbackReturns() throws {
+        let repositoryRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let source = try String(
+            contentsOf: repositoryRoot
+                .appendingPathComponent("Sources/Fluid/Services/TypingService.swift"),
+            encoding: .utf8
+        )
+        let completionSection = try XCTUnwrap(
+            source.components(separatedBy: "guard let postInsertionKey else {").last?
+                .components(separatedBy: "guard let preferredTargetPID").first
+        )
+        let callbackIndex = try XCTUnwrap(completionSection.range(of: "completion?(outcome)"))
+        let trackingIndex = try XCTUnwrap(
+            completionSection.range(of: "AutomaticDictionaryCorrectionTracker.shared.beginObservingInsertion")
+        )
+
+        XCTAssertLessThan(callbackIndex.lowerBound, trackingIndex.lowerBound)
+        XCTAssertTrue(completionSection.contains("tracksDictionaryCorrections, outcome.didInsert"))
+        XCTAssertTrue(completionSection.contains("dictionary_tracking_scheduled afterDeliveryCallback=true"))
+    }
+
+    func testReadinessGatePreservesFirstPCMThatArrivesBeforeWait() async {
+        let gate = AudioCaptureReadinessGate()
+        gate.arm(sessionID: 41, attemptID: 1)
+        gate.signalFirstPCM(sessionID: 41, attemptID: 1)
+
+        let result = await gate.wait(
+            sessionID: 41,
+            attemptID: 1,
+            timeoutNanoseconds: 1_000_000
+        )
+
+        XCTAssertEqual(result, .ready)
+    }
+
+    func testReadinessGateCancelsWaitAndIgnoresStalePCM() async {
+        let gate = AudioCaptureReadinessGate()
+        gate.arm(sessionID: 41, attemptID: 1)
+        let firstWait = Task {
+            await gate.wait(
+                sessionID: 41,
+                attemptID: 1,
+                timeoutNanoseconds: 1_000_000_000
+            )
+        }
+        await Task.yield()
+        gate.cancel(sessionID: 41, attemptID: 1)
+        let firstResult = await firstWait.value
+        XCTAssertEqual(firstResult, .cancelled)
+
+        gate.arm(sessionID: 41, attemptID: 2)
+        gate.signalFirstPCM(sessionID: 41, attemptID: 1)
+        let staleResult = await gate.wait(
+            sessionID: 41,
+            attemptID: 1,
+            timeoutNanoseconds: 1_000_000
+        )
+        XCTAssertEqual(staleResult, .staleSession)
+
+        gate.signalFirstPCM(sessionID: 41, attemptID: 2)
+        let replacementResult = await gate.wait(
+            sessionID: 41,
+            attemptID: 2,
+            timeoutNanoseconds: 1_000_000
+        )
+        XCTAssertEqual(replacementResult, .ready)
+    }
+
+    func testReadinessGateRearmingCancelsExistingWaiter() async {
+        let gate = AudioCaptureReadinessGate()
+        gate.arm(sessionID: 41, attemptID: 1)
+        let firstWait = Task {
+            await gate.wait(
+                sessionID: 41,
+                attemptID: 1,
+                timeoutNanoseconds: 10_000_000_000
+            )
+        }
+        for _ in 0..<100 where !gate.hasRegisteredWaiter(sessionID: 41, attemptID: 1) {
+            await Task.yield()
+        }
+        XCTAssertTrue(gate.hasRegisteredWaiter(sessionID: 41, attemptID: 1))
+
+        gate.arm(sessionID: 41, attemptID: 2)
+
+        let firstResult = await firstWait.value
+        XCTAssertEqual(firstResult, .cancelled)
+        gate.signalFirstPCM(sessionID: 41, attemptID: 2)
+        let replacementResult = await gate.wait(
+            sessionID: 41,
+            attemptID: 2,
+            timeoutNanoseconds: 1_000_000
+        )
+        XCTAssertEqual(replacementResult, .ready)
+    }
+
+    func testReadinessGateTimesOutWithoutPCM() async {
+        let gate = AudioCaptureReadinessGate()
+        gate.arm(sessionID: 41, attemptID: 1)
+
+        let result = await gate.wait(
+            sessionID: 41,
+            attemptID: 1,
+            timeoutNanoseconds: 1_000_000
+        )
+
+        XCTAssertEqual(result, .timedOut)
+    }
+
+    @MainActor
+    func testReadyPCMDoesNotOverrideConsumerTaskCancellation() async {
+        let gate = AudioCaptureReadinessGate()
+        gate.arm(sessionID: 41, attemptID: 1)
+        gate.signalFirstPCM(sessionID: 41, attemptID: 1)
+        var resumeAfterReady: CheckedContinuation<Void, Never>?
+        let task = Task { @MainActor in
+            let result = await gate.wait(sessionID: 41, attemptID: 1, timeoutNanoseconds: 1_000_000)
+            XCTAssertEqual(result, .ready)
+            await withCheckedContinuation { resumeAfterReady = $0 }
+            do {
+                try Task.checkCancellation()
+                return true
+            } catch { return false }
+        }
+        for _ in 0..<20 {
+            await Task.yield()
+        }
+        XCTAssertNotNil(resumeAfterReady)
+        task.cancel()
+        resumeAfterReady?.resume()
+        let publishedCapture = await task.value
+        XCTAssertFalse(publishedCapture, "The capture consumer must check cancellation even after a ready result")
+    }
+
+    func testASRRechecksCaptureCancellationAfterFirstPCMWait() throws {
+        let repositoryRoot = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let source = try String(contentsOf: repositoryRoot.appendingPathComponent("Sources/Fluid/Services/ASRService.swift"), encoding: .utf8)
+        let postWait = try XCTUnwrap(source.components(separatedBy: "let readiness = await self.audioCaptureReadinessGate.wait(").dropFirst().first)
+        let readinessBranch = try XCTUnwrap(postWait.range(of: "if readiness == .ready"))
+        let cancellationCheck = try XCTUnwrap(postWait.range(of: "try self.checkCaptureStartGeneration(startGeneration)"))
+        XCTAssertLessThan(cancellationCheck.lowerBound, readinessBranch.lowerBound, "Do not publish ready PCM before checking task cancellation")
+    }
+
+    func testHistoryOnlyOutputWiringSeparatesPersistenceFromDelivery() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let source = try String(contentsOf: root.appendingPathComponent("Sources/Fluid/ContentView.swift"), encoding: .utf8)
+        let pipeline = try XCTUnwrap(source.components(separatedBy: "private func processStoppedTranscription(").last?.components(separatedBy: "private func processDictationPromptTest(").first)
+        XCTAssertTrue(pipeline.contains("let shouldPersistOutputs = outputRoute.savesHistory"))
+        XCTAssertTrue(pipeline.contains("let shouldDeliverOutputs = outputRoute.deliversText"))
+        XCTAssertTrue(pipeline.contains("if shouldPersistOutputs, !sendsExistingDraft, SettingsStore.shared.saveTranscriptionHistory"))
+        XCTAssertTrue(pipeline.contains("let shouldCopyToClipboard = shouldDeliverOutputs"))
+        XCTAssertTrue(pipeline.contains("let shouldTypeExternally = shouldDeliverOutputs"))
+        XCTAssertTrue(pipeline.contains("if isFluidFrontmost, shouldDeliverOutputs"))
+        XCTAssertTrue(pipeline.contains("if outputRoute.publishesEditorResult"))
+        XCTAssertTrue(pipeline.contains("shouldPersistOutputs: shouldDeliverOutputs"), "Recovery must not offer a retry that later pastes")
+        XCTAssertTrue(pipeline.contains("if wasRewriteMode {"))
+        XCTAssertTrue(pipeline.contains("if wasCommandMode {"))
+        XCTAssertTrue(pipeline.contains("!cancelledAtASRStop, await self.routePromptTestResult"))
+        XCTAssertTrue(pipeline.contains("!cancelledAtASRStop && route.deliversText && self.settings.spokenSendEnabled"))
+        XCTAssertTrue(pipeline.contains("guard self.cancelledOutputLifecycleID != expectedOverlayLifecycleID else"))
+    }
+
+    func testCancelHistoryWiringSharesHandlerAndKeepsDisposableCapturesPrivate() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let source = try String(contentsOf: root.appendingPathComponent("Sources/Fluid/ContentView.swift"), encoding: .utf8)
+        let callback = try XCTUnwrap(source.components(separatedBy: "self.hotkeyManager?.setCancelCallback {").last?.components(separatedBy: "// Re-insert").first)
+        XCTAssertTrue(callback.contains("self.handleCancelShortcutResult()"))
+        XCTAssertFalse(callback.contains("clearActiveRecordingMode()"), "Keep the selected style until the History pipeline snapshots it")
+        let cancel = try XCTUnwrap(source.components(separatedBy: "private func handleCancelShortcutResult() -> GlobalHotkeyManager.CancelHandlingResult {").last?
+            .components(separatedBy: "// MARK: - Model Management Helpers").first)
+        XCTAssertTrue(cancel.contains("if self.isSavingCancelledRecording { return .cancelled }"))
+        XCTAssertTrue(cancel.contains("DictionaryCorrectionOverlayController.shared.dismiss()\n            return .dismissedOverlay"))
+        XCTAssertTrue(cancel.contains("self.settings.saveTranscriptionHistory"))
+        XCTAssertTrue(cancel.contains("!self.asr.isDictionaryTrainingCaptureActive"))
+        XCTAssertTrue(cancel.contains("!= .onboardingSandbox"))
+        XCTAssertTrue(cancel.contains("!DictationPromptTestCoordinator.shared.isActive"))
+        XCTAssertTrue(cancel.contains("stopAndProcessTranscription(route: .historyOnly)"))
+        XCTAssertTrue(cancel.contains("self.isSavingCancelledRecording = false"))
+        XCTAssertTrue(cancel.contains("manager?.traceStopUnlocked(since: stopLockStartedAt)"))
+        XCTAssertTrue(cancel.contains("resetModifierOnlyShortcutTracking(reason: .cancel)"))
+        XCTAssertTrue(cancel.contains("self.menuBarManager.beginProcessingCompletionAndHideOverlay()"))
+        XCTAssertTrue(cancel.contains("self.spokenSendAutoStopTask?.cancel()"))
+        XCTAssertTrue(cancel.contains("self.stopSpokenSendVoiceActivityMonitoring()"))
+    }
+
+    func testEscapeCancelsVoiceEditAndCommandWithoutAddingThemToDictationHistory() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let source = try String(contentsOf: root.appendingPathComponent("Sources/Fluid/ContentView.swift"), encoding: .utf8)
+        XCTAssertFalse(source.contains("processingAllowsHistoryCancellation"))
+        XCTAssertTrue(source.contains("if wasRewriteMode {\n            guard !cancelledAtASRStop else {\n                self.rewriteModeService.clearState()"))
+        XCTAssertTrue(source.contains("if wasCommandMode {\n            guard !cancelledAtASRStop else { return }"))
+        let start = try XCTUnwrap(source.range(of: "private func handleCancelShortcutResult("))
+        let end = try XCTUnwrap(source.range(of: "// MARK: - Model Management Helpers", range: start.upperBound..<source.endIndex))
+        let cancel = String(source[start.lowerBound..<end.lowerBound])
+        XCTAssertTrue(cancel.contains("self.cancelledOutputLifecycleID = lifecycleID"))
+        XCTAssertTrue(cancel.contains("(self.activeRecordingMode == .dictate || self.activeRecordingMode == .promptMode)"))
+        XCTAssertTrue(cancel.contains("!self.isRecordingForRewrite && !self.isRecordingForCommand"))
+        let edit = try XCTUnwrap(source.components(separatedBy: "private func processRewriteWithVoiceInstruction(").last?.components(separatedBy: "private func setActiveRecordingMode(").first)
+        XCTAssertTrue(edit.contains("self.cancelledOutputLifecycleID != lifecycleID"))
+        XCTAssertEqual(edit.components(separatedBy: "isOutputValid: isOutputValid").count - 1, 2)
+        XCTAssertTrue(edit.contains("if !isOutputValid() { self.rewriteModeService.clearState() }"))
+        XCTAssertTrue(edit.contains("await self.rewriteModeService.processRewriteRequest(instruction)\n        guard isOutputValid() else { return }"))
+        let command = try XCTUnwrap(source.components(separatedBy: "private func processCommandWithVoice(").last?.components(separatedBy: "/// Capture app context").first)
+        XCTAssertTrue(command.contains("processUserCommand(command, notifyInvalidRequest: true, isOutputValid: isOutputValid)"))
+        XCTAssertTrue(command.contains("self.overlayLifecycleID == lifecycleID && self.cancelledOutputLifecycleID != lifecycleID"))
+        XCTAssertTrue(cancel.contains("self.commandModeService.cancelInvalidPendingCommand()"))
+        XCTAssertTrue(command.contains("self.pendingVoiceCommandLifecycleID = self.commandModeService.pendingCommand == nil ? nil : lifecycleID"))
+    }
+
+    func testCommandFollowUpAcceptanceReachesNotchWithoutDroppingDraft() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let source = try String(contentsOf: root.appendingPathComponent("Sources/Fluid/ContentView.swift"), encoding: .utf8)
+        XCTAssertTrue(source.contains("let accepted = await commandModeService.processFollowUpCommand(text)"))
+        XCTAssertTrue(source.contains("if !accepted, commandModeService.pendingCommand != nil"))
+        XCTAssertTrue(source.contains("self.asr.errorTitle = \"Command Awaiting Approval\""))
+        let overlay = try String(contentsOf: root.appendingPathComponent("Sources/Fluid/Services/NotchOverlayManager.swift"), encoding: .utf8)
+        XCTAssertTrue(overlay.contains("return await self.onCommandFollowUp?(text) ?? false"))
+        let command = try XCTUnwrap(source.components(separatedBy: "private func processCommandWithVoice(").last?.components(separatedBy: "/// Capture app context").first)
+        XCTAssertTrue(command.contains("guard isOutputValid() else {\n            self.commandModeService.cancelInvalidPendingCommand()"))
+    }
+
+    func testCancelledProcessingCannotPublishDelayedOverlayOrPracticeResult() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let source = try String(contentsOf: root.appendingPathComponent("Sources/Fluid/ContentView.swift"), encoding: .utf8)
+        let status = try XCTUnwrap(source.components(separatedBy: "let onFinalTranscriptionStarted: @MainActor () -> Void = {").last?
+            .components(separatedBy: "return (false, onFinalTranscriptionStarted)").first)
+        XCTAssertTrue(status.contains("self.cancelledOutputLifecycleID != lifecycleID"))
+        let prompt = try XCTUnwrap(source.components(separatedBy: "private func processDictationPromptTest(").last?.components(separatedBy: "private func routePromptTestResult(").first)
+        XCTAssertTrue(prompt.contains("guard promptTest.acceptsResult(for: sessionID), self.cancelledOutputLifecycleID != lifecycleID"))
+    }
+
+    func testReadinessWaitRespondsPromptlyToTaskCancellation() async {
+        let gate = AudioCaptureReadinessGate()
+        gate.arm(sessionID: 41, attemptID: 1)
+        let waitTask = Task {
+            await gate.wait(
+                sessionID: 41,
+                attemptID: 1,
+                timeoutNanoseconds: 10_000_000_000
+            )
+        }
+        await Task.yield()
+
+        let cancelledAt = ProcessInfo.processInfo.systemUptime
+        waitTask.cancel()
+        let result = await waitTask.value
+        let cancellationMilliseconds =
+            (ProcessInfo.processInfo.systemUptime - cancelledAt) * 1000
+
+        XCTAssertEqual(result, .cancelled)
+        XCTAssertLessThan(cancellationMilliseconds, 100)
+    }
+
+    func testFingerprintMismatchInvalidatesOldCaptureBeforeStartingReplacement() async throws {
+        let oldFingerprint = makeFingerprint(sampleRate: 48_000, bufferFrameSize: 512)
+        let newFingerprint = makeFingerprint(sampleRate: 24_000, bufferFrameSize: 256)
+        let recorder = DirectAudioEventRecorder()
+        let factory = FakeDirectAudioInputFactory(
+            fingerprints: [oldFingerprint, newFingerprint],
+            recorder: recorder
+        )
+        let fingerprintReader = ScriptedFingerprintReader(
+            values: [
+                oldFingerprint,
+                oldFingerprint,
+                oldFingerprint,
+                newFingerprint,
+                newFingerprint,
+                newFingerprint,
+                newFingerprint,
+            ]
+        )
+        let controller = DirectCoreAudioLifecycleController(
+            packetHandler: { _, _, _, _, _ in },
+            inputFactory: { deviceID, _ in
+                try factory.make(deviceID: deviceID)
+            },
+            fingerprintReader: { _ in
+                try fingerprintReader.read()
+            },
+            installsHardwareListeners: false,
+            onFormatInvalidated: { _ in }
+        )
+
+        _ = try await controller.prepare(
+            deviceID: oldFingerprint.deviceID,
+            deviceName: "Test microphone",
+            reason: "test_prewarm"
+        )
+        let running = try await controller.start(
+            deviceID: oldFingerprint.deviceID,
+            deviceName: "Test microphone",
+            reason: "test_start"
+        )
+        await controller.shutdown(reason: "test_complete")
+
+        XCTAssertEqual(running.fingerprint, newFingerprint)
+        XCTAssertEqual(
+            recorder.events,
+            [
+                "make:48000",
+                "invalidate:48000",
+                "make:24000",
+                "start:24000",
+                "invalidate:24000",
+            ]
+        )
+        XCTAssertFalse(recorder.events.contains("start:48000"))
+        XCTAssertTrue(recorder.executedOnlyOffMain)
+        XCTAssertEqual(recorder.maximumConcurrentOperations, 1)
+    }
+
+    func testPrepareRollsBackWhenPostInstallFingerprintReadFails() async throws {
+        let fingerprint = makeFingerprint(sampleRate: 48_000, bufferFrameSize: 512)
+        let recorder = DirectAudioEventRecorder()
+        let factory = FakeDirectAudioInputFactory(
+            fingerprints: [fingerprint],
+            recorder: recorder
+        )
+        let fingerprintReader = ScriptedFingerprintReader(values: [fingerprint])
+        let controller = DirectCoreAudioLifecycleController(
+            packetHandler: { _, _, _, _, _ in },
+            inputFactory: { deviceID, _ in
+                try factory.make(deviceID: deviceID)
+            },
+            fingerprintReader: { _ in
+                try fingerprintReader.read()
+            },
+            installsHardwareListeners: false,
+            onFormatInvalidated: { _ in }
+        )
+
+        do {
+            _ = try await controller.prepare(
+                deviceID: fingerprint.deviceID,
+                deviceName: "Test microphone",
+                reason: "test_prepare_failure"
+            )
+            XCTFail("Expected the final fingerprint read to fail.")
+        } catch {
+            XCTAssertEqual(controller.snapshot.phase, .empty)
+            XCTAssertEqual(
+                recorder.events,
+                ["make:48000", "invalidate:48000"]
+            )
+        }
+    }
+
+    func testConcurrentLifecycleCommandsNeverOverlap() async throws {
+        let fingerprint = makeFingerprint(sampleRate: 48_000, bufferFrameSize: 512)
+        let recorder = DirectAudioEventRecorder(operationDelayMicroseconds: 2000)
+        let factory = FakeDirectAudioInputFactory(
+            fingerprints: [fingerprint],
+            recorder: recorder
+        )
+        let controller = DirectCoreAudioLifecycleController(
+            packetHandler: { _, _, _, _, _ in },
+            inputFactory: { deviceID, _ in
+                try factory.make(deviceID: deviceID)
+            },
+            fingerprintReader: { _ in fingerprint },
+            installsHardwareListeners: false,
+            onFormatInvalidated: { _ in }
+        )
+        _ = try await controller.prepare(
+            deviceID: fingerprint.deviceID,
+            deviceName: "Test microphone",
+            reason: "test_prepare"
+        )
+
+        let commands = (0..<12).map { index in
+            Task {
+                if index.isMultiple(of: 2) {
+                    _ = try? await controller.start(
+                        deviceID: fingerprint.deviceID,
+                        deviceName: "Test microphone",
+                        reason: "concurrent_start"
+                    )
+                } else {
+                    _ = await controller.stop(
+                        retainPrepared: true,
+                        reason: "concurrent_stop"
+                    )
+                }
+            }
+        }
+        for command in commands {
+            await command.value
+        }
+        await controller.shutdown(reason: "test_complete")
+
+        XCTAssertTrue(recorder.executedOnlyOffMain)
+        XCTAssertEqual(recorder.maximumConcurrentOperations, 1)
+    }
+
+    func testStartingRunningInputReusesHardwareWithoutStopOrRestart() async throws {
+        let fingerprint = makeFingerprint(sampleRate: 48_000, bufferFrameSize: 512)
+        let recorder = DirectAudioEventRecorder()
+        let factory = FakeDirectAudioInputFactory(
+            fingerprints: [fingerprint],
+            recorder: recorder
+        )
+        let controller = DirectCoreAudioLifecycleController(
+            packetHandler: { _, _, _, _, _ in },
+            inputFactory: { deviceID, _ in
+                try factory.make(deviceID: deviceID)
+            },
+            fingerprintReader: { _ in fingerprint },
+            installsHardwareListeners: false,
+            onFormatInvalidated: { _ in }
+        )
+
+        _ = try await controller.start(
+            deviceID: fingerprint.deviceID,
+            deviceName: "Test microphone",
+            reason: "preview"
+        )
+        let reused = try await controller.start(
+            deviceID: fingerprint.deviceID,
+            deviceName: "Test microphone",
+            reason: "dictation_handoff"
+        )
+        await controller.shutdown(reason: "test_complete")
+
+        XCTAssertEqual(reused.phase, .running)
+        XCTAssertEqual(
+            recorder.events,
+            ["make:48000", "start:48000", "invalidate:48000"]
+        )
+    }
+
+    func testCancelledStopStillStopsHardwareAndRetainsPreparedInput() async throws {
+        let fingerprint = makeFingerprint(sampleRate: 48_000, bufferFrameSize: 512)
+        let recorder = DirectAudioEventRecorder(operationDelayMicroseconds: 2000)
+        let factory = FakeDirectAudioInputFactory(
+            fingerprints: [fingerprint],
+            recorder: recorder
+        )
+        let controller = DirectCoreAudioLifecycleController(
+            packetHandler: { _, _, _, _, _ in },
+            inputFactory: { deviceID, _ in
+                try factory.make(deviceID: deviceID)
+            },
+            fingerprintReader: { _ in fingerprint },
+            installsHardwareListeners: false,
+            onFormatInvalidated: { _ in }
+        )
+        _ = try await controller.start(
+            deviceID: fingerprint.deviceID,
+            deviceName: "Test microphone",
+            reason: "test_start"
+        )
+
+        let stopTask = Task {
+            await controller.stop(
+                retainPrepared: true,
+                reason: "cancelled_waiter"
+            )
+        }
+        stopTask.cancel()
+        let report = await stopTask.value
+
+        XCTAssertEqual(report.status, noErr)
+        XCTAssertTrue(report.retainedPreparedCapture)
+        XCTAssertEqual(controller.snapshot.phase, .prepared)
+        XCTAssertEqual(recorder.events, ["make:48000", "start:48000", "stop:48000"])
+        await controller.shutdown(reason: "test_complete")
+    }
+
+    func testSequentialStopStartReusesInputOnlyAfterStopCompletes() async throws {
+        let fingerprint = makeFingerprint(sampleRate: 48_000, bufferFrameSize: 512)
+        let recorder = DirectAudioEventRecorder(operationDelayMicroseconds: 2000)
+        let factory = FakeDirectAudioInputFactory(
+            fingerprints: [fingerprint],
+            recorder: recorder
+        )
+        let controller = DirectCoreAudioLifecycleController(
+            packetHandler: { _, _, _, _, _ in },
+            inputFactory: { deviceID, _ in
+                try factory.make(deviceID: deviceID)
+            },
+            fingerprintReader: { _ in fingerprint },
+            installsHardwareListeners: false,
+            onFormatInvalidated: { _ in }
+        )
+        _ = try await controller.start(
+            deviceID: fingerprint.deviceID,
+            deviceName: "Test microphone",
+            reason: "first_start"
+        )
+
+        _ = await controller.stop(retainPrepared: true, reason: "first_stop")
+        _ = try await controller.start(
+            deviceID: fingerprint.deviceID,
+            deviceName: "Test microphone",
+            reason: "second_start"
+        )
+        _ = await controller.stop(retainPrepared: true, reason: "second_stop")
+
+        XCTAssertEqual(controller.snapshot.phase, .prepared)
+        XCTAssertEqual(
+            recorder.events,
+            ["make:48000", "start:48000", "stop:48000", "start:48000", "stop:48000"]
+        )
+        XCTAssertEqual(recorder.maximumConcurrentOperations, 1)
+        await controller.shutdown(reason: "test_complete")
+    }
+
+    func testFailedStopPoisonsLifecycleAndPreventsReplacement() async throws {
+        let fingerprint = makeFingerprint(sampleRate: 48_000, bufferFrameSize: 512)
+        let recorder = DirectAudioEventRecorder()
+        let input = FailingStopDirectAudioInput(
+            fingerprint: fingerprint,
+            recorder: recorder
+        )
+        let controller = DirectCoreAudioLifecycleController(
+            packetHandler: { _, _, _, _, _ in },
+            inputFactory: { _, _ in input },
+            fingerprintReader: { _ in fingerprint },
+            installsHardwareListeners: false,
+            deviceLivenessReader: { _ in true },
+            onFormatInvalidated: { _ in }
+        )
+        _ = try await controller.start(
+            deviceID: fingerprint.deviceID,
+            deviceName: "Test microphone",
+            reason: "test_start"
+        )
+
+        let report = await controller.stop(
+            retainPrepared: true,
+            reason: "test_stop_failure"
+        )
+
+        XCTAssertNotEqual(report.status, noErr)
+        XCTAssertFalse(report.retainedPreparedCapture)
+        XCTAssertEqual(controller.snapshot.phase, .failed)
+        do {
+            _ = try await controller.prepare(
+                deviceID: fingerprint.deviceID,
+                deviceName: "Replacement microphone",
+                reason: "must_not_replace"
+            )
+            XCTFail("A poisoned lifecycle must not create a replacement.")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("poisoned"))
+        }
+        XCTAssertEqual(recorder.events, ["start:48000", "stop_failed", "quarantine"])
+    }
+
+    func testFailedReplacementTeardownDoesNotCreateConcurrentInput() async throws {
+        let oldFingerprint = makeFingerprint(sampleRate: 48_000, bufferFrameSize: 512)
+        let newFingerprint = makeFingerprint(sampleRate: 24_000, bufferFrameSize: 256)
+        let recorder = DirectAudioEventRecorder()
+        let factory = FailingReplacementFactory(
+            fingerprint: oldFingerprint,
+            recorder: recorder
+        )
+        let fingerprintReader = ScriptedFingerprintReader(
+            values: [oldFingerprint, oldFingerprint, newFingerprint]
+        )
+        let controller = DirectCoreAudioLifecycleController(
+            packetHandler: { _, _, _, _, _ in },
+            inputFactory: { deviceID, _ in
+                factory.make(deviceID: deviceID)
+            },
+            fingerprintReader: { _ in
+                try fingerprintReader.read()
+            },
+            installsHardwareListeners: false,
+            deviceLivenessReader: { _ in true },
+            onFormatInvalidated: { _ in }
+        )
+
+        _ = try await controller.prepare(
+            deviceID: oldFingerprint.deviceID,
+            deviceName: "Old microphone",
+            reason: "test_initial_prepare"
+        )
+
+        do {
+            _ = try await controller.prepare(
+                deviceID: newFingerprint.deviceID,
+                deviceName: "Replacement microphone",
+                reason: "test_failed_replacement"
+            )
+            XCTFail("A failed teardown must prevent replacement creation.")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("poisoned"))
+        }
+
+        XCTAssertEqual(controller.snapshot.phase, .failed)
+        XCTAssertEqual(factory.creationCount, 1)
+        XCTAssertEqual(recorder.events, ["quarantine"])
+    }
+
+    func testDeviceRemovalFailureQuarantinesOldInputAndAllowsReplacement() async throws {
+        let oldFingerprint = makeFingerprint(sampleRate: 48_000, bufferFrameSize: 512)
+        let newFingerprint = makeFingerprint(sampleRate: 24_000, bufferFrameSize: 256)
+        let recorder = DirectAudioEventRecorder()
+        let factory = RecoveringAfterStoppedHardwareFactory(
+            oldFingerprint: oldFingerprint,
+            newFingerprint: newFingerprint,
+            recorder: recorder
+        )
+        let fingerprintReader = ScriptedFingerprintReader(
+            values: [oldFingerprint, oldFingerprint, newFingerprint, newFingerprint]
+        )
+        let controller = DirectCoreAudioLifecycleController(
+            packetHandler: { _, _, _, _, _ in },
+            inputFactory: { deviceID, _ in
+                factory.make(deviceID: deviceID)
+            },
+            fingerprintReader: { _ in
+                try fingerprintReader.read()
+            },
+            installsHardwareListeners: false,
+            onFormatInvalidated: { _ in }
+        )
+
+        _ = try await controller.prepare(
+            deviceID: oldFingerprint.deviceID,
+            deviceName: "Old microphone",
+            reason: "test_initial_prepare"
+        )
+        await controller.invalidate(reason: "teardown_before_notification")
+        XCTAssertEqual(controller.snapshot.phase, .failed)
+        await controller.simulateStoppedHardwareNotificationForTesting(
+            generation: controller.snapshot.generation,
+            reason: "device_is_alive"
+        )
+        let replacement = try await controller.prepare(
+            deviceID: newFingerprint.deviceID,
+            deviceName: "Replacement microphone",
+            reason: "test_recovery"
+        )
+
+        XCTAssertEqual(replacement.phase, .prepared)
+        XCTAssertEqual(replacement.fingerprint, newFingerprint)
+        XCTAssertEqual(factory.creationCount, 2)
+        XCTAssertEqual(recorder.events, ["quarantine", "make:24000"])
+        await controller.shutdown(reason: "test_complete")
+    }
+}
+
+private nonisolated func makeFingerprint(
+    sampleRate: Double,
+    bufferFrameSize: UInt32
+) -> DirectCoreAudioFormatFingerprint {
+    DirectCoreAudioFormatFingerprint(
+        deviceID: 7001,
+        streamID: 7002,
+        virtualFormat: DirectCoreAudioStreamFormatFingerprint(
+            AudioStreamBasicDescription(
+                mSampleRate: sampleRate,
+                mFormatID: kAudioFormatLinearPCM,
+                mFormatFlags: kAudioFormatFlagIsFloat | kAudioFormatFlagIsPacked,
+                mBytesPerPacket: 4,
+                mFramesPerPacket: 1,
+                mBytesPerFrame: 4,
+                mChannelsPerFrame: 1,
+                mBitsPerChannel: 32,
+                mReserved: 0
+            )
+        ),
+        physicalFormat: nil,
+        inputBufferChannels: [1],
+        nominalSampleRate: sampleRate,
+        bufferFrameSize: bufferFrameSize,
+        variableBufferFrameSizeMaximum: nil,
+        dataSourceID: nil
+    )
+}
+
+private final nonisolated class FakeDirectAudioInputFactory: @unchecked Sendable {
+    private let lock = NSLock()
+    private var fingerprints: [DirectCoreAudioFormatFingerprint]
+    private let recorder: DirectAudioEventRecorder
+
+    init(
+        fingerprints: [DirectCoreAudioFormatFingerprint],
+        recorder: DirectAudioEventRecorder
+    ) {
+        self.fingerprints = fingerprints
+        self.recorder = recorder
+    }
+
+    func make(deviceID: AudioObjectID) throws -> any DirectCoreAudioInputControlling {
+        try self.lock.withLock {
+            guard self.fingerprints.isEmpty == false else {
+                throw NSError(
+                    domain: "DirectAudioReliabilityTests",
+                    code: -1,
+                    userInfo: [NSLocalizedDescriptionKey: "No fake input remains."]
+                )
+            }
+            let fingerprint = self.fingerprints.removeFirst()
+            self.recorder.record("make:\(Int(fingerprint.virtualFormat.sampleRate))")
+            return FakeDirectAudioInput(
+                deviceID: deviceID,
+                fingerprint: fingerprint,
+                recorder: self.recorder
+            )
+        }
+    }
+}
+
+private final nonisolated class ScriptedFingerprintReader: @unchecked Sendable {
+    private let lock = NSLock()
+    private var values: [DirectCoreAudioFormatFingerprint]
+
+    init(values: [DirectCoreAudioFormatFingerprint]) {
+        self.values = values
+    }
+
+    func read() throws -> DirectCoreAudioFormatFingerprint {
+        try self.lock.withLock {
+            guard self.values.isEmpty == false else {
+                throw NSError(
+                    domain: "DirectAudioReliabilityTests",
+                    code: -2,
+                    userInfo: [NSLocalizedDescriptionKey: "No fingerprint remains."]
+                )
+            }
+            return self.values.removeFirst()
+        }
+    }
+}
+
+private final nonisolated class FakeDirectAudioInput:
+    DirectCoreAudioInputControlling,
+    @unchecked Sendable
+{
+    let deviceID: AudioObjectID
+    let sampleRate: Double
+    let hardwareBufferFrameSize: UInt32
+    let formatFingerprint: DirectCoreAudioFormatFingerprint
+
+    private let recorder: DirectAudioEventRecorder
+    private var running = false
+
+    init(
+        deviceID: AudioObjectID,
+        fingerprint: DirectCoreAudioFormatFingerprint,
+        recorder: DirectAudioEventRecorder
+    ) {
+        self.deviceID = deviceID
+        self.sampleRate = fingerprint.virtualFormat.sampleRate
+        self.hardwareBufferFrameSize = fingerprint.bufferFrameSize
+        self.formatFingerprint = fingerprint
+        self.recorder = recorder
+    }
+
+    var isRunning: Bool {
+        self.running
+    }
+
+    var droppedPacketCount: UInt64 {
+        0
+    }
+
+    func start() throws {
+        self.recorder.perform(
+            "start:\(Int(self.sampleRate))"
+        ) {
+            self.running = true
+        }
+    }
+
+    func stop() -> OSStatus {
+        self.recorder.perform(
+            "stop:\(Int(self.sampleRate))"
+        ) {
+            self.running = false
+        }
+        return noErr
+    }
+
+    func markFormatDirty() {}
+
+    func openPacketGateIfClean() -> Bool {
+        true
+    }
+
+    func invalidate() -> OSStatus {
+        self.recorder.perform(
+            "invalidate:\(Int(self.sampleRate))"
+        ) {
+            self.running = false
+        }
+        return noErr
+    }
+}
+
+private final nonisolated class FailingStopDirectAudioInput:
+    DirectCoreAudioInputControlling,
+    @unchecked Sendable
+{
+    let deviceID: AudioObjectID
+    let sampleRate: Double
+    let hardwareBufferFrameSize: UInt32
+    let formatFingerprint: DirectCoreAudioFormatFingerprint
+
+    private let recorder: DirectAudioEventRecorder
+    private var running = false
+    private let failureStatus = OSStatus(-50)
+
+    init(
+        fingerprint: DirectCoreAudioFormatFingerprint,
+        recorder: DirectAudioEventRecorder
+    ) {
+        self.deviceID = fingerprint.deviceID
+        self.sampleRate = fingerprint.virtualFormat.sampleRate
+        self.hardwareBufferFrameSize = fingerprint.bufferFrameSize
+        self.formatFingerprint = fingerprint
+        self.recorder = recorder
+    }
+
+    var isRunning: Bool {
+        self.running
+    }
+
+    var droppedPacketCount: UInt64 {
+        0
+    }
+
+    func start() throws {
+        self.running = true
+        self.recorder.record("start:\(Int(self.sampleRate))")
+    }
+
+    func stop() -> OSStatus {
+        self.running = false
+        self.recorder.record("stop_failed")
+        return self.failureStatus
+    }
+
+    func markFormatDirty() {}
+
+    func openPacketGateIfClean() -> Bool {
+        true
+    }
+
+    func invalidate() -> OSStatus {
+        self.recorder.record("quarantine")
+        return self.failureStatus
+    }
+}
+
+private final nonisolated class FailingReplacementFactory: @unchecked Sendable {
+    private let lock = NSLock()
+    private let fingerprint: DirectCoreAudioFormatFingerprint
+    private let recorder: DirectAudioEventRecorder
+    private var creations = 0
+
+    init(
+        fingerprint: DirectCoreAudioFormatFingerprint,
+        recorder: DirectAudioEventRecorder
+    ) {
+        self.fingerprint = fingerprint
+        self.recorder = recorder
+    }
+
+    var creationCount: Int {
+        self.lock.withLock { self.creations }
+    }
+
+    func make(deviceID _: AudioObjectID) -> any DirectCoreAudioInputControlling {
+        self.lock.withLock {
+            self.creations += 1
+        }
+        return FailingStopDirectAudioInput(
+            fingerprint: self.fingerprint,
+            recorder: self.recorder
+        )
+    }
+}
+
+private final nonisolated class RecoveringAfterStoppedHardwareFactory: @unchecked Sendable {
+    private let lock = NSLock()
+    private let oldFingerprint: DirectCoreAudioFormatFingerprint
+    private let newFingerprint: DirectCoreAudioFormatFingerprint
+    private let recorder: DirectAudioEventRecorder
+    private var creations = 0
+
+    init(
+        oldFingerprint: DirectCoreAudioFormatFingerprint,
+        newFingerprint: DirectCoreAudioFormatFingerprint,
+        recorder: DirectAudioEventRecorder
+    ) {
+        self.oldFingerprint = oldFingerprint
+        self.newFingerprint = newFingerprint
+        self.recorder = recorder
+    }
+
+    var creationCount: Int {
+        self.lock.withLock { self.creations }
+    }
+
+    func make(deviceID: AudioObjectID) -> any DirectCoreAudioInputControlling {
+        let creation = self.lock.withLock {
+            self.creations += 1
+            return self.creations
+        }
+        if creation == 1 {
+            return FailingStopDirectAudioInput(
+                fingerprint: self.oldFingerprint,
+                recorder: self.recorder
+            )
+        }
+        self.recorder.record("make:\(Int(self.newFingerprint.virtualFormat.sampleRate))")
+        return FakeDirectAudioInput(
+            deviceID: deviceID,
+            fingerprint: self.newFingerprint,
+            recorder: self.recorder
+        )
+    }
+}
+
+private final nonisolated class DirectAudioEventRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private let operationDelayMicroseconds: useconds_t
+    private var recordedEvents: [String] = []
+    private var operationCount = 0
+    private var maximumOperationCount = 0
+    private var allOperationsOffMain = true
+
+    init(operationDelayMicroseconds: useconds_t = 0) {
+        self.operationDelayMicroseconds = operationDelayMicroseconds
+    }
+
+    var events: [String] {
+        self.lock.withLock { self.recordedEvents }
+    }
+
+    var maximumConcurrentOperations: Int {
+        self.lock.withLock { self.maximumOperationCount }
+    }
+
+    var executedOnlyOffMain: Bool {
+        self.lock.withLock { self.allOperationsOffMain }
+    }
+
+    func record(_ event: String) {
+        self.lock.withLock {
+            self.recordedEvents.append(event)
+        }
+    }
+
+    func perform(_ event: String, body: () -> Void) {
+        self.lock.withLock {
+            self.operationCount += 1
+            self.maximumOperationCount = max(
+                self.maximumOperationCount,
+                self.operationCount
+            )
+            self.allOperationsOffMain = self.allOperationsOffMain && Thread.isMainThread == false
+            self.recordedEvents.append(event)
+        }
+        if self.operationDelayMicroseconds > 0 {
+            usleep(self.operationDelayMicroseconds)
+        }
+        body()
+        self.lock.withLock {
+            self.operationCount -= 1
+        }
+    }
+}

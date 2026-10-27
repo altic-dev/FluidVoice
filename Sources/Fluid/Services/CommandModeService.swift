@@ -13,9 +13,9 @@ final class CommandModeService: ObservableObject {
 
     private let terminalService = TerminalService()
     private let chatStore = ChatHistoryStore.shared
+    private var pendingVoiceCommandCancellation: (commandID: String, requestStartIndex: Int, isOutputValid: @MainActor () -> Bool)?
     private var currentTurnCount = 0
     private let maxTurns = 20
-    private var didRequireConfirmationThisRun: Bool = false
 
     // Flag to enable notch output display
     var enableNotchOutput: Bool = true
@@ -116,6 +116,7 @@ final class CommandModeService: ObservableObject {
     func clearHistory() {
         self.conversationHistory.removeAll()
         self.pendingCommand = nil
+        self.pendingVoiceCommandCancellation = nil
         self.currentTurnCount = 0
 
         // Clear in store as well
@@ -134,8 +135,8 @@ final class CommandModeService: ObservableObject {
 
     /// Create a new chat and switch to it
     func createNewChat() {
-        // Can't switch while processing
-        guard !self.isProcessing else { return }
+        // Keep the active conversation until its command has finished or been resolved.
+        guard !self.isProcessing, self.pendingCommand == nil else { return }
 
         // Save current chat first
         self.saveCurrentChat()
@@ -144,9 +145,7 @@ final class CommandModeService: ObservableObject {
         let newSession = self.chatStore.createNewChat()
         self.currentChatID = newSession.id
         self.conversationHistory = []
-        self.pendingCommand = nil
-        self.currentTurnCount = 0
-        self.currentStep = nil
+        self.resetChatTransientState()
 
         // Clear notch state
         NotchContentState.shared.clearCommandOutput()
@@ -154,14 +153,14 @@ final class CommandModeService: ObservableObject {
     }
 
     /// Switch to a different chat by ID
-    /// Returns false if switching is blocked (e.g., during processing)
+    /// Returns false if switching is blocked or the session no longer exists.
     @discardableResult
     func switchToChat(id: String) -> Bool {
-        // Can't switch while processing
-        guard !self.isProcessing else { return false }
+        guard !self.isProcessing, self.pendingCommand == nil else { return false }
 
         // Don't switch to current
         guard id != self.currentChatID else { return true }
+        guard self.chatStore.sessions.contains(where: { $0.id == id && !$0.isArchived }) else { return false }
 
         // Save current chat first
         self.saveCurrentChat()
@@ -171,9 +170,7 @@ final class CommandModeService: ObservableObject {
 
         self.currentChatID = session.id
         self.conversationHistory = session.messages.map { self.chatMessageToMessage($0) }
-        self.pendingCommand = nil
-        self.currentTurnCount = 0
-        self.currentStep = nil
+        self.resetChatTransientState()
 
         // Sync to notch state
         self.syncToNotchState()
@@ -184,14 +181,64 @@ final class CommandModeService: ObservableObject {
 
     /// Delete current chat and switch to next
     func deleteCurrentChat() {
-        // Can't delete while processing
-        guard !self.isProcessing else { return }
+        guard let id = self.currentChatID else { return }
+        self.deleteChat(id: id)
+    }
 
-        self.chatStore.deleteCurrentChat()
+    /// Delete a saved chat, preserving the active conversation when deleting another session.
+    @discardableResult
+    func deleteChat(id: String) -> Bool {
+        guard !self.isProcessing, self.pendingCommand == nil else { return false }
+        guard self.chatStore.sessions.contains(where: { $0.id == id }) else { return false }
 
-        // Load the new current chat
-        self.loadCurrentChatFromStore()
+        let deletesCurrentChat = id == self.currentChatID
+        self.chatStore.deleteChat(id: id)
+
+        if deletesCurrentChat {
+            self.resetChatTransientState()
+            self.loadCurrentChatFromStore()
+        }
         NotchContentState.shared.refreshRecentChats()
+        return true
+    }
+
+    /// Move a conversation out of active history without deleting its messages.
+    @discardableResult
+    func archiveChat(id: String) -> Bool {
+        guard !self.isProcessing, self.pendingCommand == nil else { return false }
+        guard self.chatStore.sessions.contains(where: { $0.id == id && !$0.isArchived }),
+              self.chatStore.sessions.filter(\.isArchived).count < ChatHistoryStore.maxArchivedChats else { return false }
+        let archivesCurrentChat = id == self.currentChatID
+        if archivesCurrentChat { self.saveCurrentChat() }
+        guard self.chatStore.archiveChat(id: id) else { return false }
+        if archivesCurrentChat {
+            self.resetChatTransientState()
+            self.loadCurrentChatFromStore()
+        }
+        NotchContentState.shared.refreshRecentChats()
+        return true
+    }
+
+    /// Return an archived conversation to history without changing the current conversation.
+    @discardableResult
+    func restoreChat(id: String) -> Bool {
+        guard !self.isProcessing, self.pendingCommand == nil else { return false }
+        guard self.chatStore.restoreChat(id: id) else { return false }
+        NotchContentState.shared.refreshRecentChats()
+        return true
+    }
+
+    private func resetChatTransientState() {
+        self.pendingCommand = nil
+        self.pendingVoiceCommandCancellation = nil
+        self.currentTurnCount = 0
+        self.currentStep = nil
+        self.streamingText = ""
+        self.streamingThinkingText = ""
+        self.streamingBuffer = []
+        self.thinkingBuffer = []
+        self.lastUIUpdate = 0
+        self.lastThinkingUIUpdate = 0
     }
 
     /// Save current conversation to store
@@ -199,6 +246,16 @@ final class CommandModeService: ObservableObject {
         guard self.currentChatID != nil else { return }
 
         let messages = self.conversationHistory.map { self.messageToChatMessage($0) }
+        if let savedMessages = self.chatStore.currentSession?.messages,
+           savedMessages.count == messages.count,
+           zip(savedMessages, messages).allSatisfy({ saved, current in
+               saved.role == current.role && saved.content == current.content &&
+                   saved.toolCall == current.toolCall && saved.stepType == current.stepType
+           })
+        {
+            // Restoring a session recreates display IDs and timestamps; browsing is not an edit.
+            return
+        }
         self.chatStore.updateCurrentChat(messages: messages)
     }
 
@@ -304,12 +361,39 @@ final class CommandModeService: ObservableObject {
     }
 
     /// Process user voice/text command
-    func processUserCommand(_ text: String, notifyInvalidRequest: Bool = false) async {
+    func processUserCommand(_ text: String, notifyInvalidRequest: Bool = false, isOutputValid: (@MainActor () -> Bool)? = nil) async {
+        let voiceOutputValidity = isOutputValid
+        let isOutputValid: @MainActor () -> Bool = voiceOutputValidity ?? { true }
+        guard isOutputValid(), !self.isProcessing, self.pendingCommand == nil else { return }
+        self.pendingVoiceCommandCancellation = nil
+        guard let summaryActivity = MeetingSummaryActivityCoordinator.shared.beginProcessing() else {
+            MeetingSummaryActivityCoordinator.presentBusyError()
+            return
+        }
+        defer { MeetingSummaryActivityCoordinator.shared.endProcessing(summaryActivity) }
+
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
 
+        AnalyticsService.shared.recordUsage(
+            mode: .command,
+            aiModel: SettingsStore.shared.analyticsAIModelDescriptor(for: .command)
+        )
+
+        let requestStartIndex = self.conversationHistory.count
         self.isProcessing = true
+        defer {
+            if !isOutputValid() {
+                self.discardUndispatchedMessages(from: requestStartIndex)
+                self.saveCurrentChat()
+                self.isProcessing = false
+                self.resetChatTransientState()
+                if self.shouldSyncCommandNotchState {
+                    NotchContentState.shared.setCommandProcessing(false)
+                    NotchContentState.shared.updateCommandStreamingText("")
+                }
+            }
+        }
         self.currentTurnCount = 0
-        self.didRequireConfirmationThisRun = false
         self.conversationHistory.append(Message(role: .user, content: text))
 
         // Auto-save after adding user message
@@ -321,12 +405,29 @@ final class CommandModeService: ObservableObject {
             NotchContentState.shared.setCommandProcessing(true)
         }
 
-        await self.processNextTurn(notifyInvalidRequest: notifyInvalidRequest)
+        await self.processNextTurn(notifyInvalidRequest: notifyInvalidRequest, isOutputValid: isOutputValid)
+        if isOutputValid(), let pending = self.pendingCommand, let voiceOutputValidity {
+            self.pendingVoiceCommandCancellation = (pending.id, requestStartIndex, voiceOutputValidity)
+        }
     }
 
     /// Process follow-up command from notch input
-    func processFollowUpCommand(_ text: String) async {
-        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+    @discardableResult
+    func processFollowUpCommand(_ text: String) async -> Bool {
+        guard !self.isProcessing, self.pendingCommand == nil else { return false }
+        self.pendingVoiceCommandCancellation = nil
+        guard let summaryActivity = MeetingSummaryActivityCoordinator.shared.beginProcessing() else {
+            MeetingSummaryActivityCoordinator.presentBusyError()
+            return false
+        }
+        defer { MeetingSummaryActivityCoordinator.shared.endProcessing(summaryActivity) }
+
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
+
+        AnalyticsService.shared.recordUsage(
+            mode: .command,
+            aiModel: SettingsStore.shared.analyticsAIModelDescriptor(for: .command)
+        )
 
         // Add to both histories
         self.conversationHistory.append(Message(role: .user, content: text))
@@ -338,18 +439,27 @@ final class CommandModeService: ObservableObject {
         self.saveCurrentChat()
 
         self.isProcessing = true
-        self.didRequireConfirmationThisRun = false
         if self.shouldSyncCommandNotchState {
             NotchContentState.shared.setCommandProcessing(true)
         }
 
         await self.processNextTurn()
+        return true
     }
 
     /// Execute pending command (after user confirmation)
     func confirmAndExecute() async {
+        guard !self.isProcessing else { return }
+        guard !self.cancelInvalidPendingCommand() else { return }
+        guard let summaryActivity = MeetingSummaryActivityCoordinator.shared.beginProcessing() else {
+            MeetingSummaryActivityCoordinator.presentBusyError()
+            return
+        }
+        defer { MeetingSummaryActivityCoordinator.shared.endProcessing(summaryActivity) }
+
         guard let pending = pendingCommand else { return }
         self.pendingCommand = nil
+        self.pendingVoiceCommandCancellation = nil
         self.isProcessing = true
 
         await self.executeCommand(pending.command, workingDirectory: pending.workingDirectory, callId: pending.id)
@@ -358,6 +468,7 @@ final class CommandModeService: ObservableObject {
     /// Cancel pending command
     func cancelPendingCommand() {
         self.pendingCommand = nil
+        self.pendingVoiceCommandCancellation = nil
         self.conversationHistory.append(Message(
             role: .assistant,
             content: "Command cancelled.",
@@ -367,9 +478,38 @@ final class CommandModeService: ObservableObject {
         self.currentStep = nil
     }
 
+    /// Escape invalidates the voice owner before canceling its deferred confirmation.
+    @discardableResult
+    func cancelInvalidPendingCommand() -> Bool {
+        guard !self.isProcessing,
+              let cancellation = self.pendingVoiceCommandCancellation,
+              self.pendingCommand?.id == cancellation.commandID,
+              !cancellation.isOutputValid() else { return false }
+        self.discardUndispatchedMessages(from: cancellation.requestStartIndex)
+        self.saveCurrentChat()
+        self.resetChatTransientState()
+        if self.shouldSyncCommandNotchState {
+            NotchContentState.shared.setCommandProcessing(false)
+            NotchContentState.shared.updateCommandStreamingText("")
+        }
+        return true
+    }
+
+    private func discardUndispatchedMessages(from requestStartIndex: Int) {
+        guard requestStartIndex < self.conversationHistory.count else { return }
+        // Actual terminal completions remain paired with their tool calls. Remove
+        // the undispatched tail, including a later deferred destructive command.
+        let lastCompletion = self.conversationHistory[requestStartIndex...].lastIndex(where: { $0.role == .tool })
+        let discardStart = lastCompletion.map { $0 + 1 } ?? requestStartIndex
+        guard discardStart < self.conversationHistory.count else { return }
+        self.conversationHistory.removeSubrange(discardStart...)
+        self.syncToNotchState()
+    }
+
     // MARK: - Agent Loop
 
-    private func processNextTurn(notifyInvalidRequest: Bool = false) async {
+    private func processNextTurn(notifyInvalidRequest: Bool = false, isOutputValid: @escaping @MainActor () -> Bool = { true }) async {
+        guard isOutputValid() else { return }
         if self.currentTurnCount >= self.maxTurns {
             let errorMsg = "Reached maximum steps limit. Please review the progress and continue if needed."
             self.conversationHistory.append(Message(
@@ -382,8 +522,6 @@ final class CommandModeService: ObservableObject {
 
             // Auto-save on completion
             self.saveCurrentChat()
-
-            self.captureCommandRunCompleted(success: false)
 
             // Push to notch
             if self.shouldSyncCommandNotchState {
@@ -403,7 +541,8 @@ final class CommandModeService: ObservableObject {
         }
 
         do {
-            let response = try await callLLM()
+            let response = try await callLLM(isOutputValid: isOutputValid)
+            guard isOutputValid() else { return }
 
             if let tc = response.toolCall {
                 // Determine step type based on command purpose
@@ -433,7 +572,6 @@ final class CommandModeService: ObservableObject {
 
                 // Check if we need confirmation for destructive commands
                 if SettingsStore.shared.commandModeConfirmBeforeExecute, self.isDestructiveCommand(tc.command) {
-                    self.didRequireConfirmationThisRun = true
                     self.pendingCommand = PendingCommand(
                         id: tc.id,
                         command: tc.command,
@@ -452,7 +590,7 @@ final class CommandModeService: ObservableObject {
                 }
 
                 // Auto-execute
-                await self.executeCommand(tc.command, workingDirectory: tc.workingDirectory, callId: tc.id, purpose: tc.purpose)
+                await self.executeCommand(tc.command, workingDirectory: tc.workingDirectory, callId: tc.id, purpose: tc.purpose, isOutputValid: isOutputValid)
 
             } else {
                 // Just a text response - check if it's a final summary
@@ -473,8 +611,6 @@ final class CommandModeService: ObservableObject {
                 // Auto-save on completion
                 self.saveCurrentChat()
 
-                self.captureCommandRunCompleted(success: isFinal)
-
                 // Push final response to notch and show expanded view
                 if self.shouldSyncCommandNotchState {
                     NotchContentState.shared.updateCommandStreamingText("") // Clear streaming
@@ -485,6 +621,7 @@ final class CommandModeService: ObservableObject {
             }
 
         } catch {
+            guard isOutputValid() else { return }
             let errorMsg: String
             if case LLMError.invalidRequest = error {
                 errorMsg = error.localizedDescription
@@ -506,8 +643,6 @@ final class CommandModeService: ObservableObject {
             // Auto-save on error
             self.saveCurrentChat()
 
-            self.captureCommandRunCompleted(success: false)
-
             // Push error to notch
             if self.shouldSyncCommandNotchState {
                 NotchContentState.shared.addCommandMessage(role: .assistant, content: errorMsg)
@@ -515,38 +650,6 @@ final class CommandModeService: ObservableObject {
                 self.showExpandedNotchIfNeeded()
             }
         }
-    }
-
-    private func captureCommandRunCompleted(success: Bool) {
-        let toolCalls = self.conversationHistory.compactMap { $0.toolCall }.count
-        let turns = self.currentTurnCount
-
-        let turnsBucket: String
-        switch turns {
-        case ...1: turnsBucket = "1"
-        case 2...3: turnsBucket = "2-3"
-        case 4...7: turnsBucket = "4-7"
-        case 8...20: turnsBucket = "8-20"
-        default: turnsBucket = "20+"
-        }
-
-        let toolCallsBucket: String
-        switch toolCalls {
-        case 0: toolCallsBucket = "0"
-        case 1...2: toolCallsBucket = "1-2"
-        case 3...5: toolCallsBucket = "3-5"
-        default: toolCallsBucket = "6+"
-        }
-
-        AnalyticsService.shared.capture(
-            .commandModeRunCompleted,
-            properties: [
-                "success": success,
-                "turns_bucket": turnsBucket,
-                "tool_calls_bucket": toolCallsBucket,
-                "confirmation_needed": self.didRequireConfirmationThisRun,
-            ]
-        )
     }
 
     /// Show expanded notch output if there's content to display
@@ -633,7 +736,8 @@ final class CommandModeService: ObservableObject {
         return false
     }
 
-    private func executeCommand(_ command: String, workingDirectory: String?, callId: String, purpose: String? = nil) async {
+    private func executeCommand(_ command: String, workingDirectory: String?, callId: String, purpose: String? = nil, isOutputValid: @escaping @MainActor () -> Bool = { true }) async {
+        guard isOutputValid() else { return }
         self.currentStep = .executing(command)
 
         let result = await terminalService.execute(
@@ -641,6 +745,8 @@ final class CommandModeService: ObservableObject {
             workingDirectory: workingDirectory
         )
 
+        // A command already dispatched cannot be undone. Record its actual outcome
+        // even if Escape suppresses every subsequent agent turn and visible output.
         // Create enhanced result with context
         let enhancedResult = EnhancedCommandResult(
             result: result,
@@ -659,8 +765,13 @@ final class CommandModeService: ObservableObject {
             stepType: resultStepType
         ))
 
+        guard isOutputValid() else {
+            self.saveCurrentChat()
+            return
+        }
+
         // Continue the loop - let the AI see the result and decide what to do next
-        await self.processNextTurn()
+        await self.processNextTurn(isOutputValid: isOutputValid)
     }
 
     // MARK: - Enhanced Result
@@ -713,7 +824,8 @@ final class CommandModeService: ObservableObject {
         }
     }
 
-    private func callLLM() async throws -> LLMResponse {
+    private func callLLM(isOutputValid: @escaping @MainActor () -> Bool) async throws -> LLMResponse {
+        guard isOutputValid() else { throw CancellationError() }
         let settings = SettingsStore.shared
         if let issue = settings.commandModeReadinessIssue {
             throw LLMError.invalidRequest(issue)
@@ -868,7 +980,7 @@ final class CommandModeService: ObservableObject {
 
         // Reasoning models (o1, o3, gpt-5) don't support temperature parameter at all
         let isReasoningModel = settings.isReasoningModel(model)
-        let isTemperatureUnsupported = settings.isTemperatureUnsupported(model)
+        let isTemperatureUnsupported = settings.isTemperatureUnsupported(model, baseURL: baseURL)
 
         // Get reasoning config for this model (e.g., reasoning_effort, enable_thinking)
         let reasoningConfig = SettingsStore.shared.getReasoningConfig(forModel: model, provider: providerID)
@@ -913,6 +1025,7 @@ final class CommandModeService: ObservableObject {
             config.onThinkingChunk = { [weak self] (chunk: String) in
                 guard let self = self else { return }
                 Task { @MainActor in
+                    guard isOutputValid() else { return }
                     self.thinkingBuffer.append(chunk)
 
                     // 60fps UI update throttle for thinking
@@ -928,6 +1041,7 @@ final class CommandModeService: ObservableObject {
             config.onContentChunk = { [weak self] (chunk: String) in
                 guard let self = self else { return }
                 Task { @MainActor in
+                    guard isOutputValid() else { return }
                     self.streamingBuffer.append(chunk)
 
                     // 60fps UI update throttle
@@ -949,6 +1063,7 @@ final class CommandModeService: ObservableObject {
         DebugLogger.shared.info("Using LLMClient for Command Mode (streaming=\(enableStreaming), messages=\(messages.count), history=\(self.conversationHistory.count))", source: "CommandModeService")
 
         let response = try await LLMClient.shared.call(config)
+        guard isOutputValid() else { throw CancellationError() }
 
         // Final UI update - ensure all content is displayed
         let fullContent = self.streamingBuffer.joined()
@@ -961,6 +1076,7 @@ final class CommandModeService: ObservableObject {
 
         // Small delay to let the final content render, then clear
         try? await Task.sleep(nanoseconds: 50_000_000) // 50ms
+        guard isOutputValid() else { throw CancellationError() }
 
         // Capture final thinking before clearing (for message storage)
         let finalThinking = response.thinking ?? (self.thinkingBuffer.isEmpty ? nil : self.thinkingBuffer.joined())

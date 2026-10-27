@@ -17,7 +17,7 @@ final class ModelRepository {
     /// All built-in provider IDs (not including custom/saved providers)
     static var builtInProviderIDs: [String] {
         var providers = [
-            "openai", "anthropic", "xai", "groq", "cerebras", "google", "openrouter", "ollama", "lmstudio", "apple-intelligence",
+            "openai", "anthropic", "xai", "groq", "cerebras", "google", "openrouter", "ollama", "lmstudio",
         ]
         if PrivateFeatures.privateAIProvider {
             providers.insert(PrivateAIProviderFeature.shared.providerID, at: 0)
@@ -50,12 +50,26 @@ final class ModelRepository {
         case "ollama", "lmstudio":
             // Local providers - models vary per user, they must add their own
             return []
-        case "apple-intelligence":
-            return ["System Model"]
         default:
             // Custom providers start with no default models; user must add them
             return []
         }
+    }
+
+    /// Returns models eligible for one app mode. Remote providers keep their
+    /// normal model list; Fluid Intelligence supplies task-scoped local models.
+    func defaultModels(for providerID: String, task: PrivateAIModelTask) -> [String] {
+        if PrivateFeatures.privateAIProvider, providerID == PrivateAIProviderFeature.shared.providerID {
+            return PrivateAIProviderFeature.shared.modelIDs(for: task)
+        }
+        return self.defaultModels(for: providerID)
+    }
+
+    static func eligibleModel(preferred: String?, from models: [String]) -> String? {
+        if let preferred, models.contains(preferred) {
+            return preferred
+        }
+        return models.first
     }
 
     /// Returns the default base URL for a given provider ID.
@@ -100,7 +114,6 @@ final class ModelRepository {
         case "openrouter": return "OpenRouter"
         case "ollama": return "Ollama"
         case "lmstudio": return "LM Studio"
-        case "apple-intelligence": return "Apple Intelligence"
         default: return providerID.capitalized
         }
     }
@@ -111,7 +124,7 @@ final class ModelRepository {
     }
 
     /// Returns the website URL for getting an API key or downloading the provider software.
-    /// Returns nil for providers that don't have a relevant URL (e.g., Apple Intelligence).
+    /// Returns nil for providers that don't have a relevant URL.
     func providerWebsiteURL(for providerID: String) -> (url: String, label: String)? {
         switch providerID {
         case "openai":
@@ -153,14 +166,7 @@ final class ModelRepository {
     }
 
     /// Returns the list of built-in providers for UI pickers
-    /// - Parameter includeAppleIntelligence: Whether to include Apple Intelligence
-    /// - Parameter appleIntelligenceAvailable: Whether Apple Intelligence is available on this device
-    /// - Parameter appleIntelligenceDisabledReason: Optional reason if disabled (e.g., "No tools")
-    func builtInProvidersList(
-        includeAppleIntelligence: Bool = true,
-        appleIntelligenceAvailable: Bool = false,
-        appleIntelligenceDisabledReason: String? = nil
-    ) -> [(id: String, name: String)] {
+    func builtInProvidersList() -> [(id: String, name: String)] {
         var list: [(id: String, name: String)] = [
             ("openai", "OpenAI"),
             ("anthropic", "Anthropic"),
@@ -175,16 +181,6 @@ final class ModelRepository {
 
         if PrivateFeatures.privateAIProvider {
             list.insert((PrivateAIProviderFeature.shared.providerID, PrivateAIProviderFeature.shared.providerName), at: 0)
-        }
-
-        if includeAppleIntelligence {
-            if appleIntelligenceAvailable {
-                list.append(("apple-intelligence", "Apple Intelligence"))
-            } else if let reason = appleIntelligenceDisabledReason {
-                list.append(("apple-intelligence-disabled", "Apple Intelligence (\(reason))"))
-            } else {
-                list.append(("apple-intelligence-disabled", "Apple Intelligence (Unavailable)"))
-            }
         }
 
         return list
@@ -241,8 +237,14 @@ final class ModelRepository {
     ///   - providerID: The provider identifier
     ///   - baseURL: The base URL for the API (e.g., "https://api.openai.com/v1")
     ///   - apiKey: Optional API key for authentication
+    ///   - temperatureSupport: Receives per-model `temperature` support when the listing includes it
     /// - Returns: Array of model IDs sorted alphabetically
-    func fetchModels(for providerID: String, baseURL: String, apiKey: String?) async throws -> [String] {
+    func fetchModels(
+        for providerID: String,
+        baseURL: String,
+        apiKey: String?,
+        temperatureSupport: ModelTemperatureSupport = .shared
+    ) async throws -> [String] {
         if PrivateFeatures.privateAIProvider, providerID == PrivateAIProviderFeature.shared.providerID {
             return PrivateAIProviderFeature.shared.modelIDs()
         }
@@ -316,6 +318,7 @@ final class ModelRepository {
         // Try OpenAI/Groq/Cerebras format first
         if let dataArray = json["data"] as? [[String: Any]] {
             let models = dataArray.compactMap { $0["id"] as? String }
+            temperatureSupport.record(ModelTemperatureSupport.entries(fromModelsResponse: json), baseURL: baseURL)
             DebugLogger.shared.debug(
                 "fetchModels: Found \(models.count) models for '\(providerID)' (OpenAI format)",
                 source: "ModelRepository"

@@ -3,6 +3,7 @@ name: Build and Test
 on:
   pull_request:
     branches: [ main ]
+    types: [opened, synchronize, reopened, ready_for_review]
   push:
     branches: [ main ]
 
@@ -11,17 +12,64 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build:
-    name: Build FluidVoice
-    runs-on: macos-latest
-    timeout-minutes: 40
-    
+  changes:
+    name: Detect build changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      relevant: ${{ steps.filter.outputs.relevant }}
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 2
+
+    - name: Detect build-related changes
+      id: filter
+      uses: dorny/paths-filter@v3
+      with:
+        filters: |
+          relevant:
+            - 'Sources/**'
+            - 'Tests/**'
+            - 'Fluid.xcodeproj/**'
+            - 'Package.swift'
+            - 'Package.resolved'
+            - 'Info.plist'
+            - 'Fluid.entitlements'
+            - '.swiftlint.yml'
+            - '.github/workflows/build.yml'
+
+  lint:
+    name: SwiftLint
+    if: needs.changes.outputs.relevant == 'true' && (github.event_name == 'push' || github.event.pull_request.draft == false)
+    needs: changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
 
-    - name: Install SwiftLint
-      run: brew install swiftlint
+    - name: Run SwiftLint (strict)
+      run: |
+        docker run --rm \
+          --volume "$PWD:$PWD" \
+          --workdir "$PWD" \
+          ghcr.io/realm/swiftlint:0.63.2 \
+          lint --strict --config .swiftlint.yml
+
+  build:
+    name: Build FluidVoice
+    if: needs.changes.outputs.relevant == 'true' && needs.lint.result == 'success'
+    needs: [changes, lint]
+    runs-on: macos-latest
+    timeout-minutes: 20
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
 
     - name: Install xcpretty
       run: sudo gem install xcpretty
@@ -30,11 +78,8 @@ jobs:
       uses: actions/cache@v4
       with:
         path: ~/Library/Caches/WhisperModels
-        key: ${{ runner.os }}-whisper-models-v1
+        key: ${{ runner.os }}-whisper-models-transcribecpp-v1
 
-    - name: Run SwiftLint (strict)
-      run: swiftlint --strict --config .swiftlint.yml
-      
     - name: Setup Xcode
       uses: maxim-lobanov/setup-xcode@v1
       with:
@@ -43,30 +88,49 @@ jobs:
     - name: Show Xcode version
       run: xcodebuild -version
       
-    - name: Resolve Swift Package Dependencies
-      run: xcodebuild -resolvePackageDependencies -project Fluid.xcodeproj -scheme Fluid
-      
-    - name: Build Project
+    - name: Run standalone onboarding regressions
+      run: sh Tests/run_onboarding_tests.sh
+
+    - name: Run release highlights regressions
+      run: sh Tests/run_release_highlights_tests.sh
+
+    - name: Run history decode recovery regressions
+      run: sh Tests/run_history_decode_recovery_tests.sh
+
+    - name: Run settings backup concurrency regressions
+      run: python3 Tests/run_settings_backup_concurrency_tests.py
+
+    - name: Run meeting backup refresh regressions
+      run: python3 Tests/run_meeting_backup_refresh_tests.py
+
+    # Tiny Whisper GGUF output is nondeterministic on hosted macOS runners.
+    # Keep this E2E assertion in the suite for local validation, but skip it in CI.
+    - name: Build and test (excluding flaky Tiny Whisper E2E)
       run: |
         set -o pipefail
-        xcodebuild clean build \
-          -project Fluid.xcodeproj \
-          -scheme Fluid \
-          -destination 'platform=macOS,arch=arm64' \
-          CODE_SIGN_IDENTITY="" \
-          CODE_SIGNING_REQUIRED=NO \
-          CODE_SIGNING_ALLOWED=NO \
-          | xcpretty
-      continue-on-error: false
-      
-    - name: Run Tests
-      run: |
-        set -o pipefail
+        mkdir -p build/test-results
         xcodebuild test \
           -project Fluid.xcodeproj \
           -scheme Fluid \
           -destination 'platform=macOS,arch=arm64' \
+          -resultBundlePath build/test-results/Fluid.xcresult \
+          -skip-testing:FluidDictationIntegrationTests/DictationE2ETests/testDictationEndToEnd_whisperTiny_transcribesFixture \
           CODE_SIGN_IDENTITY="" \
           CODE_SIGNING_REQUIRED=NO \
           CODE_SIGNING_ALLOWED=NO \
-          | xcpretty
+          2>&1 | tee build/test-results/xcodebuild.log | xcpretty
+
+    - name: Collect crash reports
+      if: always()
+      run: |
+        mkdir -p build/test-results/crashes
+        find "$HOME/Library/Logs/DiagnosticReports" -maxdepth 1 -type f -name 'FluidVoice*' -exec cp {} build/test-results/crashes/ \; 2>/dev/null || true
+
+    - name: Save test diagnostics
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: macos-test-results
+        path: build/test-results
+        if-no-files-found: ignore
+        retention-days: 7

@@ -1,6 +1,7 @@
 import Accelerate
 import AVFoundation
 import Combine
+import Darwin
 import Foundation
 #if arch(arm64)
 import FluidAudio
@@ -9,38 +10,457 @@ import AppKit
 import AudioToolbox
 import CoreAudio
 
-/// Serializes all CoreML transcription operations to prevent concurrent access issues.
-/// The actor ensures only one transcription runs at a time, preventing CoreML race conditions.
-/// Serializes all CoreML transcription operations to prevent concurrent access issues.
-/// This implementation enforces strict serialization (non-reentrant) using a task chain.
+/// Serializes transcription operations and lets teardown cancel the real queued work.
 private actor TranscriptionExecutor {
     private var lastTask: Task<Void, Never>?
-    private var currentOperationTask: Task<Any, Error>?
+    private var operationCancellations: [UUID: () -> Void] = [:]
 
-    func run<T>(_ operation: @escaping () async throws -> T) async throws -> T {
+    func run<T>(benchmarkSessionID: Int? = nil, _ operation: @escaping () async throws -> T) async throws -> T {
+        logTranscriptionExecutorPhase("entered", sessionID: benchmarkSessionID)
         let previous = self.lastTask
+        let operationID = UUID()
         let task = Task<T, Error> {
+            logTranscriptionExecutorPhase("task_started", sessionID: benchmarkSessionID)
             _ = await previous?.result
+            logTranscriptionExecutorPhase("previous_finished", sessionID: benchmarkSessionID)
+            try Task.checkCancellation()
             return try await operation()
         }
-        self.currentOperationTask = Task<Any, Error> { try await task.value }
+        self.operationCancellations[operationID] = { task.cancel() }
         self.lastTask = Task { _ = try? await task.value }
+        defer { self.operationCancellations.removeValue(forKey: operationID) }
         return try await task.value
     }
 
-    /// Cancels any pending operations and waits for the current chain to complete.
-    /// This ensures no in-flight transcription tasks can access deallocated memory.
     func cancelAndAwaitPending() async {
-        // Cancel the current operation if running
-        self.currentOperationTask?.cancel()
-        // Wait for the last task in the chain to complete (or be cancelled)
+        for cancel in self.operationCancellations.values {
+            cancel()
+        }
         _ = await self.lastTask?.result
         self.lastTask = nil
-        self.currentOperationTask = nil
+        self.operationCancellations.removeAll()
     }
 }
 
-// swiftlint:disable type_body_length
+private nonisolated func logTranscriptionExecutorPhase(_ phase: String, sessionID: Int?) {
+    guard DebugLogger.diagnosticsEnabled, let sessionID else { return }
+    let timestamp = ProcessInfo.processInfo.systemUptime
+    DebugLogger.shared.debug(
+        "ASR_BENCH t=\(timestamp) session=\(sessionID) final_queue_\(phase) mainThread=\(Thread.isMainThread)",
+        source: "ASRBenchmark"
+    )
+}
+
+private nonisolated func logStreamingProviderOperationReturn(
+    sessionID: Int,
+    operationID: UUID,
+    route: String
+) {
+    guard DebugLogger.diagnosticsEnabled else { return }
+    let returnedAt = ProcessInfo.processInfo.systemUptime
+    DebugLogger.shared.debug(
+        "ASR_BENCH t=\(returnedAt) streaming_provider_operation_return " +
+            "session=\(sessionID) operation=\(operationID.uuidString) route=\(route)",
+        source: "ASRBenchmark"
+    )
+}
+
+/// Keeps a stop-state UI refresh from entering the main-actor queue ahead of
+/// final transcription. The owner must always finish the gate; repeated finishes
+/// are harmless so early-return paths can share one cleanup.
+struct ASRStopUIInvalidationGate {
+    private(set) var isDeferring = false
+    private var hasOutputPipelineHold = false
+    private var stopDidFinish = false
+
+    mutating func holdForOutputPipeline() {
+        self.isDeferring = true
+        self.hasOutputPipelineHold = true
+    }
+
+    mutating func begin() {
+        self.isDeferring = true
+    }
+
+    mutating func finish() -> Bool {
+        guard self.isDeferring else { return false }
+        self.stopDidFinish = true
+        return self.completeIfReady()
+    }
+
+    mutating func releaseOutputPipelineHold() -> Bool {
+        self.hasOutputPipelineHold = false
+        guard self.stopDidFinish else {
+            let wasDeferring = self.isDeferring
+            self.isDeferring = false
+            return wasDeferring
+        }
+        return self.completeIfReady()
+    }
+
+    mutating func forceFinish() -> Bool {
+        self.hasOutputPipelineHold = false
+        self.stopDidFinish = true
+        return self.completeIfReady()
+    }
+
+    private mutating func completeIfReady() -> Bool {
+        guard self.isDeferring, self.stopDidFinish, self.hasOutputPipelineHold == false else { return false }
+        self.isDeferring = false
+        self.stopDidFinish = false
+        return true
+    }
+}
+
+@MainActor
+func scheduleDeferredMainActorOperation(
+    afterNanoseconds delayNanoseconds: UInt64,
+    shouldRun: @escaping @MainActor () -> Bool = { true },
+    operation: @escaping @MainActor () -> Void
+) -> Task<Void, Never> {
+    Task { @MainActor in
+        do {
+            try await Task.sleep(nanoseconds: delayNanoseconds)
+        } catch {
+            return
+        }
+        guard Task.isCancelled == false, shouldRun() else { return }
+        operation()
+    }
+}
+
+/// Identifies the recording and provider generation allowed to publish a live preview.
+/// Operation completion uses the narrower operation identity so stale cleanup cannot
+/// clear state owned by a newer chunk.
+struct StreamingTranscriptionWorkState {
+    private(set) var sessionID: Int?
+    private(set) var activeOperationID: UUID?
+    private(set) var providerGeneration: UInt64 = 0
+
+    mutating func beginSession(_ sessionID: Int) {
+        self.sessionID = sessionID
+        self.activeOperationID = nil
+    }
+
+    mutating func beginOperation(
+        sessionID: Int,
+        operationID: UUID
+    ) -> UInt64? {
+        guard self.sessionID == sessionID, self.activeOperationID == nil else { return nil }
+        self.activeOperationID = operationID
+        return self.providerGeneration
+    }
+
+    func ownsOperation(sessionID: Int, operationID: UUID) -> Bool {
+        self.sessionID == sessionID && self.activeOperationID == operationID
+    }
+
+    func canPublish(
+        sessionID: Int,
+        operationID: UUID,
+        providerGeneration: UInt64
+    ) -> Bool {
+        self.ownsOperation(sessionID: sessionID, operationID: operationID) &&
+            self.providerGeneration == providerGeneration
+    }
+
+    func canPublishPreview(
+        sessionID: Int,
+        operationID: UUID,
+        providerGeneration: UInt64,
+        isRunning: Bool,
+        schedulingSessionID: Int?
+    ) -> Bool {
+        isRunning &&
+            schedulingSessionID == sessionID &&
+            self.canPublish(
+                sessionID: sessionID,
+                operationID: operationID,
+                providerGeneration: providerGeneration
+            )
+    }
+
+    mutating func finishOperation(sessionID: Int, operationID: UUID) -> Bool {
+        guard self.ownsOperation(sessionID: sessionID, operationID: operationID) else { return false }
+        self.activeOperationID = nil
+        return true
+    }
+
+    mutating func invalidateProvider() {
+        self.providerGeneration &+= 1
+    }
+
+    mutating func endSession(_ sessionID: Int) {
+        guard self.sessionID == sessionID, self.activeOperationID == nil else { return }
+        self.sessionID = nil
+    }
+}
+
+/// Blocks a new recording only while the previous recording still owns the shared PCM buffer.
+/// Cancelling a pending start releases its waiter without completing the active handoff.
+@MainActor
+final class RecordingBufferHandoffGate {
+    // Explicitly nonisolated: on macOS 15.4+ the synthesized main-actor deinit can abort until the OS runtime has the fix (swiftlang/swift#88036).
+    nonisolated deinit {}
+
+    struct Token: Equatable {
+        private let id = UUID()
+    }
+
+    private var activeToken: Token?
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+    private(set) var isRecovering = false
+
+    var isActive: Bool { self.activeToken != nil }
+    var pendingWaiterCount: Int { self.waiters.count }
+
+    func begin() -> Token? {
+        guard self.activeToken == nil else { return nil }
+        let token = Token()
+        self.activeToken = token
+        return token
+    }
+
+    func waitUntilAvailable() async {
+        guard self.activeToken != nil else { return }
+        await withCheckedContinuation { continuation in
+            self.waiters.append(continuation)
+        }
+    }
+
+    func releasePendingWaiters() {
+        let waiters = self.waiters
+        self.waiters.removeAll(keepingCapacity: false)
+        waiters.forEach { $0.resume() }
+    }
+
+    func complete(_ token: Token) {
+        guard self.activeToken == token else { return }
+        self.activeToken = nil
+        self.isRecovering = false
+        self.releasePendingWaiters()
+    }
+
+    func markTimedOut(_ token: Token) {
+        guard self.activeToken == token else { return }
+        self.isRecovering = true
+        // Wake starts already waiting so they fail visibly instead of hanging.
+        self.releasePendingWaiters()
+    }
+}
+
+/// Owns the cancellable idle delay separately from provider work. Normal recording
+/// stop cancels only the delay; an active provider operation is allowed to settle.
+@MainActor
+final class StreamingTaskLifecycle {
+    // Explicitly nonisolated: on macOS 15.4+ the synthesized main-actor deinit can abort until the OS runtime has the fix (swiftlang/swift#88036).
+    nonisolated deinit {}
+
+    private var scheduler: (id: UUID, task: Task<Void, Never>)?
+    private var active: (sessionID: Int, operationID: UUID, task: Task<Void, Never>)?
+    private var drainWaiters: [UUID: (operationID: UUID, continuation: CheckedContinuation<Bool, Never>, timer: Task<Void, Never>)] = [:]
+
+    var hasScheduledIdleWork: Bool { self.scheduler != nil }
+    var hasActiveWork: Bool { self.active != nil }
+    var pendingDrainCount: Int { self.drainWaiters.count }
+
+    @discardableResult
+    func schedule(
+        sessionID: Int,
+        delayNanoseconds: UInt64,
+        operation: @escaping @MainActor (UUID) async -> Void,
+        completion: @escaping @MainActor (UUID) -> Void
+    ) -> Bool {
+        guard self.scheduler == nil, self.active == nil else { return false }
+        let schedulerID = UUID()
+        let task = Task { @MainActor [weak self] in
+            if delayNanoseconds > 0 {
+                do {
+                    try await Task.sleep(nanoseconds: delayNanoseconds)
+                } catch {
+                    return
+                }
+            }
+            guard let self,
+                  Task.isCancelled == false,
+                  self.scheduler?.id == schedulerID
+            else { return }
+
+            self.scheduler = nil
+            let operationID = UUID()
+            let activeTask = Task { @MainActor [weak self] in
+                await operation(operationID)
+                guard let self,
+                      self.active?.sessionID == sessionID,
+                      self.active?.operationID == operationID
+                else { return }
+                self.active = nil
+                completion(operationID)
+                let completedWaiters = self.drainWaiters.filter { $0.value.operationID == operationID }
+                for id in completedWaiters.keys {
+                    self.finishDrain(id: id, completed: true)
+                }
+            }
+            self.active = (sessionID, operationID, activeTask)
+        }
+        self.scheduler = (schedulerID, task)
+        return true
+    }
+
+    @discardableResult
+    func cancelScheduler() -> Bool {
+        guard let scheduler = self.scheduler else { return false }
+        self.scheduler = nil
+        scheduler.task.cancel()
+        return true
+    }
+
+    func activeTaskToDrain(sessionID: Int) -> Task<Void, Never>? {
+        guard let active = self.active, active.sessionID == sessionID else { return nil }
+        return active.task
+    }
+
+    /// Deadline bounds the caller only. Never cancel or release a provider still
+    /// using incremental state. Completion removes the timer; timeout removes the waiter.
+    func drain(sessionID: Int, timeoutNanoseconds: UInt64) async -> Bool {
+        guard let active = self.active, active.sessionID == sessionID else { return true }
+        let id = UUID()
+        return await withCheckedContinuation { continuation in
+            let timer = Task { @MainActor [weak self] in
+                do {
+                    try await Task.sleep(nanoseconds: timeoutNanoseconds)
+                } catch { return }
+                self?.finishDrain(id: id, completed: false)
+            }
+            self.drainWaiters[id] = (active.operationID, continuation, timer)
+        }
+    }
+
+    private func finishDrain(id: UUID, completed: Bool) {
+        guard let waiter = self.drainWaiters.removeValue(forKey: id) else { return }
+        waiter.timer.cancel()
+        waiter.continuation.resume(returning: completed)
+    }
+}
+
+struct ShortAudioSilenceAssessment: Equatable {
+    let durationMilliseconds: Int
+    let isEligible: Bool
+    let shouldSkipTranscription: Bool
+    let peakAmplitude: Float
+    let rmsAmplitude: Float
+    let maximumFrameRMS: Float
+}
+
+enum AudioCaptureStartOutcome: Equatable {
+    case started
+    case alreadyActive
+    case failed
+}
+
+enum ASRStopOutcome: Equatable {
+    case success
+    case empty
+    case failed
+}
+
+enum ASRExclusiveActivity: String, Equatable {
+    case dictation
+    case fileTranscription
+    case localAPI
+    case meeting
+    case modelMaintenance
+    case settingsRestore
+
+    var displayName: String {
+        switch self {
+        case .dictation:
+            return "dictation"
+        case .fileTranscription:
+            return "file transcription"
+        case .localAPI:
+            return "local API transcription"
+        case .meeting:
+            return "meeting transcription"
+        case .modelMaintenance:
+            return "voice model maintenance"
+        case .settingsRestore:
+            return "settings import"
+        }
+    }
+}
+
+struct ASRActivityLease: Equatable {
+    let id: UUID
+    let activity: ASRExclusiveActivity
+}
+
+enum ASRActivityError: LocalizedError {
+    case activityInProgress(ASRExclusiveActivity)
+    case settingsRestoreUnavailable
+
+    var errorDescription: String? {
+        switch self {
+        case let .activityInProgress(activity):
+            return "Wait for the active \(activity.displayName) to finish."
+        case .settingsRestoreUnavailable:
+            return "Finish the current recording, transcription, microphone preview, or voice model operation, then import the backup again."
+        }
+    }
+}
+
+nonisolated enum ASRHardwareListenerEventDisposition: Equatable {
+    case ignore
+    case latchUntilInstalled
+    case handle
+}
+
+nonisolated enum ASRHardwareListenerPolicy {
+    static func disposition(
+        isTerminating: Bool,
+        lifecycleMatches: Bool,
+        isInstalled: Bool,
+        pendingIdentityMatches: Bool
+    ) -> ASRHardwareListenerEventDisposition {
+        guard !isTerminating, lifecycleMatches else { return .ignore }
+        if isInstalled { return .handle }
+        return pendingIdentityMatches ? .latchUntilInstalled : .ignore
+    }
+
+    // Keep the explicit existing capture inputs together.
+
+    // swiftlint:disable:next function_parameter_count
+    static func selectedDeviceQueryCanApply(
+        isTerminating: Bool,
+        capturedLifecycle: UInt64,
+        currentLifecycle: UInt64,
+        capturedEpoch: UInt64,
+        currentEpoch: UInt64,
+        capturedDeviceID: AudioObjectID,
+        currentDeviceID: AudioObjectID?,
+        listenerIsInstalled: Bool
+    ) -> Bool {
+        !isTerminating
+            && capturedLifecycle == currentLifecycle
+            && capturedEpoch == currentEpoch
+            && currentDeviceID == capturedDeviceID
+            && listenerIsInstalled
+    }
+
+    static func deviceListQueryCanApply(
+        isTerminating: Bool,
+        capturedLifecycle: UInt64,
+        currentLifecycle: UInt64,
+        capturedQueryGeneration: UInt64,
+        currentQueryGeneration: UInt64
+    ) -> Bool {
+        !isTerminating
+            && capturedLifecycle == currentLifecycle
+            && capturedQueryGeneration == currentQueryGeneration
+    }
+}
+
+// swiftlint:disable file_length type_body_length
 /// A comprehensive speech recognition service that handles real-time audio transcription.
 ///
 /// This service manages the entire ASR (Automatic Speech Recognition) pipeline including:
@@ -52,14 +472,6 @@ private actor TranscriptionExecutor {
 ///
 /// The service is designed to work seamlessly with macOS system APIs and provides
 /// robust error handling and performance optimization.
-///
-/// ## Usage
-/// ```swift
-/// let asrService = ASRService()
-/// await asrService.start() // Begin recording
-/// // ... speak ...
-/// let transcribedText = await asrService.stop() // Stop and get transcription
-/// ```
 ///
 /// ## Language Support
 /// The service supports multiple models with varying language capabilities:
@@ -81,7 +493,125 @@ private actor TranscriptionExecutor {
 /// Models are cached locally to avoid repeated downloads.
 @MainActor
 final class ASRService: ObservableObject {
-    @Published var isRunning: Bool = false
+    // Below this the Transcribing status only adds a main-thread overlay re-render
+    // that delays the result it is announcing; final ASR on short audio is ~40 ms.
+    private static let finalTranscriptionStatusDelayNanoseconds: UInt64 = 250_000_000
+    private static let streamingDrainTimeoutNanoseconds: UInt64 = 30_000_000_000
+
+    nonisolated static func shouldAssessShortAudioSilence(
+        isEnabled: Bool,
+        useDictionaryTrainingPath: Bool,
+        hasRecognizedStreamingPreview: Bool
+    ) -> Bool {
+        isEnabled && !useDictionaryTrainingPath && !hasRecognizedStreamingPreview
+    }
+
+    nonisolated static func assessShortAudioSilence(
+        _ samples: [Float],
+        sampleRate: Int = 16_000
+    ) -> ShortAudioSilenceAssessment {
+        let durationMilliseconds = sampleRate > 0
+            ? Int((Double(samples.count) / Double(sampleRate) * 1000).rounded())
+            : 0
+        let maximumSampleCount = max(sampleRate, 0) * 4
+        guard !samples.isEmpty, sampleRate > 0, samples.count <= maximumSampleCount else {
+            return ShortAudioSilenceAssessment(
+                durationMilliseconds: durationMilliseconds,
+                isEligible: false,
+                shouldSkipTranscription: false,
+                peakAmplitude: 0,
+                rmsAmplitude: 0,
+                maximumFrameRMS: 0
+            )
+        }
+
+        let frameSize = max(sampleRate / 50, 1) // 20 ms
+        var peak: Float = 0
+        var totalSquareSum = 0.0
+        var frameSquareSum = 0.0
+        var frameSampleCount = 0
+        var maximumFrameRMS: Float = 0
+
+        for sample in samples {
+            guard sample.isFinite else {
+                return ShortAudioSilenceAssessment(
+                    durationMilliseconds: durationMilliseconds,
+                    isEligible: true,
+                    shouldSkipTranscription: false,
+                    peakAmplitude: peak,
+                    rmsAmplitude: 0,
+                    maximumFrameRMS: maximumFrameRMS
+                )
+            }
+
+            let magnitude = abs(sample)
+            peak = max(peak, magnitude)
+            let square = Double(sample) * Double(sample)
+            totalSquareSum += square
+            frameSquareSum += square
+            frameSampleCount += 1
+
+            if frameSampleCount == frameSize {
+                maximumFrameRMS = max(
+                    maximumFrameRMS,
+                    Float(sqrt(frameSquareSum / Double(frameSampleCount)))
+                )
+                frameSquareSum = 0
+                frameSampleCount = 0
+            }
+        }
+
+        if frameSampleCount > 0 {
+            maximumFrameRMS = max(
+                maximumFrameRMS,
+                Float(sqrt(frameSquareSum / Double(frameSampleCount)))
+            )
+        }
+        let rms = Float(sqrt(totalSquareSum / Double(samples.count)))
+
+        // Calibrated conservatively against real FluidVoice captures. Requiring
+        // all three conditions keeps quiet speech and short words on the ASR path.
+        let shouldSkip = peak < 0.01 && rms < 0.002 && maximumFrameRMS < 0.0045
+        return ShortAudioSilenceAssessment(
+            durationMilliseconds: durationMilliseconds,
+            isEligible: true,
+            shouldSkipTranscription: shouldSkip,
+            peakAmplitude: peak,
+            rmsAmplitude: rms,
+            maximumFrameRMS: maximumFrameRMS
+        )
+    }
+
+    @Published var isRunning: Bool = false {
+        didSet {
+            if !self.isRunning {
+                self.dictationMuteGeneration &+= 1
+                self.clearDictationMuteIndicator()
+            }
+        }
+    }
+
+    @Published private(set) var isDictationMuted = false
+    private(set) var dictationMuteGeneration: UInt64 = 0
+
+    func setDictationMuted(_ muted: Bool) {
+        guard self.isRunningOrStarting, !self.isDictionaryTrainingCaptureActive,
+              !self.isStoppingFinalTranscription, muted != self.isDictationMuted else { return }
+        self.audioCapturePipeline.setDictationMuted(muted, at: mach_absolute_time())
+        self.isDictationMuted = muted
+        NotchContentState.shared.isDictationMuted = muted
+        if muted {
+            self.audioLevelSubject.send(0)
+        }
+    }
+
+    private func clearDictationMuteIndicator() {
+        if self.isDictationMuted {
+            self.isDictationMuted = false
+        }
+        if NotchContentState.shared.isDictationMuted { NotchContentState.shared.isDictationMuted = false }
+    }
+
     @Published var finalText: String = ""
     @Published var partialTranscription: String = ""
     @Published var wordBoostStatusText: String = "Word boost: off"
@@ -92,31 +622,451 @@ final class ASRService: ObservableObject {
     @Published private(set) var isCancellingModelPreparation: Bool = false
     @Published var modelsExistOnDisk: Bool = false
     @Published var downloadProgress: Double? = nil
+    @Published var modelPreparationPhase: ModelPreparationPhase? = nil
     @Published var downloadingModelId: String? = nil // Tracks which model is currently being downloaded
     @Published private(set) var isCancellingModelDownload: Bool = false
+    @Published private(set) var isDictionaryTrainingCaptureActive: Bool = false
+    @Published private(set) var isMicrophonePreviewActive: Bool = false
+    @Published private(set) var microphonePreviewError: String?
+    /// Narrow lifecycle event used only by onboarding microphone preview.
+    /// This must not invalidate every ASR-observing view after each capture.
+    let audioCaptureStateDidSettle = PassthroughSubject<Void, Never>()
+    let deferredStopUIInvalidationDidFlush = PassthroughSubject<Void, Never>()
+    private var stopUIInvalidationGate = ASRStopUIInvalidationGate()
+    private var stopUIInvalidationTimeoutTask: Task<Void, Never>?
+    private var stopUIInvalidationHoldGeneration: UInt64 = 0
+    private var activeStopUIInvalidationHold: UInt64?
+    private var isStoppingFinalTranscription = false
+    var defersStopUIInvalidation: Bool {
+        self.stopUIInvalidationGate.isDeferring
+    }
 
-    private var isStarting: Bool = false // Guard against re-entrant start() calls
+    var isFinalTranscriptionReady: Bool {
+        self.isAsrReady && self.transcriptionProvider.isReady
+    }
+
+    private var microphonePreviewOperationGeneration: UInt64 = 0
+    private var isMicrophonePreviewRequested = false
+    private(set) var lastDictionaryTrainingResult: ASRTranscriptionResult?
+    private(set) var lastStopOutcome: ASRStopOutcome = .empty
+    private var lastFinalTranscriptionDurationMs: Int?
+    private var lastFinalParakeetProcessingMs: Int?
+    private(set) var dictionaryTrainingAudioGeneration = 0
+
+    @Published private(set) var isStarting: Bool = false { // Guard against re-entrant start() calls
+        didSet {
+            if self.isStarting {
+                self.dictationMuteGeneration &+= 1
+            }
+            if !self.isStarting, !self.isRunning {
+                self.clearDictationMuteIndicator()
+            }
+        }
+    }
+
+    private var pendingMediaCaptureSessionID: Int?
+    @Published private(set) var activeExclusiveActivity: ASRExclusiveActivity?
+    private var audioCaptureStartWaiters: [CheckedContinuation<Void, Never>] = []
+    private var activeActivityLease: ASRActivityLease?
+    private var dictationActivityLease: ASRActivityLease?
+    private var providerResetPending = false
+    private var meetingAudioHandoffGeneration: UInt64 = 0
+    private var meetingTopologyObserverSuspension: UInt64?
+    private var meetingAudioHandbackLease: ASRActivityLease?
+    private var meetingAudioHandbackTask: Task<Void, Never>?
+    private var meetingAudioHandbackTaskID: UUID?
+    // Keep the existing descriptive state or persisted evidence field name.
+    // swiftlint:disable:next identifier_name
+    private var meetingHandoffShouldRestorePreparedCapture = false
+    private var deferredMeetingRouteRecoveryReason: String?
+    // Keep the existing descriptive state or persisted evidence field name.
+    // swiftlint:disable:next identifier_name
+    private var deferredMeetingRouteRecoveryRequiresPrewarm = false
+    // Keep the existing descriptive state or persisted evidence field name.
+    // swiftlint:disable:next identifier_name
+    private var deferredMeetingRouteRecoveryReconcilesInput = false
+    private struct MeetingASRScope {
+        let id: UUID
+        let lease: ASRActivityLease
+        var cancelBody: (() -> Void)?
+        var awaitBodyCompletion: (() async -> Void)?
+    }
+
+    private var meetingASRPreparationOwner: MeetingASRPreparationOwner?
+    private var activeMeetingASRScope: MeetingASRScope?
+    private var deferredMeetingActivityLeaseRelease: ASRActivityLease?
+    #if DEBUG
+    /// Test seam replacing the lazily wired production owner so scope tests use fake providers.
+    var meetingASRPreparationOwnerForTesting: MeetingASRPreparationOwner?
+    #endif
+    var isRunningOrStarting: Bool {
+        self.isRunning || self.isStarting
+    }
+
+    /// Change only the output mode of our existing capture, never another activity's audio.
+    var canSwitchOwnedDictationCaptureMode: Bool {
+        guard let lease = self.dictationActivityLease else { return false }
+        return lease.activity == .dictation && self.activeActivityLease == lease
+            && self.isRunning && !self.isStarting && !self.isStoppingFinalTranscription
+            && !self.isTerminating && !self.isDictionaryTrainingCaptureActive
+            && !self.recordingBufferHandoffGate.isActive && !self.recordingBufferHandoffGate.isRecovering
+    }
+
+    func acquireExclusiveActivity(_ activity: ASRExclusiveActivity) throws -> ASRActivityLease {
+        guard let activeActivityLease = self.activeActivityLease else {
+            DictionaryAudioLearningService.shared.cancelForRecording()
+            let lease = ASRActivityLease(id: UUID(), activity: activity)
+            self.activeActivityLease = lease
+            self.activeExclusiveActivity = activity
+            return lease
+        }
+        throw ASRActivityError.activityInProgress(activeActivityLease.activity)
+    }
+
+    /// Reject before any backup writes, then reserve admission across its actor hop.
+    /// Keep the whole import together instead of changing the current capture's settings.
+    func beginSettingsBackupRestore() throws -> ASRActivityLease {
+        try Task.checkCancellation()
+        guard !self.isTerminating, self.activeActivityLease == nil,
+              !self.isRunning, !self.isStarting, !self.isStoppingFinalTranscription,
+              !self.recordingBufferHandoffGate.isRecovering,
+              !self.isMicrophonePreviewRequested, !self.isMicrophonePreviewActive,
+              !self.hasActiveModelDownload, !self.hasActiveModelPreparation,
+              self.deletingModelID == nil, self.providerResetDrain == nil,
+              !self.isCancellingModelPreparation, !self.isCancellingModelDownload,
+              !self.meetingModelResidency.isExclusive,
+              self.isAsrReady || (!self.isDownloadingModel && !self.isLoadingModel)
+        else { throw ASRActivityError.settingsRestoreUnavailable }
+        return try self.acquireExclusiveActivity(.settingsRestore)
+    }
+
+    func releaseExclusiveActivity(_ lease: ASRActivityLease) {
+        guard self.activeActivityLease == lease else { return }
+        if self.isMeetingASRClaimBlocking(lease: lease) {
+            // The exact lease is released by the scope's joined drain, never mid-scope.
+            self.deferredMeetingActivityLeaseRelease = lease
+            return
+        }
+        #if DEBUG
+        AudioTopologyDiagnostics.record(.phaseBegin, owner: .asrActivityLease, queueRole: .mainControl, phase: .activityLease)
+        defer { AudioTopologyDiagnostics.record(.phaseEnd, owner: .asrActivityLease, queueRole: .mainControl, phase: .activityLease) }
+        #endif
+        self.activeActivityLease = nil
+        self.activeExclusiveActivity = nil
+        DictionaryAudioLearningService.shared.activityDidEnd()
+
+        guard self.providerResetPending else { return }
+        self.providerResetPending = false
+        self.resetTranscriptionProvider()
+    }
+
+    func prepareMeetingAudioHandoff(_ lease: ASRActivityLease) async throws {
+        guard self.activeActivityLease == lease, lease.activity == .meeting,
+              self.isRunning == false, self.isStarting == false,
+              self.isTerminating == false
+        else { throw ASRActivityError.activityInProgress(self.activeExclusiveActivity ?? .meeting) }
+
+        self.meetingAudioHandoffGeneration &+= 1
+        let generation = self.meetingAudioHandoffGeneration
+        self.meetingHandoffShouldRestorePreparedCapture = self.hasPreparedAudioCapture
+        self.audioEngineStandbyTask?.cancel()
+        self.audioEngineStandbyTask = nil
+
+        let observerSuspension = await AppServices.shared.audioObserver.suspendTopologyReconciliation()
+        guard self.activeActivityLease == lease,
+              self.meetingAudioHandoffGeneration == generation
+        else {
+            await AppServices.shared.audioObserver.resumeTopologyReconciliation(observerSuspension)
+            throw CancellationError()
+        }
+        self.meetingTopologyObserverSuspension = observerSuspension
+
+        // Preview owns DirectCoreAudio without an exclusive activity lease. Stopping it
+        // advances its operation generation, clears requested/active state and monitoring,
+        // and drains its direct-capture stop before the meeting backend may materialize.
+        await self.stopMicrophonePreview(retainPreparedCapture: false)
+        await self.cancelAudioRouteRecoveryAndWait()
+        await self.directAudioLifecycleController.invalidate(reason: "meeting_audio_handoff")
+        self.activeAudioCaptureBackend = .none
+        await self.retireAudioEngineAndWait(reason: "meeting_audio_handoff")
+
+        guard self.activeActivityLease == lease,
+              self.meetingAudioHandoffGeneration == generation,
+              self.isRunning == false, self.isStarting == false,
+              self.isTerminating == false,
+              self.hasPreparedAudioCapture == false
+        else { throw CancellationError() }
+        try Task.checkCancellation()
+    }
+
+    func completeMeetingAudioHandback(_ lease: ASRActivityLease) async {
+        if self.meetingAudioHandbackLease == lease,
+           let handbackTask = self.meetingAudioHandbackTask
+        {
+            await handbackTask.value
+            return
+        }
+        guard self.activeActivityLease == lease, lease.activity == .meeting else { return }
+
+        let taskID = UUID()
+        let handbackTask = Task { @MainActor [weak self] () in
+            guard let self else { return }
+            await self.performMeetingAudioHandback(lease)
+        }
+        self.meetingAudioHandbackLease = lease
+        self.meetingAudioHandbackTask = handbackTask
+        self.meetingAudioHandbackTaskID = taskID
+        await handbackTask.value
+        if self.meetingAudioHandbackTaskID == taskID {
+            self.meetingAudioHandbackLease = nil
+            self.meetingAudioHandbackTask = nil
+            self.meetingAudioHandbackTaskID = nil
+        }
+    }
+
+    private func performMeetingAudioHandback(_ lease: ASRActivityLease) async {
+        guard self.activeActivityLease == lease, lease.activity == .meeting else { return }
+        self.meetingAudioHandoffGeneration &+= 1
+        let generation = self.meetingAudioHandoffGeneration
+
+        await self.cancelAudioRouteRecoveryAndWait()
+        await self.directAudioLifecycleController.invalidate(reason: "meeting_audio_handback")
+        self.activeAudioCaptureBackend = .none
+        await self.retireAudioEngineAndWait(reason: "meeting_audio_handback")
+        let snapshot = await AudioTopologyListenerExecution.perform {
+            (
+                AudioDevice.listInputDevicesRefreshingLiveness(diagnosticsOwner: .asrService),
+                AudioDevice.getDefaultInputDevice()?.uid
+            )
+        }
+
+        guard self.activeActivityLease == lease,
+              self.meetingAudioHandoffGeneration == generation
+        else { return }
+
+        guard self.isTerminating == false else {
+            if let observerSuspension = self.meetingTopologyObserverSuspension {
+                await AppServices.shared.audioObserver.resumeTopologyReconciliation(observerSuspension)
+                guard self.activeActivityLease == lease,
+                      self.meetingAudioHandoffGeneration == generation
+                else { return }
+                if self.meetingTopologyObserverSuspension == observerSuspension {
+                    self.meetingTopologyObserverSuspension = nil
+                }
+            }
+            guard self.activeActivityLease == lease,
+                  self.meetingAudioHandoffGeneration == generation
+            else { return }
+            self.meetingHandoffShouldRestorePreparedCapture = false
+            self.deferredMeetingRouteRecoveryReason = nil
+            self.deferredMeetingRouteRecoveryRequiresPrewarm = false
+            self.deferredMeetingRouteRecoveryReconcilesInput = false
+            self.releaseExclusiveActivity(lease)
+            return
+        }
+
+        AppServices.shared.microphonePreferenceCoordinator.reconcileMicrophoneSelection(
+            availableInputs: snapshot.0,
+            defaultInputUID: snapshot.1
+        )
+        self.cacheCurrentDeviceList(snapshot.0)
+
+        if let observerSuspension = self.meetingTopologyObserverSuspension {
+            await AppServices.shared.audioObserver.resumeTopologyReconciliation(observerSuspension)
+            guard self.activeActivityLease == lease,
+                  self.meetingAudioHandoffGeneration == generation
+            else { return }
+            if self.meetingTopologyObserverSuspension == observerSuspension {
+                self.meetingTopologyObserverSuspension = nil
+            }
+        }
+
+        // Observer resume can deliver coalesced topology events while this meeting
+        // lease is still held. Read and clear the deferred aggregate only after that
+        // drain so no handback event is stranded behind the lease release.
+        guard self.activeActivityLease == lease,
+              self.meetingAudioHandoffGeneration == generation
+        else { return }
+        let deferredReason = self.deferredMeetingRouteRecoveryReason
+        let shouldPrewarm = self.meetingHandoffShouldRestorePreparedCapture ||
+            self.deferredMeetingRouteRecoveryRequiresPrewarm
+        let shouldReconcile = self.deferredMeetingRouteRecoveryReconcilesInput
+        self.meetingHandoffShouldRestorePreparedCapture = false
+        self.deferredMeetingRouteRecoveryReason = nil
+        self.deferredMeetingRouteRecoveryRequiresPrewarm = false
+        self.deferredMeetingRouteRecoveryReconcilesInput = false
+        self.releaseExclusiveActivity(lease)
+
+        if shouldPrewarm || deferredReason != nil {
+            self.scheduleAudioRouteRecovery(
+                reason: deferredReason ?? "meeting audio handback",
+                requiresIdlePrewarm: shouldPrewarm,
+                reconcilesInputSelection: shouldReconcile
+            )
+        }
+    }
+
+    private func releaseDictationActivityIfNeeded() {
+        guard let lease = self.dictationActivityLease else { return }
+        self.dictationActivityLease = nil
+        self.releaseExclusiveActivity(lease)
+    }
+
+    private let audioCaptureReadinessGate = AudioCaptureReadinessGate()
+    private let firstPCMTimeoutNanoseconds: UInt64 = 2_000_000_000
+    private var audioCaptureStartGeneration: UInt64 = 0
+    private var isPronunciationTrainingStart = false
+    private var pronunciationTrainingStartGeneration: String?
+    private var isPronunciationTrainingStartCurrent: Bool {
+        !self.isPronunciationTrainingStart || (DictionaryMatcherExperiment.sharedFeaturesEnabled &&
+            self.pronunciationTrainingStartGeneration == DictionaryMatcherExperiment.generation)
+    }
+
+    private var pendingAudioCaptureBackendStart: Task<Void, Error>?
+    private var mediaPlaybackService = MediaPlaybackService.shared
+    private var audioCaptureAttemptID: UInt64 = 0
+    private var isTerminating = false
     private var hasCompletedFirstTranscription: Bool = false // Track if model has warmed up with first transcription
     private var lastBoostHitTerm: String?
     private var hasPendingParakeetVocabularyReload: Bool = false
     private var vocabularyChangeObserver: NSObjectProtocol?
+    private var clamshellStateChangeObserver: NSObjectProtocol?
+    private var inputDeviceAvailabilityChangeObserver: NSObjectProtocol?
 
     // MARK: - Error Handling
 
     @Published var errorTitle: String = "Error"
     @Published var errorMessage: String = ""
     @Published var showError: Bool = false
+    let audioCaptureFailurePresented = PassthroughSubject<Void, Never>()
+
+    private func presentAudioCaptureFailure(title: String, message: String) {
+        self.errorTitle = title
+        self.errorMessage = message
+        self.showError = true
+        self.audioCaptureFailurePresented.send()
+    }
+
+    #if DEBUG
+    /// Exercise the real recovery coordinator with fake hardware, without
+    /// initializing a model, recording a physical microphone, or changing defaults.
+    var recoveryPacketHandlerForTesting: DirectCoreAudioPacketHandler {
+        let pipeline = self.audioCapturePipeline
+        return { samples, frames, rate, hostTime, sampleTime in
+            pipeline.handle(
+                samples: samples,
+                frameCount: frames,
+                sampleRate: rate,
+                inputHostTime: hostTime,
+                inputSampleTime: sampleTime
+            )
+        }
+    }
+
+    func configureAudioRouteRecoveryForTesting(
+        controller: DirectCoreAudioLifecycleController,
+        devices: [AudioDevice.Device],
+        initialSamples: [Float]
+    ) {
+        precondition(self.isRunning == false && self.isStarting == false)
+        self.directAudioLifecycleController = controller
+        self.cacheCurrentDeviceList(devices)
+        self.benchmarkSessionID = 987_654
+        self.audioCaptureStartGeneration &+= 1
+        self.audioCaptureAttemptID &+= 1
+        self.activeAudioCaptureBackend = .directCoreAudio
+        self.audioBuffer.append(initialSamples)
+        self.audioCapturePipeline.setRecordingEnabled(
+            true, sessionID: self.benchmarkSessionID, attemptID: self.audioCaptureAttemptID
+        )
+        self.isRunning = true
+    }
+
+    func triggerAudioRouteRecoveryForTesting() {
+        self.scheduleAudioRouteRecovery(
+            reason: "injected input change", requiresIdlePrewarm: true, reconcilesInputSelection: true
+        )
+    }
+
+    func useMediaPlaybackForTesting(_ service: MediaPlaybackService) {
+        self.mediaPlaybackService = service
+    }
+
+    func failAudioRouteRecoveryForTesting(stale: Bool = false) async {
+        await self.finishAudioRouteRecoveryFailure(AudioRouteRecoveryRequest(
+            generation: stale ? self.audioRouteRecoveryGeneration &- 1 : self.audioRouteRecoveryGeneration,
+            reason: "injected recovery failure",
+            requiresIdlePrewarm: true,
+            reconcilesInputSelection: false
+        ), error: BoundedAudioHardwareQueue.Failure.recovering)
+    }
+
+    var audioRouteRecoveryStateForTesting: (pending: Bool, recovering: Bool, acceptingPCM: Bool, samples: [Float]) {
+        (
+            self.pendingAudioRouteRecovery != nil,
+            self.isRecoveringAudioRoute,
+            self.audioCapturePipeline.isRecordingEnabledForTesting,
+            self.audioBuffer.getAll()
+        )
+    }
+
+    func configureDictationModeSwitchForTesting(
+        ownedLease: ASRActivityLease?,
+        starting: Bool = false,
+        finalizing: Bool = false,
+        dictionaryTraining: Bool = false
+    ) {
+        self.dictationActivityLease = ownedLease
+        self.isStarting = starting
+        self.isStoppingFinalTranscription = finalizing
+        self.isDictionaryTrainingCaptureActive = dictionaryTraining
+    }
+
+    func beginDictationBufferDrainForTesting(recovering: Bool = false) -> (() -> Void)? {
+        guard let token = self.recordingBufferHandoffGate.begin() else { return nil }
+        if recovering { self.recordingBufferHandoffGate.markTimedOut(token) }
+        return { self.recordingBufferHandoffGate.complete(token) }
+    }
+
+    func finishAudioRouteRecoveryTest() async {
+        await self.cancelAudioRouteRecoveryAndWait()
+        self.isRunning = false
+        self.audioCapturePipeline.setRecordingEnabled(false)
+        await self.directAudioLifecycleController.shutdown(reason: "test_complete")
+        self.audioBuffer.clear()
+    }
+    #endif
 
     /// Returns a user-friendly status message for model loading state
     var modelStatusMessage: String {
         if self.isAsrReady { return "Model ready" }
         if self.isCancellingModelPreparation { return "Cancelling model preparation..." }
         if self.isCancellingModelDownload { return "Cancelling model download..." }
-        if self.downloadingModelId != nil { return "Downloading model..." }
-        if self.isDownloadingModel { return "Downloading model..." }
-        if self.isLoadingModel { return "Loading model into memory..." }
+        if self.downloadingModelId != nil || self.isDownloadingModel || self.isLoadingModel {
+            return self.modelPreparationStatusText
+        }
         if self.modelsExistOnDisk { return "Model cached, needs loading" }
         return "Model not downloaded"
+    }
+
+    var modelPreparationStatusText: String {
+        switch self.modelPreparationPhase {
+        case .preparingDownload:
+            return "Preparing download..."
+        case .downloading:
+            if let progress = self.downloadProgress {
+                return "Downloading \(Int(progress * 100))%"
+            }
+            return "Downloading model..."
+        case .optimizing:
+            return "Optimizing model..."
+        case .loading:
+            return "Loading voice engine..."
+        case nil:
+            if self.isDownloadingModel { return "Preparing model..." }
+            if self.isLoadingModel { return "Loading voice engine..." }
+            return "Preparing model..."
+        }
     }
 
     // MARK: - Transcription Provider (Settable)
@@ -135,11 +1085,23 @@ final class ASRService: ObservableObject {
     /// Subsequent callers await the in-flight task.
     private var ensureReadyTask: Task<Void, Error>?
     private var ensureReadyTaskID: UUID?
+    private var residentDictationModelID: String?
     private var ensureReadyProviderKey: String?
     private var ensureReadyOperationID: UUID?
     private var modelDownloadTask: Task<Void, Error>?
     private var modelDownloadOperationID: UUID?
+    private var modelDownloadAnalyticsStates: [UUID: ModelDownloadAnalyticsState] = [:]
     private var modelExistenceCheckID: UUID?
+
+    @Published private(set) var deletingModelID: String?
+    #if DEBUG
+    var modelProvidersForTesting: [SettingsStore.SpeechModel: TranscriptionProvider] = [:]
+
+    func prepareProviderRecoveryForTesting(_ provider: TranscriptionProvider, modelsAlreadyCached: Bool) async throws {
+        try await self.prepareProviderWithRecovery(provider: provider, modelsAlreadyCached: modelsAlreadyCached, progressHandler: { _ in })
+    }
+
+    #endif
 
     var hasActiveModelPreparation: Bool {
         self.ensureReadyTask != nil
@@ -163,10 +1125,81 @@ final class ASRService: ObservableObject {
         task.cancel()
     }
 
+    func shutdownForTermination() async {
+        self.meetingModelResidency.beginTermination()
+        self.isTerminating = true
+        // Give media restoration the same quit window as audio cleanup.
+        self.mediaPlaybackService.beginShutdown()
+        if self.isStarting, self.isRunning == false {
+            await self.cancelPendingAudioCaptureStart(reason: "app_termination")
+        }
+        let routeRecoveryShutdownStartedAt = Date().timeIntervalSince1970
+        await self.cancelAudioRouteRecoveryAndWait()
+        self.benchmarkLog(
+            "route_recovery_shutdown elapsedMs=\(self.elapsedMilliseconds(since: routeRecoveryShutdownStartedAt))"
+        )
+        if self.isRunning {
+            await self.stopWithoutTranscription()
+        }
+        let audioEngineShutdownStartedAt = Date().timeIntervalSince1970
+        await self.retireAudioEngineAndWait(reason: "app_termination")
+        self.benchmarkLog(
+            "audio_engine_shutdown elapsedMs=\(self.elapsedMilliseconds(since: audioEngineShutdownStartedAt))"
+        )
+        let directCaptureShutdownStartedAt = Date().timeIntervalSince1970
+        await self.directAudioLifecycleController.shutdown(reason: "app_termination")
+        self.benchmarkLog(
+            "direct_capture_shutdown phase=\(self.directAudioLifecycleController.snapshot.phase.rawValue) " +
+                "elapsedMs=\(self.elapsedMilliseconds(since: directCaptureShutdownStartedAt))"
+        )
+
+        let preparationTask = self.ensureReadyTask
+        let downloadTask = self.modelDownloadTask
+        preparationTask?.cancel()
+        downloadTask?.cancel()
+        _ = await preparationTask?.result
+        _ = await downloadTask?.result
+        await self.providerResetDrain?.task.value
+        self.streamingWorkState.invalidateProvider()
+        // The scope body is independently owned because a future backend may suspend
+        // outside the CoreML executor. Termination must join that work before releasing
+        // its provider claim or the meeting activity lease.
+        if let scope = self.activeMeetingASRScope {
+            scope.cancelBody?()
+            if let awaitBodyCompletion = scope.awaitBodyCompletion {
+                await awaitBodyCompletion()
+            }
+        }
+        if let meetingOwner = self.activeMeetingASRPreparationOwner,
+           let claimToken = meetingOwner.currentClaimToken,
+           meetingOwner.isClaimed || meetingOwner.isDraining
+        {
+            await meetingOwner.release(claimToken)
+        }
+        await self.meetingTranscriptionExecutor.cancelAndAwaitPending()
+        self.flushDeferredMeetingLeaseReleaseIfReady()
+        await self.transcriptionExecutor.cancelAndAwaitPending()
+
+        self.fluidAudioProvider = nil
+        self.parakeetRealtimeProvider = nil
+        self.externalCoreMLProvider = nil
+        self.nemotronProviders.removeAll()
+        self.whisperProvider = nil
+        self.appleSpeechProvider = nil
+        self._appleSpeechAnalyzerProvider = nil
+        self.isAsrReady = false
+        self.isLoadingModel = false
+        self.isDownloadingModel = false
+        await self.mediaPlaybackService.shutdown()
+    }
+
     /// The transcription provider, selected based on the unified SpeechModel setting.
     /// Uses the new SettingsStore.selectedSpeechModel instead of old TranscriptionProviderOption.
     private var transcriptionProvider: TranscriptionProvider {
         let model = SettingsStore.shared.selectedSpeechModel
+        #if DEBUG
+        if let injected = self.modelProvidersForTesting[model] { return injected }
+        #endif
 
         switch model {
         case .appleSpeechAnalyzer:
@@ -178,7 +1211,7 @@ final class ASRService: ObservableObject {
             }
         case .appleSpeech:
             return self.getAppleSpeechProvider()
-        case .parakeetTDT, .parakeetTDTv2:
+        case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico:
             return self.getFluidAudioProvider()
         case .parakeetRealtime:
             return self.getParakeetRealtimeProvider()
@@ -291,84 +1324,16 @@ final class ASRService: ObservableObject {
         return Int(((Date().timeIntervalSince1970 - start) * 1000).rounded())
     }
 
-    private func benchmarkLog(_ message: String) {
-        DebugLogger.shared.benchmark("ASR_BENCH", message: "session=\(self.benchmarkSessionID) \(message)", source: "ASRBenchmark")
-    }
-
-    private func streamingChunkErrorCategory(for error: Error) -> String {
-        if error is CancellationError {
-            return "cancelled"
-        }
-
-        let nsError = error as NSError
-        switch nsError.domain {
-        case AVFoundationErrorDomain:
-            return "avfoundation"
-        case NSOSStatusErrorDomain:
-            return "osstatus"
-        case NSCocoaErrorDomain:
-            return "cocoa"
-        default:
-            return "other"
-        }
-    }
-
-    private func shouldCaptureStreamingChunkAnalytics(success: Bool) -> Bool {
-        if success {
-            self.streamingChunkAnalyticsSuccessCount += 1
-            if self.streamingChunkAnalyticsSuccessCount == 1 {
-                return true
-            }
-            return self.streamingChunkAnalyticsSuccessCount % self.streamingChunkAnalyticsSuccessSampleRate == 0
-        }
-
-        let now = Date()
-        guard let lastFailureCaptureAt = self.lastStreamingChunkFailureAnalyticsAt else {
-            self.lastStreamingChunkFailureAnalyticsAt = now
-            return true
-        }
-
-        guard now.timeIntervalSince(lastFailureCaptureAt) >= self.streamingChunkFailureMinIntervalSeconds else {
-            return false
-        }
-
-        self.lastStreamingChunkFailureAnalyticsAt = now
-        return true
-    }
-
-    private func captureStreamingChunkAnalytics(
-        success: Bool,
-        chunkSampleCount: Int,
-        latencyMs: Int,
-        error: Error? = nil
-    ) {
-        guard self.shouldCaptureStreamingChunkAnalytics(success: success) else { return }
-
-        let dims = self.currentTranscriptionAnalyticsDimensions()
-        var properties: [String: Any] = [
-            "success": success,
-            "latency_ms": latencyMs,
-            "chunk_samples": chunkSampleCount,
-            "chunk_audio_seconds": Double(chunkSampleCount) / 16_000.0,
-            "transcription_provider": dims.provider,
-            "transcription_model": dims.model,
-            "success_sample_rate_chunks": self.streamingChunkAnalyticsSuccessSampleRate,
-            "failure_min_interval_seconds": self.streamingChunkFailureMinIntervalSeconds,
-        ]
-
-        if let error {
-            properties["error_category"] = self.streamingChunkErrorCategory(for: error)
-        }
-
-        AnalyticsService.shared.capture(
-            .transcriptionChunkProcessed,
-            properties: properties
-        )
+    private func benchmarkLog(_ message: @autoclosure () -> String) {
+        DebugLogger.shared.benchmark("ASR_BENCH", message: "session=\(self.benchmarkSessionID) \(message())", source: "ASRBenchmark")
     }
 
     /// Gets a provider for a specific model (without changing the active selection)
     /// Used for downloading models without switching the active model.
-    private func getProvider(for model: SettingsStore.SpeechModel) -> TranscriptionProvider {
+    private func getProvider(for model: SettingsStore.SpeechModel, updateWeights: Bool = false) -> TranscriptionProvider {
+        #if DEBUG
+        if let injected = self.modelProvidersForTesting[model] { return injected }
+        #endif
         switch model {
         case .appleSpeechAnalyzer:
             if #available(macOS 26.0, *) {
@@ -378,9 +1343,9 @@ final class ASRService: ObservableObject {
             }
         case .appleSpeech:
             return AppleSpeechProvider()
-        case .parakeetTDT, .parakeetTDTv2:
+        case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico:
             // Create a new provider configured for the specific model
-            return FluidAudioProvider(modelOverride: model, configureWordBoosting: false)
+            return FluidAudioProvider(modelOverride: model, configureWordBoosting: false, updateCompactWeights: updateWeights)
         case .parakeetRealtime:
             return ParakeetRealtimeProvider()
         case .cohereTranscribeSixBit:
@@ -400,8 +1365,40 @@ final class ASRService: ObservableObject {
     /// - Parameters:
     ///   - model: The model to download
     ///   - progressHandler: Optional callback for download progress (0.0 to 1.0)
-    func downloadModel(_ model: SettingsStore.SpeechModel, progressHandler: ((Double) -> Void)?) async throws {
-        guard self.modelDownloadTask == nil, self.ensureReadyTask == nil else {
+    func downloadModel(
+        _ model: SettingsStore.SpeechModel,
+        source: AnalyticsModelDownloadSource = .settings,
+        updateWeights: Bool = false,
+        progressHandler: ((Double) -> Void)?
+    ) async throws {
+        try Task.checkCancellation()
+        let updateLease: ASRActivityLease?
+        if updateWeights {
+            guard model == .fluidParakeetMini || model == .fluidParakeetPico else {
+                throw NSError(domain: "ASRService", code: -2003, userInfo: [NSLocalizedDescriptionKey: "Only Mini and Pico support weight updates."])
+            }
+            guard !self.isTerminating, !self.isRunning, !self.isStarting, !self.isStoppingFinalTranscription,
+                  !self.recordingBufferHandoffGate.isActive, !self.recordingBufferHandoffGate.isRecovering,
+                  !self.isMicrophonePreviewRequested, !self.isMicrophonePreviewActive, !self.isDictionaryTrainingCaptureActive,
+                  self.providerResetDrain == nil, !self.isCancellingModelPreparation, !self.isCancellingModelDownload,
+                  !self.meetingModelResidency.isExclusive
+            else {
+                throw ASRActivityError.activityInProgress(self.activeExclusiveActivity ?? .modelMaintenance)
+            }
+            updateLease = try self.acquireExclusiveActivity(.modelMaintenance)
+        } else {
+            updateLease = nil
+        }
+        defer { if let updateLease { self.releaseExclusiveActivity(updateLease) } }
+        guard self.activeExclusiveActivity != .settingsRestore else {
+            throw ASRActivityError.activityInProgress(.settingsRestore)
+        }
+        let admission = try self.meetingModelResidency.beginOperation(owner: "speech", modelID: model.id)
+        defer { self.meetingModelResidency.endOperation(admission) }
+        if self.isMeetingASRPreparationClaimed {
+            throw MeetingASRPreparationError.preparationInProgress
+        }
+        guard self.deletingModelID == nil, self.modelDownloadTask == nil, self.ensureReadyTask == nil else {
             throw NSError(
                 domain: "ASRService",
                 code: -2001,
@@ -410,11 +1407,11 @@ final class ASRService: ObservableObject {
         }
 
         let operationID = UUID()
-        let provider = self.getProvider(for: model)
-        let progressRelay = ModelPreparationProgressRelay(progressHandler)
+        let provider = self.getProvider(for: model, updateWeights: updateWeights)
         self.modelDownloadOperationID = operationID
         self.downloadingModelId = model.id
-        self.downloadProgress = 0.0
+        self.downloadProgress = nil
+        self.modelPreparationPhase = .preparingDownload
         self.isCancellingModelDownload = false
 
         let task = Task { @MainActor [weak self] in
@@ -422,7 +1419,6 @@ final class ASRService: ObservableObject {
             do {
                 DebugLogger.shared.info("Downloading model: \(model.displayName) (without changing active selection)", source: "ASRService")
                 try await provider.prepare(progressHandler: { progress in
-                    let clamped = max(0.0, min(1.0, progress))
                     Task { @MainActor in
                         guard
                             self.modelDownloadOperationID == operationID,
@@ -430,16 +1426,22 @@ final class ASRService: ObservableObject {
                         else {
                             return
                         }
-                        let monotonic = max(self.downloadProgress ?? 0.0, clamped)
-                        self.downloadProgress = monotonic
-                        progressRelay.report(monotonic)
+                        self.applyModelPreparationProgress(
+                            progress,
+                            updatesActiveModelState: false,
+                            externalProgressHandler: progressHandler,
+                            analyticsOperationID: operationID,
+                            analyticsDescriptor: model.analyticsDescriptor,
+                            analyticsSource: source
+                        )
                     }
                 })
-                try Task.checkCancellation()
+                if !updateWeights { try Task.checkCancellation() }
                 DebugLogger.shared.info("Model download completed: \(model.displayName)", source: "ASRService")
             } catch {
+                if ParakeetArchiveDownloader.isCleanupFailure(error) { throw error }
                 let wasCancelled = Task.isCancelled || Self.isModelPreparationCancellation(error)
-                if wasCancelled,
+                if wasCancelled, !updateWeights,
                    provider.shouldClearCacheAfterCancellation,
                    provider.modelsExistOnDisk() == false
                 {
@@ -459,28 +1461,73 @@ final class ASRService: ObservableObject {
                 self.modelDownloadOperationID = nil
                 self.downloadingModelId = nil
                 self.downloadProgress = nil
+                self.modelPreparationPhase = nil
                 self.isCancellingModelDownload = false
+                SpeechModelInstallationSnapshot.shared.refresh()
             }
         }
 
-        try await withTaskCancellationHandler {
-            try await task.value
-        } onCancel: {
-            task.cancel()
+        do {
+            try await withTaskCancellationHandler {
+                try await task.value
+            } onCancel: {
+                task.cancel()
+            }
+            if updateWeights, SettingsStore.shared.selectedSpeechModel == model {
+                // Release the update lease only after progress and operation cleanup;
+                // the normal deferred reset then retires the old active checkpoint.
+                self.providerResetPending = true
+            }
+            self.finishModelDownloadAnalytics(operationID: operationID, outcome: .succeeded)
+        } catch is CancellationError {
+            self.finishModelDownloadAnalytics(operationID: operationID, outcome: .cancelled)
+            throw CancellationError()
+        } catch {
+            if updateWeights, SettingsStore.shared.selectedSpeechModel == model,
+               let failure = error as? ParakeetArchiveDownloader.DownloadError,
+               case .replacementCleanupFailed = failure
+            {
+                self.providerResetPending = true
+            }
+            self.finishModelDownloadAnalytics(operationID: operationID, outcome: .failed)
+            throw error
         }
     }
 
     /// Call this when the transcription provider setting changes to reset state
     func resetTranscriptionProvider() {
+        self.meetingModelResidency.vetoRestoration(owner: "speech")
+        guard !self.recordingBufferHandoffGate.isRecovering else {
+            self.resetProviderAfterStreamingRecovery = true
+            return
+        }
+
+        guard self.activeActivityLease == nil else {
+            self.providerResetPending = true
+            DebugLogger.shared.info(
+                "ASRService: Deferring provider reset until \(self.activeExclusiveActivity?.displayName ?? "active work") finishes",
+                source: "ASRService"
+            )
+            return
+        }
+
+        guard let resetLease = try? self.acquireExclusiveActivity(.modelMaintenance) else {
+            self.providerResetPending = true
+            return
+        }
         let newModel = SettingsStore.shared.selectedSpeechModel
         DebugLogger.shared.info("ASRService: Switching to '\(newModel.displayName)', resetting provider state...", source: "ASRService")
 
+        // Any in-flight preview belongs to the provider being retired. Its operation
+        // still drains through the executor, but must not publish into this session.
+        self.streamingWorkState.invalidateProvider()
         self.isAsrReady = false
         self.modelsExistOnDisk = false
         self.isLoadingModel = false
         self.isDownloadingModel = false
         if !self.hasActiveModelDownload {
             self.downloadProgress = nil
+            self.modelPreparationPhase = nil
         }
         self.hasCompletedFirstTranscription = false // Reset warm-up state when switching models
         let retiringTask = self.ensureReadyTask
@@ -488,8 +1535,18 @@ final class ASRService: ObservableObject {
             self.isCancellingModelPreparation = true
             task.cancel()
         }
-        // Keep the task handle until its provider has stopped and cancellation cleanup has
-        // completed. The next ensureAsrReady call waits for it before touching the same cache.
+        let resetDrainID = UUID()
+        let executor = self.transcriptionExecutor
+        let resetDrainTask = Task { @MainActor [weak self] in
+            await executor.cancelAndAwaitPending()
+            // A completed handle must not leave future imports permanently busy.
+            if self?.providerResetDrain?.id == resetDrainID {
+                self?.providerResetDrain = nil
+            }
+        }
+        self.providerResetDrain = (resetDrainID, resetDrainTask)
+        // ensureAsrReady joins this executor drain. The retiring preparation task
+        // separately remains retained until its provider cancellation cleanup finishes.
         self.ensureReadyProviderKey = nil
         self.ensureReadyOperationID = nil
         self.lastBoostHitTerm = nil
@@ -508,6 +1565,7 @@ final class ASRService: ObservableObject {
         // Use Task for async check to support providers like AppleSpeechAnalyzerProvider
         Task { [weak self] in
             guard let self = self else { return }
+            defer { self.releaseExclusiveActivity(resetLease) }
             _ = await retiringTask?.result
             guard SettingsStore.shared.selectedSpeechModel == newModel else { return }
             await self.checkIfModelsExistAsync()
@@ -539,8 +1597,482 @@ final class ASRService: ObservableObject {
         return created
     }
 
+    private var hasWarmAudioEngine: Bool {
+        self.engineStorage is AVAudioEngine
+    }
+
+    private enum AudioCaptureBackend {
+        case none
+        case directCoreAudio
+        case audioEngine
+    }
+
+    private struct AudioRouteRecoveryRequest {
+        let generation: UInt64
+        let reason: String
+        let requiresIdlePrewarm: Bool
+        let reconcilesInputSelection: Bool
+    }
+
+    private lazy var directAudioLifecycleController: DirectCoreAudioLifecycleController = {
+        let pipeline = self.audioCapturePipeline
+        return DirectCoreAudioLifecycleController(
+            packetHandler: { samples, frameCount, sampleRate, inputHostTime, inputSampleTime in
+                pipeline.handle(
+                    samples: samples,
+                    frameCount: frameCount,
+                    sampleRate: sampleRate,
+                    inputHostTime: inputHostTime,
+                    inputSampleTime: inputSampleTime
+                )
+            },
+            onFormatInvalidated: { [weak self] invalidation in
+                Task { @MainActor [weak self] in
+                    await self?.handleDirectCaptureFormatInvalidation(invalidation)
+                }
+            }
+        )
+    }()
+
+    private var activeAudioCaptureBackend: AudioCaptureBackend = .none
+    private var audioStartAttemptInputUID: String?
+    private var audioStartAttemptInputName: String?
+    private var audioStartAttemptIsBluetooth = false
+    private var audioStartAttemptIsInternalMicrophone = false
+    private var deferredBluetoothStartupRouteRecovery =
+        AudioCaptureIdlePolicy.DeferredBluetoothRouteRecovery()
+    private var silentPCMRecoveryWatchdog = AudioCaptureIdlePolicy.SilentPCMRecoveryWatchdog()
+
+    private var hasPreparedAudioCapture: Bool {
+        self.directAudioLifecycleController.snapshot.isPrepared || self.hasWarmAudioEngine
+    }
+
+    /// Detaches the current engine from main-actor state and returns a token that
+    /// owns its final strong reference. The token must be handed to
+    /// `audioEngineRetirementDrain`; dropping it directly would put deallocation
+    /// back on the caller's actor.
+    private func detachAudioEngineForRetirement(reason: String) -> AudioEngineRetirementToken? {
+        self.audioEngineStandbyTask?.cancel()
+        self.audioEngineStandbyTask = nil
+
+        self.activeAudioCaptureBackend = .none
+
+        if self.isEngineTapInstalled {
+            if let engine = self.engineStorage as? AVAudioEngine {
+                engine.inputNode.removeTap(onBus: 0)
+            }
+            self.isEngineTapInstalled = false
+        }
+        if let engine = self.engineStorage as? AVAudioEngine, engine.isRunning {
+            engine.stop()
+        }
+        self.audioCapturePipeline.clearPreroll()
+
+        let retirementToken = self.engineStorage.map(AudioEngineRetirementToken.init)
+        self.engineStorage = nil
+        DebugLogger.shared.debug("Audio engine retired (\(reason))", source: "ASRService")
+        return retirementToken
+    }
+
+    /// Fire-and-forget retirement for paths that do not construct a replacement.
+    /// All releases still share the serial drain, and capture startup waits on a
+    /// drain barrier before it may create another engine.
+    private func retireAudioEngine(reason: String) {
+        guard let token = self.detachAudioEngineForRetirement(reason: reason) else { return }
+        self.audioEngineRetirementDrain.schedule(token)
+    }
+
+    /// Route recovery and engine retry paths use this completion barrier so the
+    /// old AVAudioEngine and its AVAudioIOUnit are fully deallocated before a
+    /// replacement can touch Core Audio.
+    private func retireAudioEngineAndWait(reason: String) async {
+        if let token = self.detachAudioEngineForRetirement(reason: reason) {
+            await self.audioEngineRetirementDrain.releaseAndWait(token)
+        } else {
+            await self.audioEngineRetirementDrain.waitForScheduledReleases()
+        }
+    }
+
+    private func scheduleAudioEngineStandbyRetirement() {
+        self.audioEngineStandbyTask?.cancel()
+        let delay = self.audioEngineStandbyNanoseconds
+        self.audioEngineStandbyTask = Task { [weak self] in
+            do {
+                try await Task.sleep(nanoseconds: delay)
+            } catch {
+                return
+            }
+            await self?.retireWarmAudioEngineIfIdle()
+        }
+    }
+
+    private func retireWarmAudioEngineIfIdle() async {
+        guard self.isRunning == false, self.isStarting == false else { return }
+        await self.coolDownAudioEngineStandby(reason: "standby_timeout")
+    }
+
+    private func coolDownAudioEngineStandby(reason: String) async {
+        self.audioEngineStandbyTask?.cancel()
+        self.audioEngineStandbyTask = nil
+
+        await self.directAudioLifecycleController.invalidate(reason: reason)
+        await self.retireAudioEngineAndWait(reason: reason)
+        self.benchmarkLog("audio_engine_standby retired=true reason=\(reason)")
+        DebugLogger.shared.debug("Audio engine fully retired from standby (\(reason))", source: "ASRService")
+    }
+
+    private func prewarmConfiguredAudioCaptureIfPossible(
+        reason: String,
+        allowDuringRouteRecovery: Bool = false
+    ) async {
+        guard self.isTerminating == false else {
+            DebugLogger.shared.debug("Audio capture prewarm skipped - app is terminating", source: "ASRService")
+            return
+        }
+        guard self.activeExclusiveActivity != .meeting else {
+            DebugLogger.shared.debug("Audio capture prewarm deferred - meeting owns audio topology", source: "ASRService")
+            self.meetingHandoffShouldRestorePreparedCapture = true
+            return
+        }
+        let handoffGeneration = self.meetingAudioHandoffGeneration
+        guard self.micStatus == .authorized else {
+            DebugLogger.shared.debug("Audio engine prewarm skipped - mic not authorized", source: "ASRService")
+            return
+        }
+        guard self.isRunning == false,
+              self.isStarting == false || allowDuringRouteRecovery
+        else {
+            DebugLogger.shared.debug("Audio engine prewarm skipped - capture active", source: "ASRService")
+            return
+        }
+        guard allowDuringRouteRecovery || self.isRecoveringAudioRoute == false else {
+            DebugLogger.shared.debug("Audio engine prewarm skipped - route recovery active", source: "ASRService")
+            return
+        }
+        guard AudioCaptureIdlePolicy.shouldPrewarmCapture(
+            experimentalDirectAudioCaptureEnabled: SettingsStore.shared.experimentalDirectAudioCaptureEnabled
+        ) else {
+            // Constructing AVAudioEngine while idle instantiates its input and
+            // output audio units. Bluetooth headsets can then remain in the
+            // low-bandwidth HFP route even though no recording is active.
+            if self.hasWarmAudioEngine {
+                await self.retireAudioEngineAndWait(reason: "legacy_idle_prewarm_suppressed")
+            }
+            DebugLogger.shared.debug(
+                "Legacy AVAudioEngine idle prewarm skipped to preserve playback quality",
+                source: "ASRService"
+            )
+            return
+        }
+        guard self.hasPreparedAudioCapture == false else {
+            DebugLogger.shared.debug("Audio capture prewarm skipped - backend already prepared", source: "ASRService")
+            return
+        }
+
+        // A legacy stop releases AVAudioEngine on the serial retirement drain.
+        // Do not register a direct Core Audio backend until that teardown has
+        // completed, then recheck state because this await yields the main actor.
+        await self.audioEngineRetirementDrain.waitForScheduledReleases()
+        guard self.isTerminating == false,
+              self.activeExclusiveActivity != .meeting,
+              self.meetingAudioHandoffGeneration == handoffGeneration,
+              self.isRunning == false,
+              self.isStarting == false || allowDuringRouteRecovery,
+              self.hasPreparedAudioCapture == false
+        else {
+            DebugLogger.shared.debug(
+                "Audio capture prewarm skipped - state changed while waiting for engine retirement",
+                source: "ASRService"
+            )
+            return
+        }
+
+        let startedAt = Date().timeIntervalSince1970
+        do {
+            _ = try await self.prepareDirectAudioInput(reason: reason)
+            guard self.activeExclusiveActivity != .meeting,
+                  self.meetingAudioHandoffGeneration == handoffGeneration,
+                  self.isTerminating == false
+            else {
+                await self.directAudioLifecycleController.invalidate(reason: "stale_prewarm_after_meeting_handoff")
+                self.activeAudioCaptureBackend = .none
+                return
+            }
+            self.benchmarkLog("direct_audio_prewarm reason=\(reason) elapsedMs=\(self.elapsedMilliseconds(since: startedAt))")
+        } catch {
+            DebugLogger.shared.warning(
+                "Direct Core Audio prewarm failed: \(error.localizedDescription)",
+                source: "ASRService"
+            )
+        }
+    }
+
+    private func resolvedInputDeviceForCapture(
+        availableInputs: [AudioDevice.Device] = AudioDevice.listInputDevices(),
+        defaultInputUID: String? = AudioDevice.getDefaultInputDevice()?.uid,
+        excluding excludedUIDs: Set<String> = []
+    ) -> AudioDevice.Device? {
+        return AppServices.shared.microphonePreferenceCoordinator.inputDeviceForCapture(
+            availableInputs: availableInputs,
+            defaultInputUID: defaultInputUID,
+            excluding: excludedUIDs
+        )
+    }
+
+    private func directCoreAudioDeviceSelection(
+        excluding excludedUIDs: Set<String> = []
+    ) -> DirectCoreAudioDeviceSelection? {
+        if let inputUID = self.resolvedInputDeviceForCapture(excluding: excludedUIDs)?.uid {
+            return .preferredUID(inputUID)
+        }
+        return nil
+    }
+
+    /// Prepares the direct device callback without starting hardware IO. This
+    /// keeps the default idle state privacy-friendly while removing device and
+    /// ring allocation from the hotkey path.
+    private func prepareDirectAudioInput(
+        reason: String
+    ) async throws -> DirectCoreAudioLifecycleController.Snapshot {
+        guard self.micStatus == .authorized else {
+            throw NSError(
+                domain: "ASRService",
+                code: -1,
+                userInfo: [NSLocalizedDescriptionKey: "Microphone access is not authorized."]
+            )
+        }
+        guard let selection = self.directCoreAudioDeviceSelection() else {
+            throw NSError(
+                domain: "ASRService",
+                code: -4,
+                userInfo: [NSLocalizedDescriptionKey: "No usable microphone is available."]
+            )
+        }
+        let device = try await self.directAudioLifecycleController.resolveDevice(
+            selection: selection,
+            reason: "prepare:\(reason)"
+        )
+        let snapshot = try await self.directAudioLifecycleController.prepare(
+            deviceID: device.id,
+            deviceName: device.name,
+            reason: reason
+        )
+        DebugLogger.shared.info(
+            "Prepared direct Core Audio input '\(device.name)' " +
+                "(\(Int((snapshot.sampleRate ?? 0).rounded()))Hz, " +
+                "\(snapshot.bufferFrameSize ?? 0) frames, generation=\(snapshot.generation), " +
+                "reason=\(reason))",
+            source: "ASRService"
+        )
+        return snapshot
+    }
+
+    /// Bridge the app's Cancel action to the actual backend task. The task's
+    /// cancellation handler also covers cancellation before queue admission.
+    private func startCancellableAudioCapture(
+        excluding excludedInputUIDs: Set<String>,
+        forcingInputUID: String?,
+        onInputSnapshotRead: @escaping @MainActor (Int) -> Void
+    ) async throws {
+        let task = Task {
+            try await self.startConfiguredAudioCapture(
+                excluding: excludedInputUIDs,
+                forcingInputUID: forcingInputUID,
+                onInputSnapshotRead: onInputSnapshotRead
+            )
+        }
+        self.pendingAudioCaptureBackendStart = task
+        defer { self.pendingAudioCaptureBackendStart = nil }
+        try await withTaskCancellationHandler {
+            try await task.value
+        } onCancel: {
+            task.cancel()
+        }
+    }
+
+    private func startConfiguredAudioCapture(
+        excluding excludedInputUIDs: Set<String> = [],
+        forcingInputUID: String? = nil,
+        onInputSnapshotRead: @MainActor (Int) -> Void = { _ in }
+    ) async throws {
+        let startGeneration = self.audioCaptureStartGeneration
+        let previousAttemptIdentity = self.audioStartAttemptInputUID.map {
+            AudioCaptureIdlePolicy.CaptureAttemptIdentity(
+                uid: $0,
+                name: self.audioStartAttemptInputName,
+                isBluetooth: self.audioStartAttemptIsBluetooth,
+                isInternalMicrophone: self.audioStartAttemptIsInternalMicrophone
+            )
+        }
+        self.audioStartAttemptInputUID = nil
+        self.audioStartAttemptInputName = nil
+        self.audioStartAttemptIsBluetooth = false
+        self.audioStartAttemptIsInternalMicrophone = false
+        if SettingsStore.shared.experimentalDirectAudioCaptureEnabled {
+            // A non-route path may have scheduled a fire-and-forget retirement.
+            // Do not let direct capture startup overlap a queued AVAudioEngine
+            // release.
+            await self.audioEngineRetirementDrain.waitForScheduledReleases()
+            do {
+                try self.checkCaptureStartGeneration(startGeneration)
+                if self.directAudioLifecycleController.isRecoveringHardware {
+                    let available = await self.directAudioLifecycleController.waitForPendingHardwareRetirement()
+                    try self.checkCaptureStartGeneration(startGeneration)
+                    guard available else { throw BoundedAudioHardwareQueue.Failure.recovering }
+                }
+                let deviceSnapshot = try await self.directAudioLifecycleController.readCaptureDeviceSnapshot()
+                try self.checkCaptureStartGeneration(startGeneration)
+                let allDevices = deviceSnapshot.devices
+                let availableInputs = allDevices.filter(\.hasInput)
+                onInputSnapshotRead(availableInputs.count)
+                let selectedInput: AudioDevice.Device?
+                if let forcingInputUID {
+                    selectedInput = availableInputs.first { $0.uid == forcingInputUID }
+                } else {
+                    let resolvedInput = self.resolvedInputDeviceForCapture(
+                        availableInputs: availableInputs,
+                        defaultInputUID: deviceSnapshot.defaultInputUID,
+                        excluding: excludedInputUIDs
+                    )
+                    selectedInput = AudioCaptureIdlePolicy.bluetoothInputAwaitingAvailability(
+                        priorityInputUIDs: SettingsStore.shared.microphonePriority.map(\.uid),
+                        preferredInputUID: SettingsStore.shared.preferredInputDeviceUID,
+                        resolvedInputUID: resolvedInput?.uid,
+                        allDevices: allDevices,
+                        excluding: excludedInputUIDs
+                    ) ?? resolvedInput
+                }
+                guard let attemptIdentity = AudioCaptureIdlePolicy.CaptureAttemptIdentity.resolve(
+                    selectedInput: selectedInput,
+                    forcingInputUID: forcingInputUID,
+                    previous: previousAttemptIdentity
+                ) else {
+                    throw NSError(
+                        domain: "ASRService",
+                        code: -4,
+                        userInfo: [NSLocalizedDescriptionKey: "No remaining microphone is available."]
+                    )
+                }
+                let selection = DirectCoreAudioDeviceSelection.preferredUID(attemptIdentity.uid)
+                // Preserve the selected endpoint's identity before the async UID
+                // resolution, where Bluetooth topology churn can make it vanish.
+                self.audioStartAttemptInputUID = attemptIdentity.uid
+                self.audioStartAttemptInputName = attemptIdentity.name
+                self.audioStartAttemptIsBluetooth = attemptIdentity.isBluetooth
+                self.audioStartAttemptIsInternalMicrophone = attemptIdentity.isInternalMicrophone
+                let device = try await self.directAudioLifecycleController.resolveDevice(
+                    selection: selection,
+                    reason: "recording_start"
+                )
+                try self.checkCaptureStartGeneration(startGeneration)
+                self.audioStartAttemptInputUID = device.uid
+                self.audioStartAttemptInputName = device.name
+                self.audioStartAttemptIsBluetooth = device.isBluetooth
+                self.audioStartAttemptIsInternalMicrophone = device.isUnavailableWhenClamshellClosed
+                AppServices.shared.microphonePreferenceCoordinator.reportResolvedSelection(
+                    uid: device.uid,
+                    name: device.name
+                )
+                let snapshot = try await self.directAudioLifecycleController.start(
+                    deviceID: device.id,
+                    deviceName: device.name,
+                    reason: "recording_start"
+                )
+                try self.checkCaptureStartGeneration(startGeneration)
+                self.activeAudioCaptureBackend = .directCoreAudio
+                let callbackDurationMilliseconds =
+                    Double(snapshot.bufferFrameSize ?? 0) /
+                    max(snapshot.sampleRate ?? 0, 1) * 1000
+                let callbackMs = Int(callbackDurationMilliseconds.rounded())
+                self.benchmarkLog(
+                    "audio_backend kind=direct_core_audio device=\(snapshot.deviceID ?? 0) " +
+                        "generation=\(snapshot.generation) frames=\(snapshot.bufferFrameSize ?? 0) " +
+                        "sampleRate=\(Int((snapshot.sampleRate ?? 0).rounded())) callbackMs=\(callbackMs)"
+                )
+                return
+            } catch {
+                await self.directAudioLifecycleController.invalidate(reason: "recording_start_failed")
+                DebugLogger.shared.error(
+                    "Direct Core Audio capture failed: \(error.localizedDescription)",
+                    source: "ASRService"
+                )
+                throw error
+            }
+        }
+
+        await self.directAudioLifecycleController.invalidate(reason: "av_audio_engine_selected")
+
+        try await self.startAVAudioEngineCapture()
+    }
+
+    private func checkCaptureStartGeneration(_ generation: UInt64) throws {
+        try Task.checkCancellation()
+        guard generation == self.audioCaptureStartGeneration, self.isTerminating == false,
+              self.isPronunciationTrainingStartCurrent
+        else {
+            throw CancellationError()
+        }
+    }
+
+    private func startAVAudioEngineCapture() async throws {
+        let startGeneration = self.audioCaptureStartGeneration
+        await self.audioEngineRetirementDrain.waitForScheduledReleases()
+        try self.checkCaptureStartGeneration(startGeneration)
+        self.benchmarkLog("audio_backend kind=av_audio_engine reason=faster_recording_start_disabled")
+        try self.configureSession()
+        try await self.startEngine()
+        try self.setupEngineTap()
+        self.activeAudioCaptureBackend = .audioEngine
+    }
+
+    private func stopActiveAudioCapture(
+        retainDirectPreparedCapture: Bool = true,
+        reason: String
+    ) async {
+        switch self.activeAudioCaptureBackend {
+        case .directCoreAudio:
+            let captureAwaitStartedAt = ProcessInfo.processInfo.systemUptime
+            let report = await self.directAudioLifecycleController.stop(
+                retainPrepared: retainDirectPreparedCapture,
+                reason: reason,
+                recoveringRoute: self.isRecoveringAudioRoute
+            )
+            DebugLogger.shared.debug(
+                "CLOSE_DETAIL audioCallerResumed uptime=\(ProcessInfo.processInfo.systemUptime) awaitMs=\((ProcessInfo.processInfo.systemUptime - captureAwaitStartedAt) * 1000)",
+                source: "StopTiming"
+            )
+            if report.status != noErr {
+                DebugLogger.shared.warning(
+                    "Direct Core Audio stop returned OSStatus \(report.status)",
+                    source: "ASRService"
+                )
+            }
+            if report.droppedPackets > 0 {
+                DebugLogger.shared.warning(
+                    "Direct Core Audio dropped \(report.droppedPackets) packet(s)",
+                    source: "ASRService"
+                )
+            }
+        case .audioEngine:
+            let tapStopStartedAt = ProcessInfo.processInfo.systemUptime
+            self.removeEngineTap()
+            let tapStopFinishedAt = ProcessInfo.processInfo.systemUptime
+            if let engine = self.engineStorage as? AVAudioEngine, engine.isRunning {
+                engine.stop()
+            }
+            DebugLogger.shared.debug(
+                "STOP_TRACE backend=audioEngine removeTapMs=\(Int((tapStopFinishedAt - tapStopStartedAt) * 1000)) engineStopMs=\(Int((ProcessInfo.processInfo.systemUptime - tapStopFinishedAt) * 1000))",
+                source: "StopTiming"
+            )
+        case .none:
+            break
+        }
+        self.activeAudioCaptureBackend = .none
+    }
+
     private var inputFormat: AVAudioFormat?
     private var micPermissionGranted = false
+    private var isRequestingMicrophoneAccess = false
 
     // Internal access for MeetingTranscriptionService to share models
     // Note: Only available when using FluidAudioProvider (Apple Silicon)
@@ -549,16 +2081,33 @@ final class ASRService: ObservableObject {
         (self.transcriptionProvider as? FluidAudioProvider)?.underlyingManager
     }
     #else
-    var asrManager: Any? { nil }
+    var asrManager: Any? {
+        nil
+    }
     #endif
 
     // Thread-safe buffer to prevent "Array mutation while enumerating" and memory corruption crashes
     // during long sessions where reallocation occurs frequently.
     private let audioBuffer = ThreadSafeAudioBuffer()
+    // Transient, read-only audio for a focused dictionary test. No history setting or disk write.
+    private let dictionaryTestAudioSubject = PassthroughSubject<[Float], Never>()
+    var dictionaryTestAudioPublisher: AnyPublisher<[Float], Never> {
+        self.dictionaryTestAudioSubject.eraseToAnyPublisher()
+    }
+
     private var lastCompletedAudioSnapshot: DictationAudioSnapshot?
+    private var lastDictionaryLearningRecording: DictionaryLearningRecording?
+    private var dictionaryLearningExpiryTask: Task<Void, Never>?
 
     // Streaming transcription state (no VAD)
-    private var streamingTask: Task<Void, Never>?
+    private let streamingTaskLifecycle = StreamingTaskLifecycle()
+    private var streamingWorkState = StreamingTranscriptionWorkState()
+    private var streamingSchedulingSessionID: Int?
+    private let recordingBufferHandoffGate = RecordingBufferHandoffGate()
+    private var timedOutStreamingHandoff: (sessionID: Int, token: RecordingBufferHandoffGate.Token)?
+    private var resetProviderAfterStreamingRecovery = false
+    private var streamingHealthCheckCount: Int = 0
+    private var streamingHealthLastBufferCount: Int = 0
     private var lastProcessedSampleCount: Int = 0
     private var isProcessingChunk: Bool = false
     private var skipNextChunk: Bool = false
@@ -568,29 +2117,77 @@ final class ASRService: ObservableObject {
     private var benchmarkStreamingChunkIndex: Int = 0
     private var benchmarkCompletedStreamingChunks: Int = 0
     private var benchmarkLastChunkSampleCount: Int = 0
-    private let streamingChunkAnalyticsSuccessSampleRate: Int = 50
-    private let streamingChunkFailureMinIntervalSeconds: TimeInterval = 15
-    private var streamingChunkAnalyticsSuccessCount: Int = 0
-    private var lastStreamingChunkFailureAnalyticsAt: Date?
     private let transcriptionExecutor = TranscriptionExecutor() // Serializes all CoreML access
+    /// Scoped meeting ASR work; drained independently of the shared legacy executor.
+    private let meetingTranscriptionExecutor = TranscriptionExecutor()
+    private var providerResetDrain: (id: UUID, task: Task<Void, Never>)?
     private var engineConfigurationChangeObserver: NSObjectProtocol?
+    private let audioEngineRetirementDrain = AudioEngineRetirementDrain()
     private var audioRouteRecoveryTask: Task<Void, Never>?
-    private let audioRouteRecoveryDelayNanoseconds: UInt64 = 1_000_000_000
+    private let audioRouteRecoveryDelayNanoseconds: UInt64 = 300_000_000
+    private var audioRouteRecoveryGeneration: UInt64 = 0
+    private var pendingAudioRouteRecovery: AudioRouteRecoveryRequest?
+    private var audioEngineStandbyTask: Task<Void, Never>?
+    private let audioEngineStandbyNanoseconds: UInt64 = 8_000_000_000
+    private var isEngineTapInstalled = false
     private var isRecoveringAudioRoute = false
-    private let fastPreviewStopGraceNanoseconds: UInt64 = 200_000_000
-    private let fastPreviewSampleRate = 16_000
-    private let fastPreviewMinimumSamples = 32_000
-    private let fastPreviewTailAudioToleranceMs = 300
-    private let fastPreviewStopGraceMinimumCoverage = 0.72
-    private let fastPreviewStopGraceTargetCoverage = 0.88
-
-    /// Tracks whether we paused system media for this recording session.
-    /// Used to resume playback only if we were the ones who paused it.
-    private var didPauseMediaForThisSession: Bool = false
 
     private var audioLevelSubject = PassthroughSubject<CGFloat, Never>()
-    var audioLevelPublisher: AnyPublisher<CGFloat, Never> { self.audioLevelSubject.eraseToAnyPublisher() }
+    var audioLevelPublisher: AnyPublisher<CGFloat, Never> {
+        self.audioLevelSubject.eraseToAnyPublisher()
+    }
+
     private var lastAudioLevelSentAt: TimeInterval = 0
+
+    private func retainDictionaryLearningRecording(_ recording: DictionaryLearningRecording?) {
+        self.dictionaryLearningExpiryTask?.cancel()
+        self.dictionaryLearningExpiryTask = nil
+        self.lastDictionaryLearningRecording = recording
+        guard let id = recording?.id else { return }
+        self.dictionaryLearningExpiryTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(DictionaryLearningRecording.lifetime))
+            guard !Task.isCancelled, let self, self.lastDictionaryLearningRecording?.id == id else { return }
+            self.lastDictionaryLearningRecording = nil
+            self.dictionaryLearningExpiryTask = nil
+        }
+    }
+
+    func originalAudioEnrollment(_ evidence: DictionaryLearningAudioEvidence) async throws -> PronunciationEnrollmentCapture {
+        try await self.meetingModelResidency.withBackgroundOperation(owner: "speech", modelID: evidence.modelKey) {
+            try await self.performOriginalAudioEnrollment(evidence)
+        }
+    }
+
+    private func performOriginalAudioEnrollment(_ evidence: DictionaryLearningAudioEvidence) async throws -> PronunciationEnrollmentCapture {
+        let generation = DictionaryMatcherExperiment.generation
+        guard DictionaryMatcherExperiment.sharedFeaturesEnabled else { throw CancellationError() }
+        try Task.checkCancellation()
+        guard self.activeExclusiveActivity == nil else { throw CancellationError() }
+        #if arch(arm64)
+        if let provider = self.fluidAudioProvider,
+           let capture = try await provider.originalAudioEnrollment(evidence)
+        {
+            try Task.checkCancellation()
+            guard DictionaryMatcherExperiment.sharedFeaturesEnabled,
+                  DictionaryMatcherExperiment.generation == generation else { throw CancellationError() }
+            return capture
+        }
+        #endif
+        try Task.checkCancellation()
+        guard DictionaryMatcherExperiment.sharedFeaturesEnabled,
+              DictionaryMatcherExperiment.generation == generation,
+              self.activeExclusiveActivity == nil else { throw CancellationError() }
+        let capture = try await OriginalAudioEmbeddingExtractor.extract(evidence)
+        try Task.checkCancellation()
+        guard DictionaryMatcherExperiment.sharedFeaturesEnabled,
+              DictionaryMatcherExperiment.generation == generation else { throw CancellationError() }
+        return capture
+    }
+
+    func consumeDictionaryLearningRecording() -> DictionaryLearningRecording? {
+        defer { self.retainDictionaryLearningRecording(nil) }
+        return self.lastDictionaryLearningRecording
+    }
 
     func consumeLastCompletedAudioSnapshot() -> DictationAudioSnapshot? {
         let snapshot = self.lastCompletedAudioSnapshot
@@ -598,13 +2195,25 @@ final class ASRService: ObservableObject {
         return snapshot
     }
 
+    func consumeLastFinalTranscriptionDurationMs() -> Int? {
+        let duration = self.lastFinalTranscriptionDurationMs
+        self.lastFinalTranscriptionDurationMs = nil
+        return duration
+    }
+
+    /// FluidAudio's own Parakeet time for the last final pass; nil for every other engine.
+    func consumeLastFinalParakeetProcessingMs() -> Int? {
+        let duration = self.lastFinalParakeetProcessingMs
+        self.lastFinalParakeetProcessingMs = nil
+        return duration
+    }
+
+    func dictionaryTrainingAudioChunk(at offset: Int, count: Int) -> [Float] {
+        self.audioBuffer.getRange(startingAt: offset, count: count)
+    }
+
     private var streamingChunkDurationSeconds: Double {
         let selectedModel = SettingsStore.shared.selectedSpeechModel
-        if selectedModel == .parakeetTDT || selectedModel == .parakeetTDTv2,
-           SettingsStore.shared.parakeetFinalizationMode == .tokenTimedChunkMerge
-        {
-            return 0.4
-        }
         return selectedModel.streamingPreviewIntervalSeconds
     }
 
@@ -614,17 +2223,71 @@ final class ASRService: ObservableObject {
 
     /// Handles AVAudioEngine tap processing off the @MainActor to avoid touching main-actor state
     /// from CoreAudio's realtime callback thread.
-    private lazy var audioCapturePipeline: AudioCapturePipeline = .init(
-        audioBuffer: self.audioBuffer,
-        onLevel: { [weak self] level in
-            // Keep Combine sends on the main queue.
-            DispatchQueue.main.async { [weak self] in
-                self?.audioLevelSubject.send(level)
+    private lazy var audioCapturePipeline: AudioCapturePipeline = {
+        let readinessGate = self.audioCaptureReadinessGate
+        return AudioCapturePipeline(
+            audioBuffer: self.audioBuffer,
+            onFirstAudio: { sessionID, attemptID, sampleCount, frameLength, sampleRate, acquisitionMs, elapsedMs in
+                // This gate is lock-protected. Signal from the capture worker;
+                // a Task created here inherits MainActor and can wait behind UI work.
+                readinessGate.signalFirstPCM(
+                    sessionID: sessionID,
+                    attemptID: attemptID
+                )
+                DispatchQueue.main.async {
+                    let bufferMs = Int((Double(frameLength) / sampleRate * 1000).rounded())
+                    DebugLogger.shared.benchmark(
+                        "ASR_BENCH",
+                        message: "session=\(sessionID) attempt=\(attemptID) " +
+                            "first_audio sampleCount=\(sampleCount) frameLength=\(frameLength) " +
+                            "sampleRate=\(Int(sampleRate.rounded())) bufferMs=\(bufferMs) " +
+                            "acquisitionMs=\(acquisitionMs) elapsedMs=\(elapsedMs)",
+                        source: "ASRBenchmark"
+                    )
+                }
+            },
+            onLevel: { [weak self] level in
+                // Keep Combine sends on the main queue.
+                DispatchQueue.main.async { [weak self] in
+                    self?.audioLevelSubject.send(level)
+                }
+            },
+            onCaptureHealth: { [weak self] sessionID, attemptID, audioMs, sampleCount, rms, peak in
+                DispatchQueue.main.async { [weak self] in
+                    guard let self else { return }
+                    guard sessionID == self.benchmarkSessionID,
+                          self.isRunning,
+                          self.isStoppingFinalTranscription == false
+                    else { return }
+                    let silent = rms < 0.002 && peak < 0.01
+                    self.benchmarkLog(
+                        "capture_health attempt=\(attemptID) audioMs=\(audioMs) " +
+                            "samples=\(sampleCount) rms=\(String(format: "%.6f", rms)) " +
+                            "peak=\(String(format: "%.6f", peak)) silent=\(silent) " +
+                            "inputUID=\(self.audioStartAttemptInputUID ?? "unknown")"
+                    )
+                    if self.silentPCMRecoveryWatchdog.shouldRecover(
+                        isInternalMicrophone: self.audioStartAttemptIsInternalMicrophone,
+                        isDirectCapture: self.activeAudioCaptureBackend == .directCoreAudio,
+                        rms: rms,
+                        peak: peak
+                    ) {
+                        self.benchmarkLog(
+                            "capture_health_recovery_triggered attempt=\(attemptID) " +
+                                "audioMs=\(audioMs) rms=\(String(format: "%.6f", rms)) " +
+                                "peak=\(String(format: "%.6f", peak))"
+                        )
+                        self.scheduleAudioRouteRecovery(reason: "sustained silent PCM")
+                    }
+                }
             }
-        }
-    )
+        )
+    }()
 
-    init() {
+    private let meetingModelResidency: MeetingModelResidencyCoordinator
+
+    init(meetingModelResidency: MeetingModelResidencyCoordinator = .shared) {
+        self.meetingModelResidency = meetingModelResidency
         // CRITICAL FIX: Do NOT call any framework-triggering APIs here!
         // This includes:
         // - AVCaptureDevice.authorizationStatus (triggers AVFCapture/CoreAudio)
@@ -646,6 +2309,26 @@ final class ASRService: ObservableObject {
                 self?.handleParakeetVocabularyDidChange()
             }
         }
+        self.clamshellStateChangeObserver = NotificationCenter.default.addObserver(
+            forName: .clamshellStateDidChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            let isClosed = notification.userInfo?["isClosed"] as? Bool ?? ClamshellState.isClosed
+            Task { @MainActor [weak self] in
+                self?.handleClamshellStateChanged(isClosed: isClosed)
+            }
+        }
+        self.inputDeviceAvailabilityChangeObserver = NotificationCenter.default.addObserver(
+            forName: .inputDeviceAvailabilityDidChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            let deviceID = notification.userInfo?["deviceID"] as? AudioObjectID
+            Task { @MainActor [weak self] in
+                self?.handleInputDeviceAvailabilityChanged(deviceID: deviceID)
+            }
+        }
     }
 
     deinit {
@@ -655,6 +2338,53 @@ final class ASRService: ObservableObject {
         if let observer = self.engineConfigurationChangeObserver {
             NotificationCenter.default.removeObserver(observer)
         }
+        if let observer = self.clamshellStateChangeObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        if let observer = self.inputDeviceAvailabilityChangeObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+    }
+
+    private func handleClamshellStateChanged(isClosed: Bool) {
+        DebugLogger.shared.info(
+            "Clamshell \(isClosed ? "closed" : "opened"); refreshing microphone availability",
+            source: "ASRService"
+        )
+        self.scheduleAudioRouteRecovery(
+            reason: isClosed ? "clamshell closed" : "clamshell opened",
+            requiresIdlePrewarm: true,
+            reconcilesInputSelection: true
+        )
+    }
+
+    private func handleInputDeviceAvailabilityChanged(deviceID: AudioObjectID?) {
+        let resolvedInput = AppServices.shared.microphonePreferenceCoordinator.inputDeviceForCapture()
+        let preparedDeviceID = self.directAudioLifecycleController.snapshot.deviceID
+        let confirmedUID = AppServices.shared.microphonePreferenceCoordinator.confirmedActiveInputUID
+        let activeSelectionChanged = self.isRunning && resolvedInput?.uid != confirmedUID
+        let preparedSelectionChanged = self.hasPreparedAudioCapture && resolvedInput?.id != preparedDeviceID
+        guard activeSelectionChanged || preparedSelectionChanged else { return }
+
+        self.scheduleAudioRouteRecovery(
+            reason: "input availability changed:\(deviceID ?? 0)",
+            requiresIdlePrewarm: true,
+            reconcilesInputSelection: true
+        )
+    }
+
+    @MainActor
+    func handleSettingsBackupDidRestore() {
+        // BackupService calls this synchronously while settingsRestore holds admission.
+        // Its release consumes the pending reset before a new capture can enter.
+        // Downloaded model files remain intact.
+        self.resetTranscriptionProvider()
+        SpeechModelInstallationSnapshot.shared.refresh()
+        self.scheduleAudioRouteRecovery(
+            reason: "settings backup restored",
+            requiresIdlePrewarm: true,
+            reconcilesInputSelection: true
+        )
     }
 
     @MainActor
@@ -728,17 +2458,48 @@ final class ASRService: ObservableObject {
 
     /// Call this AFTER the app has finished launching to complete ASR initialization.
     /// This must be called from onAppear or later, never during init.
-    func initialize() {
+    func initialize() async {
+        let warmupGeneration = self.meetingModelResidency.warmupGeneration
+        await AudioStartupGate.shared.scheduleOpenAfterInitialUISettled()
+        await AudioStartupGate.shared.waitUntilOpen()
+        guard self.isTerminating == false else { return }
+
         // Check microphone permission (deferred from init to avoid AVFCapture race condition)
         self.micStatus = AVCaptureDevice.authorizationStatus(for: .audio)
         self.micPermissionGranted = (self.micStatus == .authorized)
+
+        let initialInputSnapshot = await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let devices = AudioDevice.listInputDevicesRefreshingLiveness(diagnosticsOwner: .asrService)
+                let defaultInputUID = AudioDevice.getDefaultInputDevice()?.uid
+                continuation.resume(returning: (devices, defaultInputUID))
+            }
+        }
+        guard self.isTerminating == false else { return }
+
+        let microphonePreferenceCoordinator = AppServices.shared.microphonePreferenceCoordinator
+        microphonePreferenceCoordinator.reconcileMicrophoneSelection(
+            availableInputs: initialInputSnapshot.0,
+            defaultInputUID: initialInputSnapshot.1
+        )
 
         self.registerDefaultDeviceChangeListener()
         self.registerEngineConfigurationChangeObserver()
         self.registerDeviceListChangeListener()
 
         // Initialize device list cache
-        self.cacheCurrentDeviceList(AudioDevice.listInputDevices())
+        self.cacheCurrentDeviceList(initialInputSnapshot.0)
+        if microphonePreferenceCoordinator.needsMicrophonePriorityMigration {
+            self.scheduleAudioRouteRecovery(
+                reason: "app microphone migration pending",
+                requiresIdlePrewarm: true,
+                reconcilesInputSelection: true
+            )
+        }
+
+        // Register the input callback and allocate its fixed ring now. This
+        // does not start the device or show the microphone privacy indicator.
+        await self.prewarmConfiguredAudioCaptureIfPossible(reason: "startup")
 
         // Check if models exist on disk and auto-load if present
         // This is done in a Task to support async model detection (e.g., AppleSpeechAnalyzerProvider)
@@ -749,11 +2510,12 @@ final class ASRService: ObservableObject {
             await self.checkIfModelsExistAsync()
 
             // Auto-load models if they exist on disk to avoid "Downloaded but not loaded" state
-            if self.modelsExistOnDisk {
+            if self.modelsExistOnDisk, self.meetingModelResidency.canRunWarmup(warmupGeneration) {
                 DebugLogger.shared.info("Models found on disk, auto-loading...", source: "ASRService")
                 do {
                     try await self.ensureAsrReady()
                     DebugLogger.shared.info("Models auto-loaded successfully on startup", source: "ASRService")
+                    await self.prewarmConfiguredAudioCaptureIfPossible(reason: "startup")
                 } catch {
                     DebugLogger.shared.error("Failed to auto-load models on startup: \(error)", source: "ASRService")
                 }
@@ -789,6 +2551,8 @@ final class ASRService: ObservableObject {
             } else {
                 exists = self.getAppleSpeechProvider().modelsExistOnDisk()
             }
+        } else if model == .fluidParakeetMini || model == .fluidParakeetPico {
+            exists = (try? await self.modelArtifactsExist(provider: self.transcriptionProvider)) ?? false
         } else {
             exists = model.isInstalled
         }
@@ -804,13 +2568,202 @@ final class ASRService: ObservableObject {
     }
 
     func requestMicAccess() {
-        AVCaptureDevice.requestAccess(for: .audio) { [weak self] granted in
-            guard let self = self else { return }
-            Task { @MainActor in
-                self.micPermissionGranted = granted
-                self.micStatus = granted ? .authorized : .denied
+        guard self.isRequestingMicrophoneAccess == false else { return }
+        self.isRequestingMicrophoneAccess = true
+        Task { @MainActor [weak self] in
+            await AudioStartupGate.shared.scheduleOpenAfterInitialUISettled()
+            await AudioStartupGate.shared.waitUntilOpen()
+            guard let self else { return }
+            guard self.isTerminating == false else {
+                self.isRequestingMicrophoneAccess = false
+                return
+            }
+
+            AVCaptureDevice.requestAccess(for: .audio) { [weak self] granted in
+                guard let self else { return }
+                Task { @MainActor in
+                    self.isRequestingMicrophoneAccess = false
+                    self.micPermissionGranted = granted
+                    self.micStatus = granted ? .authorized : .denied
+                    if granted {
+                        await self.prewarmConfiguredAudioCaptureIfPossible(reason: "permission_granted")
+                    }
+                }
             }
         }
+    }
+
+    func startMicrophonePreview() async {
+        guard self.micStatus == .authorized,
+              self.isRunning == false,
+              self.isStarting == false,
+              self.activeExclusiveActivity != .meeting,
+              self.activeExclusiveActivity != .settingsRestore,
+              self.isTerminating == false
+        else { return }
+
+        self.microphonePreviewOperationGeneration &+= 1
+        let operationGeneration = self.microphonePreviewOperationGeneration
+        self.isMicrophonePreviewRequested = true
+
+        if self.isMicrophonePreviewActive || self.audioCapturePipeline.isLevelMonitoringEnabled {
+            self.audioCapturePipeline.setLevelMonitoringEnabled(false)
+            _ = await self.directAudioLifecycleController.stop(
+                retainPrepared: false,
+                reason: "onboarding_microphone_preview_restart"
+            )
+            guard operationGeneration == self.microphonePreviewOperationGeneration,
+                  self.isMicrophonePreviewRequested,
+                  self.isRunning == false,
+                  self.isStarting == false,
+                  self.activeExclusiveActivity != .meeting,
+                  self.activeExclusiveActivity != .settingsRestore,
+                  self.isTerminating == false,
+                  Task.isCancelled == false
+            else {
+                self.abandonMicrophonePreviewRequestIfOwned(operationGeneration)
+                return
+            }
+            self.activeAudioCaptureBackend = .none
+            self.isMicrophonePreviewActive = false
+            self.audioLevelSubject.send(0)
+        }
+
+        self.audioEngineStandbyTask?.cancel()
+        self.audioEngineStandbyTask = nil
+        await self.audioEngineRetirementDrain.waitForScheduledReleases()
+        guard operationGeneration == self.microphonePreviewOperationGeneration,
+              self.isMicrophonePreviewRequested,
+              self.isRunning == false,
+              self.isStarting == false,
+              self.activeExclusiveActivity != .meeting,
+              self.activeExclusiveActivity != .settingsRestore,
+              self.isTerminating == false,
+              Task.isCancelled == false
+        else {
+            self.abandonMicrophonePreviewRequestIfOwned(operationGeneration)
+            return
+        }
+        self.microphonePreviewError = nil
+        self.audioCapturePipeline.setLevelMonitoringEnabled(true)
+
+        do {
+            guard let selection = self.directCoreAudioDeviceSelection() else {
+                throw NSError(
+                    domain: "ASRService",
+                    code: -4,
+                    userInfo: [NSLocalizedDescriptionKey: "No usable microphone is available."]
+                )
+            }
+            let device = try await self.directAudioLifecycleController.resolveDevice(
+                selection: selection,
+                reason: "onboarding_microphone_preview"
+            )
+            try Task.checkCancellation()
+            guard operationGeneration == self.microphonePreviewOperationGeneration,
+                  self.isRunning == false,
+                  self.isStarting == false,
+                  self.activeExclusiveActivity != .meeting,
+                  self.activeExclusiveActivity != .settingsRestore,
+                  self.isTerminating == false
+            else { throw CancellationError() }
+            _ = try await self.directAudioLifecycleController.start(
+                deviceID: device.id,
+                deviceName: device.name,
+                reason: "onboarding_microphone_preview"
+            )
+            try Task.checkCancellation()
+            guard operationGeneration == self.microphonePreviewOperationGeneration,
+                  self.isRunning == false,
+                  self.isStarting == false,
+                  self.activeExclusiveActivity != .meeting,
+                  self.activeExclusiveActivity != .settingsRestore,
+                  self.isTerminating == false
+            else { throw CancellationError() }
+            self.activeAudioCaptureBackend = .directCoreAudio
+            self.isMicrophonePreviewActive = true
+            DebugLogger.shared.info(
+                "Started onboarding microphone preview with '\(device.name)'",
+                source: "ASRService"
+            )
+        } catch {
+            // A newer preview, page-exit stop, or dictation start owns cleanup
+            // after invalidating this operation. Do not tear down its capture.
+            guard operationGeneration == self.microphonePreviewOperationGeneration else {
+                return
+            }
+            self.audioCapturePipeline.setLevelMonitoringEnabled(false)
+            await self.directAudioLifecycleController.invalidate(
+                reason: "onboarding_microphone_preview_failed"
+            )
+            self.activeAudioCaptureBackend = .none
+            self.isMicrophonePreviewActive = false
+            self.isMicrophonePreviewRequested = false
+            self.microphonePreviewError = error is CancellationError ? nil : error.localizedDescription
+            guard error is CancellationError == false else { return }
+            DebugLogger.shared.warning(
+                "Onboarding microphone preview failed: \(error.localizedDescription)",
+                source: "ASRService"
+            )
+        }
+    }
+
+    func stopMicrophonePreview(retainPreparedCapture: Bool = true) async {
+        self.microphonePreviewOperationGeneration &+= 1
+        let operationGeneration = self.microphonePreviewOperationGeneration
+        self.isMicrophonePreviewRequested = false
+        self.microphonePreviewError = nil
+        guard self.isMicrophonePreviewActive || self.audioCapturePipeline.isLevelMonitoringEnabled else {
+            return
+        }
+
+        self.audioCapturePipeline.setLevelMonitoringEnabled(false)
+        _ = await self.directAudioLifecycleController.stop(
+            retainPrepared: retainPreparedCapture,
+            reason: "onboarding_microphone_preview_stop"
+        )
+        guard operationGeneration == self.microphonePreviewOperationGeneration else { return }
+        self.activeAudioCaptureBackend = .none
+        self.isMicrophonePreviewActive = false
+        self.audioLevelSubject.send(0)
+    }
+
+    private func abandonMicrophonePreviewRequestIfOwned(_ operationGeneration: UInt64) {
+        guard operationGeneration == self.microphonePreviewOperationGeneration else { return }
+        self.isMicrophonePreviewRequested = false
+        self.audioCapturePipeline.setLevelMonitoringEnabled(false)
+        self.activeAudioCaptureBackend = .none
+        self.isMicrophonePreviewActive = false
+        self.microphonePreviewError = nil
+        self.audioLevelSubject.send(0)
+    }
+
+    private func handOffMicrophonePreviewToCaptureStartIfNeeded() -> Bool {
+        guard self.isMicrophonePreviewRequested ||
+            self.isMicrophonePreviewActive ||
+            self.audioCapturePipeline.isLevelMonitoringEnabled
+        else { return false }
+
+        // Invalidate preview ownership without stopping Core Audio. The direct
+        // lifecycle serializes any in-flight preview start, and recording can
+        // reuse the already-running input without losing opening PCM.
+        self.microphonePreviewOperationGeneration &+= 1
+        self.isMicrophonePreviewRequested = false
+        self.audioCapturePipeline.setLevelMonitoringEnabled(false)
+        self.isMicrophonePreviewActive = false
+        self.microphonePreviewError = nil
+        self.audioLevelSubject.send(0)
+        return true
+    }
+
+    private func stopHandedOffMicrophonePreviewAfterCancelledStart() async {
+        self.audioCapturePipeline.setRecordingEnabled(false)
+        _ = await self.directAudioLifecycleController.stop(
+            retainPrepared: true,
+            reason: "cancelled_microphone_preview_handoff"
+        )
+        self.activeAudioCaptureBackend = .none
+        self.audioLevelSubject.send(0)
     }
 
     func openSystemSettingsForMic() {
@@ -839,23 +2792,100 @@ final class ASRService: ObservableObject {
     /// ## Errors
     /// If audio session configuration fails, the method will silently fail
     /// and `isRunning` will remain `false`. Check the debug logs for details.
-    func start() async {
+    @discardableResult
+    func start(
+        forDictionaryTraining: Bool = false,
+        requiresPronunciation: Bool = true,
+        onCaptureStarted: (@MainActor () -> Void)? = nil
+    ) async -> AudioCaptureStartOutcome {
+        guard !forDictionaryTraining || !requiresPronunciation || DictionaryMatcherExperiment.sharedFeaturesEnabled else { return .failed }
         DebugLogger.shared.info("🎤 START() called - beginning recording session", source: "ASRService")
 
         guard self.micStatus == .authorized else {
             DebugLogger.shared.error("❌ START() blocked - mic not authorized", source: "ASRService")
-            return
+            return .failed
+        }
+        guard !self.recordingBufferHandoffGate.isRecovering else {
+            self.presentStreamingRecoveryError()
+            return .failed
         }
         guard self.isRunning == false, self.isStarting == false else {
             DebugLogger.shared.warning("⚠️ START() blocked - already running (started: \(self.isRunning), starting: \(self.isStarting))", source: "ASRService")
-            return
+            return .alreadyActive
+        }
+        guard self.isTerminating == false else {
+            DebugLogger.shared.warning("START() blocked - app is terminating", source: "ASRService")
+            return .failed
+        }
+        do {
+            self.dictationActivityLease = try self.acquireExclusiveActivity(.dictation)
+        } catch {
+            let message = error.localizedDescription
+            self.errorTitle = "Dictation Unavailable"
+            self.errorMessage = message
+            self.showError = true
+            DebugLogger.shared.warning("START() blocked - \(message)", source: "ASRService")
+            return .failed
+        }
+        self.retainDictionaryLearningRecording(nil)
+        self.audioCaptureStartGeneration &+= 1
+        let startGeneration = self.audioCaptureStartGeneration
+        self.isStarting = true
+        // Spelling-only training owns the same isolated capture, without requiring voice matching.
+        self.isPronunciationTrainingStart = forDictionaryTraining && requiresPronunciation
+        self.pronunciationTrainingStartGeneration = self.isPronunciationTrainingStart ? DictionaryMatcherExperiment.generation : nil
+        defer {
+            self.pronunciationTrainingStartGeneration = nil
+            self.isPronunciationTrainingStart = false
+            self.finishAudioCaptureStart()
         }
 
-        // Reset media pause state for this session
-        self.didPauseMediaForThisSession = false
-        self.audioRouteRecoveryTask?.cancel()
-        self.audioRouteRecoveryTask = nil
-        self.isRecoveringAudioRoute = false
+        // A prior stop may already have disabled capture while its final live-preview
+        // operation still owns the shared PCM buffer. Reserve this start immediately,
+        // but do not clear or enable the buffer until that bounded handoff completes.
+        while self.recordingBufferHandoffGate.isActive {
+            await self.recordingBufferHandoffGate.waitUntilAvailable()
+            guard !self.recordingBufferHandoffGate.isRecovering else {
+                self.presentStreamingRecoveryError()
+                return .failed
+            }
+            guard startGeneration == self.audioCaptureStartGeneration,
+                  self.isTerminating == false,
+                  self.isPronunciationTrainingStartCurrent
+            else {
+                DebugLogger.shared.debug(
+                    "Audio capture start cancelled while waiting for the previous buffer handoff",
+                    source: "ASRService"
+                )
+                return .failed
+            }
+        }
+
+        self.audioCapturePipeline.resetDictationMute()
+        self.audioCapturePipeline.setDictationMuted(self.isDictationMuted, at: mach_absolute_time())
+
+        // Reserve the start before relinquishing preview ownership so a
+        // press-and-hold release can cancel the handoff. Keep the running input
+        // alive; startConfiguredAudioCapture reuses it for zero-stop first PCM.
+        let handedOffMicrophonePreview = self.handOffMicrophonePreviewToCaptureStartIfNeeded()
+
+        self.audioEngineStandbyTask?.cancel()
+        self.audioEngineStandbyTask = nil
+        await self.waitForPendingAudioRouteRecoveryBeforeStart()
+        guard startGeneration == self.audioCaptureStartGeneration,
+              self.isTerminating == false,
+              self.isPronunciationTrainingStartCurrent
+        else {
+            if handedOffMicrophonePreview {
+                await self.stopHandedOffMicrophonePreviewAfterCancelledStart()
+            }
+            DebugLogger.shared.debug(
+                "Audio capture start cancelled during route handoff generation=\(startGeneration)",
+                source: "ASRService"
+            )
+            self.releaseDictationActivityIfNeeded()
+            return .failed
+        }
 
         DebugLogger.shared.debug("🧹 Clearing buffers and state", source: "ASRService")
         self.finalText.removeAll()
@@ -867,80 +2897,312 @@ final class ASRService: ObservableObject {
         self.isProcessingChunk = false
         self.skipNextChunk = false
         self.benchmarkSessionID += 1
+        self.streamingWorkState.beginSession(self.benchmarkSessionID)
+        self.streamingHealthCheckCount = 0
+        self.streamingHealthLastBufferCount = 0
+        self.silentPCMRecoveryWatchdog = AudioCaptureIdlePolicy.SilentPCMRecoveryWatchdog()
+        let captureSessionID = self.benchmarkSessionID
+        // Start media work alongside microphone startup; never await it on the
+        // capture path. Track only this start so cancelling a buffer-handoff wait
+        // cannot finish the previous session's still-running transcription.
+        self.pendingMediaCaptureSessionID = captureSessionID
+        defer { self.pendingMediaCaptureSessionID = nil }
+        self.mediaPlaybackService.recordingStarted(
+            sessionID: captureSessionID,
+            enabled: SettingsStore.shared.pauseMediaDuringTranscription
+        )
+        self.audioCaptureAttemptID &+= 1
+        var readinessAttemptID = self.audioCaptureAttemptID
+        self.audioCaptureReadinessGate.arm(
+            sessionID: captureSessionID,
+            attemptID: readinessAttemptID
+        )
         self.benchmarkRecordingStartedAt = Date().timeIntervalSince1970
         self.benchmarkStreamingChunkIndex = 0
         self.benchmarkCompletedStreamingChunks = 0
         self.benchmarkLastChunkSampleCount = 0
-        self.streamingChunkAnalyticsSuccessCount = 0
-        self.lastStreamingChunkFailureAnalyticsAt = nil
         (self.transcriptionProvider as? FluidAudioProvider)?.resetStreamingPreviewCache()
-        self.audioCapturePipeline.setRecordingEnabled(true)
+        self.audioCapturePipeline.setRecordingEnabled(
+            true,
+            sessionID: captureSessionID,
+            attemptID: readinessAttemptID,
+            startHostTime: mach_absolute_time()
+        )
         self.refreshWordBoostStatus()
         let dims = self.currentTranscriptionAnalyticsDimensions()
         self.benchmarkLog("recording_start model=\(dims.model) provider=\(dims.provider) supportsStreaming=\(SettingsStore.shared.selectedSpeechModel.supportsStreaming)")
         DebugLogger.shared.debug("✅ Buffers cleared", source: "ASRService")
 
-        self.isStarting = true
-        defer { self.isStarting = false }
+        self.isDictionaryTrainingCaptureActive = false
 
         do {
-            DebugLogger.shared.debug("⚙️ Calling configureSession()...", source: "ASRService")
-            try self.configureSession()
-            DebugLogger.shared.debug("✅ configureSession() completed", source: "ASRService")
-
-            DebugLogger.shared.debug("🚀 Calling startEngine()...", source: "ASRService")
-            try self.startEngine()
-            DebugLogger.shared.debug("✅ startEngine() completed", source: "ASRService")
-
-            DebugLogger.shared.debug("🎧 Setting up engine tap...", source: "ASRService")
-            try self.setupEngineTap()
-            DebugLogger.shared.debug("✅ Engine tap setup complete", source: "ASRService")
-
-            // Pause system media AFTER successful audio setup but BEFORE setting isRunning
-            // This ensures we only pause media when we know recording will succeed
-            if SettingsStore.shared.pauseMediaDuringTranscription {
-                let didPause = await MediaPlaybackService.shared.pauseIfPlaying()
-                self.didPauseMediaForThisSession = didPause
-                if didPause {
-                    DebugLogger.shared.info("🎵 Paused system media for transcription", source: "ASRService")
+            var maximumStartAttempts = 1
+            var hasReadInputSnapshot = false
+            var startAttempt = 1
+            var fallbackAttempt = 1
+            var failedInputUIDs = Set<String>()
+            var immediatelyRetriedInputUID: String?
+            var bluetoothStabilization = AudioCaptureIdlePolicy.BluetoothInputStabilization()
+            var forcedInputUID: String?
+            self.audioStartAttemptInputUID = nil
+            while true {
+                try self.checkCaptureStartGeneration(startGeneration)
+                let routeGenerationAtStart = self.audioRouteRecoveryGeneration
+                do {
+                    try await self.startCancellableAudioCapture(
+                        excluding: failedInputUIDs,
+                        forcingInputUID: forcedInputUID,
+                        onInputSnapshotRead: { inputCount in
+                            guard hasReadInputSnapshot == false else { return }
+                            // Freeze a bounded budget from the same fresh snapshot
+                            // that selected the first input, including one retry.
+                            hasReadInputSnapshot = true
+                            maximumStartAttempts = max(inputCount, 1) + 1
+                        }
+                    )
+                } catch {
+                    try self.checkCaptureStartGeneration(startGeneration)
+                    guard error is BoundedAudioHardwareQueue.Failure == false,
+                          error is CancellationError == false,
+                          self.directAudioLifecycleController.isRecoveringHardware == false
+                    else { throw error }
+                    guard let failedUID = self.audioStartAttemptInputUID else { throw error }
+                    let now = ProcessInfo.processInfo.systemUptime
+                    let retryBluetoothInput = bluetoothStabilization.shouldRetry(
+                        inputUID: failedUID,
+                        isBluetoothInput: self.audioStartAttemptIsBluetooth,
+                        now: now
+                    )
+                    let retrySameInput = retryBluetoothInput || immediatelyRetriedInputUID == nil
+                    if retryBluetoothInput {
+                        forcedInputUID = failedUID
+                        immediatelyRetriedInputUID = failedUID
+                        self.logBluetoothStartupRetry(
+                            uid: failedUID,
+                            attempt: startAttempt + 1,
+                            elapsed: bluetoothStabilization.elapsed(at: now),
+                            reason: error.localizedDescription
+                        )
+                    } else {
+                        forcedInputUID = nil
+                        if bluetoothStabilization.inputUID == failedUID {
+                            self.logBluetoothStartupStabilizationEnded(
+                                uid: failedUID,
+                                elapsed: bluetoothStabilization.elapsed(at: now),
+                                outcome: "budget_exhausted"
+                            )
+                        }
+                        if immediatelyRetriedInputUID == nil {
+                            immediatelyRetriedInputUID = failedUID
+                        } else {
+                            failedInputUIDs.insert(failedUID)
+                        }
+                        fallbackAttempt += 1
+                    }
+                    guard retryBluetoothInput || fallbackAttempt <= maximumStartAttempts,
+                          startGeneration == self.audioCaptureStartGeneration,
+                          self.isTerminating == false,
+                          self.isPronunciationTrainingStartCurrent
+                    else {
+                        throw error
+                    }
+                    readinessAttemptID = try await self.prepareAudioCaptureStartRetry(
+                        sessionID: captureSessionID,
+                        startGeneration: startGeneration,
+                        completedAttempt: startAttempt,
+                        reason: "backend_start_error:\(error.localizedDescription)",
+                        waitForTopologyQuiet: retryBluetoothInput || retrySameInput == false
+                    )
+                    startAttempt += 1
+                    continue
                 }
+                try self.checkCaptureStartGeneration(startGeneration)
+                self.benchmarkLog(
+                    "first_pcm_wait_begin attempt=\(startAttempt) " +
+                        "attemptID=\(readinessAttemptID) " +
+                        "timeoutMs=\(self.firstPCMTimeoutNanoseconds / 1_000_000) " +
+                        "routeGeneration=\(routeGenerationAtStart) " +
+                        "captureGeneration=\(self.directAudioLifecycleController.snapshot.generation)"
+                )
+                let readiness = await self.audioCaptureReadinessGate.wait(
+                    sessionID: captureSessionID,
+                    attemptID: readinessAttemptID,
+                    timeoutNanoseconds: self.firstPCMTimeoutNanoseconds
+                )
+                try self.checkCaptureStartGeneration(startGeneration)
+                let routeStayedStable =
+                    routeGenerationAtStart == self.audioRouteRecoveryGeneration &&
+                    self.pendingAudioRouteRecovery == nil &&
+                    self.isRecoveringAudioRoute == false
+                if readiness == .ready, routeStayedStable {
+                    if let stabilizedUID = bluetoothStabilization.inputUID {
+                        self.logBluetoothStartupStabilizationEnded(
+                            uid: stabilizedUID,
+                            elapsed: bluetoothStabilization.elapsed(
+                                at: ProcessInfo.processInfo.systemUptime
+                            ),
+                            outcome: "first_pcm"
+                        )
+                    }
+                    AppServices.shared.microphonePreferenceCoordinator.confirmActiveSelection(
+                        uid: self.audioStartAttemptInputUID,
+                        name: self.audioStartAttemptInputName
+                    )
+                    self.benchmarkLog(
+                        "first_pcm_wait_end result=ready attempt=\(startAttempt) " +
+                            "attemptID=\(readinessAttemptID) " +
+                            "bufferedSamples=\(self.audioBuffer.count)"
+                    )
+                    break
+                }
+
+                self.benchmarkLog(
+                    "first_pcm_wait_end result=\(readiness) attempt=\(startAttempt) " +
+                        "attemptID=\(readinessAttemptID) " +
+                        "routeStable=\(routeStayedStable)"
+                )
+                if readiness == .cancelled {
+                    throw CancellationError()
+                }
+                var retrySameInput = false
+                var retryBluetoothInput = false
+                if let failedUID = self.audioStartAttemptInputUID {
+                    let now = ProcessInfo.processInfo.systemUptime
+                    retryBluetoothInput = bluetoothStabilization.shouldRetry(
+                        inputUID: failedUID,
+                        isBluetoothInput: self.audioStartAttemptIsBluetooth,
+                        now: now
+                    )
+                    retrySameInput = retryBluetoothInput || (
+                        readiness == .formatInvalidated && immediatelyRetriedInputUID == nil
+                    )
+                    if retryBluetoothInput {
+                        forcedInputUID = failedUID
+                        immediatelyRetriedInputUID = failedUID
+                        self.logBluetoothStartupRetry(
+                            uid: failedUID,
+                            attempt: startAttempt + 1,
+                            elapsed: bluetoothStabilization.elapsed(at: now),
+                            reason: "readiness_\(readiness)"
+                        )
+                    } else {
+                        forcedInputUID = nil
+                        if bluetoothStabilization.inputUID == failedUID {
+                            self.logBluetoothStartupStabilizationEnded(
+                                uid: failedUID,
+                                elapsed: bluetoothStabilization.elapsed(at: now),
+                                outcome: "budget_exhausted"
+                            )
+                        }
+                        if retrySameInput {
+                            immediatelyRetriedInputUID = failedUID
+                        } else {
+                            failedInputUIDs.insert(failedUID)
+                            fallbackAttempt += 1
+                        }
+                    }
+                }
+                guard retryBluetoothInput || fallbackAttempt <= maximumStartAttempts else {
+                    let message: String
+                    switch readiness {
+                    case .timedOut:
+                        message = "The selected microphone started but did not deliver audio."
+                    case .formatInvalidated:
+                        message = "The microphone format did not stabilize after reconnecting."
+                    case .staleSession:
+                        message = "Audio capture was replaced before the microphone became ready."
+                    case .cancelled:
+                        message = "Audio capture was cancelled."
+                    case .ready:
+                        message = "The microphone route changed before capture became stable."
+                    }
+                    throw NSError(
+                        domain: "ASRService",
+                        code: -2,
+                        userInfo: [NSLocalizedDescriptionKey: message]
+                    )
+                }
+
+                readinessAttemptID = try await self.prepareAudioCaptureStartRetry(
+                    sessionID: captureSessionID,
+                    startGeneration: startGeneration,
+                    completedAttempt: startAttempt,
+                    reason: "readiness_\(readiness)_routeStable_\(routeStayedStable)",
+                    waitForTopologyQuiet: retryBluetoothInput || retrySameInput == false
+                )
+                startAttempt += 1
             }
-
+            self.isDictionaryTrainingCaptureActive = forDictionaryTraining
             self.isRunning = true
-            DebugLogger.shared.info("✅ isRunning set to TRUE", source: "ASRService")
+            DebugLogger.shared.info(
+                "✅ Audio capture running after first PCM (session=\(captureSessionID))",
+                source: "ASRService"
+            )
+            onCaptureStarted?()
 
-            // Start monitoring the currently bound device for disconnection
-            if let currentDevice = getCurrentlyBoundInputDevice() {
+            // Direct capture already owns a required device-liveness listener
+            // on its off-main lifecycle queue.
+            if self.activeAudioCaptureBackend == .audioEngine,
+               let currentDevice = getCurrentlyBoundInputDevice()
+            {
                 DebugLogger.shared.debug("👀 Starting device monitoring for: \(currentDevice.name)", source: "ASRService")
                 self.startMonitoringDevice(currentDevice.id)
-            } else {
+            } else if self.activeAudioCaptureBackend == .audioEngine {
                 DebugLogger.shared.debug("ℹ️ No device to monitor", source: "ASRService")
             }
 
             // Only start streaming for models that support it (large Whisper models are too slow)
             let model = SettingsStore.shared.selectedSpeechModel
-            if model.supportsStreaming {
+            if model.supportsStreaming, !forDictionaryTraining {
                 DebugLogger.shared.debug("📡 Starting streaming transcription...", source: "ASRService")
                 self.benchmarkLog("streaming_timer_start intervalMs=\(Int((self.streamingChunkDurationSeconds * 1000).rounded())) minSamples=\(self.minimumStreamingPreviewSamples)")
                 self.startStreamingTranscription()
+            } else if forDictionaryTraining {
+                DebugLogger.shared.debug("⏸️ Skipping streaming for dictionary training sample", source: "ASRService")
             } else {
                 DebugLogger.shared.debug("⏸️ Skipping streaming - model '\(model.displayName)' does not support real-time chunk processing", source: "ASRService")
             }
             DebugLogger.shared.info("✅ START() completed successfully", source: "ASRService")
+            return .started
         } catch {
-            DebugLogger.shared.error("Failed to start ASR session: \(error)", source: "ASRService")
-
-            // Resume media if we paused it before the failure
-            if self.didPauseMediaForThisSession {
-                await MediaPlaybackService.shared.resumeIfWePaused(true)
-                self.didPauseMediaForThisSession = false
-                DebugLogger.shared.info("🎵 Resumed system media after start failure", source: "ASRService")
+            self.mediaPlaybackService.sessionFinished(sessionID: captureSessionID)
+            self.releaseDictationActivityIfNeeded()
+            await self.audioCaptureReadinessGate.cancel(
+                sessionID: captureSessionID,
+                attemptID: readinessAttemptID
+            )
+            self.isDictionaryTrainingCaptureActive = false
+            self.audioCapturePipeline.setRecordingEnabled(false)
+            self.isRunning = false
+            await self.stopActiveAudioCapture(
+                retainDirectPreparedCapture: false,
+                reason: "start_failed"
+            )
+            await self.retireAudioEngineAndWait(reason: "start_failed")
+            let wasCancelled =
+                error is CancellationError ||
+                startGeneration != self.audioCaptureStartGeneration ||
+                self.isTerminating
+            if wasCancelled {
+                DebugLogger.shared.info(
+                    "Audio capture start cancelled generation=\(startGeneration)",
+                    source: "ASRService"
+                )
+            } else {
+                DebugLogger.shared.error("Failed to start ASR session: \(error)", source: "ASRService")
             }
 
+            guard wasCancelled == false else { return .failed }
+            AppServices.shared.microphonePreferenceCoordinator.markActiveSelectionUnavailable()
+
             // Provide user-friendly error feedback
+            let nsError = error as NSError
+            let noUsableMicrophone = nsError.domain == "ASRService" && nsError.code == -4
             let errorMessage: String
-            if let nsError = error as NSError?, nsError.domain == "ASRService" {
-                if let underlyingError = nsError.userInfo[NSUnderlyingErrorKey] as? NSError {
+            if nsError.domain == "ASRService" {
+                if noUsableMicrophone {
+                    errorMessage = "No usable microphone is available. Open your MacBook or connect a microphone, then try again."
+                } else if let underlyingError = nsError.userInfo[NSUnderlyingErrorKey] as? NSError {
                     // Extract useful info from AVFoundation error
                     if underlyingError.domain == AVFoundationErrorDomain || underlyingError.domain == NSOSStatusErrorDomain {
                         errorMessage = "Failed to start audio recording. The audio device may be in use by another application or unavailable. Please check your audio settings and try again."
@@ -954,14 +3216,223 @@ final class ASRService: ObservableObject {
                 errorMessage = "Failed to start audio recording: \(error.localizedDescription)"
             }
 
-            // Post notification for UI to display
-            NotificationCenter.default.post(
-                name: NSNotification.Name("ASRServiceStartFailed"),
-                object: nil,
-                userInfo: ["errorMessage": errorMessage]
+            self.presentAudioCaptureFailure(
+                title: noUsableMicrophone ? "Microphone Unavailable" : "Recording Error",
+                message: errorMessage
             )
+            return .failed
         }
     }
+
+    func waitForPendingStart() async {
+        guard self.isStarting else { return }
+        await withCheckedContinuation { continuation in
+            if self.isStarting {
+                self.audioCaptureStartWaiters.append(continuation)
+            } else {
+                continuation.resume()
+            }
+        }
+    }
+
+    private func prepareAudioCaptureStartRetry(
+        sessionID: Int,
+        startGeneration: UInt64,
+        completedAttempt: Int,
+        reason: String,
+        waitForTopologyQuiet: Bool = true
+    ) async throws -> UInt64 {
+        self.audioCapturePipeline.setRecordingEnabled(false)
+        await self.directAudioLifecycleController.invalidate(
+            reason: "start_retry_attempt_\(completedAttempt):\(reason)"
+        )
+        // Invalidation retires the packet gate and drains accepted packets, so
+        // this clear cannot be followed by late PCM from the failed attempt.
+        self.audioBuffer.clear(keepingCapacity: true)
+        let routeRecoveryWasPending = self.audioRouteRecoveryTask != nil
+        await self.waitForPendingAudioRouteRecoveryBeforeStart()
+        guard startGeneration == self.audioCaptureStartGeneration,
+              self.isTerminating == false
+        else {
+            throw CancellationError()
+        }
+        if routeRecoveryWasPending == false, waitForTopologyQuiet {
+            try await Task.sleep(nanoseconds: self.audioRouteRecoveryDelayNanoseconds)
+        }
+        guard startGeneration == self.audioCaptureStartGeneration,
+              self.isTerminating == false
+        else {
+            throw CancellationError()
+        }
+
+        try self.checkCaptureStartGeneration(startGeneration)
+        self.audioCaptureAttemptID &+= 1
+        let attemptID = self.audioCaptureAttemptID
+        self.audioCaptureReadinessGate.arm(
+            sessionID: sessionID,
+            attemptID: attemptID
+        )
+        self.audioCapturePipeline.setRecordingEnabled(
+            true,
+            sessionID: sessionID,
+            attemptID: attemptID,
+            startHostTime: mach_absolute_time()
+        )
+        DebugLogger.shared.info(
+            "Retrying direct audio startup in the same session after \(reason) " +
+                "(nextAttempt=\(completedAttempt + 1))",
+            source: "ASRService"
+        )
+        return attemptID
+    }
+
+    private func logBluetoothStartupRetry(
+        uid: String,
+        attempt: Int,
+        elapsed: TimeInterval,
+        reason: String
+    ) {
+        let elapsedMilliseconds = Int((elapsed * 1000).rounded())
+        let admissionWindowMilliseconds = Int(
+            (AudioCaptureIdlePolicy.BluetoothInputStabilization.retryAdmissionWindow * 1000).rounded()
+        )
+        self.benchmarkLog(
+            "bluetooth_start_retry uid=\(uid) attempt=\(attempt) " +
+                "elapsedMs=\(elapsedMilliseconds) " +
+                "admissionWindowMs=\(admissionWindowMilliseconds) reason=\(reason)"
+        )
+    }
+
+    private func logBluetoothStartupStabilizationEnded(
+        uid: String,
+        elapsed: TimeInterval,
+        outcome: String
+    ) {
+        self.benchmarkLog(
+            "bluetooth_start_stabilization_end uid=\(uid) outcome=\(outcome) " +
+                "elapsedMs=\(Int((elapsed * 1000).rounded()))"
+        )
+    }
+
+    /// Recovery can be awaited by startup, so it must interrupt without waiting
+    /// for startup to finish. Keep task cancellation and media release together.
+    private func interruptPendingAudioCaptureStart() {
+        self.audioCaptureStartGeneration &+= 1
+        self.pendingAudioCaptureBackendStart?.cancel()
+        self.audioCapturePipeline.setRecordingEnabled(false)
+        self.directAudioLifecycleController.cancelPendingStartup()
+        if let sessionID = self.pendingMediaCaptureSessionID {
+            self.mediaPlaybackService.sessionFinished(sessionID: sessionID)
+        }
+        // A start waiting for the previous session's PCM handoff must wake to
+        // observe the generation change; the old stop keeps ownership of the gate.
+        self.recordingBufferHandoffGate.releasePendingWaiters()
+    }
+
+    func cancelPendingPronunciationTrainingStart() async {
+        guard self.isPronunciationTrainingStart else { return }
+        await self.cancelPendingAudioCaptureStart(reason: "pronunciation_disabled")
+    }
+
+    func cancelPendingAudioCaptureStart(reason: String) async {
+        guard self.isStarting, self.isRunning == false else { return }
+        self.interruptPendingAudioCaptureStart()
+        let cancelledSessionID = self.benchmarkSessionID
+        self.benchmarkLog(
+            "capture_start_cancel reason=\(reason) session=\(cancelledSessionID) " +
+                "generation=\(self.audioCaptureStartGeneration)"
+        )
+        await self.audioCaptureReadinessGate.cancel(
+            sessionID: cancelledSessionID,
+            attemptID: self.audioCaptureAttemptID
+        )
+        await self.waitForPendingStart()
+    }
+
+    private func finishAudioCaptureStart() {
+        self.isStarting = false
+        let deferredRecovery = self.deferredBluetoothStartupRouteRecovery.take()
+        self.audioCaptureStateDidSettle.send()
+        let waiters = self.audioCaptureStartWaiters
+        self.audioCaptureStartWaiters.removeAll(keepingCapacity: false)
+        waiters.forEach { $0.resume() }
+
+        if let deferredRecovery {
+            Task { @MainActor [weak self] in
+                await self?.processDeferredBluetoothStartupRouteRecovery(deferredRecovery)
+            }
+        }
+    }
+
+    private func processDeferredBluetoothStartupRouteRecovery(
+        _ request: AudioCaptureIdlePolicy.DeferredBluetoothRouteRecovery.Request
+    ) async {
+        do {
+            try await Task.sleep(nanoseconds: self.audioRouteRecoveryDelayNanoseconds)
+        } catch {
+            return
+        }
+        guard self.isTerminating == false else { return }
+
+        let snapshot = await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let devices = AudioDevice.listInputDevicesRefreshingLiveness(diagnosticsOwner: .asrService)
+                let defaultInputUID = AudioDevice.getDefaultInputDevice()?.uid
+                continuation.resume(returning: (devices, defaultInputUID))
+            }
+        }
+        guard self.isTerminating == false else { return }
+        if self.isStarting {
+            self.deferredBluetoothStartupRouteRecovery.preserve(
+                reason: request.reason,
+                requiresIdlePrewarm: request.requiresIdlePrewarm,
+                reconcilesInputSelection: request.reconcilesInputSelection
+            )
+            return
+        }
+
+        let microphonePreferenceCoordinator = AppServices.shared.microphonePreferenceCoordinator
+        let resolvedInput: AudioDevice.Device?
+        if request.reconcilesInputSelection {
+            resolvedInput = microphonePreferenceCoordinator.reconcileMicrophoneSelection(
+                availableInputs: snapshot.0,
+                defaultInputUID: snapshot.1
+            )
+        } else {
+            resolvedInput = microphonePreferenceCoordinator.inputDeviceForCapture(
+                availableInputs: snapshot.0,
+                defaultInputUID: snapshot.1
+            )
+        }
+        self.cacheCurrentDeviceList(snapshot.0)
+
+        let activeSnapshot = self.directAudioLifecycleController.snapshot
+        let shouldRecover = AudioCaptureIdlePolicy.shouldRecoverAfterDeferredBluetoothReconciliation(
+            isRunning: self.isRunning,
+            confirmedInputUID: microphonePreferenceCoordinator.confirmedActiveInputUID,
+            activeDeviceID: activeSnapshot.deviceID,
+            resolvedInputUID: resolvedInput?.uid,
+            resolvedDeviceID: resolvedInput?.id,
+            hasPreparedCapture: self.hasPreparedAudioCapture,
+            requiresIdlePrewarm: request.requiresIdlePrewarm
+        )
+        guard shouldRecover else {
+            self.benchmarkLog(
+                "bluetooth_deferred_reconciliation_noop event=\(request.reason) " +
+                    "resolvedUID=\(resolvedInput?.uid ?? "none")"
+            )
+            return
+        }
+
+        self.scheduleAudioRouteRecovery(
+            reason: "deferred after Bluetooth startup: \(request.reason)",
+            requiresIdlePrewarm: request.requiresIdlePrewarm,
+            reconcilesInputSelection: false
+        )
+    }
+
+    /// Identifies the protected dictionary capture so a dismissed test cannot stop a newer recording.
+    var dictionaryCaptureToken: Int? { self.isDictionaryTrainingCaptureActive ? self.benchmarkSessionID : nil }
 
     /// Stops the recording session and returns the transcribed text.
     ///
@@ -995,84 +3466,173 @@ final class ASRService: ObservableObject {
     ///   final transcription pass. Use this for immediate stop cues that
     ///   shouldn't wait on finalization. Only invoked when capture was actually
     ///   running (i.e. not when `stop()` early-returns because `isRunning` is false).
-    func stop(onCaptureStopped: (@MainActor () -> Void)? = nil) async -> String {
+    /// - Parameter onFinalTranscriptionStarted: Optional main-actor callback
+    ///   shown only when final transcription outlives the short status delay.
+    ///   Fast finalization proceeds without queuing transient UI work ahead of its result.
+    func stop(
+        onCaptureStopped: (@MainActor () -> Void)? = nil,
+        onFinalTranscriptionStarted: (@MainActor () -> Void)? = nil,
+        forDictionaryTraining: Bool = false,
+        captureDictionaryPronunciation: Bool? = nil,
+        forDictionaryTesting: Bool = false
+    ) async -> String {
+        guard !forDictionaryTesting || self.isDictionaryTrainingCaptureActive else { return "" }
         DebugLogger.shared.info("🛑 STOP() called - beginning shutdown sequence", source: "ASRService")
+        self.lastStopOutcome = .empty
+        self.lastFinalTranscriptionDurationMs = nil
+        self.lastFinalParakeetProcessingMs = nil
+        if forDictionaryTraining || self.isDictionaryTrainingCaptureActive {
+            self.lastDictionaryTrainingResult = nil
+        }
         self.lastCompletedAudioSnapshot = nil
+        self.retainDictionaryLearningRecording(nil)
         let stopStartedAt = Date().timeIntervalSince1970
+        let traceStartedAt = ProcessInfo.processInfo.systemUptime
+        var tracePreviousAt = traceStartedAt
+        func traceStop(_ phase: String) {
+            let now = ProcessInfo.processInfo.systemUptime
+            DebugLogger.shared.debug(
+                "STOP_TRACE phase=\(phase) deltaMs=\(Int((now - tracePreviousAt) * 1000)) totalMs=\(Int((now - traceStartedAt) * 1000))",
+                source: "StopTiming"
+            )
+            tracePreviousAt = now
+        }
+        defer { traceStop("stop_return") }
         self.benchmarkLog("stop_start ageMs=\(self.elapsedMilliseconds(since: self.benchmarkRecordingStartedAt)) bufferedSamples=\(self.audioBuffer.count)")
 
+        if self.isStarting, self.isRunning == false {
+            await self.cancelPendingAudioCaptureStart(reason: "recording_stop")
+        }
         guard self.isRunning else {
+            self.isDictionaryTrainingCaptureActive = false
+            self.releaseDictationActivityIfNeeded()
             DebugLogger.shared.warning("⚠️ STOP() - not running, returning empty string", source: "ASRService")
             return ""
         }
-        defer { self.applyPendingParakeetVocabularyReloadIfNeeded() }
+        let stoppingSessionID = self.benchmarkSessionID
+        guard let bufferHandoffToken = self.recordingBufferHandoffGate.begin() else {
+            DebugLogger.shared.warning("STOP() ignored - recording buffer handoff already active", source: "ASRService")
+            return ""
+        }
+        self.mediaPlaybackService.recordingStopped(sessionID: stoppingSessionID)
+        defer { self.mediaPlaybackService.sessionFinished(sessionID: stoppingSessionID) }
+        self.isStoppingFinalTranscription = true
+        var completedBufferHandoff = false
+        defer {
+            if completedBufferHandoff == false {
+                self.recordingBufferHandoffGate.complete(bufferHandoffToken)
+            }
+            self.publishStoppedState(for: stoppingSessionID)
+            self.finishDeferredStopUIInvalidation()
+            if self.benchmarkSessionID == stoppingSessionID {
+                self.isStoppingFinalTranscription = false
+            }
+        }
+        self.stopStreamingScheduler(sessionID: stoppingSessionID)
+        let isolatedDictionaryCapture = forDictionaryTraining || self.isDictionaryTrainingCaptureActive
+        // Tests use normal recognition and saved corrections, but never enroll or retain learning audio.
+        let useDictionaryTrainingPath = isolatedDictionaryCapture && !forDictionaryTesting
+        defer {
+            self.applyPendingParakeetVocabularyReloadIfNeeded()
+            self.isDictionaryTrainingCaptureActive = false
+            self.releaseDictationActivityIfNeeded()
+        }
 
-        self.audioRouteRecoveryTask?.cancel()
-        self.audioRouteRecoveryTask = nil
-        self.isRecoveringAudioRoute = false
-
-        // Capture media pause state before we reset it, for resuming at the end
-        let shouldResumeMedia = SettingsStore.shared.pauseMediaDuringTranscription && self.didPauseMediaForThisSession
-        self.didPauseMediaForThisSession = false // Reset for next session
+        traceStop("route_cleanup_begin")
+        await self.cancelAudioRouteRecoveryAndWait()
+        traceStop("route_cleanup_end")
+        guard self.isRunning, self.benchmarkSessionID == stoppingSessionID else {
+            self.recordingBufferHandoffGate.complete(bufferHandoffToken)
+            completedBufferHandoff = true
+            return ""
+        }
 
         DebugLogger.shared.debug("📍 Preparing final transcription", source: "ASRService")
 
-        DebugLogger.shared.debug("🚫 Setting audioCapturePipeline recording = false...", source: "ASRService")
-        self.audioCapturePipeline.setRecordingEnabled(false)
-        DebugLogger.shared.debug("✅ Capture pipeline disabled", source: "ASRService")
-
-        await self.runFastPreviewStopGraceIfNeeded()
-
-        // CRITICAL: Set isRunning to false before teardown so in-flight chunks stop safely.
-        DebugLogger.shared.debug("🚫 Setting isRunning = false...", source: "ASRService")
-        self.isRunning = false
-        DebugLogger.shared.debug("✅ isRunning disabled", source: "ASRService")
+        // Freeze an exact acquisition boundary before stopping hardware. The
+        // direct IOProc is synchronously drained and the pipeline trims the
+        // final hardware packet to this host time, preserving the last phoneme
+        // without appending audio from the next session.
+        self.audioCapturePipeline.markRecordingEnd(atHostTime: mach_absolute_time())
 
         // Stop monitoring device to prevent callbacks after stop
         DebugLogger.shared.debug("👁️ Stopping device monitoring...", source: "ASRService")
         self.stopMonitoringDevice()
         DebugLogger.shared.debug("✅ Device monitoring stopped", source: "ASRService")
 
-        // Stop the audio engine to stop new audio from coming in
-        DebugLogger.shared.debug("🎧 Removing engine tap...", source: "ASRService")
-        self.removeEngineTap()
-        DebugLogger.shared.debug("✅ Engine tap removed", source: "ASRService")
+        self.benchmarkLog("capture_stop_await_begin")
+        traceStop("capture_stop_begin")
+        await self.stopActiveAudioCapture(reason: "recording_stop")
+        traceStop("capture_stop_end")
+        self.benchmarkLog("capture_stop_await_return")
+        self.audioCapturePipeline.finishRecording()
+        self.benchmarkLog("capture_pipeline_finished")
 
-        DebugLogger.shared.debug("🛑 Calling engine.stop()...", source: "ASRService")
-        self.engine.stop()
-        DebugLogger.shared.debug("✅ Engine stopped", source: "ASRService")
+        // A prepared direct IOProc owns only fixed memory and registration; it
+        // does not run hardware, show the mic indicator, or hold Bluetooth in
+        // headset mode. Keep it prepared across idle periods. AVAudioEngine is
+        // detached immediately and released by the off-main serial drain so
+        // Bluetooth can return to stereo A2DP without delaying stop cues or
+        // transcription. The next capture waits on the drain before creating
+        // another engine.
+        if self.directAudioLifecycleController.snapshot.isPrepared {
+            self.audioEngineStandbyTask?.cancel()
+            self.audioEngineStandbyTask = nil
+            DebugLogger.shared.debug("♻️ Direct audio capture remains prepared", source: "ASRService")
+        } else {
+            self.retireAudioEngine(reason: "recording_stop_release")
+        }
 
         // Capture has fully ended — invoke the callback so callers can play a
         // stop cue or release capture-dependent UI without waiting on the
         // (potentially slow) final transcription pass.
-        await MainActor.run { onCaptureStopped?() }
+        self.benchmarkLog("capture_stopped_callback_request")
+        // stop() is MainActor-isolated; calling directly avoids needlessly
+        // yielding and re-enqueuing this callback behind unrelated UI work.
+        self.benchmarkLog("capture_stopped_callback_begin")
+        onCaptureStopped?()
+        self.benchmarkLog("capture_stopped_callback_end")
+        self.benchmarkLog("capture_stopped_callback_return")
 
-        // Recreate the engine instance instead of calling reset() to prevent format corruption
-        // VoiceInk approach: tearing down and rebuilding ensures fresh, valid audio format on restart
-        DebugLogger.shared.debug("🗑️ Deallocating old engine and creating fresh instance...", source: "ASRService")
-        self.engineStorage = nil // Explicitly release old engine
-        // New engine will be lazily created on next access via computed property
-        DebugLogger.shared.debug("✅ Engine instance recreated", source: "ASRService")
+        let directCaptureSnapshot = self.directAudioLifecycleController.snapshot
+        self.benchmarkLog(
+            "audio_capture_prepared retained=\(directCaptureSnapshot.isPrepared) " +
+                "phase=\(directCaptureSnapshot.phase.rawValue) generation=\(directCaptureSnapshot.generation)"
+        )
 
-        // CRITICAL FIX: Await completion of streaming task AND any pending transcriptions
-        // This prevents use-after-free crashes (EXC_BAD_ACCESS) when clearing buffer
-        DebugLogger.shared.debug("⏳ Awaiting stopStreamingTimerAndAwait()...", source: "ASRService")
+        // The idle scheduler was cancelled before teardown. Only real provider work
+        // can still own the PCM buffer here, so drain that operation without sending
+        // cancellation into incremental provider state.
+        DebugLogger.shared.debug("⏳ Awaiting active streaming work...", source: "ASRService")
         let streamingStopStartedAt = Date().timeIntervalSince1970
-        await self.stopStreamingTimerAndAwait()
+        traceStop("streaming_drain_begin")
+        guard await self.drainActiveStreamingWork(sessionID: stoppingSessionID) else {
+            self.beginStreamingDrainRecovery(sessionID: stoppingSessionID, token: bufferHandoffToken)
+            completedBufferHandoff = true // Recovery owns the PCM handoff until real work ends.
+            self.lastStopOutcome = .failed
+            self.benchmarkLog("stop_end result=error reason=streaming_drain_timeout")
+            return ""
+        }
         self.benchmarkLog("stop_streaming_wait elapsedMs=\(self.elapsedMilliseconds(since: streamingStopStartedAt))")
-        DebugLogger.shared.debug("✅ stopStreamingTimerAndAwait() completed", source: "ASRService")
+        traceStop("streaming_drain_end")
+        DebugLogger.shared.debug("✅ Active streaming work completed", source: "ASRService")
 
         self.isProcessingChunk = false
         self.skipNextChunk = false
         self.previousFullTranscription.removeAll()
-        self.streamingChunkAnalyticsSuccessCount = 0
-        self.lastStreamingChunkFailureAnalyticsAt = nil
 
         // NOW it's safe to access the buffer - all pending tasks have completed
         // Thread-safe copy of recorded audio
         var pcm = self.audioBuffer.getAll()
         self.audioBuffer.clear()
         let capturedPCM = pcm
+        traceStop("buffer_copied")
+        let hasRecognizedStreamingPreview = !self.partialTranscription
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .isEmpty
+        self.streamingWorkState.endSession(stoppingSessionID)
+        self.recordingBufferHandoffGate.complete(bufferHandoffToken)
+        completedBufferHandoff = true
         self.benchmarkLog("stop_audio_drained samples=\(pcm.count) audioMs=\(Int((Double(pcm.count) / 16_000.0 * 1000).rounded()))")
 
         // Drop recordings with no audio at all — nothing to transcribe.
@@ -1085,12 +3645,41 @@ final class ASRService: ObservableObject {
                 "Final ASR result | provider=\(self.transcriptionProvider.name) | samples=0 | textChars=0 | confidence=nil | reason=no_audio",
                 source: "ASRService"
             )
-            if shouldResumeMedia {
-                await MediaPlaybackService.shared.resumeIfWePaused(true)
-                DebugLogger.shared.info("🎵 Resumed system media after empty audio", source: "ASRService")
-            }
             self.benchmarkLog("stop_end result=empty totalMs=\(self.elapsedMilliseconds(since: stopStartedAt)) reason=no_audio")
             return ""
+        }
+
+        if Self.shouldAssessShortAudioSilence(
+            isEnabled: SettingsStore.shared.skipSilentRecordingsEnabled,
+            useDictionaryTrainingPath: useDictionaryTrainingPath,
+            hasRecognizedStreamingPreview: hasRecognizedStreamingPreview
+        ) {
+            let silenceGateStartedAt = ProcessInfo.processInfo.systemUptime
+            let silenceAssessment = Self.assessShortAudioSilence(pcm)
+            let silenceGateMicroseconds = Int(
+                ((ProcessInfo.processInfo.systemUptime - silenceGateStartedAt) * 1_000_000).rounded()
+            )
+            self.benchmarkLog(
+                "silence_gate eligible=\(silenceAssessment.isEligible) skip=\(silenceAssessment.shouldSkipTranscription) " +
+                    "audioMs=\(silenceAssessment.durationMilliseconds) analysisUs=\(silenceGateMicroseconds) " +
+                    "peak=\(String(format: "%.6f", silenceAssessment.peakAmplitude)) " +
+                    "rms=\(String(format: "%.6f", silenceAssessment.rmsAmplitude)) " +
+                    "maxFrameRms=\(String(format: "%.6f", silenceAssessment.maximumFrameRMS))"
+            )
+
+            if silenceAssessment.shouldSkipTranscription {
+                traceStop("silence_skipped")
+                DebugLogger.shared.info(
+                    "Final ASR result | provider=\(self.transcriptionProvider.name) | samples=\(pcm.count) | textChars=0 | confidence=nil | reason=short_silence",
+                    source: "ASRService"
+                )
+                self.benchmarkLog(
+                    "stop_end result=empty totalMs=\(self.elapsedMilliseconds(since: stopStartedAt)) reason=short_silence"
+                )
+                return ""
+            }
+        } else if hasRecognizedStreamingPreview {
+            self.benchmarkLog("silence_gate eligible=false skip=false reason=streaming_preview")
         }
 
         // Pad sub-1s buffers with trailing silence so short utterances (e.g.
@@ -1109,11 +3698,16 @@ final class ASRService: ObservableObject {
         }
 
         do {
+            traceStop("readiness_begin")
             var provider = self.transcriptionProvider
             let ensureStartedAt = Date().timeIntervalSince1970
             if self.isAsrReady, provider.isReady {
                 self.benchmarkLog("stop_ensure_ready skipped=true elapsedMs=0")
             } else {
+                // TODO: Investigate rapid restart while this cold-provider stop is pending (PR #950).
+                // A new recording may replace output context still read by the previous transcript.
+                // Not reproduced in-app; defer changes for now and preserve responsive restarts.
+                self.publishStoppedState(for: stoppingSessionID)
                 DebugLogger.shared.debug("🔍 Calling ensureAsrReady()...", source: "ASRService")
                 try await self.ensureAsrReady()
                 provider = self.transcriptionProvider
@@ -1123,32 +3717,81 @@ final class ASRService: ObservableObject {
 
             guard provider.isReady else {
                 DebugLogger.shared.error("Transcription provider is not ready", source: "ASRService")
-                // Resume media playback if we paused it
-                if shouldResumeMedia {
-                    await MediaPlaybackService.shared.resumeIfWePaused(true)
-                    DebugLogger.shared.info("🎵 Resumed system media after provider not ready", source: "ASRService")
-                }
+                self.lastStopOutcome = .failed
                 self.benchmarkLog("stop_end result=empty totalMs=\(self.elapsedMilliseconds(since: stopStartedAt)) reason=provider_not_ready")
                 return ""
             }
 
             DebugLogger.shared.debug("Starting transcription with \(pcm.count) samples (\(Float(pcm.count) / 16_000.0) seconds)", source: "ASRService")
             let finalStartedAt = Date().timeIntervalSince1970
+            traceStop("final_asr_begin")
             let result: ASRTranscriptionResult
             let finalSource: String
-            if let fluidProvider = provider as? FluidAudioProvider,
-               let cachedResult = await fluidProvider.transcribeCachedStreamingPreviewIfAvailable(pcm)
-            {
-                result = cachedResult
-                finalSource = "livePreview"
-                self.benchmarkLog("final_fast_preview_bypass hit=true")
-            } else {
+            if useDictionaryTrainingPath {
                 result = try await self.transcriptionExecutor.run { [provider] in
-                    try await provider.transcribeFinal(pcm)
+                    self.publishStoppedState(for: stoppingSessionID)
+                    if let captureDictionaryPronunciation {
+                        return try await provider.transcribeDictionaryTraining(pcm, capturePronunciation: captureDictionaryPronunciation)
+                    }
+                    return try await provider.transcribeDictionaryTraining(pcm)
                 }
+                var enrollment = result.pronunciationEnrollment
+                // Preserve the unpadded boundary alongside the exact model input.
+                enrollment?.pendingInspection?.recordedSampleCount = capturedPCM.count
+                self.lastDictionaryTrainingResult = ASRTranscriptionResult(
+                    text: result.text,
+                    confidence: result.confidence,
+                    pronunciationEnrollment: enrollment,
+                    dictionaryLearningAlignment: result.dictionaryLearningAlignment
+                )
+                finalSource = "dictionaryTraining"
+            } else {
+                let vocabularyProvider = provider as? FluidAudioProvider
+                self.benchmarkLog(
+                    "final_executor_request model=\(SettingsStore.shared.selectedSpeechModel.rawValue) " +
+                        "samples=\(pcm.count) vocabEnabled=\(vocabularyProvider?.isWordBoostingActive == true) " +
+                        "vocabTerms=\(vocabularyProvider?.boostedVocabularyTermsCount ?? 0)"
+                )
+                let delayedFinalStatusTask = scheduleDeferredMainActorOperation(
+                    afterNanoseconds: Self.finalTranscriptionStatusDelayNanoseconds,
+                    shouldRun: { [weak self] in self?.benchmarkSessionID == stoppingSessionID }
+                ) { [weak self] in
+                    guard let self else { return }
+                    self.publishStoppedState(for: stoppingSessionID)
+                    if let onFinalTranscriptionStarted {
+                        self.benchmarkLog("final_started_callback_begin trigger=delayed_status")
+                        onFinalTranscriptionStarted()
+                        self.benchmarkLog("final_started_callback_end trigger=delayed_status")
+                    }
+                }
+                defer { delayedFinalStatusTask.cancel() }
+                result = try await self.transcriptionExecutor.run(benchmarkSessionID: self.benchmarkSessionID) { [provider] in
+                    // The executor closure inherits main-actor isolation, so inference
+                    // and every await hop would otherwise run on or wait for the main
+                    // thread. Detach so the UI stays responsive during final ASR.
+                    try await Task.detached(priority: .userInitiated) {
+                        let executionStartedAt = ProcessInfo.processInfo.systemUptime
+                        DebugLogger.shared.debug("ASR_BENCH t=\(executionStartedAt) final_executor_begin mainThread=\(Thread.isMainThread)", source: "ASRBenchmark")
+                        defer {
+                            // Cancel here, not after the main-actor hop: the status
+                            // would otherwise fire while the result waits for main.
+                            delayedFinalStatusTask.cancel()
+                            DebugLogger.shared.debug("ASR_BENCH t=\(ProcessInfo.processInfo.systemUptime) final_executor_end", source: "ASRBenchmark")
+                        }
+                        return try await provider.transcribeFinal(pcm)
+                    }.value
+                }
+                delayedFinalStatusTask.cancel()
+                self.publishStoppedState(for: stoppingSessionID)
+                self.benchmarkLog("final_executor_return")
                 finalSource = "full"
             }
             let finalElapsedMs = self.elapsedMilliseconds(since: finalStartedAt)
+            traceStop("final_asr_end")
+            if !useDictionaryTrainingPath {
+                self.lastFinalTranscriptionDurationMs = finalElapsedMs
+                self.lastFinalParakeetProcessingMs = result.parakeetProcessingDurationMilliseconds
+            }
             let finalAudioSeconds = Double(pcm.count) / 16_000.0
             let finalRTF = finalAudioSeconds > 0 ? (Double(finalElapsedMs) / 1000.0) / finalAudioSeconds : 0
             DebugLogger.shared.debug("stop(): final transcription finished source=\(finalSource)", source: "ASRService")
@@ -1170,16 +3813,39 @@ final class ASRService: ObservableObject {
                 self.hasCompletedFirstTranscription = true
                 DispatchQueue.main.async {
                     self.isLoadingModel = false
+                    self.modelPreparationPhase = nil
                     DebugLogger.shared.info("✅ Model warmed up - first transcription completed", source: "ASRService")
                 }
             }
 
             // Do not update self.finalText here to avoid instant binding insert in playground
-            let cleanedText = ASRService.applyCustomDictionary(ASRService.removeFillerWords(result.text))
-            self.recordWordBoostHitIfAny(transcribedText: cleanedText)
-            DebugLogger.shared.debug("After post-processing: '\(cleanedText)'", source: "ASRService")
-            self.benchmarkLog("stop_end result=success totalMs=\(self.elapsedMilliseconds(since: stopStartedAt)) recordingAgeMs=\(self.elapsedMilliseconds(since: self.benchmarkRecordingStartedAt)) cleanedChars=\(cleanedText.count)")
-            if SettingsStore.shared.saveTranscriptionHistory,
+            if !isolatedDictionaryCapture, SettingsStore.shared.automaticDictionaryLearningEnabled || DictionaryMatcherExperiment.collectNegatives,
+               let alignment = result.dictionaryLearningAlignment
+            {
+                self.retainDictionaryLearningRecording(DictionaryLearningRecording(
+                    alignment: alignment,
+                    samples: capturedPCM,
+                    retainAudio: SettingsStore.shared.automaticDictionaryLearningEnabled
+                ))
+            }
+
+            let textWithoutFillers = ASRService.removeFillerWords(result.text)
+            let dictionaryText = useDictionaryTrainingPath
+                ? textWithoutFillers
+                : ASRService.applyCustomDictionary(textWithoutFillers)
+            let outputText = useDictionaryTrainingPath
+                ? dictionaryText
+                : ASRService.applySpokenPunctuationFormatting(dictionaryText)
+            if !isolatedDictionaryCapture {
+                self.recordWordBoostHitIfAny(transcribedText: outputText)
+            }
+            DebugLogger.shared.debug("After post-processing: '\(outputText)'", source: "ASRService")
+            self
+                .benchmarkLog(
+                    "stop_end result=success totalMs=\(self.elapsedMilliseconds(since: stopStartedAt)) recordingAgeMs=\(self.elapsedMilliseconds(since: self.benchmarkRecordingStartedAt)) cleanedChars=\(outputText.count)"
+                )
+            if !isolatedDictionaryCapture,
+               SettingsStore.shared.saveTranscriptionHistory,
                SettingsStore.shared.saveAudioWithTranscriptionHistory,
                !capturedPCM.isEmpty
             {
@@ -1190,14 +3856,16 @@ final class ASRService: ObservableObject {
                 )
             }
 
-            // Resume media playback if we paused it
-            if shouldResumeMedia {
-                await MediaPlaybackService.shared.resumeIfWePaused(true)
-                DebugLogger.shared.info("🎵 Resumed system media after transcription", source: "ASRService")
+            if !isolatedDictionaryCapture, capturedPCM.count <= 16_000 * 120 {
+                self.dictionaryTestAudioSubject.send(capturedPCM)
             }
 
-            return cleanedText
+            self.lastStopOutcome = outputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? .empty
+                : .success
+            return outputText
         } catch {
+            self.lastStopOutcome = .failed
             DebugLogger.shared.error("ASR transcription failed: \(error)", source: "ASRService")
             DebugLogger.shared.error("Error details: \(error.localizedDescription)", source: "ASRService")
             let nsError = error as NSError
@@ -1210,6 +3878,7 @@ final class ASRService: ObservableObject {
                 self.hasCompletedFirstTranscription = true
                 DispatchQueue.main.async {
                     self.isLoadingModel = false
+                    self.modelPreparationPhase = nil
                     DebugLogger.shared.info("⚠️ First transcription failed - clearing loading state", source: "ASRService")
                 }
             }
@@ -1219,18 +3888,83 @@ final class ASRService: ObservableObject {
             // (e.g., accidental hotkey press) and would disrupt the user's workflow.
             // Errors are logged for debugging purposes.
 
-            // Resume media playback if we paused it
-            if shouldResumeMedia {
-                await MediaPlaybackService.shared.resumeIfWePaused(true)
-                DebugLogger.shared.info("🎵 Resumed system media after transcription failure", source: "ASRService")
-            }
-
             self.benchmarkLog("stop_end result=error totalMs=\(self.elapsedMilliseconds(since: stopStartedAt)) error=\(error.localizedDescription)")
             return ""
         }
     }
 
+    private func beginDeferredStopUIInvalidation() {
+        self.stopUIInvalidationGate.begin()
+        self.stopUIInvalidationTimeoutTask?.cancel()
+        self.stopUIInvalidationTimeoutTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            guard Task.isCancelled == false else { return }
+            self?.forceFinishDeferredStopUIInvalidation()
+        }
+    }
+
+    /// Keeps whole-view invalidation from rebuilding SwiftUI between final ASR
+    /// and output dispatch. The generation makes stale pipeline cleanup harmless.
+    func holdStopUIInvalidationForOutputPipeline() -> UInt64 {
+        self.stopUIInvalidationHoldGeneration &+= 1
+        let generation = self.stopUIInvalidationHoldGeneration
+        self.activeStopUIInvalidationHold = generation
+        self.stopUIInvalidationGate.holdForOutputPipeline()
+        return generation
+    }
+
+    func releaseStopUIInvalidationForOutputPipeline(_ generation: UInt64) {
+        guard self.activeStopUIInvalidationHold == generation else { return }
+        self.activeStopUIInvalidationHold = nil
+        self.flushDeferredStopUIInvalidation(
+            shouldFlush: self.stopUIInvalidationGate.releaseOutputPipelineHold()
+        )
+    }
+
+    /// Publishes the stopped state only after final ASR has entered its
+    /// executor. Streaming ownership is revoked earlier by the scheduler and
+    /// buffer handoff gates, so this keeps SwiftUI work off hardware teardown.
+    private func publishStoppedState(for sessionID: Int) {
+        guard self.benchmarkSessionID == sessionID, self.isRunning else { return }
+        DebugLogger.shared.debug("🚫 Publishing isRunning = false...", source: "ASRService")
+        self.beginDeferredStopUIInvalidation()
+        self.isRunning = false
+        self.isStoppingFinalTranscription = false
+        DebugLogger.shared.debug("✅ isRunning disabled", source: "ASRService")
+        Task { @MainActor [weak self] in
+            await Task.yield()
+            guard let self,
+                  self.benchmarkSessionID == sessionID,
+                  self.isRunning == false
+            else { return }
+            self.audioCaptureStateDidSettle.send()
+        }
+    }
+
+    private func finishDeferredStopUIInvalidation() {
+        self.flushDeferredStopUIInvalidation(shouldFlush: self.stopUIInvalidationGate.finish())
+    }
+
+    private func forceFinishDeferredStopUIInvalidation() {
+        self.activeStopUIInvalidationHold = nil
+        self.flushDeferredStopUIInvalidation(shouldFlush: self.stopUIInvalidationGate.forceFinish())
+    }
+
+    private func flushDeferredStopUIInvalidation(shouldFlush: Bool) {
+        guard shouldFlush else { return }
+        self.stopUIInvalidationTimeoutTask?.cancel()
+        self.stopUIInvalidationTimeoutTask = nil
+        self.objectWillChange.send()
+        self.deferredStopUIInvalidationDidFlush.send()
+    }
+
     func transcribeSamplesForAPI(_ inputSamples: [Float]) async throws -> ASRTranscriptionResult {
+        let lease = try self.acquireExclusiveActivity(.localAPI)
+        defer { self.releaseExclusiveActivity(lease) }
+        return try await self.transcribeSamplesForAPIWithLease(inputSamples)
+    }
+
+    private func transcribeSamplesForAPIWithLease(_ inputSamples: [Float]) async throws -> ASRTranscriptionResult {
         var samples = inputSamples
         guard !samples.isEmpty else {
             return ASRTranscriptionResult(text: "", confidence: 0)
@@ -1257,14 +3991,19 @@ final class ASRService: ObservableObject {
         if !self.hasCompletedFirstTranscription {
             self.hasCompletedFirstTranscription = true
             self.isLoadingModel = false
+            self.modelPreparationPhase = nil
         }
 
-        let cleanedText = ASRService.applyCustomDictionary(ASRService.removeFillerWords(result.text))
+        let cleanedText = ASRService.applySpokenPunctuationFormatting(
+            ASRService.applyCustomDictionary(ASRService.removeFillerWords(result.text))
+        )
         self.recordWordBoostHitIfAny(transcribedText: cleanedText)
         return ASRTranscriptionResult(text: cleanedText, confidence: result.confidence)
     }
 
     func transcribeFileForAPI(_ fileURL: URL) async throws -> (result: ASRTranscriptionResult, sampleCount: Int) {
+        let lease = try self.acquireExclusiveActivity(.localAPI)
+        defer { self.releaseExclusiveActivity(lease) }
         guard FileManager.default.isReadableFile(atPath: fileURL.path) else {
             throw NSError(
                 domain: "ASRService",
@@ -1273,7 +4012,7 @@ final class ASRService: ObservableObject {
             )
         }
 
-        let estimatedSamples = try LocalAPIAudioDecoder.validateDurationWithinLimit(for: fileURL)
+        let estimatedSamples = try LocalAPIAudioDecoder.estimatedSampleCount(for: fileURL)
 
         try await self.ensureAsrReady()
         let provider = self.transcriptionProvider
@@ -1285,10 +4024,63 @@ final class ASRService: ObservableObject {
             )
         }
 
+        if provider.prefersNativeFileTranscription,
+           estimatedSamples > 0,
+           estimatedSamples < 16_000
+        {
+            let reader = try LocalAPIAudioDecoder.ChunkReader(fileURL: fileURL)
+            let samples = try await reader.nextSamples()
+            let result = try await self.transcribeSamplesForAPIWithLease(samples)
+            return (result, sampleCount: estimatedSamples)
+        }
+
         guard provider.prefersNativeFileTranscription else {
-            let samples = try LocalAPIAudioDecoder.samples(from: fileURL)
-            let result = try await self.transcribeSamplesForAPI(samples)
-            return (result, samples.count)
+            let reader = try LocalAPIAudioDecoder.ChunkReader(fileURL: fileURL)
+            let (combinedText, confidence, processedSampleCount) = try await transcriptionExecutor.run { [provider] in
+                var textParts: [String] = []
+                var weightedConfidence = 0.0
+                var processedSampleCount = 0
+
+                while true {
+                    var samples = try await reader.nextSamples()
+                    let sampleCount = samples.count
+                    guard sampleCount > 0 else { break }
+                    if sampleCount < 16_000 {
+                        samples.append(contentsOf: repeatElement(0.0, count: 16_000 - sampleCount))
+                    }
+
+                    let result = try await provider.transcribeFinal(samples)
+                    if !result.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        textParts.append(result.text)
+                    }
+                    weightedConfidence += Double(result.confidence) * Double(sampleCount)
+                    processedSampleCount += sampleCount
+                }
+
+                let confidence = processedSampleCount > 0
+                    ? Float(weightedConfidence / Double(processedSampleCount))
+                    : 0
+                return (textParts.joined(separator: " "), confidence, processedSampleCount)
+            }
+
+            guard processedSampleCount > 0 else {
+                return (ASRTranscriptionResult(text: "", confidence: 0), sampleCount: 0)
+            }
+
+            if !self.hasCompletedFirstTranscription {
+                self.hasCompletedFirstTranscription = true
+                self.isLoadingModel = false
+                self.modelPreparationPhase = nil
+            }
+
+            let cleanedText = ASRService.applySpokenPunctuationFormatting(
+                ASRService.applyCustomDictionary(ASRService.removeFillerWords(combinedText))
+            )
+            self.recordWordBoostHitIfAny(transcribedText: cleanedText)
+            return (
+                ASRTranscriptionResult(text: cleanedText, confidence: confidence),
+                sampleCount: estimatedSamples
+            )
         }
 
         let result = try await transcriptionExecutor.run { [provider] in
@@ -1298,24 +4090,336 @@ final class ASRService: ObservableObject {
         if !self.hasCompletedFirstTranscription {
             self.hasCompletedFirstTranscription = true
             self.isLoadingModel = false
+            self.modelPreparationPhase = nil
         }
 
-        let cleanedText = ASRService.applyCustomDictionary(ASRService.removeFillerWords(result.text))
+        let cleanedText = ASRService.applySpokenPunctuationFormatting(
+            ASRService.applyCustomDictionary(ASRService.removeFillerWords(result.text))
+        )
         self.recordWordBoostHitIfAny(transcribedText: cleanedText)
         return (ASRTranscriptionResult(text: cleanedText, confidence: result.confidence), estimatedSamples)
     }
 
+    // MARK: - Exclusive model residency
+
+    func meetingResidencyParticipant() -> MeetingModelParticipant {
+        MeetingModelParticipant(
+            owner: "speech",
+            snapshot: { [weak self] in
+                guard let self else { throw CancellationError() }
+                guard !self.hasActiveModelDownload, !self.hasActiveModelPreparation,
+                      self.activeExclusiveActivity == .meeting else { throw MeetingModelResidencyError.busy }
+                guard self.isAsrReady, let id = self.residentDictationModelID else { return nil }
+                return MeetingResidentModel(id: id, configuration: id)
+            },
+            suspend: { [weak self] in
+                guard let self, let lease = self.activeActivityLease else { throw CancellationError() }
+                try await self.retireDictationASRResourcesForMeeting(lease: lease)
+            },
+            restore: { [weak self] model in
+                guard let self, !self.isTerminating,
+                      SettingsStore.shared.selectedSpeechModel.id == model.id else { return }
+                // Never download a missing model just to restore residency.
+                guard try await self.modelArtifactsExist(provider: self.transcriptionProvider),
+                      !self.isTerminating, SettingsStore.shared.selectedSpeechModel.id == model.id else { return }
+                try await self.ensureAsrReady()
+                if SettingsStore.shared.selectedSpeechModel.id != model.id,
+                   let lease = self.activeActivityLease
+                {
+                    try await self.retireDictationASRResourcesForMeeting(lease: lease)
+                }
+            }
+        )
+    }
+
+    func withMeetingModelResidency<T>(attemptID: UUID, acceptsCompletedCancellation: (T) -> Bool = { _ in false }, work: () async throws -> T) async throws -> T {
+        try await self.meetingModelResidency.withExclusive(
+            attemptID: attemptID,
+            participants: [
+                self.meetingResidencyParticipant(),
+                PrivateAIIntegrationService.meetingResidencyParticipant(),
+                DictionaryTrainingEndpointMonitor.shared.meetingResidencyParticipant(),
+            ],
+            acceptsCompletedCancellation: acceptsCompletedCancellation,
+            work: work
+        )
+    }
+
+    // MARK: - Scoped Meeting ASR Preparation
+
+    private var activeMeetingASRPreparationOwner: MeetingASRPreparationOwner? {
+        #if DEBUG
+        if let injected = self.meetingASRPreparationOwnerForTesting { return injected }
+        #endif
+        return self.meetingASRPreparationOwner
+    }
+
+    private var isMeetingASRPreparationClaimed: Bool {
+        guard let owner = self.activeMeetingASRPreparationOwner else { return false }
+        return owner.isClaimed || owner.isDraining
+    }
+
+    private func meetingASROwner() -> MeetingASRPreparationOwner {
+        #if DEBUG
+        if let injected = self.meetingASRPreparationOwnerForTesting { return injected }
+        #endif
+        if let existing = self.meetingASRPreparationOwner { return existing }
+        let owner = MeetingASRPreparationOwner(
+            isActiveLease: { [weak self] lease in
+                self?.activeActivityLease == lease
+            },
+            isUserDownloadInProgress: { [weak self] in
+                self?.hasActiveModelDownload ?? false
+            },
+            retireDictationResources: { [weak self] lease in
+                guard let self else { throw CancellationError() }
+                try await self.retireDictationASRResourcesForMeeting(lease: lease)
+            },
+            makeProvider: { configuration in
+                // Language selects the pinned Parakeet v2/v3 model; never reads selectedSpeechModel.
+                try FluidAudioProvider(meetingConfiguration: configuration)
+            },
+            prepareProvider: { provider, _, progress in
+                try await provider.prepare(progressHandler: progress)
+            },
+            drainExecutor: { [weak self] _ in
+                await self?.meetingTranscriptionExecutor.cancelAndAwaitPending()
+            }
+        )
+        self.meetingASRPreparationOwner = owner
+        return owner
+    }
+
+    /// Drops cached dictation providers and drains the legacy executor for a claimed meeting
+    /// preparation. On-disk model caches are never deleted.
+    func retireDictationASRResourcesForMeeting(lease: ASRActivityLease) async throws {
+        guard self.activeActivityLease == lease, lease.activity == .meeting else {
+            throw CancellationError()
+        }
+        guard !self.hasActiveModelDownload else {
+            throw MeetingASRPreparationError.userModelDownloadInProgress
+        }
+
+        if let retiringTask = self.ensureReadyTask {
+            self.isCancellingModelPreparation = true
+            retiringTask.cancel()
+            _ = await retiringTask.result
+        }
+        await self.transcriptionExecutor.cancelAndAwaitPending()
+
+        guard self.activeActivityLease == lease else { throw CancellationError() }
+        self.fluidAudioProvider = nil
+        self.parakeetRealtimeProvider = nil
+        self.externalCoreMLProvider = nil
+        self.nemotronProviders.removeAll()
+        self.whisperProvider = nil
+        self.appleSpeechProvider = nil
+        self._appleSpeechAnalyzerProvider = nil
+        self.residentDictationModelID = nil
+        self.isAsrReady = false
+    }
+
+    private func isMeetingASRClaimBlocking(lease: ASRActivityLease) -> Bool {
+        guard lease.activity == .meeting else { return false }
+        if let scope = self.activeMeetingASRScope, scope.lease == lease { return true }
+        if let owner = self.activeMeetingASRPreparationOwner,
+           owner.currentClaimToken?.lease == lease,
+           owner.isClaimed || owner.isDraining
+        {
+            return true
+        }
+        return false
+    }
+
+    private func executorForMeetingTranscription() -> TranscriptionExecutor {
+        if self.activeMeetingASRScope != nil || self.isMeetingASRPreparationClaimed {
+            return self.meetingTranscriptionExecutor
+        }
+        return self.transcriptionExecutor
+    }
+
+    /// Runs `body` with the dedicated fixed-configuration meeting ASR provider. Requires the
+    /// active meeting lease; one scope at a time. Release/drain is awaited on success, error,
+    /// and cancellation before the scope clears and any deferred lease release flushes.
+    @discardableResult
+    func withPreparedMeetingASR<Result>(
+        attemptID: UUID,
+        configuration: MeetingFinalProcessingConfiguration,
+        body: @escaping (any TranscriptionProvider) async throws -> Result
+    ) async throws -> Result {
+        try Task.checkCancellation()
+        guard let lease = self.activeActivityLease, lease.activity == .meeting else {
+            throw MeetingASRPreparationError.invalidActivityLease
+        }
+        guard self.activeMeetingASRScope == nil else {
+            throw MeetingASRPreparationError.preparationInProgress
+        }
+        let scopeID = UUID()
+        self.activeMeetingASRScope = MeetingASRScope(
+            id: scopeID,
+            lease: lease,
+            cancelBody: nil,
+            awaitBodyCompletion: nil
+        )
+
+        let owner = self.meetingASROwner()
+        let provider: any TranscriptionProvider
+        do {
+            provider = try await owner.prepare(lease: lease, attemptID: attemptID, configuration: configuration)
+        } catch {
+            // The owner already drained the failed preparation.
+            self.finishMeetingASRScope(scopeID: scopeID)
+            throw error
+        }
+        guard self.activeActivityLease == lease,
+              let token = owner.currentClaimToken, token.lease == lease
+        else {
+            if let token = owner.currentClaimToken { await owner.release(token) }
+            self.finishMeetingASRScope(scopeID: scopeID)
+            throw CancellationError()
+        }
+
+        do {
+            let bodyTask = Task { @MainActor in
+                try await body(provider)
+            }
+            guard self.activeMeetingASRScope?.id == scopeID else {
+                bodyTask.cancel()
+                _ = await bodyTask.result
+                throw CancellationError()
+            }
+            self.activeMeetingASRScope?.cancelBody = {
+                bodyTask.cancel()
+            }
+            self.activeMeetingASRScope?.awaitBodyCompletion = {
+                _ = await bodyTask.result
+            }
+            let result = try await withTaskCancellationHandler {
+                try await bodyTask.value
+            } onCancel: {
+                bodyTask.cancel()
+            }
+            // A provider/model call may not observe cooperative cancellation until it
+            // returns. Never publish that late success after the enclosing attempt was
+            // cancelled; teardown still runs below before cancellation escapes.
+            if bodyTask.isCancelled { throw CancellationError() }
+            try Task.checkCancellation()
+            await owner.release(token)
+            self.finishMeetingASRScope(scopeID: scopeID)
+            return result
+        } catch {
+            await owner.release(token)
+            self.finishMeetingASRScope(scopeID: scopeID)
+            throw error
+        }
+    }
+
+    private func finishMeetingASRScope(scopeID: UUID) {
+        if self.activeMeetingASRScope?.id == scopeID {
+            self.activeMeetingASRScope = nil
+        }
+        self.flushDeferredMeetingLeaseReleaseIfReady()
+    }
+
+    private func flushDeferredMeetingLeaseReleaseIfReady() {
+        guard let lease = self.deferredMeetingActivityLeaseRelease,
+              !self.isMeetingASRClaimBlocking(lease: lease)
+        else { return }
+        self.deferredMeetingActivityLeaseRelease = nil
+        guard self.activeActivityLease == lease else { return }
+        let reason = self.deferredMeetingRouteRecoveryReason
+        let requiresPrewarm = self.deferredMeetingRouteRecoveryRequiresPrewarm
+        let reconcilesInput = self.deferredMeetingRouteRecoveryReconcilesInput
+        self.deferredMeetingRouteRecoveryReason = nil
+        self.deferredMeetingRouteRecoveryRequiresPrewarm = false
+        self.deferredMeetingRouteRecoveryReconcilesInput = false
+        self.releaseExclusiveActivity(lease)
+        if requiresPrewarm || reason != nil {
+            self.scheduleAudioRouteRecovery(
+                reason: reason ?? "meeting audio handback",
+                requiresIdlePrewarm: requiresPrewarm,
+                reconcilesInputSelection: reconcilesInput
+            )
+        }
+    }
+
+    func transcribeMeetingSamples(
+        _ samples: [Float],
+        provider: any TranscriptionProvider,
+        languageCode: String
+    ) async throws -> ASRTranscriptionResult {
+        guard self.activeExclusiveActivity == .meeting else {
+            throw ASRActivityError.activityInProgress(self.activeExclusiveActivity ?? .meeting)
+        }
+        return try await self.executorForMeetingTranscription().run { [provider] in
+            if let whisperProvider = provider as? WhisperProvider {
+                return try await whisperProvider.transcribe(samples, languageCode: languageCode)
+            }
+            return try await provider.transcribe(samples)
+        }
+    }
+
+    func transcribeMeetingSamplesWithTimings(
+        _ samples: [Float],
+        provider: any TranscriptionProvider
+    ) async throws -> (result: ASRTranscriptionResult, words: [ASRWordTiming]) {
+        guard self.activeExclusiveActivity == .meeting else {
+            throw ASRActivityError.activityInProgress(self.activeExclusiveActivity ?? .meeting)
+        }
+        return try await self.executorForMeetingTranscription().run { [provider] in
+            try await provider.transcribeWithWordTimings(samples)
+        }
+    }
+
+    func transcribeMeetingFile(
+        at fileURL: URL,
+        provider: any TranscriptionProvider
+    ) async throws -> ASRTranscriptionResult {
+        guard self.activeExclusiveActivity == .meeting else {
+            throw ASRActivityError.activityInProgress(self.activeExclusiveActivity ?? .meeting)
+        }
+        return try await self.executorForMeetingTranscription().run { [provider] in
+            try await provider.transcribeFile(at: fileURL)
+        }
+    }
+
     func stopWithoutTranscription() async {
-        guard self.isRunning else { return }
-        defer { self.applyPendingParakeetVocabularyReloadIfNeeded() }
+        await self.stopWithoutTranscription(finishingRecovery: false)
+    }
 
-        self.audioRouteRecoveryTask?.cancel()
-        self.audioRouteRecoveryTask = nil
-        self.isRecoveringAudioRoute = false
+    private func stopWithoutTranscription(finishingRecovery: Bool) async {
+        if self.isStarting, self.isRunning == false {
+            await self.cancelPendingAudioCaptureStart(reason: "stop_without_transcription")
+        }
+        guard self.isRunning else {
+            self.releaseDictationActivityIfNeeded()
+            return
+        }
+        let stoppingSessionID = self.benchmarkSessionID
+        guard let bufferHandoffToken = self.recordingBufferHandoffGate.begin() else { return }
+        self.mediaPlaybackService.recordingStopped(sessionID: stoppingSessionID)
+        defer { self.mediaPlaybackService.sessionFinished(sessionID: stoppingSessionID) }
+        var completedBufferHandoff = false
+        defer {
+            if completedBufferHandoff == false {
+                self.recordingBufferHandoffGate.complete(bufferHandoffToken)
+            }
+        }
+        self.stopStreamingScheduler(sessionID: stoppingSessionID)
+        defer {
+            self.applyPendingParakeetVocabularyReloadIfNeeded()
+            self.isDictionaryTrainingCaptureActive = false
+            self.releaseDictationActivityIfNeeded()
+        }
 
-        // Capture media pause state before we reset it, for resuming at the end
-        let shouldResumeMedia = SettingsStore.shared.pauseMediaDuringTranscription && self.didPauseMediaForThisSession
-        self.didPauseMediaForThisSession = false // Reset for next session
+        if finishingRecovery == false {
+            await self.cancelAudioRouteRecoveryAndWait()
+        }
+        guard self.isRunning, self.benchmarkSessionID == stoppingSessionID else {
+            self.recordingBufferHandoffGate.complete(bufferHandoffToken)
+            completedBufferHandoff = true
+            return
+        }
 
         DebugLogger.shared.info("🛑 Stopping recording - releasing audio devices", source: "ASRService")
 
@@ -1326,66 +4430,60 @@ final class ASRService: ObservableObject {
         // Stop monitoring device
         self.stopMonitoringDevice()
 
-        self.removeEngineTap()
-        DebugLogger.shared.debug("Engine tap removed", source: "ASRService")
+        await self.stopActiveAudioCapture(
+            retainDirectPreparedCapture: false,
+            reason: "stop_without_transcription"
+        )
+        DebugLogger.shared.debug("Audio capture stopped", source: "ASRService")
 
-        self.engine.stop()
-        DebugLogger.shared.debug("Engine stopped", source: "ASRService")
+        // Cancel/no-transcription paths stay conservative and retire the engine.
+        await self.retireAudioEngineAndWait(reason: "stop_without_transcription")
+        self.audioCaptureStateDidSettle.send()
 
-        // Release old engine on a background thread — if the underlying device just died,
-        // AVAudioEngine deallocation can block in CoreAudio's internal teardown.
-        // No new engine is created here (it's lazy on next start()), so no overlap risk.
-        let oldEngine = self.engineStorage
-        self.engineStorage = nil
-        if let oldEngine {
-            DispatchQueue.global(qos: .utility).async { _ = oldEngine }
+        guard await self.drainActiveStreamingWork(sessionID: stoppingSessionID) else {
+            self.beginStreamingDrainRecovery(sessionID: stoppingSessionID, token: bufferHandoffToken)
+            completedBufferHandoff = true
+            return
         }
-
-        // CRITICAL FIX: Await completion of streaming task AND any pending transcriptions
-        // This prevents use-after-free crashes (EXC_BAD_ACCESS) when clearing buffer
-        await self.stopStreamingTimerAndAwait()
 
         // NOW it's safe to clear the buffer
         self.audioBuffer.clear()
+        self.streamingWorkState.endSession(stoppingSessionID)
+        self.recordingBufferHandoffGate.complete(bufferHandoffToken)
+        completedBufferHandoff = true
         self.partialTranscription.removeAll()
         self.previousFullTranscription.removeAll()
         self.lastBoostHitTerm = nil
         self.lastProcessedSampleCount = 0
         self.isProcessingChunk = false
         self.skipNextChunk = false
-        self.streamingChunkAnalyticsSuccessCount = 0
-        self.lastStreamingChunkFailureAnalyticsAt = nil
         self.refreshWordBoostStatus()
-
-        // Resume media playback if we paused it
-        if shouldResumeMedia {
-            await MediaPlaybackService.shared.resumeIfWePaused(true)
-            DebugLogger.shared.info("🎵 Resumed system media after stopping without transcription", source: "ASRService")
-        }
     }
 
     private func configureSession() throws {
         DebugLogger.shared.debug("🔧 configureSession() - ENTERED", source: "ASRService")
 
-        if self.engine.isRunning {
+        let wasWarm = self.hasWarmAudioEngine
+        let engine = self.engine
+        DebugLogger.shared.debug(
+            wasWarm ? "♻️ Reusing warm audio engine" : "ℹ️ Creating audio engine lazily",
+            source: "ASRService"
+        )
+
+        if engine.isRunning {
             DebugLogger.shared.debug("⚠️ Engine is running, stopping before configuration", source: "ASRService")
-            self.engine.stop()
+            engine.stop()
             DebugLogger.shared.debug("✅ Engine stopped", source: "ASRService")
         }
 
-        // No need to call engine.reset() here - we created a fresh engine in stop()
-        // Accessing the engine property will either return the existing fresh engine,
-        // or create a new one if this is the first start
-        DebugLogger.shared.debug("ℹ️ Using fresh engine instance (created lazily)", source: "ASRService")
-
         // Force input node instantiation (ensures the underlying AUHAL AudioUnit exists)
         DebugLogger.shared.debug("📍 Forcing input node instantiation...", source: "ASRService")
-        _ = self.engine.inputNode
+        _ = engine.inputNode
         DebugLogger.shared.debug("Input node instantiated", source: "ASRService")
 
         // Force output node instantiation for output device binding
         DebugLogger.shared.debug("📍 Forcing output node instantiation...", source: "ASRService")
-        _ = self.engine.outputNode
+        _ = engine.outputNode
         DebugLogger.shared.debug("✅ Output node instantiated", source: "ASRService")
 
         // NOTE: Device binding occurs in startEngine() BEFORE engine.prepare()
@@ -1402,40 +4500,29 @@ final class ASRService: ObservableObject {
     private func bindPreferredInputDeviceIfNeeded() -> Bool {
         DebugLogger.shared.debug("bindPreferredInputDeviceIfNeeded() - Starting input device binding", source: "ASRService")
 
-        guard SettingsStore.shared.syncAudioDevicesWithSystem == false else {
-            DebugLogger.shared.info("Sync mode enabled - using system default input device", source: "ASRService")
-            return true
-        }
-
-        guard let preferredUID = SettingsStore.shared.preferredInputDeviceUID, preferredUID.isEmpty == false else {
-            DebugLogger.shared.info("No preferred input device set - using system default", source: "ASRService")
-            return true
-        }
-
-        DebugLogger.shared.debug("Attempting to bind to preferred input device (uid: \(preferredUID))", source: "ASRService")
-
-        guard let device = AudioDevice.getInputDevice(byUID: preferredUID) else {
-            DebugLogger.shared.warning(
-                "Preferred input device not found (uid: \(preferredUID)). Falling back to system default input.",
+        guard let device = self.resolvedInputDeviceForCapture() else {
+            DebugLogger.shared.error(
+                "No input device available for manual microphone capture.",
                 source: "ASRService"
             )
-            // Try to use system default as fallback
-            return self.tryBindToSystemDefaultInput()
+            return false
         }
 
-        DebugLogger.shared.debug("Found preferred input device: '\(device.name)' (id: \(device.id))", source: "ASRService")
+        DebugLogger.shared.debug(
+            "Attempting to bind AVAudioEngine input to capture device '\(device.name)' (uid: \(device.uid))",
+            source: "ASRService"
+        )
 
         let ok = self.setEngineInputDevice(deviceID: device.id, deviceUID: device.uid, deviceName: device.name)
         if ok == false {
             DebugLogger.shared.warning(
-                "Failed to bind engine input to preferred device '\(device.name)' (uid: \(device.uid)). Trying system default input.",
+                "Failed to bind engine input to '\(device.name)' (uid: \(device.uid)). Trying system default input.",
                 source: "ASRService"
             )
-            // Try to use system default as fallback
             return self.tryBindToSystemDefaultInput()
         }
 
-        DebugLogger.shared.info("✅ Successfully bound input to '\(device.name)'", source: "ASRService")
+        DebugLogger.shared.info("✅ Bound AVAudioEngine input to '\(device.name)'", source: "ASRService")
         return true
     }
 
@@ -1446,40 +4533,7 @@ final class ASRService: ObservableObject {
     private func bindPreferredOutputDeviceIfNeeded() -> Bool {
         DebugLogger.shared.debug("bindPreferredOutputDeviceIfNeeded() - Starting output device binding", source: "ASRService")
 
-        guard SettingsStore.shared.syncAudioDevicesWithSystem == false else {
-            DebugLogger.shared.info("Sync mode enabled - using system default output device", source: "ASRService")
-            return true
-        }
-
-        guard let preferredUID = SettingsStore.shared.preferredOutputDeviceUID, preferredUID.isEmpty == false else {
-            DebugLogger.shared.info("No preferred output device set - using system default", source: "ASRService")
-            return true
-        }
-
-        DebugLogger.shared.debug("Attempting to bind to preferred output device (uid: \(preferredUID))", source: "ASRService")
-
-        guard let device = AudioDevice.getOutputDevice(byUID: preferredUID) else {
-            DebugLogger.shared.warning(
-                "Preferred output device not found (uid: \(preferredUID)). Falling back to system default output.",
-                source: "ASRService"
-            )
-            // Try to use system default as fallback
-            return self.tryBindToSystemDefaultOutput()
-        }
-
-        DebugLogger.shared.debug("Found preferred output device: '\(device.name)' (id: \(device.id))", source: "ASRService")
-
-        let ok = self.setEngineOutputDevice(deviceID: device.id, deviceUID: device.uid, deviceName: device.name)
-        if ok == false {
-            DebugLogger.shared.warning(
-                "Failed to bind engine output to preferred device '\(device.name)' (uid: \(device.uid)). Trying system default output.",
-                source: "ASRService"
-            )
-            // Try to use system default as fallback
-            return self.tryBindToSystemDefaultOutput()
-        }
-
-        DebugLogger.shared.info("✅ Successfully bound output to '\(device.name)'", source: "ASRService")
+        DebugLogger.shared.info("Using current macOS default output device", source: "ASRService")
         return true
     }
 
@@ -1554,6 +4608,10 @@ final class ASRService: ObservableObject {
     @discardableResult
     private func setEngineInputDevice(deviceID: AudioObjectID, deviceUID: String, deviceName: String) -> Bool {
         DebugLogger.shared.debug("setEngineInputDevice() - Binding input to device ID: \(deviceID)", source: "ASRService")
+        AppServices.shared.microphonePreferenceCoordinator.reportResolvedSelection(
+            uid: deviceUID,
+            name: deviceName
+        )
 
         let inputNode = self.engine.inputNode
 
@@ -1703,7 +4761,7 @@ final class ASRService: ObservableObject {
         }
     }
 
-    private func startEngine() throws {
+    private func startEngine() async throws {
         DebugLogger.shared.debug("🚀 startEngine() - ENTERED", source: "ASRService")
         var attempts = 0
         var lastError: Error?
@@ -1762,7 +4820,7 @@ final class ASRService: ObservableObject {
                 // If this isn't the last attempt, recreate engine and reconfigure
                 if attempts < 3 {
                     DebugLogger.shared.debug("⚠️ Start failed, recreating engine for retry...", source: "ASRService")
-                    self.engineStorage = nil // Deallocate failed engine
+                    await self.retireAudioEngineAndWait(reason: "start_retry")
                     // Need to reconfigure the new engine
                     try? self.configureSession()
                     DebugLogger.shared.debug("✅ Engine recreated and reconfigured, will retry", source: "ASRService")
@@ -1790,7 +4848,11 @@ final class ASRService: ObservableObject {
     }
 
     private func removeEngineTap() {
-        self.engine.inputNode.removeTap(onBus: 0)
+        guard self.isEngineTapInstalled else { return }
+        if let engine = self.engineStorage as? AVAudioEngine {
+            engine.inputNode.removeTap(onBus: 0)
+        }
+        self.isEngineTapInstalled = false
     }
 
     private func setupEngineTap() throws {
@@ -1816,7 +4878,9 @@ final class ASRService: ObservableObject {
                 throw NSError(
                     domain: "ASRService",
                     code: -1,
-                    userInfo: [NSLocalizedDescriptionKey: "Audio input format is invalid (\(inFormat.sampleRate)Hz, \(inFormat.channelCount)ch). The microphone may still be initializing after wake from sleep. Please try again in a few seconds."]
+                    userInfo: [
+                        NSLocalizedDescriptionKey: "Audio input format is invalid (\(inFormat.sampleRate)Hz, \(inFormat.channelCount)ch). The microphone may still be initializing after wake from sleep. Please try again in a few seconds.",
+                    ]
                 )
             }
 
@@ -1847,28 +4911,127 @@ final class ASRService: ObservableObject {
 
         self.inputFormat = inFormat
         let pipeline = self.audioCapturePipeline
-        DebugLogger.shared.debug("🎧 Installing tap on bus 0...", source: "ASRService")
-        input.installTap(onBus: 0, bufferSize: 4096, format: inFormat) { buffer, _ in
-            pipeline.handle(buffer: buffer)
+        if self.isEngineTapInstalled {
+            input.removeTap(onBus: 0)
+            self.isEngineTapInstalled = false
         }
+        DebugLogger.shared.debug("🎧 Installing tap on bus 0...", source: "ASRService")
+        input.installTap(onBus: 0, bufferSize: 4096, format: inFormat) { buffer, time in
+            pipeline.handle(buffer: buffer, time: time)
+        }
+        self.isEngineTapInstalled = true
         DebugLogger.shared.debug("✅ setupEngineTap() - COMPLETED", source: "ASRService")
     }
 
-    private func scheduleAudioRouteRecovery(reason: String) {
-        guard self.isRunning else {
-            self.audioLevelSubject.send(0.0)
+    private func scheduleAudioRouteRecovery(
+        reason: String,
+        requiresIdlePrewarm: Bool = false,
+        reconcilesInputSelection: Bool = false,
+        invalidatesCurrentStart: Bool = false
+    ) {
+        guard self.isTerminating == false else {
+            self.benchmarkLog("route_recovery_ignored reason=app_terminating event=\(reason)")
             return
         }
-        guard self.isRecoveringAudioRoute == false else {
-            DebugLogger.shared.debug("Ignoring audio route recovery request during active recovery (\(reason))", source: "ASRService")
+        if self.activeExclusiveActivity == .meeting {
+            self.deferredMeetingRouteRecoveryReason = reason
+            self.deferredMeetingRouteRecoveryRequiresPrewarm =
+                self.deferredMeetingRouteRecoveryRequiresPrewarm || requiresIdlePrewarm
+            self.deferredMeetingRouteRecoveryReconcilesInput =
+                self.deferredMeetingRouteRecoveryReconcilesInput || reconcilesInputSelection
+            self.benchmarkLog("route_recovery_deferred reason=meeting_owns_topology event=\(reason)")
             return
         }
+        if AudioCaptureIdlePolicy.shouldDeferRouteRecoveryToBluetoothStart(
+            directCaptureEnabled: SettingsStore.shared.experimentalDirectAudioCaptureEnabled,
+            isStarting: self.isStarting,
+            isRunning: self.isRunning,
+            attemptedInputIsBluetooth: self.audioStartAttemptIsBluetooth
+        ) {
+            // AirPods and other Bluetooth inputs can replace their streams more
+            // than once while entering microphone mode. The active start owns
+            // its bounded retry loop; a second recovery owner would exclude the
+            // same healthy device before the Bluetooth route settles.
+            let disposition = AudioCaptureIdlePolicy.bluetoothStartupRouteChangeDisposition(
+                invalidatesCurrentStart: invalidatesCurrentStart,
+                requiresIdlePrewarm: requiresIdlePrewarm,
+                reconcilesInputSelection: reconcilesInputSelection
+            )
+            if disposition == .retryCurrentStart {
+                // Make routeStayedStable false even if first PCM won the
+                // readiness-gate race. The startup loop then retries the same
+                // Bluetooth input without handing it to active-route recovery.
+                self.audioRouteRecoveryGeneration &+= 1
+                self.benchmarkLog(
+                    "bluetooth_start_route_invalidation_retry event=\(reason) " +
+                        "routeGeneration=\(self.audioRouteRecoveryGeneration)"
+                )
+                return
+            }
+            if disposition == .preserveDeferredWork {
+                self.deferredBluetoothStartupRouteRecovery.preserve(
+                    reason: reason,
+                    requiresIdlePrewarm: requiresIdlePrewarm,
+                    reconcilesInputSelection: reconcilesInputSelection
+                )
+            }
+            self.benchmarkLog(
+                "bluetooth_start_route_change_deferred event=\(reason) " +
+                    "disposition=\(disposition)"
+            )
+            return
+        }
+        self.audioRouteRecoveryGeneration &+= 1
+        let requiresPrewarmAfterRecovery =
+            requiresIdlePrewarm || self.pendingAudioRouteRecovery?.requiresIdlePrewarm == true
+        let reconcilesInputAfterRecovery =
+            reconcilesInputSelection || self.pendingAudioRouteRecovery?.reconcilesInputSelection == true
+        let request = AudioRouteRecoveryRequest(
+            generation: self.audioRouteRecoveryGeneration,
+            reason: reason,
+            requiresIdlePrewarm: requiresPrewarmAfterRecovery,
+            reconcilesInputSelection: reconcilesInputAfterRecovery
+        )
+        self.pendingAudioRouteRecovery = request
+        #if DEBUG
+        AudioTopologyDiagnostics.record(
+            .recoveryScheduled,
+            owner: .asrDeviceList,
+            queueRole: .mainControl,
+            phase: .recovery,
+            generation: request.generation
+        )
+        #endif
 
-        DebugLogger.shared.warning("Audio route changed while recording; scheduling recovery (\(reason))", source: "ASRService")
-        self.audioCapturePipeline.setRecordingEnabled(false)
         self.audioLevelSubject.send(0.0)
+        if self.isRunning || self.isStarting {
+            // Stop accepting samples immediately, but do not touch AVAudioEngine
+            // until Core Audio has been quiet for the debounce interval.
+            self.audioCapturePipeline.setRecordingEnabled(false)
+            DebugLogger.shared.warning(
+                "Audio route changed during capture; waiting for topology quiet " +
+                    "(\(reason), generation=\(request.generation), " +
+                    "isStarting=\(self.isStarting), isRunning=\(self.isRunning))",
+                source: "ASRService"
+            )
+        } else {
+            DebugLogger.shared.debug(
+                "Audio route changed while idle; waiting for topology quiet (\(reason), generation=\(request.generation))",
+                source: "ASRService"
+            )
+        }
 
         self.audioRouteRecoveryTask?.cancel()
+        guard self.isRecoveringAudioRoute == false else {
+            // The in-flight recovery observes cancellation after its awaited
+            // retirement barrier, then arms the latest generation.
+            return
+        }
+
+        self.armAudioRouteRecovery(request)
+    }
+
+    private func armAudioRouteRecovery(_ request: AudioRouteRecoveryRequest) {
         let recoveryDelayNanoseconds = self.audioRouteRecoveryDelayNanoseconds
         self.audioRouteRecoveryTask = Task { [weak self] in
             do {
@@ -1876,81 +5039,464 @@ final class ASRService: ObservableObject {
             } catch {
                 return
             }
-            await self?.recoverAudioRoute(reason: reason)
+            await self?.performAudioRouteRecovery(request)
         }
     }
 
-    @MainActor
-    private func recoverAudioRoute(reason: String) async {
-        guard self.isRunning else { return }
+    /// Cancels a sleeping or active recovery and waits until any detached engine
+    /// release has drained. Start/stop paths use this to avoid racing a route
+    /// rebuild that yielded while AVAudioEngine was deallocating.
+    private func cancelAudioRouteRecoveryAndWait() async {
+        self.audioRouteRecoveryGeneration &+= 1
+        #if DEBUG
+        AudioTopologyDiagnostics.record(
+            .recoveryCancel,
+            owner: .asrDeviceList,
+            queueRole: .mainControl,
+            phase: .recovery,
+            generation: self.audioRouteRecoveryGeneration
+        )
+        #endif
+        self.pendingAudioRouteRecovery = nil
+        let task = self.audioRouteRecoveryTask
+        task?.cancel()
+        _ = await task?.result
+        self.audioRouteRecoveryTask = nil
+        self.isRecoveringAudioRoute = false
+        await self.audioEngineRetirementDrain.waitForScheduledReleases()
+    }
+
+    /// Recording startup must let an already-scheduled route rebuild finish.
+    /// Cancelling it here can preserve the stale prepared generation that the
+    /// route event was meant to retire.
+    private func waitForPendingAudioRouteRecoveryBeforeStart() async {
+        let startedAt = Date().timeIntervalSince1970
+        var waitedGenerations: [UInt64] = []
+        while let task = self.audioRouteRecoveryTask {
+            let generation = self.audioRouteRecoveryGeneration
+            waitedGenerations.append(generation)
+            self.benchmarkLog("route_recovery_handoff_wait generation=\(generation)")
+            _ = await task.result
+            if self.pendingAudioRouteRecovery == nil,
+               self.isRecoveringAudioRoute == false
+            {
+                self.audioRouteRecoveryTask = nil
+                break
+            }
+        }
+        await self.audioEngineRetirementDrain.waitForScheduledReleases()
+        self.benchmarkLog(
+            "route_recovery_handoff_end generations=\(waitedGenerations) " +
+                "elapsedMs=\(self.elapsedMilliseconds(since: startedAt)) " +
+                "capturePhase=\(self.directAudioLifecycleController.snapshot.phase.rawValue)"
+        )
+    }
+
+    private func performAudioRouteRecovery(_ request: AudioRouteRecoveryRequest) async {
+        guard self.isTerminating == false,
+              request.generation == self.audioRouteRecoveryGeneration,
+              Task.isCancelled == false
+        else { return }
         guard self.isRecoveringAudioRoute == false else { return }
 
         self.isRecoveringAudioRoute = true
+        #if DEBUG
+        AudioTopologyDiagnostics.record(
+            .recoveryBegin,
+            owner: .asrDeviceList,
+            queueRole: .mainControl,
+            phase: .recovery,
+            generation: request.generation
+        )
+        #endif
         defer {
-            self.isRecoveringAudioRoute = false
+            self.finishAudioRouteRecovery(request)
+        }
+
+        let hardwareAvailable = await self.directAudioLifecycleController.waitForHardwareAvailability()
+        guard request.generation == self.audioRouteRecoveryGeneration,
+              Task.isCancelled == false, self.isTerminating == false else { return }
+        guard hardwareAvailable else {
+            await self.finishAudioRouteRecoveryFailure(request, error: BoundedAudioHardwareQueue.Failure.recovering)
+            return
+        }
+
+        if request.reconcilesInputSelection,
+           await self.reconcileInputSelectionAfterTopologySettles(request) == false
+        {
+            return
+        }
+
+        if self.isRunning {
+            await self.recoverActiveAudioRoute(request)
+        } else {
+            await self.recoverIdleAudioRoute(request)
+        }
+    }
+
+    private func finishAudioRouteRecovery(_ completedRequest: AudioRouteRecoveryRequest) {
+        #if DEBUG
+        AudioTopologyDiagnostics.record(
+            .recoveryEnd,
+            owner: .asrDeviceList,
+            queueRole: .mainControl,
+            phase: .recovery,
+            status: Task.isCancelled ? -1 : noErr,
+            generation: completedRequest.generation
+        )
+        #endif
+        self.isRecoveringAudioRoute = false
+
+        guard let pendingRequest = self.pendingAudioRouteRecovery else {
             self.audioRouteRecoveryTask = nil
+            return
+        }
+        guard pendingRequest.generation != completedRequest.generation else {
+            self.pendingAudioRouteRecovery = nil
+            self.audioRouteRecoveryTask = nil
+            return
         }
 
-        DebugLogger.shared.info("Recovering audio route after \(reason)", source: "ASRService")
-        self.audioCapturePipeline.setRecordingEnabled(false)
+        self.armAudioRouteRecovery(pendingRequest)
+    }
 
-        self.stopMonitoringDevice()
-        self.removeEngineTap()
-        self.engine.stop()
-
-        let oldEngine = self.engineStorage
-        self.engineStorage = nil
-        if let oldEngine {
-            DispatchQueue.global(qos: .utility).async { _ = oldEngine }
-        }
-
-        do {
-            try self.configureSession()
-            try self.startEngine()
-            try self.setupEngineTap()
-            self.audioCapturePipeline.setRecordingEnabled(true)
-
-            if let currentDevice = self.getCurrentlyBoundInputDevice() {
-                self.startMonitoringDevice(currentDevice.id)
+    private func reconcileInputSelectionAfterTopologySettles(
+        _ request: AudioRouteRecoveryRequest
+    ) async -> Bool {
+        var resolvedSnapshot: DirectCoreAudioLifecycleController.DeviceSnapshot?
+        var queryError: Error = BoundedAudioHardwareQueue.Failure.recovering
+        // One bounded retry covers transient HAL queries without leaving a
+        // recording paused after its recovery request has been consumed.
+        for _ in 0..<2 {
+            let available = await self.directAudioLifecycleController.waitForDeviceQueryAvailability()
+            guard request.generation == self.audioRouteRecoveryGeneration,
+                  Task.isCancelled == false, self.isTerminating == false else { return false }
+            guard available else { break }
+            do {
+                resolvedSnapshot = try await self.directAudioLifecycleController.readDeviceSnapshot(refreshLiveness: true)
+                break
+            } catch {
+                queryError = error
             }
+        }
+        guard request.generation == self.audioRouteRecoveryGeneration,
+              Task.isCancelled == false, self.isTerminating == false else { return false }
+        guard let devices = resolvedSnapshot else {
+            await self.finishAudioRouteRecoveryFailure(request, error: queryError)
+            return false
+        }
+        let snapshot = (devices.devices, devices.defaultInputUID)
 
-            DebugLogger.shared.info("Audio route recovery succeeded", source: "ASRService")
-        } catch {
-            DebugLogger.shared.error("Audio route recovery failed: \(error)", source: "ASRService")
-            await self.stopWithoutTranscription()
-            NotificationCenter.default.post(
-                name: NSNotification.Name("ASRServiceDeviceDisconnected"),
-                object: nil,
-                userInfo: ["errorMessage": "Recording stopped because the audio device changed."]
+        let currentUIDs = Set(snapshot.0.map(\.uid))
+        guard currentUIDs == self.cachedDeviceUIDs else {
+            self.cacheCurrentDeviceList(snapshot.0)
+            self.scheduleAudioRouteRecovery(
+                reason: "input topology still settling",
+                requiresIdlePrewarm: request.requiresIdlePrewarm,
+                reconcilesInputSelection: true
+            )
+            return false
+        }
+
+        AppServices.shared.microphonePreferenceCoordinator.reconcileMicrophoneSelection(
+            availableInputs: snapshot.0,
+            defaultInputUID: snapshot.1
+        )
+        return true
+    }
+
+    private func recoverIdleAudioRoute(_ request: AudioRouteRecoveryRequest) async {
+        let shouldRebuild = self.hasPreparedAudioCapture || request.requiresIdlePrewarm
+        guard shouldRebuild else { return }
+        let shouldRestoreMicrophonePreview = self.isMicrophonePreviewRequested
+        let microphonePreviewGeneration = self.microphonePreviewOperationGeneration
+
+        // If another event arrives while retirement is draining, the next
+        // generation still needs to restore the prepared capture backend.
+        self.pendingAudioRouteRecovery = AudioRouteRecoveryRequest(
+            generation: request.generation,
+            reason: request.reason,
+            requiresIdlePrewarm: true,
+            reconcilesInputSelection: request.reconcilesInputSelection
+        )
+        await self.directAudioLifecycleController.invalidate(
+            reason: "idle_route_change:\(request.reason)",
+            recoveringRoute: true
+        )
+        await self.retireAudioEngineAndWait(reason: "idle_route_change:\(request.reason)")
+
+        guard request.generation == self.audioRouteRecoveryGeneration, Task.isCancelled == false else { return }
+        if shouldRestoreMicrophonePreview,
+           self.isMicrophonePreviewRequested,
+           microphonePreviewGeneration == self.microphonePreviewOperationGeneration
+        {
+            await self.startMicrophonePreview()
+        } else {
+            await self.prewarmConfiguredAudioCaptureIfPossible(
+                reason: "idle_route_change",
+                allowDuringRouteRecovery: true
             )
         }
     }
 
-    private func handleDefaultInputChanged() {
-        // If we're not syncing with macOS system settings, ignore system-default changes.
-        // In independent mode, we explicitly bind to `preferredInputDeviceUID` on start/restart.
-        guard SettingsStore.shared.syncAudioDevicesWithSystem else {
-            DebugLogger.shared.debug("Ignoring system default input change (sync disabled)", source: "ASRService")
+    private func recoverActiveAudioRoute(_ request: AudioRouteRecoveryRequest) async {
+        guard self.isRunning else { return }
+
+        DebugLogger.shared.info(
+            "Recovering audio route after \(request.reason) (generation=\(request.generation))",
+            source: "ASRService"
+        )
+        self.audioCapturePipeline.setRecordingEnabled(false)
+        self.stopMonitoringDevice()
+        await self.stopActiveAudioCapture(
+            retainDirectPreparedCapture: false,
+            reason: "active_route_recovery"
+        )
+        await self.retireAudioEngineAndWait(reason: "audio_route_recovery")
+        let hardwareAvailable = await self.directAudioLifecycleController.waitForHardwareAvailability()
+        guard request.generation == self.audioRouteRecoveryGeneration,
+              Task.isCancelled == false, self.isTerminating == false else { return }
+
+        do {
+            guard hardwareAvailable else { throw BoundedAudioHardwareQueue.Failure.recovering }
+            var maximumStartAttempts = 1
+            var hasReadInputSnapshot = false
+            var failedInputUIDs = Set<String>()
+            var immediatelyRetriedInputUID: String?
+            var completedAttempts = 0
+
+            while completedAttempts < maximumStartAttempts {
+                completedAttempts += 1
+                self.audioCaptureAttemptID &+= 1
+                let readinessAttemptID = self.audioCaptureAttemptID
+                self.audioCaptureReadinessGate.arm(
+                    sessionID: self.benchmarkSessionID,
+                    attemptID: readinessAttemptID
+                )
+                self.audioCapturePipeline.setRecordingEnabled(
+                    true,
+                    sessionID: self.benchmarkSessionID,
+                    attemptID: readinessAttemptID,
+                    startHostTime: mach_absolute_time()
+                )
+
+                do {
+                    try await self.startConfiguredAudioCapture(
+                        excluding: failedInputUIDs,
+                        onInputSnapshotRead: { inputCount in
+                            guard hasReadInputSnapshot == false else { return }
+                            hasReadInputSnapshot = true
+                            maximumStartAttempts = max(inputCount, 1) + 1
+                        }
+                    )
+                } catch {
+                    guard error is BoundedAudioHardwareQueue.Failure == false,
+                          error is CancellationError == false
+                    else { throw error }
+                    if let failedUID = self.audioStartAttemptInputUID {
+                        let retrySameInput = immediatelyRetriedInputUID == nil
+                        if retrySameInput {
+                            immediatelyRetriedInputUID = failedUID
+                        }
+                        if retrySameInput == false {
+                            failedInputUIDs.insert(failedUID)
+                        }
+                    }
+                    guard completedAttempts < maximumStartAttempts else { throw error }
+                    self.audioCapturePipeline.setRecordingEnabled(false)
+                    await self.stopActiveAudioCapture(
+                        retainDirectPreparedCapture: false,
+                        reason: "active_route_recovery_start_retry"
+                    )
+                    continue
+                }
+
+                guard request.generation == self.audioRouteRecoveryGeneration,
+                      Task.isCancelled == false
+                else {
+                    self.audioCapturePipeline.setRecordingEnabled(false)
+                    await self.stopActiveAudioCapture(
+                        retainDirectPreparedCapture: false,
+                        reason: "superseded_route_recovery_start"
+                    )
+                    return
+                }
+                let readiness = await self.audioCaptureReadinessGate.wait(
+                    sessionID: self.benchmarkSessionID,
+                    attemptID: readinessAttemptID,
+                    timeoutNanoseconds: self.firstPCMTimeoutNanoseconds
+                )
+                guard request.generation == self.audioRouteRecoveryGeneration,
+                      Task.isCancelled == false
+                else {
+                    self.audioCapturePipeline.setRecordingEnabled(false)
+                    await self.stopActiveAudioCapture(
+                        retainDirectPreparedCapture: false,
+                        reason: "superseded_route_recovery_readiness"
+                    )
+                    return
+                }
+                if readiness == .ready {
+                    AppServices.shared.microphonePreferenceCoordinator.confirmActiveSelection(
+                        uid: self.audioStartAttemptInputUID,
+                        name: self.audioStartAttemptInputName
+                    )
+                    self.benchmarkLog(
+                        "route_recovery_first_pcm generation=\(request.generation) " +
+                            "attempt=\(completedAttempts) attemptID=\(readinessAttemptID) " +
+                            "bufferedSamples=\(self.audioBuffer.count)"
+                    )
+
+                    if self.activeAudioCaptureBackend == .audioEngine,
+                       let currentDevice = self.getCurrentlyBoundInputDevice()
+                    {
+                        self.startMonitoringDevice(currentDevice.id)
+                    }
+
+                    DebugLogger.shared.info(
+                        "Audio route recovery succeeded (generation=\(request.generation), " +
+                            "attempt=\(completedAttempts))",
+                        source: "ASRService"
+                    )
+                    return
+                }
+
+                if let failedUID = self.audioStartAttemptInputUID {
+                    let retrySameInput = readiness == .formatInvalidated &&
+                        immediatelyRetriedInputUID == nil
+                    if retrySameInput {
+                        immediatelyRetriedInputUID = failedUID
+                    }
+                    if retrySameInput == false {
+                        failedInputUIDs.insert(failedUID)
+                    }
+                }
+                guard completedAttempts < maximumStartAttempts else {
+                    throw NSError(
+                        domain: "ASRService",
+                        code: -3,
+                        userInfo: [
+                            NSLocalizedDescriptionKey:
+                                "No replacement microphone delivered audio (\(readiness)).",
+                        ]
+                    )
+                }
+                self.audioCapturePipeline.setRecordingEnabled(false)
+                await self.stopActiveAudioCapture(
+                    retainDirectPreparedCapture: false,
+                    reason: "active_route_recovery_readiness_retry"
+                )
+            }
+            throw NSError(
+                domain: "ASRService",
+                code: -3,
+                userInfo: [NSLocalizedDescriptionKey: "No replacement microphone is available."]
+            )
+        } catch {
+            await self.finishAudioRouteRecoveryFailure(request, error: error)
+        }
+    }
+
+    private func finishAudioRouteRecoveryFailure(_ request: AudioRouteRecoveryRequest, error: Error) async {
+        guard request.generation == self.audioRouteRecoveryGeneration,
+              Task.isCancelled == false, self.isTerminating == false else { return }
+        DebugLogger.shared.error("Audio route recovery failed: \(error)", source: "ASRService")
+        AppServices.shared.microphonePreferenceCoordinator.markActiveSelectionUnavailable()
+        let failedSessionID = self.benchmarkSessionID
+        var expectedStartGeneration = self.audioCaptureStartGeneration
+        let wasCapturing = self.isRunning || self.isStarting
+        if self.isRunning {
+            // This task keeps recovery ownership until its defer runs. User Stop
+            // may cancel and await it, but it must never await itself here.
+            await self.stopWithoutTranscription(finishingRecovery: true)
+        } else if self.isStarting {
+            // Startup may itself be awaiting this recovery. Invalidate it without
+            // awaiting its completion, so it can unwind after this task returns.
+            self.interruptPendingAudioCaptureStart()
+            expectedStartGeneration = self.audioCaptureStartGeneration
+            await self.audioCaptureReadinessGate.cancel(
+                sessionID: failedSessionID, attemptID: self.audioCaptureAttemptID
+            )
+        }
+        guard wasCapturing, self.benchmarkSessionID == failedSessionID,
+              self.audioCaptureStartGeneration == expectedStartGeneration,
+              request.generation == self.audioRouteRecoveryGeneration,
+              Task.isCancelled == false, self.isTerminating == false else { return }
+        self.presentAudioCaptureFailure(
+            title: "Recording Stopped",
+            message: "The microphone could not recover after the audio device changed. \(error.localizedDescription)"
+        )
+    }
+
+    private func handleDirectCaptureFormatInvalidation(
+        _ invalidation: DirectCoreAudioLifecycleController.FormatInvalidation
+    ) async {
+        let captureSnapshot = self.directAudioLifecycleController.snapshot
+        guard invalidation.generation == captureSnapshot.generation else {
+            self.benchmarkLog(
+                "direct_format_invalidation_ignored staleGeneration=\(invalidation.generation) " +
+                    "currentGeneration=\(captureSnapshot.generation) property=\(invalidation.reason)"
+            )
             return
         }
+        let sessionID = self.benchmarkSessionID
+        self.audioCapturePipeline.setRecordingEnabled(false)
+        if self.isStarting, self.isRunning == false {
+            await self.audioCaptureReadinessGate.signalFormatInvalidation(
+                sessionID: sessionID,
+                attemptID: self.audioCaptureAttemptID
+            )
+        }
+        self.benchmarkLog(
+            "direct_format_invalidation generation=\(invalidation.generation) " +
+                "device=\(invalidation.deviceID) property=\(invalidation.reason) " +
+                "wasRunning=\(invalidation.wasRunning) isStarting=\(self.isStarting)"
+        )
+        AppServices.shared.audioObserver.signalInputAvailabilityChanged()
+        if invalidation.reason == "audio_service_restarted" {
+            self.reestablishAudioHardwareListenersAfterServiceReset()
+            AppServices.shared.audioObserver.restartObservingAfterAudioServiceReset()
+        }
+        DebugLogger.shared.warning(
+            "Direct capture generation \(invalidation.generation) invalidated by " +
+                "\(invalidation.reason); scheduling serialized route recovery",
+            source: "ASRService"
+        )
+        self.scheduleAudioRouteRecovery(
+            reason: "direct format changed: \(invalidation.reason)",
+            requiresIdlePrewarm: true,
+            invalidatesCurrentStart: true
+        )
+    }
 
-        self.scheduleAudioRouteRecovery(reason: "default input changed")
+    private func handleDefaultInputChanged() {
+        // Microphone priority is app-owned. A macOS default-input change must
+        // never move or restart FluidVoice's selected microphone.
     }
 
     private func handleDefaultOutputChanged() {
-        guard SettingsStore.shared.syncAudioDevicesWithSystem else {
-            DebugLogger.shared.debug("Ignoring system default output change (sync disabled)", source: "ASRService")
+        // Input-only direct capture has no output device dependency.
+        if self.directAudioLifecycleController.snapshot.isPrepared {
             return
         }
 
         self.scheduleAudioRouteRecovery(reason: "default output changed")
     }
 
-    private func handleEngineConfigurationChanged(_ changedEngine: AVAudioEngine?) {
-        guard let changedEngine,
-              let currentEngine = self.engineStorage as? AVAudioEngine,
-              changedEngine === currentEngine
+    private func handleEngineConfigurationChanged(_ changedEngineIdentifier: ObjectIdentifier) {
+        guard let currentEngine = self.engineStorage as? AVAudioEngine,
+              ObjectIdentifier(currentEngine) == changedEngineIdentifier
         else { return }
+        guard AudioCaptureIdlePolicy.shouldRecoverEngineConfigurationChange(
+            isRunning: self.isRunning,
+            isStarting: self.isStarting
+        ) else {
+            DebugLogger.shared.debug(
+                "Ignoring AVAudioEngine configuration change while capture is idle",
+                source: "ASRService"
+            )
+            return
+        }
 
         self.scheduleAudioRouteRecovery(reason: "engine configuration changed")
     }
@@ -1958,14 +5504,30 @@ final class ASRService: ObservableObject {
     private func registerEngineConfigurationChangeObserver() {
         guard self.engineConfigurationChangeObserver == nil else { return }
 
+        // queue: nil (synchronous delivery on the posting thread) is load-bearing:
+        // AVAudioEngine posts this notification from its internal serial queue, and
+        // NotificationCenter blocks a post until queued observers finish. With
+        // queue: .main that wait can never end when the main thread is itself
+        // blocked on the engine's queue (dealloc/stop during retirement) — a
+        // permanent deadlock (#542). The body only hops to the main actor, which
+        // is safe from any thread.
         self.engineConfigurationChangeObserver = NotificationCenter.default.addObserver(
             forName: .AVAudioEngineConfigurationChange,
             object: nil,
-            queue: .main
+            queue: nil
         ) { [weak self] notification in
+            #if DEBUG
+            AudioTopologyDiagnostics.record(.callbackBegin, owner: .asrEngineConfiguration, queueRole: .callbackCurrent, phase: .engine)
+            defer { AudioTopologyDiagnostics.record(.callbackEnd, owner: .asrEngineConfiguration, queueRole: .callbackCurrent, phase: .engine) }
+            #endif
             guard let changedEngine = notification.object as? AVAudioEngine else { return }
-            Task { @MainActor [weak self, weak changedEngine] in
-                self?.handleEngineConfigurationChanged(changedEngine)
+            let changedEngineIdentifier = ObjectIdentifier(changedEngine)
+            Task { @MainActor [weak self] in
+                #if DEBUG
+                AudioTopologyDiagnostics.record(.mainHopBegin, owner: .asrEngineConfiguration, queueRole: .mainControl, phase: .engine)
+                defer { AudioTopologyDiagnostics.record(.mainHopEnd, owner: .asrEngineConfiguration, queueRole: .mainControl, phase: .engine) }
+                #endif
+                self?.handleEngineConfigurationChanged(changedEngineIdentifier)
             }
         }
     }
@@ -1973,58 +5535,300 @@ final class ASRService: ObservableObject {
     private var defaultInputListenerInstalled = false
     private var defaultInputListenerToken: AudioObjectPropertyListenerBlock?
     private var defaultOutputListenerToken: AudioObjectPropertyListenerBlock?
+    private var audioHardwareListenerLifecycleGeneration: UInt64 = 0
+    private var defaultInputListenerPendingGeneration: UInt64?
+    private var defaultOutputListenerPendingGeneration: UInt64?
+    private var defaultInputListenerDirtyGeneration: UInt64?
+    private var defaultOutputListenerDirtyGeneration: UInt64?
+
+    private func reestablishAudioHardwareListenersAfterServiceReset() {
+        // The reset invalidates these registrations in HAL; do not attempt to
+        // remove the stale tokens before installing replacements.
+        self.audioHardwareListenerLifecycleGeneration &+= 1
+        self.defaultInputListenerPendingGeneration = nil
+        self.defaultOutputListenerPendingGeneration = nil
+        self.deviceListListenerPendingGeneration = nil
+        self.defaultInputListenerDirtyGeneration = nil
+        self.defaultOutputListenerDirtyGeneration = nil
+        self.deviceListListenerDirtyGeneration = nil
+        self.monitoredDeviceListenerPendingEpoch = nil
+        self.monitoredDeviceAvailabilityDirtyEpoch = nil
+        self.defaultInputListenerInstalled = false
+        self.defaultInputListenerToken = nil
+        self.defaultOutputListenerToken = nil
+        self.deviceListListenerInstalled = false
+        self.deviceListListenerToken = nil
+        self.monitoredDeviceID = nil
+        self.monitoredDeviceIsAliveListenerToken = nil
+        self.registerDefaultDeviceChangeListener()
+        self.registerDeviceListChangeListener()
+        self.benchmarkLog(
+            "audio_service_restart listener_reregistration_scheduled generation=" +
+                "\(self.audioHardwareListenerLifecycleGeneration)"
+        )
+        DebugLogger.shared.warning(
+            "Scheduled ASR hardware listener re-registration after Core Audio service reset",
+            source: "ASRService"
+        )
+    }
+
     private func registerDefaultDeviceChangeListener() {
         guard self.defaultInputListenerInstalled == false || self.defaultOutputListenerToken == nil else { return }
-        var inputAddress = AudioObjectPropertyAddress(
+        let inputAddress = AudioObjectPropertyAddress(
             mSelector: kAudioHardwarePropertyDefaultInputDevice,
             mScope: kAudioObjectPropertyScopeGlobal,
             mElement: kAudioObjectPropertyElementMain
         )
-        var outputAddress = AudioObjectPropertyAddress(
+        let outputAddress = AudioObjectPropertyAddress(
             mSelector: kAudioHardwarePropertyDefaultOutputDevice,
             mScope: kAudioObjectPropertyScopeGlobal,
             mElement: kAudioObjectPropertyElementMain
         )
 
-        if self.defaultInputListenerInstalled == false {
+        let generation = self.audioHardwareListenerLifecycleGeneration
+        if self.defaultInputListenerInstalled == false,
+           self.defaultInputListenerPendingGeneration == nil
+        {
             let inputToken: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+                #if DEBUG
+                AudioTopologyDiagnostics.record(
+                    .callbackBegin,
+                    owner: .asrDefaultInput,
+                    objectID: AudioObjectID(kAudioObjectSystemObject),
+                    selector: kAudioHardwarePropertyDefaultInputDevice,
+                    scope: kAudioObjectPropertyScopeGlobal,
+                    element: kAudioObjectPropertyElementMain,
+                    queueRole: .callbackCurrent,
+                    generation: generation
+                )
+                defer { AudioTopologyDiagnostics.record(
+                    .callbackEnd,
+                    owner: .asrDefaultInput,
+                    objectID: AudioObjectID(kAudioObjectSystemObject),
+                    selector: kAudioHardwarePropertyDefaultInputDevice,
+                    scope: kAudioObjectPropertyScopeGlobal,
+                    element: kAudioObjectPropertyElementMain,
+                    queueRole: .callbackCurrent,
+                    generation: generation
+                ) }
+                #endif
                 // Defer to next runloop pass — CoreAudio may hold an internal lock during
                 // this callback, and our handler makes synchronous CoreAudio queries that
                 // would deadlock waiting for the same lock.
-                DispatchQueue.main.async { self?.handleDefaultInputChanged() }
+                DispatchQueue.main.async {
+                    guard let self,
+                          self.audioHardwareListenerLifecycleGeneration == generation,
+                          self.isTerminating == false
+                    else { return }
+                    guard self.defaultInputListenerToken != nil else {
+                        if self.defaultInputListenerPendingGeneration == generation {
+                            self.defaultInputListenerDirtyGeneration = generation
+                        }
+                        return
+                    }
+                    #if DEBUG
+                    AudioTopologyDiagnostics.record(
+                        .mainHopBegin,
+                        owner: .asrDefaultInput,
+                        objectID: AudioObjectID(kAudioObjectSystemObject),
+                        selector: kAudioHardwarePropertyDefaultInputDevice,
+                        scope: kAudioObjectPropertyScopeGlobal,
+                        element: kAudioObjectPropertyElementMain,
+                        queueRole: .mainControl
+                    )
+                    defer { AudioTopologyDiagnostics.record(
+                        .mainHopEnd,
+                        owner: .asrDefaultInput,
+                        objectID: AudioObjectID(kAudioObjectSystemObject),
+                        selector: kAudioHardwarePropertyDefaultInputDevice,
+                        scope: kAudioObjectPropertyScopeGlobal,
+                        element: kAudioObjectPropertyElementMain,
+                        queueRole: .mainControl
+                    ) }
+                    #endif
+                    self.handleDefaultInputChanged()
+                }
             }
-            let inputStatus = AudioObjectAddPropertyListenerBlock(
-                AudioObjectID(kAudioObjectSystemObject),
-                &inputAddress,
-                DispatchQueue.main,
-                inputToken
+            #if DEBUG
+            AudioTopologyDiagnostics.record(
+                .listenerAddBegin,
+                owner: .asrDefaultInput,
+                objectID: AudioObjectID(kAudioObjectSystemObject),
+                selector: inputAddress.mSelector,
+                scope: inputAddress.mScope,
+                element: inputAddress.mElement,
+                queueRole: .mainControl,
+                phase: .listener
             )
-
-            if inputStatus == noErr {
+            #endif
+            self.defaultInputListenerPendingGeneration = generation
+            Task { @MainActor [weak self] in
+                let inputStatus = await AudioTopologyListenerExecution.add(
+                    objectID: AudioObjectID(kAudioObjectSystemObject),
+                    address: inputAddress,
+                    token: inputToken
+                )
+                #if DEBUG
+                AudioTopologyDiagnostics.record(
+                    .listenerAddEnd,
+                    owner: .asrDefaultInput,
+                    objectID: AudioObjectID(kAudioObjectSystemObject),
+                    selector: inputAddress.mSelector,
+                    scope: inputAddress.mScope,
+                    element: inputAddress.mElement,
+                    queueRole: .dedicatedControl,
+                    phase: .listener,
+                    status: inputStatus,
+                    generation: generation
+                )
+                #endif
+                guard let self else {
+                    if inputStatus == noErr {
+                        _ = await AudioTopologyListenerExecution.remove(objectID: AudioObjectID(kAudioObjectSystemObject), address: inputAddress, token: inputToken)
+                    }
+                    return
+                }
+                let ownsPending = self.defaultInputListenerPendingGeneration == generation
+                if ownsPending { self.defaultInputListenerPendingGeneration = nil }
+                guard inputStatus == noErr, ownsPending,
+                      self.audioHardwareListenerLifecycleGeneration == generation,
+                      self.isTerminating == false
+                else {
+                    if ownsPending, self.defaultInputListenerDirtyGeneration == generation {
+                        self.defaultInputListenerDirtyGeneration = nil
+                    }
+                    if inputStatus == noErr {
+                        _ = await AudioTopologyListenerExecution.remove(objectID: AudioObjectID(kAudioObjectSystemObject), address: inputAddress, token: inputToken)
+                    }
+                    return
+                }
                 self.defaultInputListenerInstalled = true
                 self.defaultInputListenerToken = inputToken
-            } else {
-                self.defaultInputListenerToken = nil
-                DebugLogger.shared.error("Failed to register default input listener: \(inputStatus)", source: "ASRService")
+                if self.defaultInputListenerDirtyGeneration == generation {
+                    self.defaultInputListenerDirtyGeneration = nil
+                    self.handleDefaultInputChanged()
+                }
             }
         }
 
-        if self.defaultOutputListenerToken == nil {
+        if self.defaultOutputListenerToken == nil,
+           self.defaultOutputListenerPendingGeneration == nil
+        {
             let outputToken: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
-                DispatchQueue.main.async { self?.handleDefaultOutputChanged() }
+                #if DEBUG
+                AudioTopologyDiagnostics.record(
+                    .callbackBegin,
+                    owner: .asrDefaultOutput,
+                    objectID: AudioObjectID(kAudioObjectSystemObject),
+                    selector: kAudioHardwarePropertyDefaultOutputDevice,
+                    scope: kAudioObjectPropertyScopeGlobal,
+                    element: kAudioObjectPropertyElementMain,
+                    queueRole: .callbackCurrent,
+                    generation: generation
+                )
+                defer { AudioTopologyDiagnostics.record(
+                    .callbackEnd,
+                    owner: .asrDefaultOutput,
+                    objectID: AudioObjectID(kAudioObjectSystemObject),
+                    selector: kAudioHardwarePropertyDefaultOutputDevice,
+                    scope: kAudioObjectPropertyScopeGlobal,
+                    element: kAudioObjectPropertyElementMain,
+                    queueRole: .callbackCurrent,
+                    generation: generation
+                ) }
+                #endif
+                DispatchQueue.main.async {
+                    guard let self,
+                          self.audioHardwareListenerLifecycleGeneration == generation,
+                          self.isTerminating == false
+                    else { return }
+                    guard self.defaultOutputListenerToken != nil else {
+                        if self.defaultOutputListenerPendingGeneration == generation {
+                            self.defaultOutputListenerDirtyGeneration = generation
+                        }
+                        return
+                    }
+                    #if DEBUG
+                    AudioTopologyDiagnostics.record(
+                        .mainHopBegin,
+                        owner: .asrDefaultOutput,
+                        objectID: AudioObjectID(kAudioObjectSystemObject),
+                        selector: kAudioHardwarePropertyDefaultOutputDevice,
+                        scope: kAudioObjectPropertyScopeGlobal,
+                        element: kAudioObjectPropertyElementMain,
+                        queueRole: .mainControl
+                    )
+                    defer { AudioTopologyDiagnostics.record(
+                        .mainHopEnd,
+                        owner: .asrDefaultOutput,
+                        objectID: AudioObjectID(kAudioObjectSystemObject),
+                        selector: kAudioHardwarePropertyDefaultOutputDevice,
+                        scope: kAudioObjectPropertyScopeGlobal,
+                        element: kAudioObjectPropertyElementMain,
+                        queueRole: .mainControl
+                    ) }
+                    #endif
+                    self.handleDefaultOutputChanged()
+                }
             }
-            let outputStatus = AudioObjectAddPropertyListenerBlock(
-                AudioObjectID(kAudioObjectSystemObject),
-                &outputAddress,
-                DispatchQueue.main,
-                outputToken
+            #if DEBUG
+            AudioTopologyDiagnostics.record(
+                .listenerAddBegin,
+                owner: .asrDefaultOutput,
+                objectID: AudioObjectID(kAudioObjectSystemObject),
+                selector: outputAddress.mSelector,
+                scope: outputAddress.mScope,
+                element: outputAddress.mElement,
+                queueRole: .mainControl,
+                phase: .listener
             )
-
-            if outputStatus == noErr {
+            #endif
+            self.defaultOutputListenerPendingGeneration = generation
+            Task { @MainActor [weak self] in
+                let outputStatus = await AudioTopologyListenerExecution.add(
+                    objectID: AudioObjectID(kAudioObjectSystemObject),
+                    address: outputAddress,
+                    token: outputToken
+                )
+                #if DEBUG
+                AudioTopologyDiagnostics.record(
+                    .listenerAddEnd,
+                    owner: .asrDefaultOutput,
+                    objectID: AudioObjectID(kAudioObjectSystemObject),
+                    selector: outputAddress.mSelector,
+                    scope: outputAddress.mScope,
+                    element: outputAddress.mElement,
+                    queueRole: .dedicatedControl,
+                    phase: .listener,
+                    status: outputStatus,
+                    generation: generation
+                )
+                #endif
+                guard let self else {
+                    if outputStatus == noErr {
+                        _ = await AudioTopologyListenerExecution.remove(objectID: AudioObjectID(kAudioObjectSystemObject), address: outputAddress, token: outputToken)
+                    }
+                    return
+                }
+                let ownsPending = self.defaultOutputListenerPendingGeneration == generation
+                if ownsPending { self.defaultOutputListenerPendingGeneration = nil }
+                guard outputStatus == noErr, ownsPending,
+                      self.audioHardwareListenerLifecycleGeneration == generation,
+                      self.isTerminating == false
+                else {
+                    if ownsPending, self.defaultOutputListenerDirtyGeneration == generation {
+                        self.defaultOutputListenerDirtyGeneration = nil
+                    }
+                    if outputStatus == noErr {
+                        _ = await AudioTopologyListenerExecution.remove(objectID: AudioObjectID(kAudioObjectSystemObject), address: outputAddress, token: outputToken)
+                    }
+                    return
+                }
                 self.defaultOutputListenerToken = outputToken
-            } else {
-                self.defaultOutputListenerToken = nil
-                DebugLogger.shared.warning("Failed to register default output listener: \(outputStatus)", source: "ASRService")
+                if self.defaultOutputListenerDirtyGeneration == generation {
+                    self.defaultOutputListenerDirtyGeneration = nil
+                    self.handleDefaultOutputChanged()
+                }
             }
         }
     }
@@ -2033,40 +5837,157 @@ final class ASRService: ObservableObject {
 
     private var deviceListListenerInstalled = false
     private var deviceListListenerToken: AudioObjectPropertyListenerBlock?
+    private var deviceListListenerPendingGeneration: UInt64?
+    private var deviceListListenerDirtyGeneration: UInt64?
+    private var deviceListQueryGeneration: UInt64 = 0
     private var monitoredDeviceID: AudioObjectID?
     private var monitoredDeviceIsAliveListenerToken: AudioObjectPropertyListenerBlock?
+    private var monitoredDeviceListenerEpoch: UInt64 = 0
+    private var monitoredDeviceListenerPendingEpoch: UInt64?
+    private var monitoredDeviceAvailabilityDirtyEpoch: UInt64?
 
     /// Registers a listener for device list changes (additions/removals)
     /// This enables auto-switching to newly connected devices (especially Bluetooth)
     private func registerDeviceListChangeListener() {
-        guard self.deviceListListenerInstalled == false else { return }
+        guard self.deviceListListenerInstalled == false,
+              self.deviceListListenerPendingGeneration == nil
+        else { return }
 
-        var address = AudioObjectPropertyAddress(
+        let address = AudioObjectPropertyAddress(
             mSelector: kAudioHardwarePropertyDevices,
             mScope: kAudioObjectPropertyScopeGlobal,
             mElement: kAudioObjectPropertyElementMain
         )
 
-        let token: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+        let controller = self.directAudioLifecycleController
+        let generation = self.audioHardwareListenerLifecycleGeneration
+        let token: AudioObjectPropertyListenerBlock = { [weak self, weak controller] _, _ in
+            #if DEBUG
+            AudioTopologyDiagnostics.record(
+                .callbackBegin,
+                owner: .asrDeviceList,
+                objectID: AudioObjectID(kAudioObjectSystemObject),
+                selector: kAudioHardwarePropertyDevices,
+                scope: kAudioObjectPropertyScopeGlobal,
+                element: kAudioObjectPropertyElementMain,
+                queueRole: .callbackCurrent,
+                generation: generation
+            )
+            defer { AudioTopologyDiagnostics.record(
+                .callbackEnd,
+                owner: .asrDeviceList,
+                objectID: AudioObjectID(kAudioObjectSystemObject),
+                selector: kAudioHardwarePropertyDevices,
+                scope: kAudioObjectPropertyScopeGlobal,
+                element: kAudioObjectPropertyElementMain,
+                queueRole: .callbackCurrent,
+                generation: generation
+            ) }
+            #endif
+            // Invalidate cached topology immediately without querying HAL from its callback.
+            controller?.noteHardwareTopologyChanged()
             // Defer to next runloop pass — CoreAudio may hold an internal lock during
             // this callback, and our handler makes synchronous CoreAudio queries that
             // would deadlock waiting for the same lock.
-            DispatchQueue.main.async { self?.handleDeviceListChanged() }
+            DispatchQueue.main.async {
+                guard let self else { return }
+                switch ASRHardwareListenerPolicy.disposition(
+                    isTerminating: self.isTerminating,
+                    lifecycleMatches: self.audioHardwareListenerLifecycleGeneration == generation,
+                    isInstalled: self.deviceListListenerToken != nil,
+                    pendingIdentityMatches: self.deviceListListenerPendingGeneration == generation
+                ) {
+                case .ignore:
+                    return
+                case .latchUntilInstalled:
+                    self.deviceListListenerDirtyGeneration = generation
+                    return
+                case .handle:
+                    break
+                }
+                #if DEBUG
+                AudioTopologyDiagnostics.record(
+                    .mainHopBegin,
+                    owner: .asrDeviceList,
+                    objectID: AudioObjectID(kAudioObjectSystemObject),
+                    selector: kAudioHardwarePropertyDevices,
+                    scope: kAudioObjectPropertyScopeGlobal,
+                    element: kAudioObjectPropertyElementMain,
+                    queueRole: .mainControl
+                )
+                defer { AudioTopologyDiagnostics.record(
+                    .mainHopEnd,
+                    owner: .asrDeviceList,
+                    objectID: AudioObjectID(kAudioObjectSystemObject),
+                    selector: kAudioHardwarePropertyDevices,
+                    scope: kAudioObjectPropertyScopeGlobal,
+                    element: kAudioObjectPropertyElementMain,
+                    queueRole: .mainControl
+                ) }
+                #endif
+                self.handleDeviceListChanged()
+            }
         }
-        let status = AudioObjectAddPropertyListenerBlock(
-            AudioObjectID(kAudioObjectSystemObject),
-            &address,
-            DispatchQueue.main,
-            token
+        #if DEBUG
+        AudioTopologyDiagnostics.record(
+            .listenerAddBegin,
+            owner: .asrDeviceList,
+            objectID: AudioObjectID(kAudioObjectSystemObject),
+            selector: address.mSelector,
+            scope: address.mScope,
+            element: address.mElement,
+            queueRole: .mainControl,
+            phase: .listener
         )
-
-        if status == noErr {
+        #endif
+        self.deviceListListenerPendingGeneration = generation
+        Task { @MainActor [weak self] in
+            let status = await AudioTopologyListenerExecution.add(
+                objectID: AudioObjectID(kAudioObjectSystemObject),
+                address: address,
+                token: token
+            )
+            #if DEBUG
+            AudioTopologyDiagnostics.record(
+                .listenerAddEnd,
+                owner: .asrDeviceList,
+                objectID: AudioObjectID(kAudioObjectSystemObject),
+                selector: address.mSelector,
+                scope: address.mScope,
+                element: address.mElement,
+                queueRole: .dedicatedControl,
+                phase: .listener,
+                status: status,
+                generation: generation
+            )
+            #endif
+            guard let self else {
+                if status == noErr {
+                    _ = await AudioTopologyListenerExecution.remove(objectID: AudioObjectID(kAudioObjectSystemObject), address: address, token: token)
+                }
+                return
+            }
+            let ownsPending = self.deviceListListenerPendingGeneration == generation
+            if ownsPending { self.deviceListListenerPendingGeneration = nil }
+            guard status == noErr, ownsPending,
+                  self.audioHardwareListenerLifecycleGeneration == generation,
+                  self.isTerminating == false
+            else {
+                if ownsPending, self.deviceListListenerDirtyGeneration == generation {
+                    self.deviceListListenerDirtyGeneration = nil
+                }
+                if status == noErr {
+                    _ = await AudioTopologyListenerExecution.remove(objectID: AudioObjectID(kAudioObjectSystemObject), address: address, token: token)
+                }
+                return
+            }
             self.deviceListListenerInstalled = true
             self.deviceListListenerToken = token
+            if self.deviceListListenerDirtyGeneration == generation {
+                self.deviceListListenerDirtyGeneration = nil
+                self.handleDeviceListChanged()
+            }
             DebugLogger.shared.debug("Device list change listener registered", source: "ASRService")
-        } else {
-            self.deviceListListenerToken = nil
-            DebugLogger.shared.error("Failed to register device list listener: \(status)", source: "ASRService")
         }
     }
 
@@ -2076,30 +5997,156 @@ final class ASRService: ObservableObject {
         // Unregister previous device if any
         self.stopMonitoringDevice()
 
-        var address = AudioObjectPropertyAddress(
+        let address = AudioObjectPropertyAddress(
             mSelector: kAudioDevicePropertyDeviceIsAlive,
             mScope: kAudioObjectPropertyScopeGlobal,
             mElement: kAudioObjectPropertyElementMain
         )
 
+        self.monitoredDeviceListenerEpoch &+= 1
+        let epoch = self.monitoredDeviceListenerEpoch
+        let generation = self.audioHardwareListenerLifecycleGeneration
+        self.monitoredDeviceID = deviceID
+        self.monitoredDeviceListenerPendingEpoch = epoch
         let token: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
-            DispatchQueue.main.async { self?.handleDeviceAvailabilityChanged(deviceID: deviceID) }
+            #if DEBUG
+            AudioTopologyDiagnostics.record(
+                .callbackBegin,
+                owner: .asrMonitoredInput,
+                objectID: deviceID,
+                selector: kAudioDevicePropertyDeviceIsAlive,
+                scope: kAudioObjectPropertyScopeGlobal,
+                element: kAudioObjectPropertyElementMain,
+                queueRole: .callbackCurrent,
+                generation: epoch
+            )
+            defer { AudioTopologyDiagnostics.record(
+                .callbackEnd,
+                owner: .asrMonitoredInput,
+                objectID: deviceID,
+                selector: kAudioDevicePropertyDeviceIsAlive,
+                scope: kAudioObjectPropertyScopeGlobal,
+                element: kAudioObjectPropertyElementMain,
+                queueRole: .callbackCurrent,
+                generation: epoch
+            ) }
+            #endif
+            DispatchQueue.main.async {
+                guard let self else { return }
+                let identityMatches = self.audioHardwareListenerLifecycleGeneration == generation
+                    && self.monitoredDeviceListenerEpoch == epoch
+                    && self.monitoredDeviceID == deviceID
+                switch ASRHardwareListenerPolicy.disposition(
+                    isTerminating: self.isTerminating,
+                    lifecycleMatches: identityMatches,
+                    isInstalled: self.monitoredDeviceIsAliveListenerToken != nil,
+                    pendingIdentityMatches: self.monitoredDeviceListenerPendingEpoch == epoch
+                ) {
+                case .ignore:
+                    return
+                case .latchUntilInstalled:
+                    self.monitoredDeviceAvailabilityDirtyEpoch = epoch
+                    return
+                case .handle:
+                    break
+                }
+                #if DEBUG
+                AudioTopologyDiagnostics.record(
+                    .mainHopBegin,
+                    owner: .asrMonitoredInput,
+                    objectID: deviceID,
+                    selector: kAudioDevicePropertyDeviceIsAlive,
+                    scope: kAudioObjectPropertyScopeGlobal,
+                    element: kAudioObjectPropertyElementMain,
+                    queueRole: .mainControl
+                )
+                defer { AudioTopologyDiagnostics.record(
+                    .mainHopEnd,
+                    owner: .asrMonitoredInput,
+                    objectID: deviceID,
+                    selector: kAudioDevicePropertyDeviceIsAlive,
+                    scope: kAudioObjectPropertyScopeGlobal,
+                    element: kAudioObjectPropertyElementMain,
+                    queueRole: .mainControl
+                ) }
+                #endif
+                self.handleDeviceAvailabilityChanged(
+                    deviceID: deviceID,
+                    lifecycleGeneration: generation,
+                    listenerEpoch: epoch
+                )
+            }
         }
-        let status = AudioObjectAddPropertyListenerBlock(
-            deviceID,
-            &address,
-            DispatchQueue.main,
-            token
+        #if DEBUG
+        AudioTopologyDiagnostics.record(
+            .listenerAddBegin,
+            owner: .asrMonitoredInput,
+            objectID: deviceID,
+            selector: address.mSelector,
+            scope: address.mScope,
+            element: address.mElement,
+            queueRole: .mainControl,
+            phase: .listener
         )
-
-        if status == noErr {
-            self.monitoredDeviceID = deviceID
+        #endif
+        Task { @MainActor [weak self] in
+            let status = await AudioTopologyListenerExecution.add(
+                objectID: deviceID,
+                address: address,
+                token: token
+            )
+            #if DEBUG
+            AudioTopologyDiagnostics.record(
+                .listenerAddEnd,
+                owner: .asrMonitoredInput,
+                objectID: deviceID,
+                selector: address.mSelector,
+                scope: address.mScope,
+                element: address.mElement,
+                queueRole: .dedicatedControl,
+                phase: .listener,
+                status: status,
+                generation: epoch
+            )
+            #endif
+            guard let self else {
+                if status == noErr {
+                    _ = await AudioTopologyListenerExecution.remove(objectID: deviceID, address: address, token: token)
+                }
+                return
+            }
+            let ownsPending = self.monitoredDeviceListenerPendingEpoch == epoch
+            if ownsPending { self.monitoredDeviceListenerPendingEpoch = nil }
+            guard status == noErr,
+                  ownsPending,
+                  self.audioHardwareListenerLifecycleGeneration == generation,
+                  self.monitoredDeviceListenerEpoch == epoch,
+                  self.monitoredDeviceID == deviceID,
+                  self.isTerminating == false
+            else {
+                if ownsPending,
+                   self.monitoredDeviceListenerEpoch == epoch,
+                   self.monitoredDeviceID == deviceID
+                {
+                    self.monitoredDeviceAvailabilityDirtyEpoch = nil
+                    self.monitoredDeviceID = nil
+                    self.monitoredDeviceListenerEpoch &+= 1
+                }
+                if status == noErr {
+                    _ = await AudioTopologyListenerExecution.remove(objectID: deviceID, address: address, token: token)
+                }
+                return
+            }
             self.monitoredDeviceIsAliveListenerToken = token
+            if self.monitoredDeviceAvailabilityDirtyEpoch == epoch {
+                self.monitoredDeviceAvailabilityDirtyEpoch = nil
+                self.handleDeviceAvailabilityChanged(
+                    deviceID: deviceID,
+                    lifecycleGeneration: generation,
+                    listenerEpoch: epoch
+                )
+            }
             DebugLogger.shared.debug("Started monitoring device ID: \(deviceID)", source: "ASRService")
-        } else {
-            self.monitoredDeviceID = nil
-            self.monitoredDeviceIsAliveListenerToken = nil
-            DebugLogger.shared.error("Failed to monitor device \(deviceID): \(status)", source: "ASRService")
         }
     }
 
@@ -2107,17 +6154,52 @@ final class ASRService: ObservableObject {
     private func stopMonitoringDevice() {
         guard let deviceID = self.monitoredDeviceID else { return }
 
-        var address = AudioObjectPropertyAddress(
+        let address = AudioObjectPropertyAddress(
             mSelector: kAudioDevicePropertyDeviceIsAlive,
             mScope: kAudioObjectPropertyScopeGlobal,
             mElement: kAudioObjectPropertyElementMain
         )
 
-        if let token = self.monitoredDeviceIsAliveListenerToken {
-            _ = AudioObjectRemovePropertyListenerBlock(deviceID, &address, DispatchQueue.main, token)
-        }
+        let token = self.monitoredDeviceIsAliveListenerToken
+        self.monitoredDeviceListenerEpoch &+= 1
         self.monitoredDeviceID = nil
         self.monitoredDeviceIsAliveListenerToken = nil
+        self.monitoredDeviceListenerPendingEpoch = nil
+        self.monitoredDeviceAvailabilityDirtyEpoch = nil
+        if let token {
+            #if DEBUG
+            AudioTopologyDiagnostics.record(
+                .listenerRemoveBegin,
+                owner: .asrMonitoredInput,
+                objectID: deviceID,
+                selector: address.mSelector,
+                scope: address.mScope,
+                element: address.mElement,
+                queueRole: .mainControl,
+                phase: .listener
+            )
+            #endif
+            Task {
+                let status = await AudioTopologyListenerExecution.remove(
+                    objectID: deviceID,
+                    address: address,
+                    token: token
+                )
+                #if DEBUG
+                AudioTopologyDiagnostics.record(
+                    .listenerRemoveEnd,
+                    owner: .asrMonitoredInput,
+                    objectID: deviceID,
+                    selector: address.mSelector,
+                    scope: address.mScope,
+                    element: address.mElement,
+                    queueRole: .dedicatedControl,
+                    phase: .listener,
+                    status: status
+                )
+                #endif
+            }
+        }
         DebugLogger.shared.debug("Stopped monitoring device ID: \(deviceID)", source: "ASRService")
     }
 
@@ -2125,99 +6207,123 @@ final class ASRService: ObservableObject {
     private func handleDeviceListChanged() {
         DebugLogger.shared.info("🔄 Device list changed - checking for new/removed devices", source: "ASRService")
 
-        // Perform CoreAudio queries off the main thread — during a device topology change
-        // the HAL may still be settling, and synchronous queries on main can deadlock.
-        let preferredUID = SettingsStore.shared.preferredInputDeviceUID
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let currentDevices = AudioDevice.listInputDevices()
-            let systemDefault = AudioDevice.getDefaultInputDevice()
-
-            DispatchQueue.main.async { [weak self] in
-                guard let self else { return }
-                let cachedUIDs = self.cachedDeviceUIDs
-
-                DebugLogger.shared.debug("Current input devices: \(currentDevices.map { $0.name }.joined(separator: ", "))", source: "ASRService")
-
-                // Check if preferred device is now available (for auto-switch)
-                if let preferredUID,
-                   let preferredDevice = currentDevices.first(where: { $0.uid == preferredUID })
-                {
-                    if let currentDevice = self.getCurrentlyBoundInputDevice(),
-                       currentDevice.uid != preferredUID,
-                       currentDevice.uid == systemDefault?.uid
-                    {
-                        DebugLogger.shared.info(
-                            "🔌 Preferred device '\(preferredDevice.name)' reconnected. Auto-switching...",
-                            source: "ASRService"
-                        )
-
-                        if self.isRunning {
-                            DebugLogger.shared.info(
-                                "Recording in progress - deferring preferred device switch until audio route recovery",
-                                source: "ASRService"
-                            )
-                            self.scheduleAudioRouteRecovery(reason: "preferred input reconnected")
-                        } else {
-                            DebugLogger.shared.info("Not recording - updating binding for next session", source: "ASRService")
-                            _ = self.setEngineInputDevice(
-                                deviceID: preferredDevice.id,
-                                deviceUID: preferredDevice.uid,
-                                deviceName: preferredDevice.name
-                            )
-                        }
-                    }
-                }
-
-                // Check for newly connected Bluetooth devices (auto-switch)
-                for device in currentDevices {
-                    if device.name.localizedCaseInsensitiveContains("airpods") ||
-                        device.name.localizedCaseInsensitiveContains("bluetooth")
-                    {
-                        if !cachedUIDs.contains(device.uid) {
-                            DebugLogger.shared.info(
-                                "🎧 New Bluetooth device detected: '\(device.name)'. Auto-switching...",
-                                source: "ASRService"
-                            )
-
-                            SettingsStore.shared.preferredInputDeviceUID = device.uid
-                            DebugLogger.shared.debug("Updated preferred input device to: \(device.uid)", source: "ASRService")
-
-                            if self.isRunning {
-                                DebugLogger.shared.info(
-                                    "Recording in progress - deferring Bluetooth switch until audio route recovery",
-                                    source: "ASRService"
-                                )
-                                self.scheduleAudioRouteRecovery(reason: "bluetooth input connected")
-                            } else {
-                                DebugLogger.shared.info("Not recording - Bluetooth device will be used on next recording", source: "ASRService")
-                            }
-                        }
-                    }
-                }
-
-                self.cacheCurrentDeviceList(currentDevices)
+        // Every request gets an identity before leaving MainActor. Results are last-request-wins:
+        // an older HAL snapshot must not mutate dictation state after a newer topology event,
+        // a Core Audio service restart, or termination.
+        self.deviceListQueryGeneration &+= 1
+        let queryGeneration = self.deviceListQueryGeneration
+        let lifecycleGeneration = self.audioHardwareListenerLifecycleGeneration
+        Task { @MainActor [weak self] in
+            let snapshot = await AudioTopologyListenerExecution.perform {
+                (
+                    AudioDevice.listInputDevicesRefreshingLiveness(diagnosticsOwner: .asrService),
+                    AudioDevice.getDefaultInputDevice()?.uid
+                )
             }
+
+            guard let self,
+                  ASRHardwareListenerPolicy.deviceListQueryCanApply(
+                      isTerminating: self.isTerminating,
+                      capturedLifecycle: lifecycleGeneration,
+                      currentLifecycle: self.audioHardwareListenerLifecycleGeneration,
+                      capturedQueryGeneration: queryGeneration,
+                      currentQueryGeneration: self.deviceListQueryGeneration
+                  )
+            else { return }
+
+            let (currentDevices, defaultInputUID) = snapshot
+            let cachedUIDs = self.cachedDeviceUIDs
+            let cachedDeviceIDsByUID = self.cachedInputDeviceIDsByUID
+            let cachedLivenessByUID = self.cachedInputLivenessByUID
+            let currentUIDs = Set(currentDevices.map(\.uid))
+            let currentDeviceIDsByUID = Dictionary(
+                currentDevices.map { ($0.uid, $0.id) },
+                uniquingKeysWith: { current, _ in current }
+            )
+            let currentLivenessByUID = Dictionary(
+                currentDevices.map { ($0.uid, $0.isAlive) },
+                uniquingKeysWith: { current, _ in current }
+            )
+
+            DebugLogger.shared.debug("Current input devices: \(currentDevices.map { $0.name }.joined(separator: ", "))", source: "ASRService")
+
+            if currentUIDs != cachedUIDs ||
+                currentDeviceIDsByUID != cachedDeviceIDsByUID ||
+                currentLivenessByUID != cachedLivenessByUID
+            {
+                let microphonePreferenceCoordinator =
+                    AppServices.shared.microphonePreferenceCoordinator
+                let migrationPending = microphonePreferenceCoordinator.needsMicrophonePriorityMigration
+                let resolvedInput = microphonePreferenceCoordinator.reconcileMicrophoneSelection(
+                    availableInputs: currentDevices,
+                    defaultInputUID: defaultInputUID
+                )
+                let priorityUIDs = SettingsStore.shared.microphonePriority.map(\.uid)
+                let livenessRequiresRecovery =
+                    (
+                        self.isRunning &&
+                            resolvedInput?.uid != microphonePreferenceCoordinator.confirmedActiveInputUID
+                    ) ||
+                    (
+                        self.hasPreparedAudioCapture &&
+                            resolvedInput?.id != self.directAudioLifecycleController.snapshot.deviceID
+                    )
+                let shouldReconcileInputSelection = AudioCaptureIdlePolicy.shouldReconcileInputSelection(
+                    priorityInputUIDs: priorityUIDs,
+                    migrationPending: migrationPending,
+                    previousInputUIDs: cachedUIDs,
+                    currentInputUIDs: currentUIDs
+                ) || AudioCaptureIdlePolicy.didResolvedPriorityInputIdentityChange(
+                    priorityInputUIDs: priorityUIDs,
+                    previousInputDeviceIDsByUID: cachedDeviceIDsByUID,
+                    currentInputDeviceIDsByUID: currentDeviceIDsByUID
+                ) || livenessRequiresRecovery
+                if shouldReconcileInputSelection {
+                    self.scheduleAudioRouteRecovery(
+                        reason: "app microphone availability changed",
+                        requiresIdlePrewarm: true,
+                        reconcilesInputSelection: true
+                    )
+                }
+            }
+
+            self.cacheCurrentDeviceList(currentDevices)
         }
     }
 
     /// Handles device availability changes (device disconnected or reconnected)
-    private func handleDeviceAvailabilityChanged(deviceID: AudioObjectID) {
+    private func handleDeviceAvailabilityChanged(
+        deviceID: AudioObjectID,
+        lifecycleGeneration: UInt64,
+        listenerEpoch: UInt64
+    ) {
         DebugLogger.shared.info("⚠️ Device availability changed for ID: \(deviceID)", source: "ASRService")
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let isAlive = AudioDevice.refreshInputDeviceLiveness(deviceID: deviceID)
+            DispatchQueue.main.async { [weak self] in
+                guard let self,
+                      ASRHardwareListenerPolicy.selectedDeviceQueryCanApply(
+                          isTerminating: self.isTerminating,
+                          capturedLifecycle: lifecycleGeneration,
+                          currentLifecycle: self.audioHardwareListenerLifecycleGeneration,
+                          capturedEpoch: listenerEpoch,
+                          currentEpoch: self.monitoredDeviceListenerEpoch,
+                          capturedDeviceID: deviceID,
+                          currentDeviceID: self.monitoredDeviceID,
+                          listenerIsInstalled: self.monitoredDeviceIsAliveListenerToken != nil
+                      )
+                else { return }
+                self.applyDeviceAvailability(isAlive: isAlive, deviceID: deviceID)
+            }
+        }
+    }
 
-        // Check if device is still alive
-        var address = AudioObjectPropertyAddress(
-            mSelector: kAudioDevicePropertyDeviceIsAlive,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain
+    private func applyDeviceAvailability(isAlive: Bool, deviceID: AudioObjectID) {
+        DebugLogger.shared.debug(
+            "Device \(deviceID) cached alive status: \(isAlive)",
+            source: "ASRService"
         )
-
-        var isAlive: UInt32 = 0
-        var size = UInt32(MemoryLayout<UInt32>.size)
-        let status = AudioObjectGetPropertyData(deviceID, &address, 0, nil, &size, &isAlive)
-
-        DebugLogger.shared.debug("Device \(deviceID) alive status query: status=\(status), isAlive=\(isAlive)", source: "ASRService")
-
-        if status == noErr, isAlive == 0 {
+        if isAlive == false {
             // Device disconnected
             DebugLogger.shared.warning("❌ Monitored device (ID: \(deviceID)) DISCONNECTED", source: "ASRService")
             self.stopMonitoringDevice()
@@ -2227,17 +6333,31 @@ final class ASRService: ObservableObject {
                     "Device changed during recording - deferring rebuild until audio route recovery",
                     source: "ASRService"
                 )
-                self.scheduleAudioRouteRecovery(reason: "monitored input disconnected")
+                self.scheduleAudioRouteRecovery(
+                    reason: "monitored input disconnected",
+                    reconcilesInputSelection: true
+                )
             } else {
                 DebugLogger.shared.info("Not recording - device disconnect handled gracefully", source: "ASRService")
             }
-        } else if status == noErr, isAlive != 0 {
+        } else {
             DebugLogger.shared.info("✅ Device (ID: \(deviceID)) is still alive", source: "ASRService")
         }
     }
 
     /// Gets the currently bound input device (if determinable)
     private func getCurrentlyBoundInputDevice() -> AudioDevice.Device? {
+        let directSnapshot = self.directAudioLifecycleController.snapshot
+        if let deviceID = directSnapshot.deviceID {
+            return AudioDevice.Device(
+                id: deviceID,
+                uid: "",
+                name: directSnapshot.deviceName ?? "Direct Core Audio input",
+                hasInput: true,
+                hasOutput: false
+            )
+        }
+
         // Check if engine exists before accessing inputNode
         guard self.engineStorage != nil else { return nil }
         guard let audioUnit = self.engine.inputNode.audioUnit else { return nil }
@@ -2260,44 +6380,62 @@ final class ASRService: ObservableObject {
         return nil
     }
 
-    // Device caching for change detection
+    /// Device caching for change detection
     private var cachedDeviceUIDs: Set<String> = []
+    private var cachedInputDeviceIDsByUID: [String: AudioObjectID] = [:]
+    private var cachedInputLivenessByUID: [String: Bool] = [:]
 
     private func cacheCurrentDeviceList(_ devices: [AudioDevice.Device]) {
         self.cachedDeviceUIDs = Set(devices.map { $0.uid })
+        self.cachedInputDeviceIDsByUID = Dictionary(
+            devices.map { ($0.uid, $0.id) },
+            uniquingKeysWith: { current, _ in current }
+        )
+        self.cachedInputLivenessByUID = Dictionary(
+            devices.map { ($0.uid, $0.isAlive) },
+            uniquingKeysWith: { current, _ in current }
+        )
     }
 
     // Audio tap processing is handled by AudioCapturePipeline (thread-safe).
 
-    /// Ensures that ASR models are downloaded and ready for transcription.
-    ///
-    /// This method handles the complete model lifecycle using the appropriate
-    /// TranscriptionProvider based on CPU architecture:
-    /// - Apple Silicon: FluidAudio (CoreML optimized)
-    /// - Intel: SwiftWhisper (whisper.cpp)
-    ///
-    /// ## Performance
-    /// - First run will download models (~100-500MB depending on provider)
-    /// - Subsequent runs use cached models (much faster)
-    /// - Model loading happens asynchronously to avoid blocking UI
-    ///
-    /// ## Errors
-    /// Throws if model download or loading fails. Common causes:
-    /// - Network connectivity issues
-    /// - Insufficient disk space
     func ensureAsrReady() async throws {
-        try await self.ensureAsrReady(progressHandler: nil)
+        try await self.ensureAsrReady(source: .automatic, progressHandler: nil)
     }
 
-    /// Ensures ASR models are ready, with an optional external progress handler.
-    /// - Parameter progressHandler: Optional callback for download progress (0.0 to 1.0)
     func ensureAsrReady(progressHandler: ((Double) -> Void)?) async throws {
-        guard self.modelDownloadTask == nil else {
+        try await self.ensureAsrReady(source: .automatic, progressHandler: progressHandler)
+    }
+
+    func ensureAsrReady(
+        source: AnalyticsModelDownloadSource,
+        progressHandler: ((Double) -> Void)? = nil
+    ) async throws {
+        try Task.checkCancellation()
+        guard self.activeExclusiveActivity != .settingsRestore else {
+            throw ASRActivityError.activityInProgress(.settingsRestore)
+        }
+        let admission = try self.meetingModelResidency.beginOperation(
+            owner: "speech", modelID: SettingsStore.shared.selectedSpeechModel.id
+        )
+        defer { self.meetingModelResidency.endOperation(admission) }
+        try self.requireStreamingProviderAvailable()
+        guard self.deletingModelID == nil, self.modelDownloadTask == nil else {
             throw NSError(
                 domain: "ASRService",
                 code: -2001,
                 userInfo: [NSLocalizedDescriptionKey: "Another model download is already in progress."]
             )
+        }
+        if let drain = self.providerResetDrain {
+            await drain.task.value
+            if self.providerResetDrain?.id == drain.id {
+                self.providerResetDrain = nil
+            }
+        }
+        // Unclaimed behavior is unchanged; a claimed scope blocks re-seeding retired caches.
+        if self.isMeetingASRPreparationClaimed {
+            throw MeetingASRPreparationError.preparationInProgress
         }
         let provider = self.transcriptionProvider
         let model = SettingsStore.shared.selectedSpeechModel
@@ -2330,7 +6468,10 @@ final class ASRService: ObservableObject {
             }
         }
 
-        guard SettingsStore.shared.selectedSpeechModel == model else {
+        guard self.activeExclusiveActivity != .settingsRestore else {
+            throw ASRActivityError.activityInProgress(.settingsRestore)
+        }
+        guard self.deletingModelID == nil, SettingsStore.shared.selectedSpeechModel == model else {
             throw CancellationError()
         }
 
@@ -2339,6 +6480,7 @@ final class ASRService: ObservableObject {
             try await self.performEnsureAsrReady(
                 provider: provider,
                 operationID: operationID,
+                analyticsSource: source,
                 externalProgressHandler: progressHandler
             )
         }
@@ -2365,11 +6507,24 @@ final class ASRService: ObservableObject {
         } onCancel: {
             task.cancel()
         }
+        if self.isAsrReady, SettingsStore.shared.selectedSpeechModel == model {
+            self.residentDictationModelID = model.id
+        }
+    }
+
+    private func modelArtifactsExist(provider: TranscriptionProvider) async throws -> Bool {
+        #if arch(arm64)
+        if let compactProvider = provider as? FluidAudioProvider {
+            return try await compactProvider.refreshModelsExistOnDiskAsync()
+        }
+        #endif
+        return provider.modelsExistOnDisk()
     }
 
     private func performEnsureAsrReady(
         provider: TranscriptionProvider,
         operationID: UUID,
+        analyticsSource: AnalyticsModelDownloadSource,
         externalProgressHandler: ((Double) -> Void)? = nil
     ) async throws {
         guard self.ensureReadyOperationID == operationID else { throw CancellationError() }
@@ -2386,13 +6541,17 @@ final class ASRService: ObservableObject {
             return
         }
 
+        defer { SpeechModelInstallationSnapshot.shared.refresh() }
+
         // If the flag is set but provider isn't ready (e.g., provider switch without reset), re-init.
         if self.isAsrReady, !provider.isReady {
             DebugLogger.shared.debug("ASR marked ready but provider not ready; re-initializing", source: "ASRService")
         }
 
         self.isAsrReady = false
-        let modelsAlreadyCached = provider.modelsExistOnDisk()
+        let modelsAlreadyCached = try await self.modelArtifactsExist(provider: provider)
+        try Task.checkCancellation()
+        guard self.ensureReadyOperationID == operationID else { throw CancellationError() }
 
         let totalStartTime = Date()
         do {
@@ -2432,11 +6591,13 @@ final class ASRService: ObservableObject {
                 self.isLoadingModel = true
                 self.isDownloadingModel = false
                 self.downloadProgress = nil
+                self.modelPreparationPhase = .loading
                 DebugLogger.shared.info("📦 LOADING cached model into memory...", source: "ASRService")
             } else {
                 self.isDownloadingModel = true
                 self.isLoadingModel = false
-                self.downloadProgress = 0.0
+                self.downloadProgress = nil
+                self.modelPreparationPhase = .preparingDownload
                 DebugLogger.shared.info("⬇️ DOWNLOADING model...", source: "ASRService")
             }
 
@@ -2451,20 +6612,18 @@ final class ASRService: ObservableObject {
                         guard
                             let self,
                             self.ensureReadyOperationID == operationID,
-                            self.isDownloadingModel,
                             !self.isCancellingModelPreparation
                         else {
                             return
                         }
-                        let clamped = max(0.0, min(1.0, progress))
-                        let monotonic = max(self.downloadProgress ?? 0.0, clamped)
-                        self.downloadProgress = monotonic
-                        externalProgressHandler?(monotonic)
-                        if clamped >= 1.0 {
-                            self.isDownloadingModel = false
-                            self.isLoadingModel = true
-                            self.downloadProgress = nil
-                        }
+                        self.applyModelPreparationProgress(
+                            progress,
+                            updatesActiveModelState: true,
+                            externalProgressHandler: externalProgressHandler,
+                            analyticsOperationID: operationID,
+                            analyticsDescriptor: SettingsStore.shared.selectedSpeechModel.analyticsDescriptor,
+                            analyticsSource: analyticsSource
+                        )
                     }
                 }
             )
@@ -2477,9 +6636,11 @@ final class ASRService: ObservableObject {
             // Keep isLoadingModel true until first transcription completes (for large models that need warm-up)
             if !self.hasCompletedFirstTranscription {
                 self.isLoadingModel = true
+                self.modelPreparationPhase = .loading
                 DebugLogger.shared.info("⏳ Model loaded, waiting for first transcription to complete...", source: "ASRService")
             } else {
                 self.isLoadingModel = false
+                self.modelPreparationPhase = nil
             }
             self.downloadProgress = nil
             self.modelsExistOnDisk = true
@@ -2489,9 +6650,17 @@ final class ASRService: ObservableObject {
             DebugLogger.shared.info("Total initialization time: \(String(format: "%.1f", totalDuration)) seconds", source: "ASRService")
 
             self.isAsrReady = true
+            if !SettingsStore.shared.onboardingCompleted,
+               SettingsStore.shared.analyticsOnboardingOrigin == .firstRun
+            {
+                DebugLogger.shared.info("Voice model ready; requesting FI prefetch", source: "OnboardingAI")
+                OnboardingAISetupController.live.prefetch()
+            }
             self.isCancellingModelPreparation = false
             self.refreshWordBoostStatus()
+            self.finishModelDownloadAnalytics(operationID: operationID, outcome: .succeeded)
         } catch is CancellationError {
+            self.finishModelDownloadAnalytics(operationID: operationID, outcome: .cancelled)
             DebugLogger.shared.info("ASR initialization cancelled", source: "ASRService")
             if provider.shouldClearCacheAfterCancellation,
                provider.modelsExistOnDisk() == false
@@ -2509,12 +6678,14 @@ final class ASRService: ObservableObject {
                 self.isDownloadingModel = false
                 self.isLoadingModel = false
                 self.downloadProgress = nil
+                self.modelPreparationPhase = nil
                 self.modelsExistOnDisk = provider.modelsExistOnDisk()
                 self.isCancellingModelPreparation = false
             }
             throw CancellationError()
         } catch {
-            if Task.isCancelled || Self.isModelPreparationCancellation(error) {
+            if !ParakeetArchiveDownloader.isCleanupFailure(error), Task.isCancelled || Self.isModelPreparationCancellation(error) {
+                self.finishModelDownloadAnalytics(operationID: operationID, outcome: .cancelled)
                 if provider.shouldClearCacheAfterCancellation,
                    provider.modelsExistOnDisk() == false
                 {
@@ -2524,26 +6695,121 @@ final class ASRService: ObservableObject {
                     self.isDownloadingModel = false
                     self.isLoadingModel = false
                     self.downloadProgress = nil
+                    self.modelPreparationPhase = nil
                     self.modelsExistOnDisk = provider.modelsExistOnDisk()
                     self.isCancellingModelPreparation = false
                 }
                 throw CancellationError()
             }
+            self.finishModelDownloadAnalytics(operationID: operationID, outcome: .failed)
             DebugLogger.shared.error("ASR initialization failed with error: \(error)", source: "ASRService")
             DebugLogger.shared.error("Error details: \(error.localizedDescription)", source: "ASRService")
             if self.ensureReadyOperationID == operationID {
                 self.isDownloadingModel = false
                 self.isLoadingModel = false
                 self.downloadProgress = nil
+                self.modelPreparationPhase = nil
             }
             throw error
         }
     }
 
+    private func applyModelPreparationProgress(
+        _ progress: ModelPreparationProgress,
+        updatesActiveModelState: Bool,
+        externalProgressHandler: ((Double) -> Void)?,
+        analyticsOperationID: UUID? = nil,
+        analyticsDescriptor: AnalyticsModelDescriptor? = nil,
+        analyticsSource: AnalyticsModelDownloadSource = .automatic
+    ) {
+        switch progress.phase {
+        case .preparingDownload:
+            self.downloadProgress = nil
+            if updatesActiveModelState {
+                self.isDownloadingModel = true
+                self.isLoadingModel = false
+            }
+        case .downloading:
+            if let analyticsOperationID, let analyticsDescriptor {
+                self.beginModelDownloadAnalytics(
+                    operationID: analyticsOperationID,
+                    descriptor: analyticsDescriptor,
+                    source: analyticsSource
+                )
+            }
+            self.downloadProgress = progress.fractionCompleted
+            if updatesActiveModelState {
+                self.isDownloadingModel = true
+                self.isLoadingModel = false
+            }
+            if let fraction = progress.fractionCompleted {
+                externalProgressHandler?(fraction)
+            }
+        case .optimizing:
+            if let analyticsOperationID {
+                self.finishModelDownloadAnalytics(operationID: analyticsOperationID, outcome: .succeeded)
+            }
+            self.downloadProgress = nil
+            if updatesActiveModelState {
+                self.isDownloadingModel = true
+                self.isLoadingModel = false
+            }
+        case .loading:
+            if let analyticsOperationID {
+                self.finishModelDownloadAnalytics(operationID: analyticsOperationID, outcome: .succeeded)
+            }
+            self.downloadProgress = nil
+            if updatesActiveModelState {
+                self.isDownloadingModel = false
+                self.isLoadingModel = true
+            }
+        }
+
+        self.modelPreparationPhase = progress.phase
+    }
+
+    private struct ModelDownloadAnalyticsState {
+        let descriptor: AnalyticsModelDescriptor
+        let source: AnalyticsModelDownloadSource
+        let startedAt: Date
+    }
+
+    private func beginModelDownloadAnalytics(
+        operationID: UUID,
+        descriptor: AnalyticsModelDescriptor,
+        source: AnalyticsModelDownloadSource
+    ) {
+        guard self.modelDownloadAnalyticsStates[operationID] == nil else { return }
+        self.modelDownloadAnalyticsStates[operationID] = ModelDownloadAnalyticsState(
+            descriptor: descriptor,
+            source: source,
+            startedAt: Date()
+        )
+        AnalyticsService.shared.recordModelDownloadStarted(
+            id: operationID,
+            descriptor: descriptor,
+            source: source
+        )
+    }
+
+    private func finishModelDownloadAnalytics(
+        operationID: UUID,
+        outcome: AnalyticsModelDownloadOutcome
+    ) {
+        guard let state = self.modelDownloadAnalyticsStates.removeValue(forKey: operationID) else { return }
+        AnalyticsService.shared.recordModelDownloadFinished(
+            id: operationID,
+            descriptor: state.descriptor,
+            source: state.source,
+            outcome: outcome,
+            duration: Date().timeIntervalSince(state.startedAt)
+        )
+    }
+
     private func prepareProviderWithRecovery(
         provider: TranscriptionProvider,
         modelsAlreadyCached: Bool,
-        progressHandler: @escaping (Double) -> Void
+        progressHandler: @escaping (ModelPreparationProgress) -> Void
     ) async throws {
         let start = Date()
         var firstError: Error?
@@ -2555,8 +6821,16 @@ final class ASRService: ObservableObject {
             )
             return
         } catch {
+            // Staging cleanup failure must not delete a successfully published cache
+            // or hide its repair path when cancellation was also requested.
+            if ParakeetArchiveDownloader.isCleanupFailure(error) { throw error }
             if Task.isCancelled || Self.isModelPreparationCancellation(error) {
                 throw CancellationError()
+            }
+            if let compact = provider as? FluidAudioProvider, compact.preservesInstalledCompactWeights {
+                // Repairing by deletion could silently upgrade an installed older
+                // checkpoint. Explicit Update/Delete owns that choice instead.
+                throw error
             }
             firstError = error
             DebugLogger.shared.error("ASRService: First prepare attempt for \(provider.name) failed after \(String(format: "%.2f", Date().timeIntervalSince(start)))s", source: "ASRService")
@@ -2595,6 +6869,7 @@ final class ASRService: ObservableObject {
         do {
             try await provider.prepare(progressHandler: progressHandler)
         } catch {
+            if ParakeetArchiveDownloader.isCleanupFailure(error) { throw error }
             if Task.isCancelled || Self.isModelPreparationCancellation(error) {
                 throw CancellationError()
             }
@@ -2650,84 +6925,149 @@ final class ASRService: ObservableObject {
     // MARK: - Cache management
 
     func clearModelCache() async throws {
-        DebugLogger.shared.debug("Clearing model cache via transcription provider", source: "ASRService")
-        try await self.transcriptionProvider.clearCache()
-        self.isAsrReady = false
-        self.modelsExistOnDisk = false
+        try await self.clearModelCache(for: SettingsStore.shared.selectedSpeechModel)
     }
 
-    func clearModelCache(for model: SettingsStore.SpeechModel) async throws {
+    func clearModelCache(for requestedModel: SettingsStore.SpeechModel) async throws {
+        // The legacy Streaming320 name shares Streaming's files and active provider.
+        let model = requestedModel == .nemotronStreaming320 ? .nemotronStreaming : requestedModel
+        try self.requireStreamingProviderAvailable()
+        guard self.deletingModelID == nil, !self.hasActiveModelDownload, !self.hasActiveModelPreparation,
+              !self.isMeetingASRPreparationClaimed
+        else {
+            throw NSError(domain: "ASRService", code: -2001, userInfo: [
+                NSLocalizedDescriptionKey: "Another model operation is already in progress. Try deleting again when it finishes.",
+            ])
+        }
+        guard !model.usesAppleLogo, model != .qwen3Asr else {
+            throw NSError(domain: "ASRService", code: -2003, userInfo: [
+                NSLocalizedDescriptionKey: "This model cannot be deleted from FluidVoice.",
+            ])
+        }
+        let activityLease = try self.acquireExclusiveActivity(.modelMaintenance)
+        self.deletingModelID = model.id
+        let isActive = SettingsStore.shared.selectedSpeechModel == model
+        defer {
+            self.deletingModelID = nil
+            SpeechModelInstallationSnapshot.shared.refresh()
+            self.releaseExclusiveActivity(activityLease)
+        }
         DebugLogger.shared.debug("Clearing model cache for \(model.displayName)", source: "ASRService")
-        let provider = self.getProvider(for: model)
+        let provider = isActive ? self.transcriptionProvider : self.cachedDeletionProvider(for: model)
+        if isActive {
+            self.streamingWorkState.invalidateProvider()
+            self.isAsrReady = false
+            self.providerResetPending = true
+            await self.transcriptionExecutor.cancelAndAwaitPending()
+        }
+        try Task.checkCancellation()
+        guard !isActive || SettingsStore.shared.selectedSpeechModel == model else { throw CancellationError() }
         try await provider.clearCache()
-
         if model.requiresExternalArtifacts {
             SettingsStore.shared.setExternalCoreMLArtifactsDirectory(nil, for: model)
         }
+        if isActive { self.modelsExistOnDisk = false }
+    }
 
-        guard SettingsStore.shared.selectedSpeechModel == model else { return }
-        self.resetTranscriptionProvider()
-        await self.checkIfModelsExistAsync()
+    private func cachedDeletionProvider(for model: SettingsStore.SpeechModel) -> TranscriptionProvider {
+        // Nemotron keeps providers for both modes; retire the target's existing instance.
+        if model == .nemotronOffline || model == .nemotronStreaming || model == .nemotronStreaming320,
+           let cached = self.nemotronProviders[model.nemotronProviderMode]
+        {
+            return cached
+        }
+        return self.getProvider(for: model)
     }
 
     // MARK: - Timer-based Streaming Transcription (No VAD)
 
     private func startStreamingTranscription() {
-        self.streamingTask?.cancel()
+        self.streamingSchedulingSessionID = nil
+        _ = self.streamingTaskLifecycle.cancelScheduler()
         guard self.isAsrReady else { return }
+        self.streamingSchedulingSessionID = self.benchmarkSessionID
 
         DebugLogger.shared.debug(
             "Starting streaming transcription task (interval: \(self.streamingChunkDurationSeconds)s, minSamples: \(self.minimumStreamingPreviewSamples))",
             source: "ASRService"
         )
-
-        self.streamingTask = Task { [weak self] in
-            await self?.runStreamingLoop()
-        }
+        self.scheduleNextStreamingChunk(sessionID: self.benchmarkSessionID, delayNanoseconds: 0)
     }
 
-    @MainActor
-    private func runStreamingLoop() async {
-        DebugLogger.shared.debug("🔄 runStreamingLoop() - ENTERED", source: "ASRService")
-        var loopCount = 0
-        var lastBufferCount = 0
-
-        while !Task.isCancelled {
-            DebugLogger.shared.debug("🔄 runStreamingLoop() - calling processStreamingChunk()", source: "ASRService")
-            await self.processStreamingChunk()
-            DebugLogger.shared.debug("🔄 runStreamingLoop() - processStreamingChunk() returned", source: "ASRService")
-
-            if Task.isCancelled || self.isRunning == false {
-                break
+    private func scheduleNextStreamingChunk(sessionID: Int, delayNanoseconds: UInt64) {
+        guard self.isRunning,
+              self.benchmarkSessionID == sessionID,
+              self.streamingSchedulingSessionID == sessionID
+        else { return }
+        self.streamingTaskLifecycle.schedule(
+            sessionID: sessionID,
+            delayNanoseconds: delayNanoseconds
+        ) { [weak self] operationID in
+            await self?.processStreamingChunk(sessionID: sessionID, operationID: operationID)
+            self?.benchmarkLog(
+                "streaming_active_exit session=\(sessionID) operation=\(operationID.uuidString)"
+            )
+        } completion: { [weak self] operationID in
+            let isLateCompletion = self?.isRunning == false || self?.streamingSchedulingSessionID != sessionID
+            if isLateCompletion {
+                self?.benchmarkLog(
+                    "streaming_active_cleanup_begin session=\(sessionID) operation=\(operationID.uuidString)"
+                )
             }
-
-            // Health check: detect if audio is not being captured
-            loopCount += 1
-            if loopCount >= 3 { // After 3 loops (~6 seconds with 2s interval)
-                let currentBufferCount = self.audioBuffer.count
-                if currentBufferCount == lastBufferCount, currentBufferCount < 16_000 {
-                    DebugLogger.shared.warning(
-                        "Audio buffer not growing after \(loopCount * 2) seconds (count: \(currentBufferCount)). " +
-                            "Audio capture may have failed. Check if engine is running and tap is installed.",
-                        source: "ASRService"
-                    )
-                }
-                lastBufferCount = currentBufferCount
-                loopCount = 0
-            }
-
-            do {
-                try await Task.sleep(nanoseconds: UInt64(self.streamingChunkDurationSeconds * 1_000_000_000))
-            } catch {
-                DebugLogger.shared.debug("Streaming transcription task cancelled", source: "ASRService")
-                break
+            self?.streamingChunkDidFinish(sessionID: sessionID, operationID: operationID)
+            if isLateCompletion {
+                self?.benchmarkLog(
+                    "streaming_active_cleanup_end session=\(sessionID) operation=\(operationID.uuidString)"
+                )
             }
         }
     }
 
-    @MainActor
-    private func processStreamingChunk() async {
-        guard self.isRunning else { return }
+    private func streamingChunkDidFinish(sessionID: Int, operationID: UUID) {
+        guard self.streamingWorkState.finishOperation(
+            sessionID: sessionID,
+            operationID: operationID
+        ) else { return }
+        self.isProcessingChunk = false
+        self.finishStreamingDrainRecovery(sessionID: sessionID)
+        guard self.isRunning,
+              self.benchmarkSessionID == sessionID,
+              self.streamingSchedulingSessionID == sessionID
+        else { return }
+
+        self.streamingHealthCheckCount += 1
+        if self.streamingHealthCheckCount >= 3 {
+            let currentBufferCount = self.audioBuffer.count
+            if !self.isDictationMuted,
+               currentBufferCount == self.streamingHealthLastBufferCount,
+               currentBufferCount < 16_000
+            {
+                DebugLogger.shared.warning(
+                    "Audio buffer not growing after three streaming intervals (count: \(currentBufferCount)). " +
+                        "Audio capture may have failed. Check if engine is running and tap is installed.",
+                    source: "ASRService"
+                )
+            }
+            self.streamingHealthLastBufferCount = currentBufferCount
+            self.streamingHealthCheckCount = 0
+        }
+
+        self.scheduleNextStreamingChunk(
+            sessionID: sessionID,
+            delayNanoseconds: UInt64(self.streamingChunkDurationSeconds * 1_000_000_000)
+        )
+    }
+
+    private func processStreamingChunk(sessionID: Int, operationID: UUID) async {
+        guard self.isRunning,
+              self.benchmarkSessionID == sessionID,
+              self.streamingSchedulingSessionID == sessionID,
+              let providerGeneration = self.streamingWorkState.beginOperation(
+                  sessionID: sessionID,
+                  operationID: operationID
+              )
+        else { return }
+        guard !self.isDictationMuted else { return }
         self.benchmarkStreamingChunkIndex += 1
         let chunkIndex = self.benchmarkStreamingChunkIndex
         let chunkAgeMs = self.elapsedMilliseconds(since: self.benchmarkRecordingStartedAt)
@@ -2768,8 +7108,25 @@ final class ASRService: ObservableObject {
             return
         }
 
-        // Thread-safe copy of the data
-        let chunk = self.audioBuffer.getPrefix(currentSampleCount)
+        // Once FluidAudio has an incremental session, copy only newly captured PCM.
+        // Other providers and the first incremental preview still receive the full prefix.
+        #if arch(arm64)
+        let incrementalProvider = self.transcriptionProvider as? FluidAudioProvider
+        let incrementalDeltaStart = incrementalProvider?.incrementalPreviewDeltaStart(
+            totalSampleCount: currentSampleCount
+        )
+        #else
+        let incrementalDeltaStart: Int? = nil
+        #endif
+        let chunk: [Float]
+        if let incrementalDeltaStart {
+            chunk = self.audioBuffer.getRange(
+                startingAt: incrementalDeltaStart,
+                count: currentSampleCount - incrementalDeltaStart
+            )
+        } else {
+            chunk = self.audioBuffer.getPrefix(currentSampleCount)
+        }
 
         // Validate chunk is not empty (defensive check)
         guard !chunk.isEmpty else {
@@ -2779,44 +7136,121 @@ final class ASRService: ObservableObject {
         }
 
         self.isProcessingChunk = true
-        defer { isProcessingChunk = false }
 
         let startTime = Date()
         let startedAt = startTime.timeIntervalSince1970
-        let newSamples = max(0, chunk.count - self.benchmarkLastChunkSampleCount)
-        self.benchmarkLastChunkSampleCount = chunk.count
-        self.benchmarkLog("chunk_start index=\(chunkIndex) ageMs=\(chunkAgeMs) samples=\(chunk.count) newSamples=\(newSamples) audioMs=\(Int((Double(chunk.count) / 16_000.0 * 1000).rounded())) provider=\(self.transcriptionProvider.name)")
+        let newSamples = max(0, currentSampleCount - self.benchmarkLastChunkSampleCount)
+        self.benchmarkLastChunkSampleCount = currentSampleCount
+        let audioMilliseconds = Int((Double(currentSampleCount) / 16_000.0 * 1000).rounded())
+        self.benchmarkLog(
+            "chunk_start index=\(chunkIndex) ageMs=\(chunkAgeMs) samples=\(currentSampleCount) " +
+                "inputSamples=\(chunk.count) newSamples=\(newSamples) audioMs=\(audioMilliseconds) " +
+                "provider=\(self.transcriptionProvider.name)"
+        )
 
         do {
-            DebugLogger.shared.debug("Streaming chunk starting transcription (samples: \(chunk.count)) using \(self.transcriptionProvider.name)", source: "ASRService")
-            let result = try await transcriptionExecutor.run { [provider = self.transcriptionProvider] in
-                try await provider.transcribeStreaming(chunk)
+            DebugLogger.shared.debug("Streaming chunk starting transcription (samples: \(currentSampleCount), input: \(chunk.count)) using \(self.transcriptionProvider.name)", source: "ASRService")
+            let result: ASRTranscriptionResult
+            #if arch(arm64)
+            if incrementalDeltaStart != nil, let incrementalProvider {
+                do {
+                    result = try await self.transcriptionExecutor.run {
+                        let result = try await incrementalProvider.transcribeStreamingDelta(
+                            chunk,
+                            totalSampleCount: currentSampleCount
+                        )
+                        logStreamingProviderOperationReturn(
+                            sessionID: sessionID,
+                            operationID: operationID,
+                            route: "incremental_delta"
+                        )
+                        return result
+                    }
+                } catch {
+                    if Task.isCancelled || error is CancellationError {
+                        throw CancellationError()
+                    }
+                    guard self.streamingWorkState.canPublishPreview(
+                        sessionID: sessionID,
+                        operationID: operationID,
+                        providerGeneration: providerGeneration,
+                        isRunning: self.isRunning,
+                        schedulingSessionID: self.streamingSchedulingSessionID
+                    ) else { return }
+                    DebugLogger.shared.warning(
+                        "Incremental delta preview failed; retrying with the full prefix",
+                        source: "ASRService"
+                    )
+                    let fullPrefix = self.audioBuffer.getPrefix(currentSampleCount)
+                    result = try await self.transcriptionExecutor.run { [provider = self.transcriptionProvider] in
+                        let result = try await provider.transcribeStreaming(fullPrefix)
+                        logStreamingProviderOperationReturn(
+                            sessionID: sessionID,
+                            operationID: operationID,
+                            route: "incremental_fallback_full"
+                        )
+                        return result
+                    }
+                }
+            } else {
+                result = try await self.transcriptionExecutor.run { [provider = self.transcriptionProvider] in
+                    let result = try await provider.transcribeStreaming(chunk)
+                    logStreamingProviderOperationReturn(
+                        sessionID: sessionID,
+                        operationID: operationID,
+                        route: "full_prefix"
+                    )
+                    return result
+                }
+            }
+            #else
+            result = try await self.transcriptionExecutor.run { [provider = self.transcriptionProvider] in
+                let result = try await provider.transcribeStreaming(chunk)
+                logStreamingProviderOperationReturn(
+                    sessionID: sessionID,
+                    operationID: operationID,
+                    route: "full_prefix"
+                )
+                return result
+            }
+            #endif
+
+            let canPublishPreview = self.streamingWorkState.canPublishPreview(
+                sessionID: sessionID,
+                operationID: operationID,
+                providerGeneration: providerGeneration,
+                isRunning: self.isRunning,
+                schedulingSessionID: self.streamingSchedulingSessionID
+            )
+            if canPublishPreview == false {
+                let scheduledSession = self.streamingSchedulingSessionID.map(String.init) ?? "none"
+                self.benchmarkLog(
+                    "streaming_executor_return publish=false index=\(chunkIndex) session=\(sessionID) " +
+                        "operation=\(operationID.uuidString) running=\(self.isRunning) " +
+                        "scheduledSession=\(scheduledSession)"
+                )
+                return
             }
 
             let duration = Date().timeIntervalSince(startTime)
-            let latencyMs = Int((duration * 1000).rounded())
-            self.captureStreamingChunkAnalytics(
-                success: true,
-                chunkSampleCount: chunk.count,
-                latencyMs: latencyMs
-            )
             DebugLogger.shared.debug(
                 "Streaming chunk transcription finished in \(String(format: "%.2f", duration))s",
                 source: "ASRService"
             )
             let rawText = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
-            let newText = ASRService.applyCustomDictionary(ASRService.removeFillerWords(rawText))
+            let newText = ASRService.applySpokenPunctuationFormatting(
+                ASRService.applyCustomDictionary(ASRService.removeFillerWords(rawText))
+            )
             self.recordWordBoostHitIfAny(transcribedText: newText)
             self.benchmarkCompletedStreamingChunks += 1
-            self.lastProcessedSampleCount = chunk.count
+            self.lastProcessedSampleCount = currentSampleCount
 
             // Mark first transcription as complete to clear loading state
             if !self.hasCompletedFirstTranscription {
                 self.hasCompletedFirstTranscription = true
-                DispatchQueue.main.async {
-                    self.isLoadingModel = false
-                    DebugLogger.shared.info("✅ Model warmed up - first streaming transcription completed", source: "ASRService")
-                }
+                self.isLoadingModel = false
+                self.modelPreparationPhase = nil
+                DebugLogger.shared.info("✅ Model warmed up - first streaming transcription completed", source: "ASRService")
             }
 
             if !newText.isEmpty {
@@ -2827,11 +7261,11 @@ final class ASRService: ObservableObject {
 
                 DebugLogger.shared.debug("✅ Streaming: '\(updatedText)' (\(String(format: "%.2f", duration))s)", source: "ASRService")
             }
-            let rtf = chunk.isEmpty ? 0 : duration / (Double(chunk.count) / 16_000.0)
+            let rtf = duration / (Double(currentSampleCount) / 16_000.0)
             let chunkDoneAgeMs = self.elapsedMilliseconds(since: self.benchmarkRecordingStartedAt)
             self.benchmarkLog(
                 "chunk_done index=\(chunkIndex) elapsedMs=\(self.elapsedMilliseconds(since: startedAt)) ageMs=\(chunkDoneAgeMs) " +
-                    "samples=\(chunk.count) rawChars=\(rawText.count) cleanedChars=\(newText.count) rtf=\(String(format: "%.3f", rtf))"
+                    "samples=\(currentSampleCount) inputSamples=\(chunk.count) rawChars=\(rawText.count) cleanedChars=\(newText.count) rtf=\(String(format: "%.3f", rtf))"
             )
 
             // If transcription takes longer than the interval, skip next to prevent queue buildup
@@ -2843,18 +7277,23 @@ final class ASRService: ObservableObject {
                 )
                 self.skipNextChunk = true
             }
-        } catch {
-            let duration = Date().timeIntervalSince(startTime)
-            let latencyMs = Int((duration * 1000).rounded())
-            self.captureStreamingChunkAnalytics(
-                success: false,
-                chunkSampleCount: chunk.count,
-                latencyMs: latencyMs,
-                error: error
-            )
+        } catch where self.streamingWorkState.canPublishPreview(
+            sessionID: sessionID,
+            operationID: operationID,
+            providerGeneration: providerGeneration,
+            isRunning: self.isRunning,
+            schedulingSessionID: self.streamingSchedulingSessionID
+        ) {
             DebugLogger.shared.error("❌ Streaming failed: \(error)", source: "ASRService")
-            self.benchmarkLog("chunk_fail index=\(chunkIndex) elapsedMs=\(self.elapsedMilliseconds(since: startedAt)) samples=\(chunk.count) error=\(error.localizedDescription)")
+            self
+                .benchmarkLog(
+                    "chunk_fail index=\(chunkIndex) elapsedMs=\(self.elapsedMilliseconds(since: startedAt)) samples=\(currentSampleCount) inputSamples=\(chunk.count) error=\(error.localizedDescription)"
+                )
             self.skipNextChunk = true
+        } catch {
+            self.benchmarkLog(
+                "chunk_stale_failure index=\(chunkIndex) session=\(sessionID) operation=\(operationID.uuidString)"
+            )
         }
     }
 
@@ -2888,29 +7327,127 @@ final class ASRService: ObservableObject {
         }
     }
 
-    // MARK: - Typing convenience for compatibility
-
     private let typingService = TypingService() // Reuse instance to avoid conflicts
 
-    func typeTextToActiveField(_ text: String) {
-        self.typeTextToActiveField(text, preferredTargetPID: nil, textReadyAt: nil)
+    @MainActor
+    func typeTextToActiveField(_ text: String) async -> TextDeliveryResult {
+        await self.typeTextToActiveField(text, preferredTargetPID: nil, textReadyAt: nil)
     }
 
-    func typeTextToActiveField(_ text: String, preferredTargetPID: pid_t?, textReadyAt: TimeInterval? = nil) {
+    @MainActor
+    func typeTextToActiveField(
+        _ text: String,
+        preferredTargetPID: pid_t?,
+        textReadyAt: TimeInterval? = nil,
+        preserveTranscriptOnClipboard: Bool = false,
+        isOutputValid: @escaping @MainActor () -> Bool = { true }
+    ) async -> TextDeliveryResult {
+        await self.typeOutputPlanToActiveField(
+            .plain(text),
+            preferredTargetPID: preferredTargetPID,
+            textReadyAt: textReadyAt,
+            preserveTranscriptOnClipboard: preserveTranscriptOnClipboard,
+            isOutputValid: isOutputValid
+        )
+    }
+
+    @MainActor
+    func typeOutputPlanToActiveField(
+        _ plan: DictationLiteralOutputPlan,
+        preferredTargetPID: pid_t?,
+        textReadyAt: TimeInterval? = nil,
+        toggleStopRequestedAt: TimeInterval? = nil,
+        tracksDictionaryCorrections: Bool = false,
+        preserveTranscriptOnClipboard: Bool = false,
+        isOutputValid: @escaping @MainActor () -> Bool = { true }
+    ) async -> TextDeliveryResult {
         let requestedAt = ProcessInfo.processInfo.systemUptime
         let textReadyAge = textReadyAt.map { Int(((requestedAt - $0) * 1000).rounded()) }
+        let text = plan.plainText
         DebugLogger.shared.benchmark(
             "TYPING_BENCH",
             message: "asr_type_request chars=\(text.count) preferredPID=\(preferredTargetPID.map { String($0) } ?? "nil") textReadyAgeMs=\(textReadyAge.map { String($0) } ?? "nil")",
             source: "TypingBenchmark"
         )
-        self.typingService.typeTextInstantly(text, preferredTargetPID: preferredTargetPID, textReadyAt: textReadyAt)
+        let result = await self.typingService.typeOutputPlanInstantly(
+            plan,
+            preferredTargetPID: preferredTargetPID,
+            textReadyAt: textReadyAt,
+            toggleStopRequestedAt: toggleStopRequestedAt,
+            tracksDictionaryCorrections: tracksDictionaryCorrections,
+            preserveTranscriptOnClipboard: preserveTranscriptOnClipboard,
+            isOutputValid: isOutputValid
+        )
         let dispatchedAt = ProcessInfo.processInfo.systemUptime
+        let textReadyToDispatchMs = textReadyAt.map {
+            String(Int(((dispatchedAt - $0) * 1000).rounded()))
+        } ?? "nil"
         DebugLogger.shared.benchmark(
             "TYPING_BENCH",
-            message: "asr_type_dispatched chars=\(text.count) preferredPID=\(preferredTargetPID.map { String($0) } ?? "nil") textReadyToDispatchMs=\(textReadyAt.map { String(Int(((dispatchedAt - $0) * 1000).rounded())) } ?? "nil")",
+            message: "asr_type_dispatched chars=\(text.count) preferredPID=\(preferredTargetPID.map { String($0) } ?? "nil") result=\(String(describing: result)) textReadyToDispatchMs=\(textReadyToDispatchMs)",
             source: "TypingBenchmark"
         )
+        if case .commandPosted = result {
+            let scheduledAt = ProcessInfo.processInfo.systemUptime
+            let pipelineID = DebugLogger.pipelineID
+            // One queued timestamp per output. No polling, AX queries or delivery waits.
+            DispatchQueue.main.async {
+                DebugLogger.$pipelineID.withValue(pipelineID) {
+                    DebugLogger.shared.benchmark(
+                        "APP_BENCH",
+                        message: "dispatch_main_queue_probe scheduledAt=\(scheduledAt)",
+                        source: "AppBenchmark"
+                    )
+                }
+            }
+        }
+        return result
+    }
+
+    func typeOutputPlanToActiveFieldAndWait(
+        _ plan: DictationLiteralOutputPlan,
+        preferredTargetPID: pid_t?,
+        textReadyAt: TimeInterval? = nil,
+        toggleStopRequestedAt: TimeInterval? = nil,
+        tracksDictionaryCorrections: Bool = false,
+        postInsertionKey: SettingsStore.SpokenSendKey? = nil,
+        requiredFocusTarget: TypingService.CapturedFocusTarget? = nil,
+        preserveTranscriptOnClipboard: Bool = false,
+        isOutputValid: @escaping @MainActor () -> Bool = { true }
+    ) async -> TypingService.DeliveryOutcome {
+        let requestedAt = ProcessInfo.processInfo.systemUptime
+        let textReadyAge = textReadyAt.map { Int(((requestedAt - $0) * 1000).rounded()) }
+        let text = plan.plainText
+        DebugLogger.shared.benchmark(
+            "TYPING_BENCH",
+            message: "asr_type_request chars=\(text.count) preferredPID=\(preferredTargetPID.map { String($0) } ?? "nil") textReadyAgeMs=\(textReadyAge.map { String($0) } ?? "nil")",
+            source: "TypingBenchmark"
+        )
+        let outcome = await withCheckedContinuation { continuation in
+            self.typingService.typeOutputPlanInstantly(
+                plan,
+                preferredTargetPID: preferredTargetPID,
+                textReadyAt: textReadyAt,
+                toggleStopRequestedAt: toggleStopRequestedAt,
+                tracksDictionaryCorrections: tracksDictionaryCorrections,
+                postInsertionKey: postInsertionKey,
+                requiredFocusTarget: requiredFocusTarget,
+                preserveTranscriptOnClipboard: preserveTranscriptOnClipboard,
+                isOutputValid: isOutputValid
+            ) { outcome in
+                continuation.resume(returning: outcome)
+            }
+        }
+        let dispatchedAt = ProcessInfo.processInfo.systemUptime
+        let textReadyToDispatchMs = textReadyAt.map {
+            String(Int(((dispatchedAt - $0) * 1000).rounded()))
+        } ?? "nil"
+        DebugLogger.shared.benchmark(
+            "TYPING_BENCH",
+            message: "asr_type_dispatched chars=\(text.count) preferredPID=\(preferredTargetPID.map { String($0) } ?? "nil") textReadyToDispatchMs=\(textReadyToDispatchMs)",
+            source: "TypingBenchmark"
+        )
+        return outcome
     }
 
     /// Removes filler sounds from transcribed text
@@ -2932,31 +7469,142 @@ final class ASRService: ObservableObject {
     /// Cache for compiled custom dictionary regexes.
     /// Key: trigger word, Value: (compiled regex, escaped replacement template)
     /// Cleared when dictionary entries change.
-    private static var cachedDictionaryPatterns: [(regex: NSRegularExpression, template: String)] = []
+    private struct CachedDictionaryPattern {
+        let entryID: UUID
+        let trigger: String
+        let regex: NSRegularExpression
+        let template: String
+        let canonical: NSRegularExpression?
+    }
+
+    private static var cachedDictionaryPatterns: [CachedDictionaryPattern] = []
+    private static var cachedBuiltInDictionaryPatterns: [CachedDictionaryPattern] = []
+    private static var cachedUserDictionaryProtections: [NSRegularExpression] = []
     private static var dictionaryCacheNeedsRebuild: Bool = true
 
     /// Rebuilds the regex cache if dictionary has changed.
     /// Called lazily on first apply after settings change.
     private static func rebuildDictionaryCache() {
-        let entries = SettingsStore.shared.customDictionaryEntries
-        var patterns: [(regex: NSRegularExpression, template: String)] = []
+        let userEntries = SettingsStore.shared.customDictionaryEntries
+        self.cachedDictionaryPatterns = self.dictionaryPatterns(for: userEntries)
+        self.cachedBuiltInDictionaryPatterns = self.dictionaryPatterns(for: BuiltInDictionary.entries(excludingSpellingsIn: userEntries))
+        self.cachedUserDictionaryProtections = self.cachedDictionaryPatterns.map(\.regex)
+        var protectedPatterns = Set(self.cachedUserDictionaryProtections.map(\.pattern))
+        for entry in userEntries where !entry.replacement.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            let pattern = self.dictionaryPattern(for: entry.replacement)
+            guard protectedPatterns.insert(pattern).inserted,
+                  let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) else { continue }
+            self.cachedUserDictionaryProtections.append(regex)
+        }
+        self.dictionaryCacheNeedsRebuild = false
+    }
+
+    private static func dictionaryPatterns(for entries: [SettingsStore.CustomDictionaryEntry]) -> [CachedDictionaryPattern] {
+        var patterns: [CachedDictionaryPattern] = []
 
         for entry in entries {
+            var canonical: NSRegularExpression?
+            let replacementRange = NSRange(entry.replacement.startIndex..., in: entry.replacement)
             for trigger in entry.triggers {
                 guard !trigger.isEmpty else { continue }
 
-                let escapedTrigger = NSRegularExpression.escapedPattern(for: trigger)
+                let consumesHorizontalSeparators = !entry.replacement.isEmpty &&
+                    entry.replacement.allSatisfy(\.isWhitespace)
+                let escapedTrigger = self.dictionaryPattern(
+                    for: trigger,
+                    consumesHorizontalSeparators: consumesHorizontalSeparators
+                )
                 guard let regex = try? NSRegularExpression(
-                    pattern: "\\b" + escapedTrigger + "\\b",
+                    pattern: escapedTrigger,
                     options: .caseInsensitive
                 ) else { continue }
 
-                patterns.append((regex: regex, template: NSRegularExpression.escapedTemplate(for: entry.replacement)))
+                let needsProtection = regex.matches(in: entry.replacement, range: replacementRange).contains {
+                    $0.range.length < replacementRange.length
+                }
+                if needsProtection, canonical == nil {
+                    canonical = try? NSRegularExpression(pattern: self.dictionaryPattern(for: entry.replacement), options: .caseInsensitive)
+                }
+                patterns.append(CachedDictionaryPattern(
+                    entryID: entry.id,
+                    trigger: trigger,
+                    regex: regex,
+                    template: NSRegularExpression.escapedTemplate(for: entry.replacement),
+                    canonical: needsProtection ? canonical : nil
+                ))
             }
         }
 
-        self.cachedDictionaryPatterns = patterns
-        self.dictionaryCacheNeedsRebuild = false
+        return patterns.sorted {
+            $0.regex.pattern.utf16.count > $1.regex.pattern.utf16.count
+        }
+    }
+
+    /// Apply defaults only outside user-defined phrases and completed user replacements.
+    /// Match against one immutable string so built-in edits cannot move protected ranges.
+    private static func applyBuiltInDictionary(
+        to text: String,
+        onReplacement: (CachedDictionaryPattern, NSRange, String, String) -> Void
+    ) -> String {
+        let fullRange = NSRange(text.startIndex..., in: text)
+        var candidates: [(pattern: CachedDictionaryPattern, match: NSTextCheckingResult)] = []
+        for pattern in self.cachedBuiltInDictionaryPatterns {
+            candidates += pattern.regex.matches(in: text, range: fullRange).map { (pattern, $0) }
+        }
+        guard !candidates.isEmpty else { return text }
+        candidates.sort {
+            if $0.match.range.location != $1.match.range.location { return $0.match.range.location < $1.match.range.location }
+            return $0.match.range.length > $1.match.range.length
+        }
+        let protected = self.cachedUserDictionaryProtections.flatMap {
+            $0.matches(in: text, range: fullRange).map(\.range)
+        }.sorted { $0.location < $1.location }
+        var protectedIndex = 0
+        var previousEnd = 0
+        var accepted: [(pattern: CachedDictionaryPattern, match: NSTextCheckingResult)] = []
+        for candidate in candidates {
+            let range = candidate.match.range
+            while protectedIndex < protected.count, NSMaxRange(protected[protectedIndex]) <= range.location {
+                protectedIndex += 1
+            }
+            guard range.location >= previousEnd,
+                  protectedIndex == protected.count || protected[protectedIndex].location >= NSMaxRange(range) else { continue }
+            accepted.append(candidate)
+            previousEnd = NSMaxRange(range)
+        }
+        let output = NSMutableString(string: text)
+        for (pattern, match) in accepted.reversed() {
+            let replacement = pattern.regex.replacementString(for: match, in: text, offset: 0, template: pattern.template)
+            let heard = (text as NSString).substring(with: match.range)
+            if heard != replacement { onReplacement(pattern, match.range, heard, replacement) }
+            output.replaceCharacters(in: match.range, with: replacement)
+        }
+        return output as String
+    }
+
+    private static func dictionaryPattern(
+        for trigger: String,
+        consumesHorizontalSeparators: Bool = false
+    ) -> String {
+        let escapedTrigger = NSRegularExpression.escapedPattern(for: trigger)
+        let prefix = self.startsWithWordCharacter(trigger) ? "\\b" : ""
+        let suffix = self.endsWithWordCharacter(trigger) ? "\\b" : ""
+        let separator = consumesHorizontalSeparators ? "[ \\t]*" : ""
+        return separator + prefix + escapedTrigger + suffix + separator
+    }
+
+    private static func startsWithWordCharacter(_ text: String) -> Bool {
+        guard let scalar = text.unicodeScalars.first else { return false }
+        return self.isWordCharacter(scalar)
+    }
+
+    private static func endsWithWordCharacter(_ text: String) -> Bool {
+        guard let scalar = text.unicodeScalars.last else { return false }
+        return self.isWordCharacter(scalar)
+    }
+
+    private static func isWordCharacter(_ scalar: Unicode.Scalar) -> Bool {
+        CharacterSet.alphanumerics.contains(scalar) || scalar == "_"
     }
 
     /// Invalidates the dictionary cache. Called when settings change.
@@ -2969,27 +7617,52 @@ final class ASRService: ObservableObject {
     /// Uses case-insensitive matching with word boundaries.
     /// Optimized: caches compiled regexes to avoid per-call compilation overhead.
     static func applyCustomDictionary(_ text: String) -> String {
-        // Fast path: no entries configured
-        let entries = SettingsStore.shared.customDictionaryEntries
-        guard !entries.isEmpty else { return text }
+        // Built-in spellings always exist, so the compiled patterns decide whether there is work.
 
         // Rebuild cache if needed (lazy initialization)
         if self.dictionaryCacheNeedsRebuild {
             self.rebuildDictionaryCache()
         }
 
-        guard !self.cachedDictionaryPatterns.isEmpty else {
+        guard !self.cachedDictionaryPatterns.isEmpty || !self.cachedBuiltInDictionaryPatterns.isEmpty else {
             return text
         }
 
         var result = text
 
         // Apply cached regexes - O(n) where n = number of patterns
+        var replacementCount = 0
+        func recordReplacement(_ pattern: CachedDictionaryPattern, _ range: NSRange, _ heard: String, _ replacement: String) {
+            replacementCount += 1
+            guard replacementCount <= DictionaryReplacementDiagnostics.maximumEvents else { return }
+            DebugLogger.shared.debug(
+                "DICTIONARY_REPLACEMENT stage=exact_rule entryID=\(pattern.entryID) " +
+                    "trigger=\(DictionaryReplacementDiagnostics.quoted(pattern.trigger)) " +
+                    "heard=\(DictionaryReplacementDiagnostics.quoted(heard)) " +
+                    "replacement=\(DictionaryReplacementDiagnostics.quoted(replacement)) " +
+                    "utf16Location=\(range.location) utf16Length=\(range.length)",
+                source: "CustomDictionary"
+            )
+        }
+        // Defaults cannot consume an explicit user phrase. Apply user rules last so a
+        // default's corrected spelling can also follow the user's chosen replacement.
+        result = self.applyBuiltInDictionary(to: result, onReplacement: recordReplacement)
         for pattern in self.cachedDictionaryPatterns {
-            result = pattern.regex.stringByReplacingMatches(
+            result = DictionaryReplacementProtection.replacingMatches(
                 in: result,
-                range: NSRange(result.startIndex..., in: result),
-                withTemplate: pattern.template
+                regex: pattern.regex,
+                template: pattern.template,
+                canonical: pattern.canonical,
+                onReplacement: { range, heard, replacement in
+                    recordReplacement(pattern, range, heard, replacement)
+                }
+            )
+        }
+        if replacementCount > DictionaryReplacementDiagnostics.maximumEvents {
+            DebugLogger.shared.info(
+                "DICTIONARY_REPLACEMENT_SUMMARY total=\(replacementCount) " +
+                    "omitted=\(replacementCount - DictionaryReplacementDiagnostics.maximumEvents)",
+                source: "CustomDictionary"
             )
         }
 
@@ -3110,85 +7783,140 @@ private extension SettingsStore.SpeechModel {
 }
 
 private extension ASRService {
-    /// Stops the streaming timer and waits for the task to complete.
-    /// This prevents race conditions where the buffer is cleared while
-    /// a transcription task is still running.
-    func stopStreamingTimerAndAwait() async {
-        guard let task = self.streamingTask else {
-            self.benchmarkLog("streaming_timer_stop no_task=true")
-            return
-        }
+    /// Cancels only the idle delay. Active provider work is intentionally not
+    /// cancelled because incremental providers use cancellation to discard state
+    /// needed by the final pass.
+    func stopStreamingScheduler(sessionID: Int) {
         let startedAt = Date().timeIntervalSince1970
-        self.benchmarkLog("streaming_timer_stop begin")
-        task.cancel()
-        // Wait for the task to actually finish - this is critical!
-        // The task may be in the middle of processStreamingChunk()
-        _ = await task.result
-        self.streamingTask = nil
-        self.benchmarkLog("streaming_timer_stop end elapsedMs=\(self.elapsedMilliseconds(since: startedAt)) completedChunks=\(self.benchmarkCompletedStreamingChunks)")
-    }
-
-    /// Legacy sync version for cases where we can't await (e.g., stopWithoutTranscription)
-    /// WARNING: This can cause crashes if buffer is cleared immediately after!
-    func stopStreamingTimer() {
-        self.streamingTask?.cancel()
-        self.streamingTask = nil
-    }
-
-    func runFastPreviewStopGraceIfNeeded() async {
-        guard SettingsStore.shared.parakeetFinalizationMode == .tokenTimedChunkMerge else { return }
-        guard SettingsStore.shared.selectedSpeechModel.supportsFastDictationProcessing else { return }
-        guard SettingsStore.shared.selectedSpeechModel.supportsStreaming else { return }
-        guard self.transcriptionProvider is FluidAudioProvider else { return }
-
-        let currentSampleCount = self.audioBuffer.count
-        guard currentSampleCount >= self.fastPreviewMinimumSamples else {
-            self.benchmarkLog("fast_preview_stop_grace skipped=true reason=duration samples=\(currentSampleCount)")
-            return
+        if self.streamingSchedulingSessionID == sessionID {
+            self.streamingSchedulingSessionID = nil
         }
+        let cancelled = self.streamingTaskLifecycle.cancelScheduler()
+        self.benchmarkLog(
+            "streaming_scheduler_cancel session=\(sessionID) hadIdleTask=\(cancelled) " +
+                "elapsedMs=\(self.elapsedMilliseconds(since: startedAt))"
+        )
+    }
 
-        let processedSampleCount = min(self.lastProcessedSampleCount, currentSampleCount)
-        let coverage = currentSampleCount > 0 ? Double(processedSampleCount) / Double(currentSampleCount) : 0
-        let tailSamples = max(0, currentSampleCount - processedSampleCount)
-        let tailMs = Int((Double(tailSamples) / Double(self.fastPreviewSampleRate) * 1000).rounded())
-        guard coverage < self.fastPreviewStopGraceTargetCoverage || tailMs > self.fastPreviewTailAudioToleranceMs else {
+    /// Drains only real in-flight provider work before the shared PCM buffer is
+    /// handed off. An idle scheduler never participates in this await.
+    func drainActiveStreamingWork(sessionID: Int) async -> Bool {
+        let startedAt = Date().timeIntervalSince1970
+        guard self.streamingTaskLifecycle.activeTaskToDrain(sessionID: sessionID) != nil else {
             self.benchmarkLog(
-                "fast_preview_stop_grace skipped=true reason=already_covered coverage=\(String(format: "%.3f", coverage)) tailMs=\(tailMs)"
+                "streaming_timer_stop begin phase=idle session=\(sessionID)"
             )
-            return
+            self.benchmarkLog(
+                "streaming_timer_stop end phase=idle session=\(sessionID) elapsedMs=0 " +
+                    "completedChunks=\(self.benchmarkCompletedStreamingChunks)"
+            )
+            return true
         }
+        self.benchmarkLog(
+            "streaming_timer_stop begin phase=active session=\(sessionID)"
+        )
+        // Keep the idle fast path synchronous; only real work gets a deadline.
+        let completed = await self.streamingTaskLifecycle.drain(
+            sessionID: sessionID,
+            timeoutNanoseconds: Self.streamingDrainTimeoutNanoseconds
+        )
+        self.benchmarkLog(
+            "streaming_active_drain_resume session=\(sessionID)"
+        )
+        self.benchmarkLog(
+            "streaming_timer_stop end phase=active session=\(sessionID) completed=\(completed) " +
+                "elapsedMs=\(self.elapsedMilliseconds(since: startedAt)) " +
+                "completedChunks=\(self.benchmarkCompletedStreamingChunks)"
+        )
+        return completed
+    }
 
-        if self.isProcessingChunk {
-            self.benchmarkLog("fast_preview_stop_grace wait=in_flight coverage=\(String(format: "%.3f", coverage)) tailMs=\(tailMs)")
-            try? await Task.sleep(nanoseconds: self.fastPreviewStopGraceNanoseconds)
-            return
+    static var streamingRecoveryMessage: String {
+        "Speech recognition took too long to finish. This recording could not be transcribed. " +
+            "Wait for the model to recover, or restart FluidVoice before recording again."
+    }
+
+    func presentStreamingRecoveryError() {
+        self.errorTitle = "Speech recognition needs recovery"
+        self.errorMessage = Self.streamingRecoveryMessage
+        self.showError = true
+    }
+
+    func requireStreamingProviderAvailable() throws {
+        guard self.recordingBufferHandoffGate.isRecovering else { return }
+        throw NSError(domain: "ASRService", code: -2002, userInfo: [
+            NSLocalizedDescriptionKey: Self.streamingRecoveryMessage,
+        ])
+    }
+
+    func beginStreamingDrainRecovery(sessionID: Int, token: RecordingBufferHandoffGate.Token) {
+        self.timedOutStreamingHandoff = (sessionID, token)
+        self.recordingBufferHandoffGate.markTimedOut(token)
+        self.presentStreamingRecoveryError()
+        // Completion may have won the main-actor turn after the deadline fired.
+        if self.streamingTaskLifecycle.activeTaskToDrain(sessionID: sessionID) == nil {
+            self.finishStreamingDrainRecovery(sessionID: sessionID)
         }
+    }
 
-        guard processedSampleCount > 0, coverage >= self.fastPreviewStopGraceMinimumCoverage else {
-            self.benchmarkLog("fast_preview_stop_grace skipped=true reason=not_close coverage=\(String(format: "%.3f", coverage)) tailMs=\(tailMs)")
-            return
+    func finishStreamingDrainRecovery(sessionID: Int) {
+        guard let recovery = self.timedOutStreamingHandoff, recovery.sessionID == sessionID else { return }
+        self.timedOutStreamingHandoff = nil
+        // The provider has actually returned. Only now may its PCM and state be retired.
+        if self.benchmarkSessionID == sessionID {
+            self.audioBuffer.clear()
+            self.streamingWorkState.endSession(sessionID)
+            self.partialTranscription = ""
+            self.previousFullTranscription = ""
+            self.isProcessingChunk = false
+            self.skipNextChunk = false
         }
-
-        let startedAt = Date().timeIntervalSince1970
-        self.benchmarkLog("fast_preview_stop_grace forced_chunk=true coverage=\(String(format: "%.3f", coverage)) tailMs=\(tailMs) samples=\(currentSampleCount)")
-        await self.processStreamingChunk()
-        self.benchmarkLog("fast_preview_stop_grace done elapsedMs=\(self.elapsedMilliseconds(since: startedAt)) samples=\(self.audioBuffer.count)")
+        self.recordingBufferHandoffGate.complete(recovery.token)
+        if self.resetProviderAfterStreamingRecovery {
+            self.resetProviderAfterStreamingRecovery = false
+            self.resetTranscriptionProvider()
+        }
+        if self.errorMessage == Self.streamingRecoveryMessage {
+            self.errorMessage = "The speech model has recovered. Please record your dictation again."
+        }
+        self.benchmarkLog("streaming_drain_recovered session=\(sessionID)")
     }
 }
 
 // MARK: - Audio capture pipeline
 
 //
-// AVAudioEngine's tap runs on a realtime audio thread. ASRService is @MainActor, so we must NOT
-// touch its state directly inside the tap callback. This pipeline keeps all tap-side state
-// thread-safe and only calls back with derived values (audio level + captured samples).
+// Audio callbacks are not main-actor isolated. Direct Core Audio arrives through
+// a lock-free C ring. The AVAudioEngine implementation remains as legacy code but
+// is no longer user-selectable. This pipeline owns timestamp trimming, 16 kHz
+// conversion, levels, and session-safe delivery without touching ASRService from
+// a realtime callback.
 
-private final class AudioCapturePipeline {
+final nonisolated class AudioCapturePipeline: @unchecked Sendable {
     private let audioBuffer: ThreadSafeAudioBuffer
+    private let onFirstAudio: (Int, UInt64, Int, Int, Double, Int, Int) -> Void
     private let onLevel: (CGFloat) -> Void
+    private let onCaptureHealth: (Int, UInt64, Int, Int, Float, Float) -> Void
 
     private let lock = NSLock()
     private var recordingEnabled: Bool = false
+    private var muteTimeline = DictationMuteTimeline()
+    private var needsMuteSeparation = false
+    private var levelMonitoringEnabled: Bool = false
+    private var firstAudioReported: Bool = false
+    private var recordingSessionID: Int = 0
+    private var recordingAttemptID: UInt64 = 0
+    private var recordingStartHostTime: UInt64 = 0
+    private var recordingStopHostTime: UInt64?
+    private var resampleSourceRate: Double = 0
+    private var resampleSourceFrameCursor: Int64 = 0
+    private var resampleNextSourcePosition: Double = 0
+    private var resamplePreviousSample: Float?
+    private var lastInputSampleEnd: Int64?
+    private var captureHealthSampleCount: Int = 0
+    private var captureHealthTotalSampleCount: Int = 0
+    private var captureHealthSquareSum: Double = 0
+    private var captureHealthPeak: Float = 0
 
     // Smoothing state (kept off ASRService/@MainActor)
     private var levelHistory: [CGFloat] = []
@@ -3196,59 +7924,494 @@ private final class AudioCapturePipeline {
     private let historySize: Int = 2
     private let silenceThreshold: CGFloat = 0.04
 
-    init(audioBuffer: ThreadSafeAudioBuffer, onLevel: @escaping (CGFloat) -> Void) {
+    private static let hostTicksPerSecond: Double = {
+        var info = mach_timebase_info_data_t()
+        mach_timebase_info(&info)
+        guard info.numer != 0 else { return 1_000_000_000 }
+        return 1_000_000_000.0 * Double(info.denom) / Double(info.numer)
+    }()
+
+    init(
+        audioBuffer: ThreadSafeAudioBuffer,
+        onFirstAudio: @escaping (Int, UInt64, Int, Int, Double, Int, Int) -> Void,
+        onLevel: @escaping (CGFloat) -> Void,
+        onCaptureHealth: @escaping (Int, UInt64, Int, Int, Float, Float) -> Void
+    ) {
         self.audioBuffer = audioBuffer
+        self.onFirstAudio = onFirstAudio
         self.onLevel = onLevel
+        self.onCaptureHealth = onCaptureHealth
     }
 
-    func setRecordingEnabled(_ enabled: Bool) {
+    func setRecordingEnabled(
+        _ enabled: Bool,
+        sessionID: Int = 0,
+        attemptID: UInt64 = 0,
+        startHostTime: UInt64 = 0
+    ) {
         self.lock.lock()
-        defer { self.lock.unlock() }
-        self.recordingEnabled = enabled
+        if enabled {
+            self.firstAudioReported = false
+            self.recordingSessionID = sessionID
+            self.recordingAttemptID = attemptID
+            self.recordingStartHostTime = startHostTime == 0 ? mach_absolute_time() : startHostTime
+            self.recordingStopHostTime = nil
+            self.resetResamplerLocked()
+            self.lastInputSampleEnd = nil
+            self.resetCaptureHealthLocked()
+            self.recordingEnabled = true
+        }
         if enabled == false {
+            self.recordingEnabled = false
+            self.recordingSessionID = 0
+            self.recordingAttemptID = 0
+            self.recordingStartHostTime = 0
+            self.recordingStopHostTime = nil
+            self.resetResamplerLocked()
+            self.lastInputSampleEnd = nil
+            self.resetCaptureHealthLocked()
             self.levelHistory.removeAll(keepingCapacity: true)
             self.smoothedLevel = 0.0
         }
+        self.lock.unlock()
     }
 
-    func handle(buffer: AVAudioPCMBuffer) {
+    func setDictationMuted(_ muted: Bool, at hostTime: UInt64) {
+        self.lock.withLock { self.muteTimeline.setMuted(muted, at: hostTime) }
+    }
+
+    /// Reset only between logical recordings, not during an audio-route retry.
+    func resetDictationMute() {
+        self.lock.withLock {
+            self.muteTimeline = DictationMuteTimeline()
+            self.needsMuteSeparation = false
+        }
+    }
+
+    var isLevelMonitoringEnabled: Bool {
         self.lock.lock()
-        let enabled = self.recordingEnabled
+        defer { self.lock.unlock() }
+        return self.levelMonitoringEnabled
+    }
+
+    #if DEBUG
+    var isRecordingEnabledForTesting: Bool { self.lock.withLock { self.recordingEnabled } }
+    #endif
+
+    func setLevelMonitoringEnabled(_ enabled: Bool) {
+        self.lock.lock()
+        self.levelMonitoringEnabled = enabled
+        if enabled == false, self.recordingEnabled == false {
+            self.levelHistory.removeAll(keepingCapacity: true)
+            self.smoothedLevel = 0
+        }
+        self.lock.unlock()
+        if enabled == false {
+            self.onLevel(0)
+        }
+    }
+
+    /// Sets the exact last acquisition time accepted for the current session.
+    /// Capture remains enabled until the backend has stopped and drained.
+    func markRecordingEnd(atHostTime hostTime: UInt64) {
+        self.lock.lock()
+        if self.recordingEnabled {
+            self.recordingStopHostTime = hostTime
+        }
+        self.lock.unlock()
+    }
+
+    func finishRecording() {
+        self.setRecordingEnabled(false)
+        self.onLevel(0.0)
+    }
+
+    /// Compatibility for capture teardown paths. Session-scoped timestamps
+    /// replace the old cross-session preroll buffer, so there is nothing to clear.
+    func clearPreroll() {
+        // Intentionally empty.
+    }
+
+    func handle(buffer: AVAudioPCMBuffer, time: AVAudioTime) {
+        let mono = Self.downmixToMono(buffer)
+        guard mono.isEmpty == false else {
+            self.onLevel(0.0)
+            return
+        }
+        self.handleMonoSamples(
+            mono,
+            sampleRate: buffer.format.sampleRate,
+            inputHostTime: time.isHostTimeValid ? time.hostTime : 0,
+            inputSampleTime: time.isSampleTimeValid ? time.sampleTime : -1,
+            originalFrameCount: Int(buffer.frameLength)
+        )
+    }
+
+    func handle(
+        samples: UnsafePointer<Float>,
+        frameCount: Int,
+        sampleRate: Double,
+        inputHostTime: UInt64,
+        inputSampleTime: Int64
+    ) {
+        guard frameCount > 0 else { return }
+        self.handleMonoSamples(
+            Array(UnsafeBufferPointer(start: samples, count: frameCount)),
+            sampleRate: sampleRate,
+            inputHostTime: inputHostTime,
+            inputSampleTime: inputSampleTime,
+            originalFrameCount: frameCount
+        )
+    }
+
+    private func handleMonoSamples(
+        _ samples: [Float],
+        sampleRate: Double,
+        inputHostTime: UInt64,
+        inputSampleTime: Int64,
+        originalFrameCount: Int
+    ) {
+        guard samples.isEmpty == false, sampleRate > 0 else {
+            self.onLevel(0.0)
+            return
+        }
+
+        self.lock.lock()
+        let recordingEnabled = self.recordingEnabled
+        let levelMonitoringEnabled = self.levelMonitoringEnabled
+        guard recordingEnabled || levelMonitoringEnabled else {
+            self.lock.unlock()
+            return
+        }
+        if recordingEnabled == false {
+            self.lock.unlock()
+            AudioSpectrumMeter.shared.ingest(samples)
+            self.onLevel(self.measureAudioLevel(samples).level)
+            return
+        }
+        let startHostTime = self.recordingStartHostTime
+        let stopHostTime = self.recordingStopHostTime
+        let recordingSessionID = self.recordingSessionID
+        let recordingAttemptID = self.recordingAttemptID
         self.lock.unlock()
 
-        guard enabled else {
-            self.onLevel(0.0)
+        guard let acceptedRange = Self.acceptedFrameRange(
+            frameCount: samples.count,
+            sampleRate: sampleRate,
+            packetHostTime: inputHostTime,
+            startHostTime: startHostTime,
+            stopHostTime: stopHostTime
+        ) else {
             return
         }
 
-        let mono16k = Self.toMono16k(floatBuffer: buffer)
-        guard mono16k.isEmpty == false else {
-            self.onLevel(0.0)
+        self.lock.lock()
+        guard self.recordingEnabled,
+              self.recordingSessionID == recordingSessionID,
+              self.recordingAttemptID == recordingAttemptID
+        else {
+            self.lock.unlock()
             return
         }
+        let mono16k = self.resampleAudibleRangesLocked(
+            samples,
+            acceptedRange: acceptedRange,
+            sampleRate: sampleRate,
+            inputHostTime: inputHostTime,
+            inputSampleTime: inputSampleTime
+        )
+        guard !mono16k.isEmpty || self.muteTimeline.hasExclusions else {
+            self.lock.unlock()
+            return
+        }
+        let shouldReportFirstAudio = self.firstAudioReported == false
+        if shouldReportFirstAudio {
+            self.firstAudioReported = true
+        }
 
+        // Keep append and first-audio attribution inside the capture lock.
+        // Disabling an attempt therefore returns only after every accepted
+        // callback has committed its PCM and queued its attempt-scoped signal.
         self.audioBuffer.append(mono16k)
-        let level = self.calculateAudioLevel(mono16k)
-        self.onLevel(level)
+        if shouldReportFirstAudio {
+            let acceptedHostTime = Self.hostTime(
+                inputHostTime,
+                advancedByFrames: acceptedRange.lowerBound,
+                sampleRate: sampleRate
+            )
+            let acquisitionMs = Self.elapsedMilliseconds(
+                from: startHostTime,
+                to: acceptedHostTime
+            )
+            let deliveryMs = Self.elapsedMilliseconds(
+                from: startHostTime,
+                to: mach_absolute_time()
+            )
+            self.onFirstAudio(
+                recordingSessionID,
+                recordingAttemptID,
+                Int(mono16k.count),
+                originalFrameCount,
+                sampleRate,
+                acquisitionMs,
+                deliveryMs
+            )
+        }
+        self.lock.unlock()
+        guard !mono16k.isEmpty else {
+            self.onLevel(0)
+            return
+        }
+        let measurement = self.measureAudioLevel(mono16k)
+        AudioSpectrumMeter.shared.ingest(mono16k)
+        self.onLevel(measurement.level)
+        if let health = self.captureHealthDiagnostic(
+            sampleCount: mono16k.count,
+            rms: measurement.rms,
+            peak: measurement.peak,
+            sessionID: recordingSessionID,
+            attemptID: recordingAttemptID
+        ) {
+            self.onCaptureHealth(
+                recordingSessionID,
+                recordingAttemptID,
+                health.audioMs,
+                health.sampleCount,
+                health.rms,
+                health.peak
+            )
+        }
     }
 
-    private func calculateAudioLevel(_ samples: [Float]) -> CGFloat {
-        guard samples.isEmpty == false else { return 0.0 }
+    private static func acceptedFrameRange(
+        frameCount: Int,
+        sampleRate: Double,
+        packetHostTime: UInt64,
+        startHostTime: UInt64,
+        stopHostTime: UInt64?
+    ) -> Range<Int>? {
+        guard frameCount > 0 else { return nil }
+        // AVAudioEngine can occasionally omit host time. It remains the
+        // conservative fallback and accepts the whole callback in that case.
+        guard packetHostTime > 0, startHostTime > 0 else { return 0..<frameCount }
 
-        // RMS
+        var lowerBound = 0
+        if packetHostTime < startHostTime {
+            let framesBeforeStart = Int(ceil(
+                Double(startHostTime - packetHostTime) /
+                    Self.hostTicksPerSecond * sampleRate
+            ))
+            lowerBound = min(max(framesBeforeStart, 0), frameCount)
+        }
+
+        var upperBound = frameCount
+        if let stopHostTime {
+            if stopHostTime <= packetHostTime {
+                return nil
+            }
+            let framesBeforeStop = Int(floor(
+                Double(stopHostTime - packetHostTime) /
+                    Self.hostTicksPerSecond * sampleRate
+            ))
+            upperBound = min(max(framesBeforeStop, 0), frameCount)
+        }
+
+        guard lowerBound < upperBound else { return nil }
+        return lowerBound..<upperBound
+    }
+
+    private static func hostTime(
+        _ hostTime: UInt64,
+        advancedByFrames frames: Int,
+        sampleRate: Double
+    ) -> UInt64 {
+        guard hostTime > 0, frames > 0, sampleRate > 0 else { return hostTime }
+        let ticks = Double(frames) / sampleRate * Self.hostTicksPerSecond
+        return hostTime &+ UInt64(max(ticks.rounded(), 0))
+    }
+
+    private static func elapsedMilliseconds(from start: UInt64, to end: UInt64) -> Int {
+        guard start > 0, end >= start else { return 0 }
+        return Int((Double(end - start) / self.hostTicksPerSecond * 1000).rounded())
+    }
+
+    private func resetResamplerLocked() {
+        self.resampleSourceRate = 0
+        self.resampleSourceFrameCursor = 0
+        self.resampleNextSourcePosition = 0
+        self.resamplePreviousSample = nil
+    }
+
+    /// Remove muted samples before resampling, streaming, or history storage. Reset
+    /// interpolation at every excluded range so a muted sample cannot cross a seam.
+    private func resampleAudibleRangesLocked(
+        _ samples: [Float],
+        acceptedRange: Range<Int>,
+        sampleRate: Double,
+        inputHostTime: UInt64,
+        inputSampleTime: Int64
+    ) -> [Float] {
+        if !self.muteTimeline.hasExclusions {
+            return self.resampleCapturedRangeLocked(samples, range: acceptedRange, sampleRate: sampleRate, inputSampleTime: inputSampleTime)
+        }
+        let ranges = self.muteTimeline.audibleRanges(
+            in: acceptedRange,
+            packetHostTime: inputHostTime,
+            sampleRate: sampleRate,
+            hostTicksPerSecond: Self.hostTicksPerSecond
+        )
+        var output: [Float] = []
+        var cursor = acceptedRange.lowerBound
+        for range in ranges {
+            if range.lowerBound > cursor {
+                self.needsMuteSeparation = true
+            }
+            if self.needsMuteSeparation { self.resetResamplerLocked() }
+            if self.needsMuteSeparation {
+                // Keep a short word boundary, without accumulating minutes of silence.
+                if !self.audioBuffer.isEmpty || !output.isEmpty {
+                    output.append(contentsOf: repeatElement(0, count: 1600))
+                }
+                self.needsMuteSeparation = false
+            }
+            output.append(contentsOf: self.resampleCapturedRangeLocked(samples, range: range, sampleRate: sampleRate, inputSampleTime: inputSampleTime))
+            cursor = range.upperBound
+        }
+        if cursor < acceptedRange.upperBound {
+            self.needsMuteSeparation = true
+            self.resetResamplerLocked()
+            self.lastInputSampleEnd = nil
+        }
+        return output
+    }
+
+    private func resampleCapturedRangeLocked(_ samples: [Float], range: Range<Int>, sampleRate: Double, inputSampleTime: Int64) -> [Float] {
+        if inputSampleTime >= 0 {
+            let sampleStart = inputSampleTime + Int64(range.lowerBound)
+            if let lastInputSampleEnd = self.lastInputSampleEnd, lastInputSampleEnd != sampleStart {
+                self.resetResamplerLocked()
+            }
+            self.lastInputSampleEnd = inputSampleTime + Int64(range.upperBound)
+        }
+        let acceptedSamples = range == samples.indices ? samples : Array(samples[range])
+        return self.resampleTo16kLocked(acceptedSamples, sourceSampleRate: sampleRate)
+    }
+
+    private func resetCaptureHealthLocked() {
+        self.captureHealthSampleCount = 0
+        self.captureHealthTotalSampleCount = 0
+        self.captureHealthSquareSum = 0
+        self.captureHealthPeak = 0
+    }
+
+    /// Stateful linear resampling keeps fractional phase across small hardware
+    /// callbacks. Stateless per-packet conversion silently shortens 44.1 kHz
+    /// recordings and introduces a discontinuity at every device cycle.
+    private func resampleTo16kLocked(
+        _ samples: [Float],
+        sourceSampleRate: Double
+    ) -> [Float] {
+        guard samples.isEmpty == false else { return [] }
+        if abs(self.resampleSourceRate - sourceSampleRate) > 0.5 {
+            self.resetResamplerLocked()
+            self.resampleSourceRate = sourceSampleRate
+        }
+        if sourceSampleRate == 16_000.0 {
+            return samples
+        }
+
+        let chunkStart = Double(self.resampleSourceFrameCursor)
+        let chunkEnd = chunkStart + Double(samples.count)
+        let step = sourceSampleRate / 16_000.0
+        var output: [Float] = []
+        output.reserveCapacity(Int(ceil(Double(samples.count) / step)) + 1)
+
+        while self.resampleNextSourcePosition < chunkEnd {
+            let lowerFrame = Int64(floor(self.resampleNextSourcePosition))
+            let fraction = Float(self.resampleNextSourcePosition - Double(lowerFrame))
+            let localLower = lowerFrame - self.resampleSourceFrameCursor
+
+            let lowerSample: Float
+            let upperSample: Float
+            if localLower < 0 {
+                guard localLower == -1,
+                      let previousSample = self.resamplePreviousSample
+                else { break }
+                lowerSample = previousSample
+                upperSample = samples[0]
+            } else {
+                let index = Int(localLower)
+                guard index < samples.count else { break }
+                lowerSample = samples[index]
+                if fraction == 0 {
+                    upperSample = lowerSample
+                } else {
+                    guard index + 1 < samples.count else { break }
+                    upperSample = samples[index + 1]
+                }
+            }
+
+            output.append(lowerSample + (upperSample - lowerSample) * fraction)
+            self.resampleNextSourcePosition += step
+        }
+
+        self.resampleSourceFrameCursor += Int64(samples.count)
+        self.resamplePreviousSample = samples.last
+        return output
+    }
+
+    private func measureAudioLevel(_ samples: [Float]) -> (level: CGFloat, rms: Float, peak: Float) {
+        guard samples.isEmpty == false else { return (0, 0, 0) }
+
         var sum: Float = 0.0
         vDSP_svesq(samples, 1, &sum, vDSP_Length(samples.count))
         let rms = sqrt(sum / Float(samples.count))
+        var peak: Float = 0
+        vDSP_maxmgv(samples, 1, &peak, vDSP_Length(samples.count))
 
         // Noise gate
         if rms < 0.002 {
-            return self.applySmoothingAndThreshold(0.0)
+            return (self.applySmoothingAndThreshold(0), rms, peak)
         }
 
         // dB -> normalized [0, 1]
         let dbLevel = 20 * log10(max(rms, 1e-10))
         let normalizedLevel = max(0, min(1, (dbLevel + 55) / 55))
-        return self.applySmoothingAndThreshold(CGFloat(normalizedLevel))
+        return (self.applySmoothingAndThreshold(CGFloat(normalizedLevel)), rms, peak)
+    }
+
+    private func captureHealthDiagnostic(
+        sampleCount: Int,
+        rms: Float,
+        peak: Float,
+        sessionID: Int,
+        attemptID: UInt64
+    ) -> (audioMs: Int, sampleCount: Int, rms: Float, peak: Float)? {
+        self.lock.lock()
+        defer { self.lock.unlock() }
+        guard self.recordingEnabled,
+              self.recordingSessionID == sessionID,
+              self.recordingAttemptID == attemptID
+        else { return nil }
+
+        self.captureHealthSampleCount += sampleCount
+        self.captureHealthTotalSampleCount += sampleCount
+        self.captureHealthSquareSum += Double(rms * rms) * Double(sampleCount)
+        self.captureHealthPeak = max(self.captureHealthPeak, peak)
+        guard self.captureHealthSampleCount >= 16_000 else { return nil }
+
+        let windowSampleCount = self.captureHealthSampleCount
+        let windowRMS = Float(sqrt(self.captureHealthSquareSum / Double(windowSampleCount)))
+        let result = (
+            audioMs: Int((Double(self.captureHealthTotalSampleCount) / 16_000 * 1000).rounded()),
+            sampleCount: windowSampleCount,
+            rms: windowRMS,
+            peak: self.captureHealthPeak
+        )
+        self.captureHealthSampleCount = 0
+        self.captureHealthSquareSum = 0
+        self.captureHealthPeak = 0
+        return result
     }
 
     private func applySmoothingAndThreshold(_ newLevel: CGFloat) -> CGFloat {
@@ -3271,20 +8434,6 @@ private final class AudioCapturePipeline {
         return self.smoothedLevel
     }
 
-    private static func toMono16k(floatBuffer: AVAudioPCMBuffer) -> [Float] {
-        if let format = floatBuffer.format as AVAudioFormat?,
-           format.sampleRate == 16_000.0,
-           format.commonFormat == .pcmFormatFloat32,
-           format.channelCount == 1,
-           let channelData = floatBuffer.floatChannelData
-        {
-            let frameCount = Int(floatBuffer.frameLength)
-            return Array(UnsafeBufferPointer(start: channelData[0], count: frameCount))
-        }
-        let mono = self.downmixToMono(floatBuffer)
-        return self.resampleTo16k(mono, sourceSampleRate: floatBuffer.format.sampleRate)
-    }
-
     private static func downmixToMono(_ buffer: AVAudioPCMBuffer) -> [Float] {
         guard let channelData = buffer.floatChannelData else { return [] }
         let frameCount = Int(buffer.frameLength)
@@ -3300,27 +8449,5 @@ private final class AudioCapturePipeline {
         var div = Float(channels)
         vDSP_vsdiv(mono, 1, &div, &mono, 1, vDSP_Length(frameCount))
         return mono
-    }
-
-    private static func resampleTo16k(_ samples: [Float], sourceSampleRate: Double) -> [Float] {
-        guard samples.isEmpty == false else { return [] }
-        if sourceSampleRate == 16_000.0 { return samples }
-        let ratio = 16_000.0 / sourceSampleRate
-        let outCount = Int(Double(samples.count) * ratio)
-        var output = [Float](repeating: 0, count: max(outCount, 0))
-        if output.isEmpty { return [] }
-        for i in 0..<outCount {
-            let srcPos = Double(i) / ratio
-            let idx = Int(srcPos)
-            let frac = Float(srcPos - Double(idx))
-            if idx + 1 < samples.count {
-                let a = samples[idx]
-                let b = samples[idx + 1]
-                output[i] = a + (b - a) * frac
-            } else if idx < samples.count {
-                output[i] = samples[idx]
-            }
-        }
-        return output
     }
 }

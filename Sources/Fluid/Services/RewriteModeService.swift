@@ -82,7 +82,17 @@ final class RewriteModeService: ObservableObject {
     }
 
     func processRewriteRequest(_ prompt: String) async {
+        guard let summaryActivity = MeetingSummaryActivityCoordinator.shared.beginProcessing() else {
+            MeetingSummaryActivityCoordinator.presentBusyError()
+            return
+        }
+        defer { MeetingSummaryActivityCoordinator.shared.endProcessing(summaryActivity) }
+
         let startTime = Date()
+        AnalyticsService.shared.recordUsage(
+            mode: .edit,
+            aiModel: SettingsStore.shared.analyticsAIModelDescriptor(for: .edit)
+        )
         self.appendDiagnosticLog(
             "processRewriteRequest start | promptChars=\(prompt.count) | hadOriginal=\(!self.originalText.isEmpty) | contextChars=\(self.selectedContextText.count)"
         )
@@ -133,44 +143,38 @@ final class RewriteModeService: ObservableObject {
                 "processRewriteRequest success | writeMode=\(self.isWriteMode) | outputChars=\(response.count) | latency=\(String(format: "%.2fs", Date().timeIntervalSince(startTime)))"
             )
 
-            AnalyticsService.shared.capture(
-                .rewriteRunCompleted,
-                properties: [
-                    "write_mode": self.isWriteMode,
-                    "success": true,
-                    "latency_bucket": AnalyticsBuckets.bucketSeconds(Date().timeIntervalSince(startTime)),
-                ]
-            )
         } catch {
             self.conversationHistory.append(Message(role: .assistant, content: "Error: \(error.localizedDescription)"))
             self.isProcessing = false
             self.appendDiagnosticLog(
                 "processRewriteRequest failure | writeMode=\(self.isWriteMode) | error=\(error.localizedDescription)"
             )
-
-            AnalyticsService.shared.capture(
-                .rewriteRunCompleted,
-                properties: [
-                    "write_mode": self.isWriteMode,
-                    "success": false,
-                    "latency_bucket": AnalyticsBuckets.bucketSeconds(Date().timeIntervalSince(startTime)),
-                ]
-            )
         }
     }
 
-    func acceptRewrite() {
-        guard !self.rewrittenText.isEmpty else { return }
-        NSApp.hide(nil) // Restore focus to the previous app
-        self.typingService.typeTextInstantly(self.rewrittenText)
+    @MainActor
+    func acceptRewrite(_ text: String) async {
+        guard let summaryActivity = MeetingSummaryActivityCoordinator.shared.beginProcessing() else {
+            MeetingSummaryActivityCoordinator.presentBusyError()
+            return
+        }
+        defer { MeetingSummaryActivityCoordinator.shared.endProcessing(summaryActivity) }
 
-        AnalyticsService.shared.capture(
-            .outputDelivered,
-            properties: [
-                "mode": AnalyticsMode.rewrite.rawValue,
-                "method": AnalyticsOutputMethod.typed.rawValue,
-            ]
-        )
+        // The panel may clear its state before this queued action starts.
+        guard !text.isEmpty else { return }
+        NSApp.hide(nil)
+        // Hiding alone races the paste: the focused element can still be our
+        // panel when the editability check runs. Put focus back on the field
+        // the rewrite was recorded from, and fall back to a short settle.
+        var targetPID: pid_t?
+        if let context = NotchContentState.shared.recordingTargetContext {
+            let preparation = await TypingService.prepareTargetForDelivery(context)
+            targetPID = context.pid
+            self.appendDiagnosticLog("acceptRewrite focus=\(preparation.rawValue) pid=\(context.pid)")
+        } else {
+            try? await Task.sleep(nanoseconds: 80_000_000)
+        }
+        _ = await self.typingService.typeTextInstantly(text, preferredTargetPID: targetPID)
     }
 
     func clearState() {
@@ -206,12 +210,7 @@ final class RewriteModeService: ObservableObject {
         let builtInDefaultPrompt = SettingsStore.defaultSystemPromptText(for: promptMode)
         let systemPromptBeforeContext = settings.effectiveSystemPrompt(for: promptMode, appBundleID: appBundleID)
         // Use global provider/model when linked, otherwise use Edit Mode's independent settings.
-        let providerID: String = {
-            if settings.rewriteModeLinkedToGlobal {
-                return settings.selectedProviderID
-            }
-            return settings.rewriteModeSelectedProviderID
-        }()
+        let providerID = settings.effectiveRewriteModeProviderID
         guard !providerID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw NSError(
                 domain: "RewriteMode",
@@ -219,14 +218,8 @@ final class RewriteModeService: ObservableObject {
                 userInfo: [NSLocalizedDescriptionKey: "No verified AI provider selected"]
             )
         }
-        guard !self.isPrivateAIProviderID(providerID) else {
-            throw NSError(
-                domain: "RewriteMode",
-                code: -5,
-                userInfo: [NSLocalizedDescriptionKey: "\(PrivateAIProviderFeature.displayName) for Edit Mode is coming soon. Choose a verified chat provider or turn Sync off."]
-            )
-        }
-        guard self.isProviderVerified(providerID, settings: settings) else {
+        let usesPrivateAIProvider = self.isPrivateAIProviderID(providerID)
+        guard usesPrivateAIProvider || self.isProviderVerified(providerID, settings: settings) else {
             throw NSError(
                 domain: "RewriteMode",
                 code: -3,
@@ -262,47 +255,7 @@ final class RewriteModeService: ObservableObject {
             self.logPromptTrace("Conversation input (Q/history)", value: messageDump.isEmpty ? "<empty>" : messageDump)
         }
 
-        // Route to Apple Intelligence if selected
-        if providerID == "apple-intelligence" {
-            #if canImport(FoundationModels)
-            if #available(macOS 26.0, *) {
-                let provider = AppleIntelligenceProvider()
-                let messageTuples = messages
-                    .map { (role: $0.role == .user ? "user" : "assistant", content: $0.content) }
-                DebugLogger.shared.debug("Using Apple Intelligence for edit mode", source: "RewriteModeService")
-                let output = try await provider.processRewrite(messages: messageTuples, systemPrompt: systemPrompt)
-                if self.shouldTracePromptProcessing {
-                    self.logPromptTrace("Model answer (A)", value: output)
-                }
-                return output
-            }
-            #endif
-            throw NSError(
-                domain: "RewriteMode",
-                code: -1,
-                userInfo: [NSLocalizedDescriptionKey: "Apple Intelligence not available"]
-            )
-        }
-
-        let model: String = {
-            if settings.rewriteModeLinkedToGlobal {
-                let key: String
-                if ModelRepository.shared.isBuiltIn(providerID) {
-                    key = providerID
-                } else if providerID.hasPrefix("custom:") {
-                    key = providerID
-                } else {
-                    key = "custom:\(providerID)"
-                }
-                return settings.selectedModelByProvider[key]
-                    ?? settings.selectedModel
-                    ?? ModelRepository.shared.defaultModels(for: providerID).first
-                    ?? ""
-            }
-            return settings.rewriteModeSelectedModel
-                ?? ModelRepository.shared.defaultModels(for: providerID).first
-                ?? ""
-        }()
+        let model = settings.effectiveRewriteModeSelectedModel
         guard !model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw NSError(
                 domain: "RewriteMode",
@@ -310,12 +263,21 @@ final class RewriteModeService: ObservableObject {
                 userInfo: [NSLocalizedDescriptionKey: "No AI model selected"]
             )
         }
-        guard !PrivateAIIntegrationService.shouldHandleDictation(model: model) else {
-            throw NSError(
-                domain: "RewriteMode",
-                code: -6,
-                userInfo: [NSLocalizedDescriptionKey: "\(PrivateAIProviderFeature.displayName) for Edit Mode is coming soon. Choose a verified chat provider model."]
-            )
+        var runtimeModel = model
+        var localModelPath = PrivateAIIntegrationService.configuredLocalModelPath
+        if usesPrivateAIProvider {
+            guard let verifiedModelID = PrivateAIProviderPromptFormat.verifiedModelID(for: model, settings: settings),
+                  let verifiedModel = PrivateAIModelRegistry.model(id: verifiedModelID),
+                  let verifiedModelPath = PrivateAIIntegrationService.localModelPath(for: verifiedModel)
+            else {
+                throw NSError(
+                    domain: "RewriteMode",
+                    code: -5,
+                    userInfo: [NSLocalizedDescriptionKey: "Selected Fluid-1 model is not installed and verified"]
+                )
+            }
+            runtimeModel = verifiedModelID
+            localModelPath = verifiedModelPath
         }
         self.appendDiagnosticLog(
             "LLM config | writeMode=\(isWriteMode) | linkedToGlobal=\(settings.rewriteModeLinkedToGlobal) | " +
@@ -333,6 +295,35 @@ final class RewriteModeService: ObservableObject {
             baseURL = ""
         }
 
+        if usesPrivateAIProvider || PrivateAIIntegrationService.shouldHandleDictation(model: model) {
+            let inputText = messages.map {
+                let role = $0.role == .user ? "user" : "assistant"
+                return "[\(role)]\n\($0.content)"
+            }.joined(separator: "\n\n")
+            let response = try await PrivateAIIntegrationService.shared.rewrite(
+                inputText,
+                systemPrompt: systemPrompt,
+                runtime: PrivateAIIntegrationService.RuntimeConfiguration(
+                    selectedProviderID: providerID,
+                    providerKey: self.providerKey(for: providerID),
+                    baseURL: baseURL,
+                    model: runtimeModel,
+                    apiKey: apiKey,
+                    localModelPath: localModelPath,
+                    usesStablePromptPrefixKVCache: settings.privateAIPrefixKVCacheEnabled,
+                    usesFluid1Boost: settings.privateAIBoostEnabled,
+                    contextTokenLimit: settings.privateAIContextTokenLimit
+                ),
+                context: PrivateAIIntegrationService.AppContext(
+                    appName: "",
+                    bundleID: appBundleID ?? "",
+                    windowTitle: "",
+                    appVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
+                )
+            )
+            return response.outputText
+        }
+
         // Build messages array for LLMClient
         var apiMessages: [[String: Any]] = [
             ["role": "system", "content": systemPrompt],
@@ -348,7 +339,7 @@ final class RewriteModeService: ObservableObject {
 
         // Reasoning models (o1, o3, gpt-5) don't support temperature parameter at all
         let isReasoningModel = settings.isReasoningModel(model)
-        let isTemperatureUnsupported = settings.isTemperatureUnsupported(model)
+        let isTemperatureUnsupported = settings.isTemperatureUnsupported(model, baseURL: baseURL)
 
         // Get reasoning config for this model (e.g., reasoning_effort, enable_thinking)
         let reasoningConfig = settings.getReasoningConfig(forModel: model, provider: providerID)
@@ -437,9 +428,7 @@ final class RewriteModeService: ObservableObject {
 
     private func appendDiagnosticLog(_ message: String) {
         guard self.diagnosticsEnabled || self.forcePromptTraceToConsole else { return }
-        let line = "[RewriteModeService] \(message)"
-        FileLogger.shared.append(line: line)
-        DebugLogger.shared.debug(line, source: "RewriteModeService")
+        DebugLogger.shared.info(message, source: "RewriteModeService")
     }
 
     private func providerKey(for providerID: String) -> String {
@@ -473,9 +462,6 @@ final class RewriteModeService: ObservableObject {
         guard !self.isPrivateAIProviderID(providerID) else { return false }
         let key = self.providerKey(for: providerID)
         guard let stored = settings.verifiedProviderFingerprints[key] else { return false }
-        if providerID == "apple-intelligence" {
-            return stored == "apple-intelligence"
-        }
         let baseURL = self.providerBaseURL(for: providerID, settings: settings)
         let apiKey = settings.getAPIKey(for: providerID) ?? ""
         let current = self.providerFingerprint(baseURL: baseURL, apiKey: apiKey)

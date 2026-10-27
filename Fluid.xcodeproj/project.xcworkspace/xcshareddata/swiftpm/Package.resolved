@@ -1,5 +1,5 @@
 {
-  "originHash" : "064855d16f7e949cfc68503de53276b1c6192736444e73922fc77d0a6b315471",
+  "originHash" : "b292cff340b2a516c854d49a19a563c138d2f0e4d2a4e91c4f8f75dff25ed1b1",
   "pins" : [
     {
       "identity" : "appupdater",
@@ -15,8 +15,7 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/altic-dev/DynamicNotchKit.git",
       "state" : {
-        "branch" : "main",
-        "revision" : "708f31da5319436c64059ee7ae566953407063d7"
+        "revision" : "50dc8565469cc80bbbe3c0d5dd902585a2d67986"
       }
     },
     {
@@ -33,8 +32,7 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/altic-dev/FluidAudio.git",
       "state" : {
-        "branch" : "B/cohere-coreml-asr",
-        "revision" : "72625bbccf9f6c797a540a1f1cb66a4cb60753eb"
+        "revision" : "eb1e6628998e47022799d305b52c2680d3576801"
       }
     },
     {
@@ -128,12 +126,12 @@
       }
     },
     {
-      "identity" : "swiftwhisper",
+      "identity" : "transcribe-cpp-swift",
       "kind" : "remoteSourceControl",
-      "location" : "https://github.com/exPHAT/SwiftWhisper.git",
+      "location" : "https://github.com/altic-dev/transcribe-cpp-swift.git",
       "state" : {
-        "revision" : "a192004db08de7c6eaa169eede77f1625e7d23fb",
-        "version" : "1.2.0"
+        "revision" : "a16df2905f9c715344374fd2d8dd97c2712a6d96",
+        "version" : "0.1.2"
       }
     },
     {
@@ -152,6 +150,15 @@
       "state" : {
         "revision" : "8b4a38dc994a110abaec8a400615567bd996105f",
         "version" : "0.12.0"
+      }
+    },
+    {
+      "identity" : "zeppelin-embed",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/zepdb/zeppelin-embed.git",
+      "state" : {
+        "revision" : "69b488e3a697ae22ebe2115c69ce2989b505dfe2",
+        "version" : "0.4.1"
       }
     }
   ],

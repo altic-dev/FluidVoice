@@ -2,7 +2,7 @@ import Foundation
 
 enum LocalAPI {
     static let defaultPort: UInt16 = 47_733
-    static let maxRequestBytes = 25 * 1024 * 1024
+    static let maxRequestBytes = 500 * 1024 * 1024
 
     struct Configuration {
         let enabled: Bool

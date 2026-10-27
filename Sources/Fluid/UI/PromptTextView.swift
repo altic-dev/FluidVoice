@@ -7,7 +7,7 @@ struct PromptTextView: NSViewRepresentable {
     @Binding var text: String
 
     var isEditable: Bool = true
-    var font: NSFont = .monospacedSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
+    var font: NSFont = .fluidMonospacedSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
     var contentInset: CGFloat = 10
 
     func makeCoordinator() -> Coordinator {

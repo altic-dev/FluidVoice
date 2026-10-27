@@ -43,30 +43,33 @@ final class InferenceAPIController: LocalAPIRouteHandler {
     private func transcribe(_ request: LocalAPI.Request) async -> LocalAPI.Response {
         do {
             if let fileURL = try self.decodeFilePath(from: request) {
-                let apiResult = try await AppServices.shared.asr.transcribeFileForAPI(fileURL)
-                return LocalAPI.json(
-                    TranscribeResponse(
-                        text: apiResult.result.text,
-                        confidence: apiResult.result.confidence,
-                        sampleCount: apiResult.sampleCount,
-                        provider: SettingsStore.shared.selectedSpeechModel.displayName
-                    )
-                )
+                return try await self.transcribeFile(fileURL)
             }
 
-            let samples = try self.decodeAudioSamples(from: request)
-            let result = try await AppServices.shared.asr.transcribeSamplesForAPI(samples)
-            return LocalAPI.json(
-                TranscribeResponse(
-                    text: result.text,
-                    confidence: result.confidence,
-                    sampleCount: samples.count,
-                    provider: SettingsStore.shared.selectedSpeechModel.displayName
-                )
-            )
+            let temporaryFileURL = try await self.decodeUploadedAudioFile(from: request)
+            do {
+                let response = try await self.transcribeFile(temporaryFileURL)
+                await LocalAPIAudioDecoder.removeTemporaryFile(at: temporaryFileURL)
+                return response
+            } catch {
+                await LocalAPIAudioDecoder.removeTemporaryFile(at: temporaryFileURL)
+                throw error
+            }
         } catch {
             return LocalAPI.error(error.localizedDescription, status: 400)
         }
+    }
+
+    private func transcribeFile(_ fileURL: URL) async throws -> LocalAPI.Response {
+        let apiResult = try await AppServices.shared.asr.transcribeFileForAPI(fileURL)
+        return LocalAPI.json(
+            TranscribeResponse(
+                text: apiResult.result.text,
+                confidence: apiResult.result.confidence,
+                sampleCount: apiResult.sampleCount,
+                provider: SettingsStore.shared.selectedSpeechModel.displayName
+            )
+        )
     }
 
     private func decodeFilePath(from request: LocalAPI.Request) throws -> URL? {
@@ -98,7 +101,9 @@ final class InferenceAPIController: LocalAPIRouteHandler {
         }
     }
 
-    private func decodeAudioSamples(from request: LocalAPI.Request) throws -> [Float] {
+    private func decodeUploadedAudioFile(from request: LocalAPI.Request) async throws -> URL {
+        let data: Data
+        let suggestedExtension: String
         if self.isJSON(request) {
             let payload: TranscribeJSONRequest
             do {
@@ -107,30 +112,27 @@ final class InferenceAPIController: LocalAPIRouteHandler {
                 throw NSError(domain: "InferenceAPIController", code: -3, userInfo: [NSLocalizedDescriptionKey: "Invalid JSON audio payload."])
             }
 
-            if let path = payload.path, !path.isEmpty {
-                return try LocalAPIAudioDecoder.samples(from: URL(fileURLWithPath: path))
-            }
-
             if let audioBase64 = payload.audioBase64,
-               let data = Data(base64Encoded: audioBase64)
+               let decodedData = Data(base64Encoded: audioBase64)
             {
-                return try LocalAPIAudioDecoder.samples(
-                    fromAudioData: data,
-                    suggestedExtension: payload.filename.flatMap { URL(fileURLWithPath: $0).pathExtension } ?? "wav"
-                )
+                data = decodedData
+                suggestedExtension = payload.filename.flatMap { URL(fileURLWithPath: $0).pathExtension } ?? "wav"
+            } else {
+                throw NSError(domain: "InferenceAPIController", code: -1, userInfo: [NSLocalizedDescriptionKey: "Missing audio path or audioBase64."])
+            }
+        } else {
+            guard !request.body.isEmpty else {
+                throw NSError(domain: "InferenceAPIController", code: -1, userInfo: [NSLocalizedDescriptionKey: "Missing audio body."])
             }
 
-            throw NSError(domain: "InferenceAPIController", code: -1, userInfo: [NSLocalizedDescriptionKey: "Missing audio path or audioBase64."])
+            data = request.body
+            let filename = request.headers["x-filename"] ?? "audio.wav"
+            suggestedExtension = URL(fileURLWithPath: filename).pathExtension
         }
 
-        guard !request.body.isEmpty else {
-            throw NSError(domain: "InferenceAPIController", code: -1, userInfo: [NSLocalizedDescriptionKey: "Missing audio body."])
-        }
-
-        let filename = request.headers["x-filename"] ?? "audio.wav"
-        return try LocalAPIAudioDecoder.samples(
-            fromAudioData: request.body,
-            suggestedExtension: URL(fileURLWithPath: filename).pathExtension
+        return try await LocalAPIAudioDecoder.temporaryFile(
+            fromAudioData: data,
+            suggestedExtension: suggestedExtension
         )
     }
 

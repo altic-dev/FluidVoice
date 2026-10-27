@@ -2,7 +2,7 @@ import Darwin
 import Foundation
 
 /// A lightweight file-backed logger that mirrors in-app debug logs to disk for diagnostics.
-final class FileLogger {
+final nonisolated class FileLogger: @unchecked Sendable {
     static let shared = FileLogger()
 
     private let queue = DispatchQueue(label: "file.logger.queue", qos: .utility)
@@ -24,7 +24,13 @@ final class FileLogger {
     private static let sigUnknownLine = Array("[CRASH] Fatal signal UNKNOWN\n".utf8)
 
     private init() {
+        #if FLUID_ASR_BASELINE
+        // Baseline runs log to an isolated per-process temp root, never user Library.
+        let baseDirectory = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent("FluidASRBaseline-\(UUID().uuidString)", isDirectory: true)
+        #else
         let baseDirectory = self.fileManager.urls(for: .libraryDirectory, in: .userDomainMask).first ?? URL(fileURLWithPath: NSTemporaryDirectory())
+        #endif
         self.logDirectory = baseDirectory.appendingPathComponent("Logs/Fluid", isDirectory: true)
         self.logFileURL = self.logDirectory.appendingPathComponent("Fluid.log", isDirectory: false)
         self.backupLogURL = self.logDirectory.appendingPathComponent("Fluid.log.1", isDirectory: false)
@@ -196,7 +202,7 @@ final class FileLogger {
     }
 }
 
-private func fileLoggerSignalHandler(_ signalNumber: Int32) {
+private nonisolated func fileLoggerSignalHandler(_ signalNumber: Int32) {
     FileLogger.writeCrashSignalLine(signalNumber)
     signal(signalNumber, SIG_DFL)
     raise(signalNumber)

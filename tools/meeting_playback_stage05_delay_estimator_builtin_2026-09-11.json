@@ -1,0 +1,26 @@
+{
+  "acousticEligibleForAECTrial": false,
+  "aec3Authorized": false,
+  "analyzerSHA256": "3379f9a36fdda278e47ac64af8fe7c7e3fc0fd583bb8518e25e793d85cbf7336",
+  "callbackAdapterEligibleForAECTrial": false,
+  "eligibleSessionCount": 0,
+  "exitStatus": 2,
+  "outcome": "rejected",
+  "privacy": {
+    "pathsRetained": false,
+    "rawPCMRetained": false,
+    "transcriptRetained": false
+  },
+  "reasonCounts": {
+    "delayUnresolved": 1,
+    "driftUnscored": 1,
+    "insufficientCoverage": 1,
+    "linearPathUnscored": 1,
+    "noEligibleSessions": 1,
+    "unstablePath": 1
+  },
+  "replayCount": 1,
+  "schemaVersion": 1,
+  "sessionCount": 1,
+  "testSHA256": "602f6c85632e3cdc90fd539f056d8dd3a1f4b587599311f51dea580b2897e313"
+}

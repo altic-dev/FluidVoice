@@ -1,0 +1,264 @@
+import AVFoundation
+import CoreMedia
+import Foundation
+
+/// Owns the two live-transcription engines for one meeting recording and publishes a snapshot for
+/// the UI. Entirely additive to the recording path: `offer(kind:sampleBuffer:)` is the only entry
+/// point invoked from the capture tee, and it never blocks or throws into the capture callback.
+///
+/// Not `@MainActor` on purpose — `offer` must be callable synchronously from the SCStream callback
+/// thread. `onUpdate` is responsible for hopping to the main actor if the caller needs that.
+final nonisolated class MeetingLiveTranscriptionCoordinator: @unchecked Sendable {
+    /// Two `StreamingEouAsrManager` instances measured at ~470MB RSS each. Below this, skip live
+    /// entirely rather than risk contending with the recording or the later batch model.
+    static let minimumPhysicalMemoryBytes: UInt64 = 8 * 1024 * 1024 * 1024
+    static let echoWindowSeconds: TimeInterval = 20
+
+    static func isMemorySufficient(physicalMemory: UInt64) -> Bool {
+        physicalMemory >= self.minimumPhysicalMemoryBytes
+    }
+
+    private let stateLock = NSLock()
+    private let diagnosticsEnabled: Bool = {
+        #if DEBUG
+        ProcessInfo.processInfo.environment["FLUIDVOICE_MEETING_LIVE_DIAGNOSTICS"] == "1"
+        #else
+        false
+        #endif
+    }()
+
+    private func diag(_ message: @autoclosure () -> String) {
+        guard self.diagnosticsEnabled else { return }
+        DebugLogger.shared.info(message(), source: "MeetingLive")
+    }
+
+    private var comparisonProbe: MeetingAudioComparisonProbe?
+    private var snapshot: MeetingLiveTranscriptSnapshot = .empty
+    private var recentThemUtterances: [MeetingLiveUtterance] = []
+    private var offerCounts: [MeetingAudioTrackKind: Int] = [:]
+    /// nil (fail-safe) keeps the echo filter ON; guarded by `stateLock` on both sides.
+    private var microphoneCaptureMethod: MeetingAudioTrackCaptureMethod?
+    private let originBox = MeetingLiveOriginBox()
+    private let onUpdate: @Sendable (MeetingLiveTranscriptSnapshot) -> Void
+
+    #if arch(arm64)
+    private var microphoneEngine: MeetingLiveTrackEngine?
+    private var applicationEngine: MeetingLiveTrackEngine?
+    #endif
+
+    init(onUpdate: @escaping @Sendable (MeetingLiveTranscriptSnapshot) -> Void) {
+        self.onUpdate = onUpdate
+    }
+
+    func attachComparisonProbe(_ probe: MeetingAudioComparisonProbe) {
+        self.stateLock.withLock { self.comparisonProbe = probe }
+        #if arch(arm64)
+        let engines = self.stateLock.withLock { [self.microphoneEngine, self.applicationEngine].compactMap { $0 } }
+        for engine in engines {
+            Task { await engine.attachComparisonProbe(probe) }
+        }
+        #endif
+        probe.recordEvent("live-probe-attached")
+    }
+
+    func recordComparisonCaptureEvent(_ event: MeetingCaptureEvent) {
+        guard let probe = self.stateLock.withLock({ self.comparisonProbe }), probe.isRecordingDiagnostics else { return }
+        probe.recordEvent("capture-event", detail: String(describing: event))
+    }
+
+    private func recordProbe(_ step: String, kind: MeetingAudioTrackKind? = nil, pts: Double? = nil, text: String? = nil, detail: String? = nil) {
+        self.stateLock.withLock { self.comparisonProbe }?.recordEvent(step, track: kind, pts: pts, text: text, detail: detail)
+    }
+
+    /// Clears any in-progress microphone partial at a capture-side splice, so it can't straddle eras.
+    func resetMicrophoneUtterance() {
+        self.publish { $0.settingPartial(nil, for: .you) }
+    }
+
+    func setMicrophoneCaptureMethod(_ method: MeetingAudioTrackCaptureMethod?) {
+        self.stateLock.withLock { self.microphoneCaptureMethod = method }
+        self.recordProbe("microphone-capture-method", detail: method?.rawValue ?? "unknown")
+        self.diag(
+            "[live/ECHO] setter-armed captureMethod=\(method.map(String.init(describing:)) ?? "nil")"
+        )
+    }
+
+    func start(mode: MeetingCaptureMode, languageCode: String = "en") {
+        guard languageCode == "en" else {
+            self.publish { $0.settingAvailability(.unavailable(reason: "Live captions support English only. Your transcript will be generated after recording.")) }
+            return
+        }
+        #if arch(arm64)
+        guard Self.isMemorySufficient(physicalMemory: ProcessInfo.processInfo.physicalMemory) else {
+            self.diag(
+                "Live meeting transcription skipped: below memory threshold."
+            )
+            self.publish { $0.settingAvailability(.unavailable(reason: "Not enough memory available for live captions.")) }
+            return
+        }
+
+        self.diag(
+            "[live] starting engines mode=\(mode) physicalMemory=\(ProcessInfo.processInfo.physicalMemory / 1_073_741_824)GB"
+        )
+        let microphone = MeetingLiveTrackEngine(kind: .microphone)
+        self.stateLock.withLock { self.microphoneEngine = microphone }
+        self.launch(microphone)
+
+        if mode == .onlineCall {
+            let application = MeetingLiveTrackEngine(kind: .applicationAudio)
+            self.stateLock.withLock { self.applicationEngine = application }
+            self.launch(application)
+        }
+        self.publish { $0.settingAvailability(.unavailable(reason: "Live captions are loading…")) }
+        #else
+        self.publish { $0.settingAvailability(.unavailable(reason: "Live captions require Apple Silicon.")) }
+        #endif
+    }
+
+    /// The capture-tee entry point. Copies PCM only for an active engine, then hands it to the
+    /// track's bounded queue — never retains the `CMSampleBuffer` beyond this call.
+    func offer(kind: MeetingAudioTrackKind, sampleBuffer: CMSampleBuffer) {
+        #if arch(arm64)
+        let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+        self.recordProbe("live-audio-offered", kind: kind, pts: pts.seconds)
+        guard pts.isNumeric else { return }
+        // Keep the shared capture clock even when this track has no caption engine.
+        self.originBox.establish(pts)
+        guard self.stateLock.withLock({ kind == .microphone ? self.microphoneEngine != nil : self.applicationEngine != nil }) else { return }
+        guard let sample = MeetingLiveSampleCopy.copy(sampleBuffer) else {
+            self.recordProbe("live-sample-copy-failed", kind: kind, pts: pts.seconds)
+            self.diag("[live/tee] sample copy FAILED kind=\(kind)")
+            return
+        }
+        let engine: MeetingLiveTrackEngine? = self.stateLock.withLock { () -> MeetingLiveTrackEngine? in
+            let count = (self.offerCounts[kind] ?? 0) + 1
+            self.offerCounts[kind] = count
+            if count == 1 {
+                self.diag(
+                    "[live/tee] first sample kind=\(kind) pts=\(String(format: "%.3f", sample.pts.seconds)) sr=\(sample.buffer.format.sampleRate) ch=\(sample.buffer.format.channelCount)"
+                )
+            }
+            let engine = kind == .microphone ? self.microphoneEngine : self.applicationEngine
+            if engine == nil, count == 1 {
+                self.diag("[live/tee] no engine for kind=\(kind) — samples discarded")
+            }
+            return engine
+        }
+        engine?.offer(sample)
+        #endif
+    }
+
+    /// Must complete before the batch pipeline calls `ensureAsrReady()`, so both engines' CoreML
+    /// models are released before the offline model loads.
+    func stop() async {
+        #if arch(arm64)
+        let (microphone, application) = self.stateLock.withLock { () -> (MeetingLiveTrackEngine?, MeetingLiveTrackEngine?) in
+            defer {
+                self.microphoneEngine = nil
+                self.applicationEngine = nil
+            }
+            return (self.microphoneEngine, self.applicationEngine)
+        }
+        self.diag(
+            "[live] stopping engines offers=\(self.stateLock.withLock { self.offerCounts.map { "\($0.key)=\($0.value)" }.sorted().joined(separator: " ") })"
+        )
+        await microphone?.stop()
+        await application?.stop()
+        self.diag("[live] engines stopped, models released")
+        #endif
+    }
+
+    #if arch(arm64)
+    private func launch(_ engine: MeetingLiveTrackEngine) {
+        Task { [weak self] in
+            guard let self else { return }
+            await engine.configure(
+                onPartial: { [weak self] kind, id, text, start, end in
+                    self?.handlePartial(kind: kind, id: id, text: text, start: start, end: end)
+                },
+                onUtterance: { [weak self] kind, id, text, start, end in
+                    self?.handleUtterance(kind: kind, id: id, text: text, start: start, end: end)
+                },
+                onDegraded: { [weak self] kind, reason in
+                    self?.handleDegraded(kind: kind, reason: reason)
+                },
+                onReady: { [weak self] kind in
+                    self?.handleReady(kind: kind)
+                }
+            )
+            await engine.start()
+        }
+    }
+
+    private func handlePartial(kind: MeetingAudioTrackKind, id: UUID, text: String, start: CMTime, end: CMTime) {
+        guard let origin = self.originBox.current else { return }
+        let startSeconds = MeetingLiveTimeConversion.sessionSeconds(pts: start, origin: origin)
+        let speaker = Self.speaker(for: kind)
+        self.recordProbe("partial-before-display", kind: kind, pts: startSeconds, text: text)
+        let partial = MeetingLivePartial(id: id, text: text, start: startSeconds)
+        self.publish { $0.settingPartial(partial, for: speaker) }
+    }
+
+    /// Not `private`: Phase 4 tests drive it directly, predating the solidify UUID — hence the default.
+    func handleUtterance(kind: MeetingAudioTrackKind, id: UUID = UUID(), text: String, start: CMTime, end: CMTime) {
+        guard let origin = self.originBox.current else { return }
+        let startSeconds = MeetingLiveTimeConversion.sessionSeconds(pts: start, origin: origin)
+        let endSeconds = MeetingLiveTimeConversion.sessionSeconds(pts: end, origin: origin)
+        let speaker = Self.speaker(for: kind)
+
+        self.recordProbe("utterance-before-filter", kind: kind, pts: startSeconds, text: text)
+        let updated: MeetingLiveTranscriptSnapshot = self.stateLock.withLock {
+            self.snapshot.revision &+= 1
+            if speaker == .you {
+                if self.microphoneCaptureMethod != .voiceProcessing {
+                    let recentThem = MeetingLiveEchoFilter.recentThemText(
+                        from: self.recentThemUtterances,
+                        before: startSeconds,
+                        windowSeconds: Self.echoWindowSeconds
+                    )
+                    if MeetingLiveEchoFilter.shouldSuppress(micText: text, recentThemText: recentThem) {
+                        self.comparisonProbe?.recordEvent("utterance-echo-suppressed", track: kind, pts: startSeconds, text: text, detail: recentThem)
+                        self.snapshot = self.snapshot.settingPartial(nil, for: .you).markingFinalized(id)
+                        return self.snapshot
+                    }
+                }
+            } else {
+                let record = MeetingLiveUtterance(id: id, speaker: .them, text: text, start: startSeconds, end: endSeconds)
+                self.recentThemUtterances.append(record)
+                self.recentThemUtterances.removeAll { $0.end < startSeconds - Self.echoWindowSeconds }
+            }
+            self.comparisonProbe?.recordEvent("utterance-displayed", track: kind, pts: startSeconds, text: text)
+            let utterance = MeetingLiveUtterance(id: id, speaker: speaker, text: text, start: startSeconds, end: endSeconds)
+            self.snapshot = self.snapshot.inserting(utterance).settingPartial(nil, for: speaker)
+            return self.snapshot
+        }
+        self.onUpdate(updated)
+    }
+
+    private func handleDegraded(kind: MeetingAudioTrackKind, reason: String) {
+        self.recordProbe("live-degraded", kind: kind, detail: reason)
+        DebugLogger.shared.warning("Live captions degraded: \(reason)", source: "MeetingLive")
+        self.publish { $0.settingAvailability(.degraded(reason: reason)) }
+    }
+
+    private func handleReady(kind: MeetingAudioTrackKind) {
+        self.publish { snapshot in
+            guard case .unavailable = snapshot.availability else { return snapshot }
+            return snapshot.settingAvailability(.available)
+        }
+    }
+
+    private static func speaker(for kind: MeetingAudioTrackKind) -> MeetingLiveSpeaker {
+        kind == .microphone ? .you : .them
+    }
+    #endif
+
+    private func publish(_ transform: (MeetingLiveTranscriptSnapshot) -> MeetingLiveTranscriptSnapshot) {
+        let updated: MeetingLiveTranscriptSnapshot = self.stateLock.withLock {
+            self.snapshot = transform(self.snapshot)
+            self.snapshot.revision &+= 1
+            return self.snapshot
+        }
+        self.onUpdate(updated)
+    }
+}

@@ -1,0 +1,8 @@
+{
+  "captureSeconds": 14,
+  "content": "https://www.youtube.com/watch?v=N0S048D2tj4&t=2523s",
+  "operatorStartsPlaybackAfterReady": true,
+  "schemaVersion": 1,
+  "sourceCategory": "operatorControlledWebSpeech",
+  "targetBundleIdentifier": "com.google.Chrome"
+}

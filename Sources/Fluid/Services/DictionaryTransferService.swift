@@ -325,14 +325,14 @@ final class DictionaryTransferService {
 
     private static func exportReplacement(from entry: SettingsStore.CustomDictionaryEntry) -> DictionaryTransferReplacement? {
         let from = self.normalizedUniqueStrings(entry.triggers, lowercased: true)
-        let to = entry.replacement.trimmingCharacters(in: .whitespacesAndNewlines)
+        let to = SettingsStore.CustomDictionaryEntry.sanitizedReplacement(entry.replacement)
         guard !from.isEmpty, !to.isEmpty else { return nil }
         return DictionaryTransferReplacement(from: from, to: to)
     }
 
     private static func exportReplacement(from replacement: DictionaryTransferReplacement) -> DictionaryTransferReplacement? {
         let from = self.normalizedUniqueStrings(replacement.from, lowercased: true)
-        let to = replacement.to.trimmingCharacters(in: .whitespacesAndNewlines)
+        let to = SettingsStore.CustomDictionaryEntry.sanitizedReplacement(replacement.to)
         guard !from.isEmpty, !to.isEmpty else { return nil }
         return DictionaryTransferReplacement(from: from, to: to)
     }
@@ -341,7 +341,7 @@ final class DictionaryTransferService {
         from replacement: DictionaryTransferReplacement
     ) -> SettingsStore.CustomDictionaryEntry? {
         let from = self.normalizedUniqueStrings(replacement.from, lowercased: true)
-        let to = replacement.to.trimmingCharacters(in: .whitespacesAndNewlines)
+        let to = SettingsStore.CustomDictionaryEntry.sanitizedReplacement(replacement.to)
         guard !from.isEmpty, !to.isEmpty else { return nil }
         return SettingsStore.CustomDictionaryEntry(triggers: from, replacement: to)
     }

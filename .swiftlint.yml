@@ -27,6 +27,7 @@ opt_in_rules:
   - unavailable_function
 
 excluded:
+  - Prototypes
   - .build
   - DerivedData
   - Fluid.xcodeproj

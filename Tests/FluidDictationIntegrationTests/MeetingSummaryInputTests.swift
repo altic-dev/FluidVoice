@@ -1,0 +1,372 @@
+import Combine
+@testable import FluidVoice_Debug
+import Foundation
+import XCTest
+
+final class MeetingSummaryInputTests: XCTestCase {
+    func testSummaryInputPreservesTranscriptAndUsesSpeakerFormat() {
+        let original = self.session(origin: 0, segmentStart: 0, segmentEnd: 1, gapStart: 2, gapEnd: 3)
+        let input = MeetingSummaryInput.transcript(for: original)
+        XCTAssertTrue(input.contains("Title: Timeline migration"))
+        XCTAssertTrue(input.contains("----------\n**Speaker 1**: hello"))
+        XCTAssertEqual(original.transcriptSegments.first?.text, "hello")
+        XCTAssertNil(original.postProcessing)
+    }
+
+    /// A meeting is saved with whole-second dates. The summary text must not depend on the fractions
+    /// the app still holds right after recording, or a summary made then is hidden after a restart.
+    func testSummaryMadeRightAfterRecordingStillMatchesOnceTheMeetingIsReloaded() async throws {
+        var live = self.session(origin: 0, segmentStart: 0, segmentEnd: 1, gapStart: 2, gapEnd: 3)
+        live.startedAt = Date(timeIntervalSince1970: 1_700_000_000.7)
+        live.endedAt = Date(timeIntervalSince1970: 1_700_001_800.3) // 29 min 59.6 s as recorded
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("MeetingSummaryInputTests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = MeetingSessionStore(rootDirectory: root)
+        try await store.create(live)
+        let loaded = try await store.load(id: live.id)
+        let reloaded = try XCTUnwrap(loaded)
+        XCTAssertNotEqual(reloaded.endedAt, live.endedAt, "The store keeps whole seconds; that is the difference under test")
+
+        XCTAssertEqual(MeetingSummaryInput.transcript(for: live), MeetingSummaryInput.transcript(for: reloaded))
+        XCTAssertEqual(
+            MeetingSummaryInput.fingerprint(MeetingSummaryInput.transcript(for: live)),
+            MeetingSummaryInput.fingerprint(MeetingSummaryInput.transcript(for: reloaded))
+        )
+        XCTAssertEqual(MeetingSummaryInput.contentFingerprint(for: live), MeetingSummaryInput.contentFingerprint(for: reloaded))
+    }
+
+    func testDurationLineIsUnchangedForMeetingsAlreadyOnWholeSeconds() {
+        var session = self.session(origin: 0, segmentStart: 0, segmentEnd: 1, gapStart: 2, gapEnd: 3)
+        session.startedAt = Date(timeIntervalSince1970: 1_700_000_000)
+        for (seconds, minutes) in [(0.0, 0), (59, 0), (60, 1), (1799, 29), (1800, 30), (2640, 44)] {
+            session.endedAt = session.startedAt.addingTimeInterval(seconds)
+            XCTAssertTrue(MeetingSummaryInput.transcript(for: session).contains("Duration: \(minutes) minutes\n"), "\(seconds) s")
+        }
+        session.endedAt = nil
+        XCTAssertTrue(MeetingSummaryInput.transcript(for: session).contains("Duration: 0 minutes\n"))
+        session.endedAt = session.startedAt.addingTimeInterval(-30)
+        XCTAssertTrue(MeetingSummaryInput.transcript(for: session).contains("Duration: 0 minutes\n"), "A clock that went backwards still reads zero")
+    }
+
+    func testChangedTextOrSpeakerInvalidatesSavedSummary() {
+        var session = self.session(origin: 0, segmentStart: 0, segmentEnd: 1, gapStart: 2, gapEnd: 3)
+        let original = MeetingSummaryInput.contentFingerprint(for: session)
+        session.transcriptSegments[0].text = "Corrected transcript"
+        let corrected = MeetingSummaryInput.contentFingerprint(for: session)
+        XCTAssertNotEqual(original, corrected)
+        session.speakers[0].displayName = "Maya"
+        XCTAssertNotEqual(corrected, MeetingSummaryInput.contentFingerprint(for: session))
+    }
+
+    func testRenamingKeepsContentFingerprintButUpdatesModelInput() {
+        var session = self.session(origin: 0, segmentStart: 0, segmentEnd: 1, gapStart: 2, gapEnd: 3)
+        let original = MeetingSummaryInput.contentFingerprint(for: session)
+        for title in ["Weekly Sync", "A title\nwith a second line", ""] {
+            session.title = title
+            session.updatedAt = session.updatedAt.addingTimeInterval(1)
+            XCTAssertEqual(MeetingSummaryInput.contentFingerprint(for: session), original)
+            XCTAssertTrue(MeetingSummaryInput.transcript(for: session).hasPrefix("Title: \(title)\n"))
+        }
+    }
+
+    @MainActor
+    func testSummaryCannotRunOutsideExclusiveModelScope() async {
+        do {
+            _ = try await PrivateAIIntegrationService.summarizeMeeting("Example", style: "executive")
+            XCTFail("An unowned request must not load or switch models")
+        } catch {
+            XCTAssertEqual(error.localizedDescription, MeetingModelResidencyError.staleGrant.localizedDescription)
+        }
+    }
+
+    private func session(
+        origin: TimeInterval,
+        segmentStart: TimeInterval,
+        segmentEnd: TimeInterval,
+        gapStart: TimeInterval,
+        gapEnd: TimeInterval
+    ) -> MeetingSession {
+        let configuration = MeetingCaptureConfiguration(
+            mode: .inRoom,
+            title: "Timeline migration",
+            microphone: MeetingMicrophoneIdentity(captureDeviceID: "mic", displayName: "Mic")
+        )
+        var session = MeetingSession(
+            configuration: configuration,
+            startedAt: Date(timeIntervalSince1970: 1_700_000_000),
+            timebase: MeetingTimebaseMetadata(
+                startedHostTime: 1,
+                machTimebaseNumerator: 1,
+                machTimebaseDenominator: 1,
+                firstPresentationTime: self.mediaTime(origin)
+            )
+        )
+        let trackID = UUID()
+        let speakerID = UUID()
+        session.audioTracks = [MeetingAudioTrack(
+            id: trackID,
+            kind: .microphone,
+            sourceIdentifier: "mic",
+            sourceDisplayName: "Mic",
+            format: nil,
+            timebase: session.timebase,
+            health: .waiting,
+            chunks: []
+        )]
+        session.speakers = [MeetingSessionSpeaker(
+            id: speakerID,
+            displayName: "Speaker 1",
+            diarizationClusterID: "slot-0",
+            trackKind: .microphone,
+            isLocalUser: false,
+            identityCandidates: []
+        )]
+        session.transcriptSegments = [MeetingTranscriptSegment(
+            id: UUID(),
+            start: self.mediaTime(segmentStart),
+            end: self.mediaTime(segmentEnd),
+            sourceTrackID: trackID,
+            speakerID: speakerID,
+            text: "hello",
+            revision: 0,
+            status: .final,
+            overlap: .none,
+            completeness: .complete
+        )]
+        session.transcriptCoverageGaps = [MeetingTranscriptCoverageGap(
+            trackID: trackID,
+            start: gapStart,
+            end: gapEnd,
+            reason: .processingFailed
+        )]
+        return session
+    }
+
+    private func mediaTime(_ seconds: TimeInterval) -> MeetingMediaTime {
+        MeetingMediaTime(value: Int64((seconds * 1000).rounded()), timescale: 1000)
+    }
+}
+
+@MainActor
+final class MeetingSummaryActivityTests: XCTestCase {
+    private final class Activity: ASRActivityLeasing {
+        var active: ASRActivityLease?
+        var handoffs = 0
+        var handbacks = 0
+        var onHandback: (() -> Void)?
+        var preparationError: Error?
+        func acquireExclusiveActivity(_ activity: ASRExclusiveActivity) throws -> ASRActivityLease {
+            if let active { throw ASRActivityError.activityInProgress(active.activity) }
+            let lease = ASRActivityLease(id: UUID(), activity: activity)
+            self.active = lease
+            return lease
+        }
+
+        func releaseExclusiveActivity(_ lease: ASRActivityLease) {
+            if self.active == lease { self.active = nil }
+        }
+
+        func prepareMeetingAudioHandoff(_: ASRActivityLease) async throws {
+            self.handoffs += 1
+            if let preparationError { throw preparationError }
+        }
+
+        func completeMeetingAudioHandback(_ lease: ASRActivityLease) async {
+            self.onHandback?()
+            self.handbacks += 1
+            self.releaseExclusiveActivity(lease)
+        }
+    }
+
+    func testProcessingBlocksSummaryWithoutTouchingAudioAndStaleReleaseCannotUnlock() async throws {
+        let gate = MeetingSummaryActivityCoordinator()
+        let activity = Activity()
+        var published: [Bool] = []
+        let observation = gate.$isProcessing.removeDuplicates().sink { published.append($0) }
+        defer { observation.cancel() }
+        XCTAssertFalse(gate.isProcessing)
+        let first = try XCTUnwrap(gate.beginProcessing())
+        XCTAssertTrue(gate.isProcessing)
+        let second = try XCTUnwrap(gate.beginProcessing())
+        gate.endProcessing(first)
+        XCTAssertTrue(gate.isProcessing)
+        gate.endProcessing(first)
+        XCTAssertTrue(gate.isProcessing)
+        do {
+            try await gate.withSummary(activity: activity) { XCTFail("Must not begin") }
+            XCTFail("Second processing token must still block")
+        } catch { XCTAssertTrue(error is MeetingModelResidencyError) }
+        XCTAssertEqual(activity.handoffs, 0)
+        XCTAssertNil(activity.active)
+        gate.endProcessing(second)
+        XCTAssertFalse(gate.isProcessing)
+        XCTAssertEqual(published, [false, true, false])
+        try await gate.withSummary(activity: activity) {}
+        XCTAssertEqual(activity.handbacks, 1)
+    }
+
+    func testSummaryBlocksProcessingAndDictationThroughHandback() async throws {
+        let gate = MeetingSummaryActivityCoordinator()
+        let activity = Activity()
+        let selectionLock = try XCTUnwrap(gate.lockSelection())
+        XCTAssertNil(gate.lockSelection(), "A second summary cannot replace the selected meeting's lock")
+        gate.unlockSelection(UUID())
+        XCTAssertEqual(gate.selectionLock, selectionLock, "An unrelated completion cannot unlock selection")
+        activity.onHandback = {
+            XCTAssertEqual(gate.selectionLock, selectionLock, "Selection stays locked until model restoration drains")
+            XCTAssertNil(gate.beginProcessing())
+            do {
+                _ = try activity.acquireExclusiveActivity(.dictation)
+                XCTFail("Handback must retain audio ownership")
+            } catch { XCTAssertTrue(error is ASRActivityError) }
+        }
+        try await gate.withSummary(activity: activity) {
+            XCTAssertNil(gate.beginProcessing())
+            XCTAssertThrowsError(try activity.acquireExclusiveActivity(.dictation))
+            do {
+                try await gate.withSummary(activity: activity) { XCTFail("Must not overlap") }
+                XCTFail("Second summary must fail")
+            } catch { XCTAssertTrue(error is MeetingModelResidencyError) }
+        }
+        XCTAssertNil(activity.active)
+        gate.unlockSelection(selectionLock)
+        XCTAssertNil(gate.selectionLock)
+        let nextLock = try XCTUnwrap(gate.lockSelection())
+        gate.unlockSelection(selectionLock)
+        XCTAssertEqual(gate.selectionLock, nextLock, "A late old completion cannot unlock a new summary")
+        gate.unlockSelection(nextLock)
+        XCTAssertNotNil(gate.beginProcessing())
+        XCTAssertNoThrow(try activity.acquireExclusiveActivity(.dictation))
+    }
+
+    func testRemoteSummaryLeavesDictationAndProcessingAvailable() async throws {
+        let gate = MeetingSummaryActivityCoordinator()
+        let activity = Activity()
+        try await gate.withRemoteSummary {
+            let processing = try XCTUnwrap(gate.beginProcessing(), "Dictation must be able to finish during a cloud summary")
+            gate.endProcessing(processing)
+            XCTAssertNoThrow(try activity.acquireExclusiveActivity(.dictation))
+            do {
+                try await gate.withRemoteSummary { XCTFail("Must not overlap") }
+                XCTFail("Second summary must fail")
+            } catch { XCTAssertTrue(error is MeetingModelResidencyError) }
+        }
+        XCTAssertEqual(activity.handoffs, 0)
+        try await gate.withRemoteSummary {}
+    }
+
+    func testFailureDrainsHandbackBeforeReleasingAdmission() async {
+        let gate = MeetingSummaryActivityCoordinator()
+        let activity = Activity()
+        activity.onHandback = { XCTAssertNil(gate.beginProcessing()) }
+        do {
+            try await gate.withSummary(activity: activity) { throw MeetingModelResidencyError.staleGrant }
+            XCTFail("Expected failure")
+        } catch { XCTAssertTrue(error is MeetingModelResidencyError) }
+        XCTAssertEqual(activity.handbacks, 1)
+        XCTAssertNil(activity.active)
+        XCTAssertNotNil(gate.beginProcessing())
+    }
+
+    func testCancellationUsesUncancelledJoinedHandback() async {
+        let gate = MeetingSummaryActivityCoordinator()
+        let activity = Activity()
+        let selectionLock = gate.lockSelection()
+        activity.onHandback = {
+            XCTAssertNotNil(gate.selectionLock, "Cancel retains the meeting selection while work drains")
+            XCTAssertFalse(Task.isCancelled)
+            XCTAssertNil(gate.beginProcessing())
+        }
+        let task = Task {
+            defer { if let selectionLock { gate.unlockSelection(selectionLock) } }
+            try await gate.withSummary(activity: activity) {
+                withUnsafeCurrentTask { $0?.cancel() }
+                try Task.checkCancellation()
+            }
+        }
+        do {
+            try await task.value
+            XCTFail("Expected cancellation")
+        } catch { XCTAssertTrue(error is CancellationError) }
+        XCTAssertEqual(activity.handbacks, 1)
+        XCTAssertNil(gate.selectionLock, "Cancellation eventually unlocks meeting selection")
+        XCTAssertNil(activity.active)
+        XCTAssertNotNil(gate.beginProcessing())
+    }
+
+    func testPreparationFailureDrainsPartialHandoffWithoutRunningSummary() async {
+        let gate = MeetingSummaryActivityCoordinator()
+        let activity = Activity()
+        activity.preparationError = MeetingModelResidencyError.busy
+        activity.onHandback = {
+            XCTAssertNil(gate.beginProcessing())
+            XCTAssertFalse(Task.isCancelled)
+        }
+        do {
+            try await gate.withSummary(activity: activity) { XCTFail("Preparation failed") }
+            XCTFail("Expected failure")
+        } catch { XCTAssertTrue(error is MeetingModelResidencyError) }
+        XCTAssertEqual(activity.handoffs, 1)
+        XCTAssertEqual(activity.handbacks, 1)
+        XCTAssertNil(activity.active)
+        XCTAssertNotNil(gate.beginProcessing())
+    }
+
+    func testRealASRLeaseRejectsSummaryWhileDictationOwnsAudio() async throws {
+        let gate = MeetingSummaryActivityCoordinator()
+        let asr = ASRService()
+        let dictation = try asr.acquireExclusiveActivity(.dictation)
+        defer { asr.releaseExclusiveActivity(dictation) }
+        do {
+            try await gate.withSummary(activity: asr) { XCTFail("Must not start") }
+            XCTFail("Expected existing dictation to block summary")
+        } catch { XCTAssertTrue(error is ASRActivityError) }
+        XCTAssertEqual(asr.activeExclusiveActivity, .dictation)
+        XCTAssertNotNil(gate.beginProcessing())
+    }
+
+    func testRealASRMeetingLeaseBlocksEveryCompetingAudioActivity() throws {
+        let asr = ASRService()
+        let summary = try asr.acquireExclusiveActivity(.meeting)
+        let activities: [ASRExclusiveActivity] = [.dictation, .meeting, .fileTranscription, .localAPI, .modelMaintenance]
+        for activity in activities {
+            XCTAssertThrowsError(try asr.acquireExclusiveActivity(activity))
+        }
+        asr.releaseExclusiveActivity(ASRActivityLease(id: UUID(), activity: .meeting))
+        XCTAssertEqual(asr.activeExclusiveActivity, .meeting)
+        asr.releaseExclusiveActivity(summary)
+        XCTAssertNil(asr.activeExclusiveActivity)
+        let dictation = try asr.acquireExclusiveActivity(.dictation)
+        asr.releaseExclusiveActivity(dictation)
+    }
+
+    func testActiveDictationRejectsSummaryWithoutReleasingItsLease() async throws {
+        let gate = MeetingSummaryActivityCoordinator()
+        let activity = Activity()
+        let dictation = try activity.acquireExclusiveActivity(.dictation)
+        do {
+            try await gate.withSummary(activity: activity) { XCTFail("Must not start") }
+            XCTFail("Expected activity rejection")
+        } catch { XCTAssertTrue(error is ASRActivityError) }
+        XCTAssertEqual(activity.active, dictation)
+        XCTAssertEqual(activity.handbacks, 0)
+        XCTAssertNotNil(gate.beginProcessing())
+    }
+
+    func testALargeSummaryModelComesWithAWarningOnASixteenGBMacOnly() {
+        // The 9B recommends 24 GB.
+        XCTAssertEqual(
+            MeetingSummaryOnDevice.memoryWarning(recommendedMemoryGB: 24, memoryGB: 16),
+            "Recommended only for Macs with more than 16 GB of memory."
+        )
+        XCTAssertNil(MeetingSummaryOnDevice.memoryWarning(recommendedMemoryGB: 24, memoryGB: 18))
+        XCTAssertNil(MeetingSummaryOnDevice.memoryWarning(recommendedMemoryGB: 24, memoryGB: 64))
+    }
+
+    func testASmallSummaryModelNeverWarns() {
+        for memoryGB in [8, 16, 24] {
+            XCTAssertNil(MeetingSummaryOnDevice.memoryWarning(recommendedMemoryGB: 8, memoryGB: memoryGB))
+            XCTAssertNil(MeetingSummaryOnDevice.memoryWarning(recommendedMemoryGB: nil, memoryGB: memoryGB))
+        }
+    }
+}

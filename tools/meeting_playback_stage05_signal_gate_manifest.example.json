@@ -1,0 +1,63 @@
+{
+  "schemaVersion": 1,
+  "topology": "pairedScreenCaptureKit",
+  "route": "builtInSpeakerMicrophone",
+  "referenceScope": "selectedApplication",
+  "referenceCompletenessMeasured": true,
+  "consentConfirmed": true,
+  "renderLeadSeconds": 0,
+  "thresholds": {
+    "minimumValidCoverageFraction": 0.99,
+    "maximumDriftPPM": 100,
+    "maximumUncorrectedOffsetSeconds": 0.02,
+    "maximumRenderLeadSeconds": 0.1,
+    "maximumSearchDelaySeconds": 0.5,
+    "safetyMarginSeconds": 0.02,
+    "minimumBandCoherence": 0.1,
+    "minimumExcitationRMS": 0.001,
+    "maximumClippingFraction": 0.01,
+    "maximumHeldOutLinearResidualFraction": 0.75,
+    "maximumIneligibleSessionFraction": 0.25,
+    "minimumExposureSeconds": 1,
+    "minimumPathStabilityFraction": 0.5,
+    "minimumDelayObservationCount": 3,
+    "minimumTimingBlockCount": 3,
+    "maximumPCMSamples": 1000000,
+    "requireDeliveryJitter": true
+  },
+  "sessions": [
+    {
+      "ordinal": 0,
+      "render": {
+        "relativePath": "session-ordinal-0/render.wav",
+        "sha256": "replace-with-64-lowercase-hex-digest",
+        "codec": "pcm_s16le",
+        "lossless": true,
+        "sampleRateHz": 16000,
+        "channelCount": 1,
+        "durationSeconds": 60,
+        "developmentOnly": true
+      },
+      "capture": {
+        "relativePath": "session-ordinal-0/capture.wav",
+        "sha256": "replace-with-64-lowercase-hex-digest",
+        "codec": "pcm_s16le",
+        "lossless": true,
+        "sampleRateHz": 16000,
+        "channelCount": 1,
+        "durationSeconds": 60,
+        "developmentOnly": true
+      },
+      "renderTiming": [
+        {"presentationSeconds": 0, "durationSeconds": 20, "frameCount": 320000, "arrivalSeconds": 0.001},
+        {"presentationSeconds": 20, "durationSeconds": 20, "frameCount": 320000, "arrivalSeconds": 20.002},
+        {"presentationSeconds": 40, "durationSeconds": 20, "frameCount": 320000, "arrivalSeconds": 40.001}
+      ],
+      "captureTiming": [
+        {"presentationSeconds": 0, "durationSeconds": 20, "frameCount": 320000, "arrivalSeconds": 0.003},
+        {"presentationSeconds": 20, "durationSeconds": 20, "frameCount": 320000, "arrivalSeconds": 20.004},
+        {"presentationSeconds": 40, "durationSeconds": 20, "frameCount": 320000, "arrivalSeconds": 40.003}
+      ]
+    }
+  ]
+}

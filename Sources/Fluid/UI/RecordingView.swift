@@ -25,15 +25,15 @@ struct RecordingView: View {
                     VStack(spacing: 12) {
                         HStack {
                             Image(systemName: "waveform.circle.fill")
-                                .font(.system(size: 32))
+                                .font(.fluidSystem(size: 32))
                                 .foregroundStyle(.white)
 
                             VStack(alignment: .leading, spacing: 4) {
                                 Text("Voice Dictation")
-                                    .font(.title2)
+                                    .font(.fluidSystem(.title2))
                                     .fontWeight(.bold)
                                 Text("AI-powered speech recognition")
-                                    .font(.subheadline)
+                                    .font(.fluidSystem(.subheadline))
                                     .foregroundStyle(.secondary)
                             }
 
@@ -49,7 +49,7 @@ struct RecordingView: View {
                                     .frame(width: 8, height: 8)
 
                                 Text(self.asr.isRunning ? "Recording..." : self.asr.isAsrReady ? "Ready to record" : "Model not ready")
-                                    .font(.subheadline)
+                                    .font(.fluidSystem(.subheadline))
                                     .foregroundStyle(self.asr.isRunning ? .red : self.asr.isAsrReady ? Color.fluidGreen : .secondary)
                             }
 
@@ -65,7 +65,7 @@ struct RecordingView: View {
                             }) {
                                 HStack {
                                     Image(systemName: self.asr.isRunning ? "stop.fill" : "mic.fill")
-                                        .font(.system(size: 16, weight: .semibold))
+                                        .font(.fluidSystem(size: 16, weight: .semibold))
                                     Text(self.asr.isRunning ? "Stop Recording" : "Start Recording")
                                 }
                                 .frame(maxWidth: .infinity)

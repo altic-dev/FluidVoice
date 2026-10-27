@@ -1,92 +1,53 @@
 import SwiftUI
 
-enum AIEnhancementConfigurationSection: String, CaseIterable, Identifiable {
+enum AIEnhancementConfigurationSection: String {
     case providers
     case advancedPrompts
 
-    var id: String { self.rawValue }
-
-    var title: String {
+    var sidebarItem: SidebarItem {
         switch self {
         case .providers:
-            return "AI Providers"
+            return .aiEnhancements
         case .advancedPrompts:
-            return "Advanced Prompts"
-        }
-    }
-
-    var systemImage: String {
-        switch self {
-        case .providers:
-            return "cpu"
-        case .advancedPrompts:
-            return "slider.horizontal.3"
+            return .cleanupStyles
         }
     }
 }
 
-enum PrivateAIModelLoadState: Equatable {
-    case idle
-    case downloading(modelID: String, progress: PrivateAIModelDownloadProgress?)
-    case loading(modelID: String)
-    case loaded(modelID: String, latencyMilliseconds: Int?)
-    case failed(modelID: String, message: String)
-
-    func isLoading(_ modelID: String) -> Bool {
-        if case .loading(modelID) = self { return true }
-        return false
-    }
-
-    func isDownloading(_ modelID: String) -> Bool {
-        if case .downloading(modelID, _) = self { return true }
-        return false
-    }
-
-    func isLoaded(_ modelID: String) -> Bool {
-        if case .loaded(modelID, _) = self { return true }
-        return false
-    }
-
-    func latencyMilliseconds(for modelID: String) -> Int? {
-        if case let .loaded(loadedModelID, latencyMilliseconds) = self, loadedModelID == modelID {
-            return latencyMilliseconds
+extension SidebarItem {
+    var aiEnhancementConfigurationSection: AIEnhancementConfigurationSection? {
+        switch self {
+        case .aiEnhancements:
+            return .providers
+        case .cleanupStyles:
+            return .advancedPrompts
+        default:
+            return nil
         }
-        return nil
-    }
-
-    func failureMessage(for modelID: String) -> String? {
-        if case let .failed(failedModelID, message) = self, failedModelID == modelID {
-            return message
-        }
-        return nil
-    }
-
-    func downloadProgress(for modelID: String) -> PrivateAIModelDownloadProgress? {
-        if case let .downloading(downloadingModelID, progress) = self, downloadingModelID == modelID {
-            return progress
-        }
-        return nil
     }
 }
 
 struct AIEnhancementSettingsView: View {
     @ObservedObject var viewModel: AIEnhancementSettingsViewModel
+    @ObservedObject var privateAIController: PrivateAISettingsController
     @ObservedObject var settings: SettingsStore
     @ObservedObject var promptTest: DictationPromptTestCoordinator
     let theme: AppTheme
+    @Binding var selectedConfigurationSection: AIEnhancementConfigurationSection
     @Binding var activeShortcutRecordingTarget: ShortcutRecordingTarget?
     @Binding var shortcutRecordingMessage: String?
     @State var expandedProviderID: String? = nil
+    @State var showingAddProviderSheet = false
+    @State var showingPromptProviderSetup = false
+    @State var managedExternalProviderID: String?
+    @State var showingRemoveProviderConfirmation = false
     @State var providerSearchText: String = ""
-    @State var privateAISelectedModelID: String = PrivateAIIntegrationService.configuredModelID
-    @State var privateAILoadState: PrivateAIModelLoadState = .idle
-    @State var selectedConfigurationSection: AIEnhancementConfigurationSection = .providers
-    @State var hoveredConfigurationSection: AIEnhancementConfigurationSection?
     @State var hoveredPromptCardKey: String? = nil
     @State var selectedPromptMode: SettingsStore.PromptMode = .dictate
     @State var hoveredPromptModeKey: String? = nil
     @State var hoveredPromptScopeKey: String? = nil
     @State var isPromptProfilesHelpPresented: Bool = false
+    @State var showsAppSpecificStyles = false
     @State var promptEditorPrimarySelectionDraft: SettingsStore.DictationPromptSelection? = nil
     @State var promptEditorShortcutDraft: HotkeyShortcut? = nil
     @State var promptEditorProviderIDDraft: String = ""
@@ -97,8 +58,9 @@ struct AIEnhancementSettingsView: View {
         self.aiConfigurationCard
             .onAppear {
                 self.viewModel.onAppear()
-                self.privateAISelectedModelID = PrivateAIIntegrationService.configuredModelID
-                self.refreshPrivateAILoadState()
+                self.privateAIController.synchronizeSelection()
+                self.privateAIController.refreshPrivateAILoadState()
+                self.privateAIController.refreshPrivateAIModelUpdateStatus(self.privateAIController.selectedPrivateAIModel)
             }
             .onChange(of: self.viewModel.connectionStatus) { oldValue, newValue in
                 if oldValue == .success && newValue != .success {

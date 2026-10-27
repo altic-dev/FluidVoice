@@ -1,12 +1,33 @@
 # FluidVoice
 
-[![Supported Models](https://img.shields.io/badge/Models-Nemotron%20Speech%203.5%20%7C%20Parakeet%20Flash%20%7C%20Parakeet%20v3%20%26%20v2%20%7C%20Cohere%20%7C%20Apple%20Speech%20%7C%20Whisper-blue)](https://huggingface.co/nvidia/parakeet_realtime_eou_120m-v1)
+<p align="center">
+  <a href="https://github.com/altic-dev/FluidVoice/stargazers"><img src="https://img.shields.io/github/stars/altic-dev/FluidVoice?style=social" alt="GitHub stars"/></a>
+  <a href="https://github.com/sponsors/altic-dev"><img src="https://img.shields.io/badge/Sponsor-GitHub%20Sponsors-ea4aaa?logo=githubsponsors&logoColor=white" alt="Sponsor FluidVoice"/></a>
+  <a href="https://x.com/fluidvoiceapp"><img src="https://img.shields.io/badge/X-%40fluidvoiceapp-black?logo=x&logoColor=white" alt="X @fluidvoiceapp"/></a>
+  <br />
+  <a href="https://huggingface.co/nvidia/parakeet_realtime_eou_120m-v1"><img src="https://img.shields.io/badge/Models-Nemotron%20Speech%203.5%20%7C%20Parakeet%20Flash%20%7C%20Parakeet%20v3%20%26%20v2%20%7C%20Cohere%20%7C%20Apple%20Speech%20%7C%20Whisper-blue" alt="Supported Models"/></a>
+  <br /><br />
+  <a href="https://trendshift.io/repositories/16601?utm_source=repository-badge&utm_medium=badge&utm_campaign=badge-repository-16601" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/repositories/16601" alt="altic-dev%2FFluidVoice | Trendshift" width="250" height="55"/></a>
+</p>
 
 Open source voice-to-text dictation app for macOS with on-device AI enhancement.
 
 **Install with Homebrew:** `brew install --cask fluidvoice`
 
 **Manual download:** [latest release](https://github.com/altic-dev/FluidVoice/releases/latest)
+
+> [!WARNING]
+> **fluidvoice.org is not affiliated with, operated by, or endorsed by FluidVoice or Altic.** Its claims to be our official website are unauthorized.
+>
+> Our official website is [altic.dev/fluid](https://altic.dev/fluid). Our official domains also include **fluidvoice.com** and **fluidvoice.app**.
+>
+> For official downloads, use this repository's [GitHub Releases](https://github.com/altic-dev/FluidVoice/releases).
+>
+> If **fluidvoice.org** appears in your search results claiming to be our official website, please report the misleading result to the search provider.
+
+> [!NOTE]
+> FluidVoice is on macOS today. **iOS and Windows are on the way** — join the waitlist to get notified when we launch: **[altic.dev/fluid/waitlist](https://www.altic.dev/fluid/waitlist)**
+
 
 > [!IMPORTANT]
 > This project is free and open source under GPLv3. If FluidVoice is useful to you, please star the repository — it helps visibility and keeps development going.
@@ -15,7 +36,7 @@ Open source voice-to-text dictation app for macOS with on-device AI enhancement.
 
 ## Support FluidVoice
 
-If FluidVoice makes your day a little easier, you can support its continued development on [GitHub Sponsors](https://github.com/sponsors/altic-dev).
+If FluidVoice helps you, you can support continued development and future platform work for iOS and Windows on [GitHub Sponsors](https://github.com/sponsors/altic-dev).
 
 ---
 
@@ -39,18 +60,6 @@ We're keeping Fluid Intelligence private for now so we can sustainably offer the
 
 ---
 
-## Star History
-
-<a href="https://star-history.com/#altic-dev/FluidVoice&Date">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=altic-dev/FluidVoice&type=Date&theme=dark" />
-    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=altic-dev/FluidVoice&type=Date" />
-    <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=altic-dev/FluidVoice&type=Date" />
-  </picture>
-</a>
-
----
-
 ## Fluid Intelligence Sneak Peek
 
 <table>
@@ -59,16 +68,16 @@ We're keeping Fluid Intelligence private for now so we can sustainably offer the
     <td width="50%" align="center"><b>Flowers</b></td>
   </tr>
   <tr>
-    <td width="50%"><video src="https://github.com/user-attachments/assets/6c7a7c4c-17a8-453d-8eff-1aa1fa9f6077" width="100%"></video></td>
     <td width="50%"><video src="https://github.com/user-attachments/assets/36747e9d-1ea3-4d27-8d38-eaacb6d57285" width="100%"></video></td>
+    <td width="50%"><video src="https://github.com/user-attachments/assets/5f6063ab-0506-4687-b825-c7bf4ab66ed6" width="100%"></video></td>
   </tr>
   <tr>
     <td width="50%" align="center"><b>Change Time & Name</b></td>
     <td width="50%" align="center"><b>Emoji</b></td>
   </tr>
   <tr>
+    <td width="50%"><video src="https://github.com/user-attachments/assets/6c7a7c4c-17a8-453d-8eff-1aa1fa9f6077" width="100%"></video></td>
     <td width="50%"><video src="https://github.com/user-attachments/assets/04e00f3d-a602-448d-9bde-50b5e8f61ac6" width="100%"></video></td>
-    <td width="50%"><video src="https://github.com/user-attachments/assets/5f6063ab-0506-4687-b825-c7bf4ab66ed6" width="100%"></video></td>
   </tr>
   <tr>
     <td width="50%" align="center"><b>Hyphens & Numbers</b></td>
@@ -90,16 +99,6 @@ https://github.com/user-attachments/assets/ffb47afd-1621-432a-bdca-baa4b8526301
 
 https://github.com/user-attachments/assets/c57ef6d5-f0a1-4a3f-a121-637533442c24
 
-## Screenshots
-
-### Command Mode
-
-![Command Mode](assets/cmd_mode_ss.png)
-
-### History & Stats
-
-![History & Stats](assets/history__ss.png)
-
 ---
 
 ## Features
@@ -114,6 +113,7 @@ https://github.com/user-attachments/assets/c57ef6d5-f0a1-4a3f-a121-637533442c24
 - **Today-Usage Stats** — daily usage tracking at a glance with a stats header card and toolbar pill
 - **Adaptive Theming** — light/dark theme that follows your system, with a compact toolbar switcher
 - **Global Hotkey** — instant voice capture from anywhere, no app switching needed
+- **Hold Space to Mute** — optional temporary mute within a dictation: hold Space while thinking, then release to continue the same recording; quick taps still type spaces
 - **Smart Typing** — direct insertion into any app via accessibility APIs for reliable, app-independent text entry
 - **Menu Bar Integration** — quick access, status, and settings from the menu bar
 - **Auto-Updates** — seamless updates with an optional beta channel for early previews
@@ -122,7 +122,7 @@ https://github.com/user-attachments/assets/c57ef6d5-f0a1-4a3f-a121-637533442c24
 - **Local-First** — your voice and text never leave your machine unless you opt in to a cloud AI provider
 - **Fastest Parakeet on Mac** — one of the fastest native implementations of Parakeet on macOS, with near-instant transcription and minimal latency
 - **Configurable Overlay** — choose from pill-shaped to large overlay sizes to show live preview, or keep it minimal. Everything is optional
-- **Everything is Optional** — AI enhancement, Fluid Intelligence, audio history, analytics, and beta builds are all opt-in. The core dictation experience works out of the box with zero configuration beyond permissions and a hotkey
+- **Everything is Optional** — AI enhancement, Fluid Intelligence, audio history, detailed analytics, and beta builds are optional. The core dictation experience works out of the box with zero configuration beyond permissions and a hotkey
 
 ---
 
@@ -181,6 +181,8 @@ Whisper supports up to 99 languages, depending on the model size you choose.
 
 7. **(Optional) Opt in to beta builds** — `Settings → Automatic Updates → Beta Releases` for early access to new features.
 
+To pause listening without ending a hands-free dictation, enable **Settings → Dictation → Hold Space to Mute**. Start dictation with your usual shortcut, hold Space to mute, and release it to resume. The overlay shows a muted microphone. A quick tap (up to 250 ms) types one space on release; a longer hold types nothing. Muting starts immediately in both cases. Your normal shortcut still finishes the recording. Muted audio is excluded from live transcription, the final transcript, and saved audio history. Space works normally outside dictation; modifier-plus-Space and configured Space shortcuts keep their existing behavior. The option is off by default and applies to Dictation mode.
+
 ---
 
 ## Requirements
@@ -205,22 +207,41 @@ open Fluid.xcodeproj
 
 Build and run in Xcode. All dependencies are managed via Swift Package Manager.
 
-### Build Only (No Signing)
+Run a signed Debug build using the script:
 
 ```bash
-xcodebuild -project Fluid.xcodeproj -scheme Fluid -destination 'platform=macOS' build CODE_SIGNING_ALLOWED=NO
+./build.sh
 ```
+
+The signed build is written to `DerivedData/Build/Products/Debug/FluidVoice Debug.app`.
+Keep launching that product after each rebuild so macOS can preserve its Accessibility
+authorization.
+
+For CI or contributors who do not have a signing identity, use the explicit unsigned
+fallback:
+
+```bash
+./build.sh unsigned
+```
+
+Unsigned builds are tied to a specific executable version and may require Accessibility,
+Screen Recording, and microphone permissions to be removed and granted again after rebuilding.
 
 ---
 
 ## Contributing
 
-Contributions are welcome! Please create an issue first to discuss major changes before submitting a pull request.
+Contributions are welcome! Read the [contribution guidelines](CONTRIBUTING.md) before starting work.
+
+- **Every PR needs a linked issue**, including bug fixes and small changes.
+- **Major features and UI or UX changes need maintainer or moderator approval before implementation.** Open an issue and wait for explicit agreement on the scope.
+- **Major feature requests start in [Discussions](https://github.com/altic-dev/FluidVoice/discussions/new?category=ideas).** After approval, create or link a tracking issue and reference both in the PR.
+- **Keep PRs focused and verifiable.** Include a screenshot, image, or video, clear reproduction or verification steps, and testing results. Show before and after for UI or UX changes.
 
 ### Development Setup
 
 1. Clone and open in Xcode as above.
-2. **Signing:** `FluidVoice → Signing & Capabilities → Automatically manage signing → pick your Team` (Personal Team is fine). Stored in `xcuserdata/` (gitignored).
+2. **Signing:** `FluidVoice → Signing & Capabilities → Automatically manage signing → pick your Team` (Personal Team is fine). If you have certificates for multiple teams, select one without changing the project by running `FLUIDVOICE_DEVELOPMENT_TEAM=YOUR_TEAM_ID ./build.sh`.
 3. Build and run — SPM handles dependencies.
 4. **(Optional) Pre-commit hook** to prevent accidental team ID commits:
    ```bash
@@ -231,12 +252,15 @@ Contributions are welcome! Please create an issue first to discuss major changes
 ### Pull Request Guidelines
 
 - **One feature or fix per PR** — keep changes focused and atomic
-- **Create an issue first** so work is trackable before review
-- **Discuss non-trivial changes** before opening a PR
-- **Follow the PR template**
-- **Test thoroughly** on your machine
+- **Link a tracking issue** — a Discussion alone does not replace it
+- **Get approval before implementing major features or UI or UX changes**
+- **Follow the PR template**, including reproduction steps and screenshot, image, or video evidence
+- **Report testing results** and any checks you could not run
+- **AI-assisted coding is welcome; human review is required.** A human must create or vet the final PR, understand the full diff, and verify the behavior. Briefly explain AI use and your own checks; keep descriptions, code comments, and review replies focused. See [AI-assisted contribution guidelines](CONTRIBUTING.md#ai-assisted-contributions).
 - **Never commit personal team IDs or API keys**
 - **Check `git diff`** before committing
+
+**These requirements are mandatory. PRs that do not follow the [contribution guidelines](CONTRIBUTING.md) will not be reviewed or merged until they comply, and may be closed.**
 
 ---
 
@@ -258,16 +282,19 @@ xcodebuild test -project Fluid.xcodeproj -scheme Fluid -destination 'platform=ma
 
 FluidVoice is **local-first**. Your voice, audio, and transcribed text never leave your machine unless you explicitly opt in to a cloud AI provider.
 
-### What's Collected (Opt-In)
+### What's Collected
 
-Anonymous analytics are enabled by default to track app health and feature usage. You can disable at any time from `Settings → Share Anonymous Analytics`.
+FluidVoice records one anonymous activity signal per local day and uploads the week's buffered signals together after the week ends. Detailed anonymous analytics are enabled by default and can be disabled at any time from `Settings → Share Detailed Anonymous Analytics`; when disabled, only the weekly activity batch is sent.
 
-**Collected:**
+**Daily activity:**
 
-- App version, build, macOS version
-- Low-cardinality feature/config flags (e.g. app mode, major settings)
-- Approximate usage ranges (not exact values)
-- High-level success/error outcomes
+- A random installation ID, activity date, app version, and macOS platform label
+
+**With detailed analytics enabled:**
+
+- Daily feature and model usage totals
+- Onboarding progress
+- Model download starts and high-level outcomes
 
 **Not Collected:**
 
@@ -282,7 +309,7 @@ Anonymous analytics are enabled by default to track app health and feature usage
 
 Join our Discord: https://discord.gg/VUPHaKSvYV
 
-Follow development on X: [@ALTIC_DEV](https://x.com/ALTIC_DEV)
+Follow development on X: [@fluidvoiceapp](https://x.com/fluidvoiceapp)
 
 ---
 

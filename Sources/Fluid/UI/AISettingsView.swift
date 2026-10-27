@@ -73,8 +73,10 @@ enum SpeechProviderFilter: String, CaseIterable, Identifiable {
     case apple = "Apple"
     case cohere = "Cohere"
     case openai = "OpenAI"
+    case qwen = "Qwen"
 
     var id: String { self.rawValue }
+    var displayName: String { self == .nvidia ? "FluidVoice / NVIDIA" : self.rawValue }
 }
 
 enum AISettingsLayout {
@@ -92,8 +94,8 @@ enum AISettingsLayout {
     static let promptInlinePickerWidth: CGFloat = 145
     static let promptInlineModelWidth: CGFloat = 180
     static let promptScopeLabelWidth: CGFloat = 110
-    static let promptEditorLabelColumnWidth: CGFloat = 180
-    static let promptEditorControlColumnWidth: CGFloat = 270
+    static let promptEditorLabelColumnWidth: CGFloat = 140
+    static let promptEditorControlColumnWidth: CGFloat = 340
     static let rowLeadingIndent: CGFloat = labelWidth + 12
 }
 
@@ -104,6 +106,8 @@ struct AISettingsView: View {
 
     @StateObject private var voiceViewModel: VoiceEngineSettingsViewModel
     @StateObject private var enhancementViewModel: AIEnhancementSettingsViewModel
+    @StateObject private var privateAIController: PrivateAISettingsController
+    @State private var selectedEnhancementSection: AIEnhancementConfigurationSection = .providers
 
     init(appServices: AppServices, menuBarManager: MenuBarManager, theme: AppTheme) {
         self.appServices = appServices
@@ -113,11 +117,13 @@ struct AISettingsView: View {
             settings: SettingsStore.shared,
             appServices: appServices
         ))
-        _enhancementViewModel = StateObject(wrappedValue: AIEnhancementSettingsViewModel(
+        let enhancementModel = AIEnhancementSettingsViewModel(
             settings: SettingsStore.shared,
             menuBarManager: menuBarManager,
             promptTest: DictationPromptTestCoordinator.shared
-        ))
+        )
+        _enhancementViewModel = StateObject(wrappedValue: enhancementModel)
+        _privateAIController = StateObject(wrappedValue: PrivateAISettingsController(viewModel: enhancementModel))
     }
 
     var body: some View {
@@ -130,9 +136,11 @@ struct AISettingsView: View {
                 )
                 AIEnhancementSettingsView(
                     viewModel: self.enhancementViewModel,
+                    privateAIController: self.privateAIController,
                     settings: self.enhancementViewModel.settings,
                     promptTest: self.enhancementViewModel.promptTest,
                     theme: self.theme,
+                    selectedConfigurationSection: self.$selectedEnhancementSection,
                     activeShortcutRecordingTarget: .constant(nil),
                     shortcutRecordingMessage: .constant(nil)
                 )

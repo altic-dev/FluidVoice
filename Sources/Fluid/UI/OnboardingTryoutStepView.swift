@@ -334,36 +334,7 @@ struct OnboardingTryoutStepView: View {
     }
 
     private func shortcutKeycap(_ text: String) -> some View {
-        let shape = RoundedRectangle(cornerRadius: 10, style: .continuous)
-        let isPressed = self.isShortcutKeyPressed
-        let isListening = self.isShortcutGlowActive
-
-        return Text(text)
-            .font(.system(size: 20, weight: .semibold))
-            .foregroundStyle(.white)
-            .lineLimit(1)
-            .minimumScaleFactor(0.62)
-            .padding(.horizontal, 14)
-            .frame(width: 112, height: 74)
-            .background(
-                shape
-                    .fill(Color.white.opacity(isListening ? 0.115 : 0.075))
-                    .overlay(
-                        shape.stroke(
-                            FluidOnboardingLandingColors.blue.opacity(isListening ? 0.86 : 0.48),
-                            lineWidth: isListening ? 1.6 : 1.2
-                        )
-                    )
-                    .shadow(
-                        color: FluidOnboardingLandingColors.blue.opacity(isListening ? 0.34 : 0.20),
-                        radius: isListening ? 18 : 12,
-                        x: 0,
-                        y: isPressed ? 2 : 0
-                    )
-            )
-            .scaleEffect(isPressed ? 0.965 : 1)
-            .offset(y: isPressed ? 4 : 0)
-            .accessibilityLabel("Current shortcut \(text)")
+        OnboardingShortcutKeycap(text: text, isPressed: self.isShortcutKeyPressed, isListening: self.isShortcutGlowActive)
     }
 
     private func examplePill(_ text: String) -> some View {

@@ -1,103 +1,183 @@
 import Foundation
-import SwiftWhisper
+import TranscribeCpp
 
-/// TranscriptionProvider implementation using SwiftWhisper (whisper.cpp) for Intel Macs.
-/// This provides on-device speech recognition that works on Intel x86_64 architecture.
+/// TranscriptionProvider implementation using transcribe.cpp for Whisper and Qwen GGUF models.
 final class WhisperProvider: TranscriptionProvider {
-    let name = "Whisper (Intel/Universal)"
+    let name = "Whisper (Universal)"
 
-    /// Whether this provider is supported on the current system.
-    /// SwiftWhisper (whisper.cpp) works on both Intel and Apple Silicon.
     var isAvailable: Bool {
-        true
+        guard case .success = Self.backendInitialization else { return false }
+        if CPUArchitecture.isAppleSilicon {
+            return Transcribe.backendAvailable(.metal)
+        }
+        return Transcribe.backendAvailable(.cpu)
     }
 
-    private var whisper: Whisper?
-    private(set) var isReady: Bool = false
+    private static let backendInitialization: Result<Void, Error> = Result {
+        try Transcribe.initBackends()
+    }
+
+    private let stateLock = NSLock()
+    private var model: Model?
+    private var session: Session?
+    private var ready = false
     private var loadedModelName: String?
 
     private let overriddenModelDirectory: URL?
     private let urlSession: URLSession
+    private let languageCodeOverride: String?
 
-    /// Optional model override - if set, uses this model instead of the global setting.
-    /// Used for downloading specific models without changing the active selection.
     var modelOverride: SettingsStore.SpeechModel?
 
-    init(modelDirectory: URL? = nil, urlSession: URLSession = .shared, modelOverride: SettingsStore.SpeechModel? = nil) {
+    init(
+        modelDirectory: URL? = nil,
+        urlSession: URLSession = .shared,
+        modelOverride: SettingsStore.SpeechModel? = nil,
+        languageCodeOverride: String? = nil
+    ) {
         self.overriddenModelDirectory = modelDirectory
         self.urlSession = urlSession
         self.modelOverride = modelOverride
+        self.languageCodeOverride = languageCodeOverride
     }
 
-    /// Model filename to use - reads from override first, then unified SpeechModel setting
-    /// Models: tiny (~75MB), base (~142MB), small (~466MB), medium (~1.5GB), large (~2.9GB)
+    deinit {
+        self.unloadModel()
+    }
+
+    var isReady: Bool {
+        self.stateLock.lock()
+        defer { self.stateLock.unlock() }
+        return self.ready
+    }
+
+    private var selectedModel: SettingsStore.SpeechModel {
+        self.modelOverride ?? SettingsStore.shared.selectedSpeechModel
+    }
+
     private var modelName: String {
-        let model = self.modelOverride ?? SettingsStore.shared.selectedSpeechModel
-        let configured = model.whisperModelFile?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        if let configured, !configured.isEmpty {
-            return configured
-        }
-        return "ggml-base.bin"
+        self.selectedModel.whisperModelFile ?? "whisper-base-Q8_0.gguf"
+    }
+
+    private var legacyModelName: String? {
+        self.selectedModel.legacyWhisperModelFile
     }
 
     private var modelURL: URL {
-        let directory: URL
-        if let overriddenModelDirectory {
-            directory = overriddenModelDirectory
-        } else {
-            guard let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first else {
-                preconditionFailure("Could not find caches directory")
-            }
-            directory = cacheDir.appendingPathComponent("WhisperModels")
-        }
+        self.modelDirectory.appendingPathComponent(self.modelName)
+    }
 
-        return directory.appendingPathComponent(self.modelName)
+    private var legacyModelURL: URL? {
+        self.legacyModelName.map { self.modelDirectory.appendingPathComponent($0) }
     }
 
     private var modelDirectory: URL {
-        self.modelURL.deletingLastPathComponent()
+        if let overriddenModelDirectory {
+            return overriddenModelDirectory
+        }
+        guard let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first else {
+            preconditionFailure("Could not find caches directory")
+        }
+        return cacheDir.appendingPathComponent("WhisperModels")
     }
 
-    private func isModelFileValid(at url: URL) -> Bool {
+    private var modelDownloadURL: URL? {
+        let modelName = self.modelName
+        let suffix = "-Q8_0.gguf"
+        guard modelName.hasSuffix(suffix) else { return nil }
+        let repoName = String(modelName.dropLast(suffix.count))
+        return URL(string: "https://huggingface.co/handy-computer/\(repoName)-gguf/resolve/main/\(modelName)")
+    }
+
+    private var backend: Backend {
+        CPUArchitecture.isAppleSilicon ? .metal : .cpu
+    }
+
+    private func unloadModel() {
+        self.stateLock.lock()
+        defer { self.stateLock.unlock() }
+        self.session = nil
+        self.model = nil
+        self.ready = false
+        self.loadedModelName = nil
+    }
+
+    private func currentLoadedModelName() -> String? {
+        self.stateLock.lock()
+        defer { self.stateLock.unlock() }
+        return self.loadedModelName
+    }
+
+    private func installModel(_ model: Model, session: Session, modelName: String) {
+        self.stateLock.lock()
+        defer { self.stateLock.unlock() }
+        self.model = model
+        self.session = session
+        self.loadedModelName = modelName
+        self.ready = true
+    }
+
+    private func activeSession() -> Session? {
+        self.stateLock.lock()
+        defer { self.stateLock.unlock() }
+        return self.session
+    }
+
+    private func removeLegacyModelIfNeeded() {
+        for legacyFile in SettingsStore.SpeechModel.legacyWhisperModelFiles {
+            let url = self.modelDirectory.appendingPathComponent(legacyFile)
+            guard FileManager.default.fileExists(atPath: url.path) else { continue }
+            do {
+                try FileManager.default.removeItem(at: url)
+                DebugLogger.shared.info("WhisperProvider: Removed legacy Whisper cache \(legacyFile)", source: "WhisperProvider")
+            } catch {
+                DebugLogger.shared.warning(
+                    "WhisperProvider: Failed to remove legacy Whisper cache \(legacyFile): \(error.localizedDescription)",
+                    source: "WhisperProvider"
+                )
+            }
+        }
+    }
+
+    private func isModelFileValid(at url: URL, for targetModel: SettingsStore.SpeechModel) -> Bool {
+        guard let expectedModelFile = targetModel.whisperModelFile,
+              url.lastPathComponent == expectedModelFile
+        else {
+            return false
+        }
         guard FileManager.default.fileExists(atPath: url.path) else { return false }
         guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
               let size = attributes[.size] as? NSNumber
         else {
             return false
         }
-        let sizeBytes = size.int64Value
-        guard sizeBytes > 0 else { return false }
-        let expectedBytes = SettingsStore.SpeechModel.allCases
-            .first { $0.whisperModelFile == url.lastPathComponent }?
-            .expectedDownloadBytes
-        return expectedBytes.map { sizeBytes == $0 } ?? false
+        return size.int64Value == targetModel.expectedDownloadBytes
     }
 
-    func prepare(progressHandler: ((Double) -> Void)? = nil) async throws {
+    func prepare(progressHandler: ((ModelPreparationProgress) -> Void)? = nil) async throws {
         try Task.checkCancellation()
-        // CRITICAL: Capture the target model at start to use consistently throughout this method.
-        // This prevents race conditions where SettingsStore could change after await points.
-        let targetModel = self.modelOverride ?? SettingsStore.shared.selectedSpeechModel
-        let currentModelName = targetModel.whisperModelFile?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "ggml-base.bin"
 
-        // Detect model change: if a different model is now selected, force reload
-        if self.isReady, self.loadedModelName != currentModelName {
-            DebugLogger.shared.info("WhisperProvider: Model changed from \(self.loadedModelName ?? "nil") to \(currentModelName), forcing reload", source: "WhisperProvider")
-            self.isReady = false
-            self.whisper = nil
-            self.loadedModelName = nil
+        let targetModel = self.selectedModel
+        let currentModelName = targetModel.whisperModelFile ?? "whisper-base-Q8_0.gguf"
+
+        let loadedModelName = self.currentLoadedModelName()
+        if self.isReady, loadedModelName != currentModelName {
+            DebugLogger.shared.info(
+                "WhisperProvider: Model changed from \(loadedModelName ?? "nil") to \(currentModelName), forcing reload",
+                source: "WhisperProvider"
+            )
+            self.unloadModel()
         }
 
-        guard self.isReady == false else { return }
+        guard !self.isReady else { return }
 
-        DebugLogger.shared.info("WhisperProvider: Starting model preparation", source: "WhisperProvider")
+        try Self.backendInitialization.get()
+        try self.validateBackendAvailability(for: targetModel)
 
-        // Ensure model directory exists
         try FileManager.default.createDirectory(at: self.modelDirectory, withIntermediateDirectories: true)
 
         if FileManager.default.fileExists(atPath: self.modelURL.path),
-           !self.isModelFileValid(at: self.modelURL)
+           !self.isModelFileValid(at: self.modelURL, for: targetModel)
         {
             DebugLogger.shared.warning(
                 "WhisperProvider: Found invalid model file at \(self.modelURL.path); removing to force re-download",
@@ -106,25 +186,28 @@ final class WhisperProvider: TranscriptionProvider {
             try? FileManager.default.removeItem(at: self.modelURL)
         }
 
-        // Download model if not present
         if !FileManager.default.fileExists(atPath: self.modelURL.path) {
-            DebugLogger.shared.info("WhisperProvider: Downloading Whisper model...", source: "WhisperProvider")
-            try await self.downloadModel(progressHandler: progressHandler)
+            DebugLogger.shared.info("WhisperProvider: Downloading \(targetModel.displayName) GGUF model...", source: "WhisperProvider")
+            progressHandler?(.preparingDownload)
+            try await self.downloadModel { progress in
+                progressHandler?(.downloading(progress))
+            }
         }
 
-        guard self.isModelFileValid(at: self.modelURL) else {
+        guard self.isModelFileValid(at: self.modelURL, for: targetModel) else {
+            try? FileManager.default.removeItem(at: self.modelURL)
             throw NSError(
                 domain: "WhisperProvider",
                 code: -3,
-                userInfo: [NSLocalizedDescriptionKey: "Whisper model file is missing or corrupted. Please re-download the model."]
+                userInfo: [NSLocalizedDescriptionKey: "\(targetModel.displayName) model file is missing or corrupted. Please re-download the model."]
             )
         }
+        if targetModel.isWhisperModel {
+            self.removeLegacyModelIfNeeded()
+        }
 
-        // Check available memory before loading large models
-        // Use the captured targetModel to ensure consistent memory validation
         let requiredMemoryGB = targetModel.requiredMemoryGB
         let availableMemoryGB = Self.availableMemoryGB()
-
         DebugLogger.shared.info(
             "WhisperProvider: Memory check - Required: \(String(format: "%.1f", requiredMemoryGB))GB, Available: \(String(format: "%.1f", availableMemoryGB))GB",
             source: "WhisperProvider"
@@ -136,11 +219,9 @@ final class WhisperProvider: TranscriptionProvider {
             Required: \(String(format: "%.1f", requiredMemoryGB)) GB
             Available: \(String(format: "%.1f", availableMemoryGB)) GB
 
-            Please try a smaller model (e.g., Whisper Base or Small) or close other applications to free up memory.
+            Please try a smaller model or close other applications to free up memory.
             """
-
             DebugLogger.shared.error("WhisperProvider: \(errorMessage)", source: "WhisperProvider")
-
             throw NSError(
                 domain: "WhisperProvider",
                 code: -4,
@@ -148,17 +229,52 @@ final class WhisperProvider: TranscriptionProvider {
             )
         }
 
-        // Load the model
-        DebugLogger.shared.info("WhisperProvider: Loading Whisper model...", source: "WhisperProvider")
-        self.whisper = Whisper(fromFileURL: self.modelURL)
+        DebugLogger.shared.info("WhisperProvider: Loading \(currentModelName) with \(self.backend)", source: "WhisperProvider")
+        progressHandler?(.loading)
+
+        let loadedModel = try Model(
+            path: self.modelURL.path,
+            options: ModelOptions(backend: self.backend)
+        )
+        let runtimeBackend = loadedModel.backend.lowercased()
+        if CPUArchitecture.isAppleSilicon,
+           !runtimeBackend.contains("metal"),
+           !runtimeBackend.contains("mtl")
+        {
+            throw NSError(
+                domain: "WhisperProvider",
+                code: -7,
+                userInfo: [NSLocalizedDescriptionKey: "\(targetModel.displayName) loaded on \(loadedModel.backend), but Metal is required on Apple Silicon."]
+            )
+        }
+        let loadedSession = try loadedModel.session()
 
         try Task.checkCancellation()
-        self.loadedModelName = currentModelName
-        self.isReady = true
-        DebugLogger.shared.info("WhisperProvider: Model ready (\(currentModelName))", source: "WhisperProvider")
+        self.installModel(loadedModel, session: loadedSession, modelName: currentModelName)
+        DebugLogger.shared.info(
+            "WhisperProvider: Model ready (\(currentModelName), backend=\(loadedModel.backend), arch=\(loadedModel.arch), maxAudioMs=\(loadedModel.capabilities.maxAudioMs))",
+            source: "WhisperProvider"
+        )
     }
 
-    /// Returns the available system memory in GB
+    private func validateBackendAvailability(for model: SettingsStore.SpeechModel) throws {
+        if CPUArchitecture.isAppleSilicon, !Transcribe.backendAvailable(.metal) {
+            throw NSError(
+                domain: "WhisperProvider",
+                code: -5,
+                userInfo: [NSLocalizedDescriptionKey: "\(model.displayName) requires the Metal transcription backend on Apple Silicon."]
+            )
+        }
+
+        if !CPUArchitecture.isAppleSilicon, !Transcribe.backendAvailable(.cpu) {
+            throw NSError(
+                domain: "WhisperProvider",
+                code: -6,
+                userInfo: [NSLocalizedDescriptionKey: "Whisper CPU backend is unavailable on this Mac."]
+            )
+        }
+    }
+
     private static func availableMemoryGB() -> Double {
         var pageSize: vm_size_t = 0
         host_page_size(mach_host_self(), &pageSize)
@@ -173,85 +289,95 @@ final class WhisperProvider: TranscriptionProvider {
         }
 
         guard result == KERN_SUCCESS else {
-            // Fallback: assume we have enough memory if we can't check
             DebugLogger.shared.warning("WhisperProvider: Failed to get memory stats, assuming sufficient memory", source: "WhisperProvider")
             return 16.0
         }
 
-        // Calculate free + inactive memory (memory that can be reclaimed)
         let freePages = UInt64(vmStats.free_count)
         let inactivePages = UInt64(vmStats.inactive_count)
         let purgablePages = UInt64(vmStats.purgeable_count)
-
         let availableBytes = (freePages + inactivePages + purgablePages) * UInt64(pageSize)
-        let availableGB = Double(availableBytes) / (1024 * 1024 * 1024)
-
-        return availableGB
+        return Double(availableBytes) / (1024 * 1024 * 1024)
     }
 
     func transcribe(_ samples: [Float]) async throws -> ASRTranscriptionResult {
-        // Whisper.cpp asserts on very short buffers; guard early to avoid abort.
+        try await self.transcribe(samples, languageCode: nil)
+    }
+
+    func transcribe(_ samples: [Float], languageCode: String?) async throws -> ASRTranscriptionResult {
         let minSamples = 16_000
         guard samples.count >= minSamples else {
             throw NSError(
                 domain: "WhisperProvider",
                 code: -2,
-                userInfo: [NSLocalizedDescriptionKey: "Audio too short for Whisper transcription"]
+                userInfo: [NSLocalizedDescriptionKey: "Audio too short for \(self.selectedModel.displayName) transcription"]
             )
         }
 
-        guard let whisper = whisper else {
+        guard let session = self.activeSession() else {
             throw NSError(
                 domain: "WhisperProvider",
                 code: -1,
-                userInfo: [NSLocalizedDescriptionKey: "Whisper model not loaded"]
+                userInfo: [NSLocalizedDescriptionKey: "\(self.selectedModel.displayName) model not loaded"]
             )
         }
 
-        // SwiftWhisper expects 16kHz PCM audio frames (which is what we receive)
-        let segments = try await whisper.transcribe(audioFrames: samples)
-
-        // Combine all segments into one string
-        let fullText = segments.map { $0.text }.joined(separator: " ").trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
-
-        // SwiftWhisper doesn't provide confidence, so we use 1.0
+        let resolvedLanguageCode = languageCode
+            ?? self.languageCodeOverride
+        let transcript = try await session.run(
+            samples,
+            options: Self.runOptions(
+                languageCode: resolvedLanguageCode,
+                model: self.selectedModel,
+                whisperLanguageCode: SettingsStore.shared.selectedWhisperLanguageCode
+            )
+        )
+        let fullText = transcript.text.trimmingCharacters(in: .whitespacesAndNewlines)
         return ASRTranscriptionResult(text: fullText, confidence: 1.0)
     }
 
+    static func runOptions(
+        languageCode: String?,
+        model: SettingsStore.SpeechModel = .whisperBase,
+        whisperLanguageCode: String? = nil
+    ) -> RunOptions {
+        // Qwen3-ASR decodes text only and rejects timestamp requests.
+        let timestamps: TimestampKind = model == .qwen3Asr17B ? .none : .segment
+        let language = languageCode ?? (model.isWhisperModel ? whisperLanguageCode : nil)
+        return RunOptions(timestamps: timestamps, language: language)
+    }
+
     func modelsExistOnDisk() -> Bool {
-        return self.isModelFileValid(at: self.modelURL)
+        return self.isModelFileValid(at: self.modelURL, for: self.selectedModel)
     }
 
     func clearCache() async throws {
-        if FileManager.default.fileExists(atPath: self.modelURL.path) {
-            try FileManager.default.removeItem(at: self.modelURL)
-        }
-        if FileManager.default.fileExists(atPath: self.modelDirectory.path) {
-            let contents = try FileManager.default.contentsOfDirectory(atPath: self.modelDirectory.path)
-            if contents.isEmpty {
-                try FileManager.default.removeItem(at: self.modelDirectory)
+        self.unloadModel()
+        let files = [self.modelURL, self.legacyModelURL].compactMap { $0 }
+        let directory = self.modelDirectory
+        try await Task.detached(priority: .userInitiated) {
+            let manager = FileManager.default
+            for file in files where manager.fileExists(atPath: file.path) {
+                try manager.removeItem(at: file)
             }
-        }
-        self.isReady = false
-        self.whisper = nil
-        self.loadedModelName = nil
+            if manager.fileExists(atPath: directory.path),
+               try manager.contentsOfDirectory(atPath: directory.path).isEmpty
+            {
+                try manager.removeItem(at: directory)
+            }
+        }.value
     }
 
-    // MARK: - Model Download
-
     private func downloadModel(progressHandler: ((Double) -> Void)?) async throws {
-        // Whisper models are hosted on Hugging Face
-        let modelURLString = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/\(modelName)"
-
-        guard let url = URL(string: modelURLString) else {
+        guard let url = self.modelDownloadURL else {
             throw NSError(
                 domain: "WhisperProvider",
                 code: -1,
-                userInfo: [NSLocalizedDescriptionKey: "Invalid model URL"]
+                userInfo: [NSLocalizedDescriptionKey: "Invalid \(self.selectedModel.displayName) model URL"]
             )
         }
 
-        DebugLogger.shared.info("WhisperProvider: Downloading from \(modelURLString)", source: "WhisperProvider")
+        DebugLogger.shared.info("WhisperProvider: Downloading from \(url.absoluteString)", source: "WhisperProvider")
 
         let maxAttempts = 3
         for attempt in 1...maxAttempts {
@@ -259,9 +385,7 @@ final class WhisperProvider: TranscriptionProvider {
                 if attempt == 1 {
                     progressHandler?(0.0)
                 }
-
                 try await self.downloadFile(from: url, to: self.modelURL, progressHandler: progressHandler)
-
                 DebugLogger.shared.info("WhisperProvider: Model downloaded successfully", source: "WhisperProvider")
                 return
             } catch let error as NSError {
@@ -270,14 +394,13 @@ final class WhisperProvider: TranscriptionProvider {
                 {
                     throw CancellationError()
                 }
-                let isLastAttempt = attempt == maxAttempts
 
-                // Provide user-friendly error messages
+                let isLastAttempt = attempt == maxAttempts
                 if error.domain == NSURLErrorDomain {
                     let message: String
                     switch error.code {
                     case NSURLErrorNotConnectedToInternet:
-                        message = "No internet connection. Please connect to the internet to download the Whisper model."
+                        message = "No internet connection. Please connect to the internet to download \(self.selectedModel.displayName)."
                     case NSURLErrorTimedOut:
                         message = "Download timed out. Please check your internet connection and try again."
                     case NSURLErrorCannotFindHost, NSURLErrorCannotConnectToHost:
@@ -293,7 +416,6 @@ final class WhisperProvider: TranscriptionProvider {
                             userInfo: [NSLocalizedDescriptionKey: message]
                         )
                     }
-
                     DebugLogger.shared.warning(
                         "WhisperProvider: Download attempt \(attempt)/\(maxAttempts) failed (\(message)). Retrying...",
                         source: "WhisperProvider"
@@ -306,7 +428,6 @@ final class WhisperProvider: TranscriptionProvider {
                     )
                 }
 
-                // Backoff: 1s, 2s, 4s
                 let delayNanos = UInt64(1_000_000_000) << UInt64(attempt - 1)
                 try await Task.sleep(nanoseconds: delayNanos)
             }
@@ -314,16 +435,15 @@ final class WhisperProvider: TranscriptionProvider {
     }
 
     private func downloadFile(from url: URL, to destination: URL, progressHandler: ((Double) -> Void)?) async throws {
-        let delegate = DownloadProgressDelegate(onProgress: progressHandler)
-        let session = URLSession(configuration: self.urlSession.configuration, delegate: delegate, delegateQueue: nil)
-        defer { session.finishTasksAndInvalidate() }
-
         var temporaryURL: URL?
         do {
-            let (downloadedURL, response) = try await withTaskCancellationHandler {
-                try await session.download(from: url)
-            } onCancel: {
-                session.invalidateAndCancel()
+            let (downloadedURL, response) = try await ProgressiveFileDownloader.download(
+                from: url,
+                configuration: self.urlSession.configuration
+            ) { totalBytesWritten, totalBytesExpectedToWrite in
+                guard totalBytesExpectedToWrite > 0 else { return }
+                let pct = min(0.999, Double(totalBytesWritten) / Double(totalBytesExpectedToWrite))
+                progressHandler?(pct)
             }
             temporaryURL = downloadedURL
             try Task.checkCancellation()
@@ -345,6 +465,13 @@ final class WhisperProvider: TranscriptionProvider {
 
             let attributes = try FileManager.default.attributesOfItem(atPath: downloadedURL.path)
             let actualBytes = (attributes[.size] as? NSNumber)?.int64Value ?? 0
+            guard actualBytes > 0 else {
+                throw NSError(
+                    domain: "WhisperProvider",
+                    code: -1,
+                    userInfo: [NSLocalizedDescriptionKey: "Downloaded model is empty. Please try again."]
+                )
+            }
             if httpResponse.expectedContentLength > 0,
                actualBytes != httpResponse.expectedContentLength
             {
@@ -352,18 +479,6 @@ final class WhisperProvider: TranscriptionProvider {
                     domain: "WhisperProvider",
                     code: -1,
                     userInfo: [NSLocalizedDescriptionKey: "Downloaded model size mismatch. Please try again."]
-                )
-            }
-            guard
-                let expectedBytes = SettingsStore.SpeechModel.allCases
-                .first(where: { $0.whisperModelFile == destination.lastPathComponent })?
-                .expectedDownloadBytes,
-                actualBytes == expectedBytes
-            else {
-                throw NSError(
-                    domain: "WhisperProvider",
-                    code: -1,
-                    userInfo: [NSLocalizedDescriptionKey: "Downloaded model is invalid. Please try again."]
                 )
             }
 
@@ -382,7 +497,6 @@ final class WhisperProvider: TranscriptionProvider {
             if let temporaryURL {
                 try? FileManager.default.removeItem(at: temporaryURL)
             }
-            session.invalidateAndCancel()
             let nsError = error as NSError
             if Task.isCancelled
                 || error is CancellationError
@@ -394,29 +508,5 @@ final class WhisperProvider: TranscriptionProvider {
         }
         try Task.checkCancellation()
         progressHandler?(1.0)
-    }
-
-    private final class DownloadProgressDelegate: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
-        private let onProgress: ((Double) -> Void)?
-
-        init(onProgress: ((Double) -> Void)?) {
-            self.onProgress = onProgress
-        }
-
-        func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {
-            // The async URLSession API owns completion; this delegate only reports bytes.
-        }
-
-        func urlSession(
-            _ session: URLSession,
-            downloadTask: URLSessionDownloadTask,
-            didWriteData bytesWritten: Int64,
-            totalBytesWritten: Int64,
-            totalBytesExpectedToWrite: Int64
-        ) {
-            guard totalBytesExpectedToWrite > 0 else { return }
-            let pct = min(0.999, Double(totalBytesWritten) / Double(totalBytesExpectedToWrite))
-            self.onProgress?(pct)
-        }
     }
 }

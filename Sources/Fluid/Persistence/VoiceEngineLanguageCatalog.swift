@@ -2,7 +2,6 @@ import Foundation
 #if canImport(Speech)
 import Speech
 #endif
-import SwiftWhisper
 
 struct VoiceEngineLanguage: Identifiable, Equatable {
     let id: String
@@ -49,7 +48,7 @@ struct VoiceEngineLanguageRoute: Identifiable, Equatable {
 
     var badgeText: String? {
         switch self.model {
-        case .parakeetTDT, .parakeetTDTv2:
+        case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico:
             return "Optimized for FluidVoice"
         default:
             return nil
@@ -94,6 +93,14 @@ enum VoiceEngineLanguageCatalog {
         self.allLanguages(availableModels: availableModels).first { $0.id == id }
     }
 
+    static var whisperLanguages: [VoiceEngineLanguage] {
+        self.languageDefinitions.filter { self.whisperLanguageCode(for: $0.id) != nil }
+    }
+
+    static func whisperLanguage(forCode languageCode: String) -> VoiceEngineLanguage? {
+        self.whisperLanguages.first { self.whisperLanguageCode(for: $0.id) == languageCode }
+    }
+
     static func routes(
         for language: VoiceEngineLanguage,
         availableModels: [SettingsStore.SpeechModel] = SettingsStore.SpeechModel.availableModels
@@ -118,8 +125,10 @@ enum VoiceEngineLanguageCatalog {
         settings.selectedSpeechModel = route.model
 
         switch route.binding {
-        case .automatic, .whisper:
+        case .automatic:
             break
+        case let .whisper(languageCode):
+            settings.selectedWhisperLanguageCode = languageCode
         case let .appleSpeech(localeIdentifier):
             settings.selectedAppleSpeechLocaleIdentifier = localeIdentifier
         case let .cohere(language):
@@ -139,6 +148,11 @@ enum VoiceEngineLanguageCatalog {
 
         if Self.parakeetV3LanguageIDs.contains(language.id) {
             routes.append(Self.route(language, .parakeetTDT, .automatic))
+        }
+
+        if language.id == "en" {
+            routes.append(Self.route(language, .fluidParakeetMini, .automatic))
+            routes.append(Self.route(language, .fluidParakeetPico, .automatic))
         }
 
         if let cohereLanguage = Self.cohereLanguage(for: language.id) {
@@ -183,7 +197,7 @@ enum VoiceEngineLanguageCatalog {
         self.nemotronLanguageMap[languageID]
     }
 
-    private static func whisperLanguageCode(for languageID: String) -> String? {
+    static func whisperLanguageCode(for languageID: String) -> String? {
         self.whisperLanguageCodeMap[languageID]
     }
 
@@ -214,33 +228,7 @@ enum VoiceEngineLanguageCatalog {
         "ar",
     ]
 
-    private static let parakeetV3LanguageIDs: Set<String> = [
-        "bg",
-        "hr",
-        "cs",
-        "da",
-        "nl",
-        "en",
-        "et",
-        "fi",
-        "fr",
-        "de",
-        "el",
-        "hu",
-        "it",
-        "lv",
-        "lt",
-        "mt",
-        "pl",
-        "pt",
-        "ro",
-        "sk",
-        "sl",
-        "es",
-        "sv",
-        "ru",
-        "uk",
-    ]
+    nonisolated static let parakeetV3LanguageIDs = Set(ParakeetSpeechModelCatalog.v3.supportedLanguageCodes)
 
     private static let cohereLanguageMap: [String: SettingsStore.CohereLanguage] = [
         "ar": .arabic,
@@ -286,6 +274,7 @@ enum VoiceEngineLanguageCatalog {
 
     private static let whisperModelOrder: [SettingsStore.SpeechModel] = [
         .whisperSmall,
+        .whisperLargeTurbo,
     ]
 
     private static let appleSpeechAnalyzerLocaleMap: [String: String] = [
@@ -349,20 +338,27 @@ enum VoiceEngineLanguageCatalog {
     }
 
     private static let whisperLanguageCodeMap: [String: String] = {
-        let supportedCodes = Set(
-            WhisperLanguage.allCases
-                .map(\.rawValue)
-                .filter { $0 != WhisperLanguage.auto.rawValue }
-        )
-
         var languageMap: [String: String] = [:]
         for language in Self.languageDefinitions {
-            let whisperCode = language.id == "he" ? "iw" : language.id
-            guard supportedCodes.contains(whisperCode) else { continue }
+            let whisperCode = language.id
+            guard Self.whisperSupportedLanguageCodes.contains(whisperCode) else { continue }
             languageMap[language.id] = whisperCode
         }
         return languageMap
     }()
+
+    private static let whisperSupportedLanguageCodes: Set<String> = [
+        "af", "am", "ar", "as", "az", "ba", "be", "bg", "bn", "bo",
+        "br", "bs", "ca", "cs", "cy", "da", "de", "el", "en", "es",
+        "et", "eu", "fa", "fi", "fo", "fr", "gl", "gu", "ha", "haw",
+        "he", "hi", "hr", "ht", "hu", "hy", "id", "is", "it", "ja",
+        "jw", "ka", "kk", "km", "kn", "ko", "la", "lb", "ln", "lo",
+        "lt", "lv", "mg", "mi", "mk", "ml", "mn", "mr", "ms", "mt",
+        "my", "ne", "nl", "nn", "no", "oc", "pa", "pl", "ps", "pt",
+        "ro", "ru", "sa", "sd", "si", "sk", "sl", "sn", "so", "sq",
+        "sr", "su", "sv", "sw", "ta", "te", "tg", "th", "tk", "tl",
+        "tr", "tt", "uk", "ur", "uz", "vi", "yi", "yo", "zh",
+    ]
 
     private static let languageDefinitions: [VoiceEngineLanguage] = [
         Self.language("af", "Afrikaans"),

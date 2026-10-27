@@ -3,8 +3,11 @@ import Foundation
 enum AppNavigationDestination {
     case aiEnhancements
     case history
+    case dictationShortcuts
+    case meetingTranscription
 }
 
+@MainActor
 final class AppNavigationRouter {
     static let shared = AppNavigationRouter()
 

@@ -1,5 +1,10 @@
 import SwiftUI
 
+/// Shared product accents. Onboarding and feature surfaces use the same source of truth.
+enum FluidBrandColors {
+    static let blue = Color(red: 0.10, green: 0.46, blue: 1.0)
+}
+
 /// Central theme definition for the Fluid app. All colors, spacings and materials
 /// should be defined here to keep styling consistent and easy to evolve.
 struct AppTheme {
@@ -43,26 +48,26 @@ struct AppTheme {
         let chromeCaption: Font
 
         static let standard = Typography(
-            displayTitle: .system(size: 42, weight: .semibold),
-            statement: .system(size: 17, weight: .regular),
-            title: .system(size: 22, weight: .bold),
-            titleIcon: .system(size: 22, weight: .regular),
-            sectionTitle: .system(size: 15, weight: .semibold),
-            body: .system(size: 14, weight: .regular),
-            bodyStrong: .system(size: 14, weight: .medium),
-            bodySmall: .system(size: 13, weight: .regular),
-            bodySmallStrong: .system(size: 13, weight: .medium),
-            caption: .system(size: 12, weight: .regular),
-            captionStrong: .system(size: 12, weight: .medium),
-            captionSmall: .system(size: 11, weight: .regular),
-            tiny: .system(size: 11, weight: .regular),
-            tinyStrong: .system(size: 11, weight: .bold),
-            badge: .system(size: 11, weight: .semibold),
-            metricTiny: .system(size: 11, weight: .bold, design: .rounded),
-            codeCaption: .system(size: 12, weight: .medium, design: .monospaced),
-            sidebarItem: .system(size: 14, weight: .regular),
-            sidebarSection: .system(size: 12, weight: .medium),
-            chromeCaption: .system(size: 12, weight: .regular)
+            displayTitle: .fluidSystem(size: 42, weight: .semibold),
+            statement: .fluidSystem(size: 17, weight: .regular),
+            title: .fluidSystem(size: 22, weight: .bold),
+            titleIcon: .fluidSystem(size: 22, weight: .regular),
+            sectionTitle: .fluidSystem(size: 15, weight: .semibold),
+            body: .fluidSystem(size: 14, weight: .regular),
+            bodyStrong: .fluidSystem(size: 14, weight: .medium),
+            bodySmall: .fluidSystem(size: 13, weight: .regular),
+            bodySmallStrong: .fluidSystem(size: 13, weight: .medium),
+            caption: .fluidSystem(size: 12, weight: .regular),
+            captionStrong: .fluidSystem(size: 12, weight: .medium),
+            captionSmall: .fluidSystem(size: 11, weight: .regular),
+            tiny: .fluidSystem(size: 11, weight: .regular),
+            tinyStrong: .fluidSystem(size: 11, weight: .bold),
+            badge: .fluidSystem(size: 11, weight: .semibold),
+            metricTiny: .fluidSystem(size: 11, weight: .bold, design: .rounded),
+            codeCaption: .fluidSystem(size: 12, weight: .medium, design: .monospaced),
+            sidebarItem: .fluidSystem(size: 14, weight: .regular),
+            sidebarSection: .fluidSystem(size: 12, weight: .medium),
+            chromeCaption: .fluidSystem(size: 12, weight: .regular)
         )
     }
 
@@ -107,7 +112,8 @@ struct AppTheme {
             let opacity: Double
 
             static func subtle(color: Color, opacity: Double = 0.45) -> Shadow {
-                Shadow(color: color, radius: 12, x: 0, y: 6, opacity: opacity)
+                // Wide and low: reads as ambient depth rather than a hard drop.
+                Shadow(color: color, radius: 18, x: 0, y: 4, opacity: opacity)
             }
         }
 
@@ -301,7 +307,7 @@ struct AppTheme {
                 tertiaryText: Color(nsColor: .tertiaryLabelColor),
                 accent: accent,
                 warning: Color(nsColor: .systemOrange),
-                success: accent
+                success: Color(nsColor: .systemGreen)
             ),
             typography: .standard,
             metrics: Metrics(
@@ -312,8 +318,8 @@ struct AppTheme {
                 cardSurface: .defaults,
                 onboardingSurface: .standard,
                 window: .standard,
-                cardShadow: .subtle(color: .black, opacity: 0.18),
-                elevatedCardShadow: .subtle(color: .black, opacity: 0.22)
+                cardShadow: .subtle(color: .black, opacity: 0.12),
+                elevatedCardShadow: .subtle(color: .black, opacity: 0.16)
             ),
             materials: Materials(
                 window: .thinMaterial,
@@ -344,7 +350,7 @@ struct AppTheme {
                 tertiaryText: Color(nsColor: .tertiaryLabelColor),
                 accent: accent,
                 warning: Color(nsColor: .systemOrange),
-                success: accent
+                success: Color(nsColor: .systemGreen)
             ),
             typography: .standard,
             metrics: Metrics(
@@ -355,8 +361,8 @@ struct AppTheme {
                 cardSurface: .defaults,
                 onboardingSurface: .standard,
                 window: .standard,
-                cardShadow: .subtle(color: .black, opacity: 0.70),
-                elevatedCardShadow: .subtle(color: .black, opacity: 0.80)
+                cardShadow: .subtle(color: .black, opacity: 0.45),
+                elevatedCardShadow: .subtle(color: .black, opacity: 0.55)
             ),
             materials: Materials(
                 window: .thinMaterial,

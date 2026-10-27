@@ -12,24 +12,29 @@ import SwiftUI
 @main
 struct FluidApp: App {
     @StateObject private var menuBarManager = MenuBarManager()
-    @StateObject private var appServices: AppServices
     @ObservedObject private var settings = SettingsStore.shared
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
-    init() {
-        // Use the shared singleton instance
-        _appServices = StateObject(wrappedValue: AppServices.shared)
-    }
-
     var body: some Scene {
         WindowGroup(id: "main") {
-            AdaptiveAppTheme(accent: self.settings.accentColor) {
-                ContentView()
-                    .environmentObject(self.menuBarManager)
-                    .environmentObject(self.appServices)
+            #if DEBUG
+            if MeetingExternalReferenceTrialAGate.autorunEnabled(environment: ProcessInfo.processInfo.environment)
+                || MeetingSCKPairedDiagnosticGate.autorunEnabled()
+                || MeetingStage05EvidenceAutorun.requested()
+                || ProcessInfo.processInfo.environment["FLUIDVOICE_MIC_PHASE1"] != nil
+                || ProcessInfo.processInfo.environment["FLUIDVOICE_VPIO_ACOUSTIC"] == "1"
+            {
+                Color.clear
+            } else {
+                self.applicationContent
             }
+            #else
+            self.applicationContent
+            #endif
         }
         .defaultSize(width: 1000, height: 700)
+        .windowStyle(.titleBar)
+        .windowToolbarStyle(.unified)
         .commands {
             CommandGroup(replacing: .appSettings) {
                 Button("Settings...") {
@@ -37,6 +42,22 @@ struct FluidApp: App {
                 }
                 .keyboardShortcut(",", modifiers: .command)
             }
+            CommandGroup(after: .textEditing) {
+                Button("Find") {
+                    NotificationCenter.default.post(name: .sidebarSearchFocusRequested, object: nil)
+                }
+                .keyboardShortcut("f", modifiers: .command)
+            }
+        }
+    }
+
+    private var applicationContent: some View {
+        AdaptiveAppTheme(accent: self.settings.accentColor) {
+            ContentView()
+                .environmentObject(self.menuBarManager)
+                // Resolve the singleton only when the normal application content branch is built.
+                // The DEBUG C2 autorun branch returns Color.clear before this view is evaluated.
+                .environmentObject(AppServices.shared)
         }
     }
 }

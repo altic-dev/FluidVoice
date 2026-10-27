@@ -29,7 +29,7 @@ final class AppleSpeechProvider: TranscriptionProvider {
 
     // MARK: - Lifecycle
 
-    func prepare(progressHandler: ((Double) -> Void)?) async throws {
+    func prepare(progressHandler: ((ModelPreparationProgress) -> Void)?) async throws {
         // 1. Request Authorization
         let status = await self.requestAuthorization()
 
