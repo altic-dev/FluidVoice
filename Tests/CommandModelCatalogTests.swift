@@ -109,6 +109,7 @@ final class SettingsStore: ObservableObject {
         self.staleSelectionsHaveNoEffects()
         self.customAliasesResolveConsistently()
         self.verifiedKeylessAndCredentialPrecedenceStayCompatible()
+        self.appleIntelligenceIsCommandModeOnly()
         print("Command model catalog: \(self.checks) checks passed")
     }
 
@@ -207,5 +208,20 @@ final class SettingsStore: ObservableObject {
         self.check(!settings.commandModeModelCatalog().contains { $0.providerID == "custom:raw-only" }, "Canonical registration cannot verify with a raw alias that getAPIKey would not send")
         settings.credentials["custom:raw-only"] = "raw-secret"
         self.check(settings.commandModeModelCatalog().contains { $0.providerID == "custom:raw-only" }, "Canonical registration becomes eligible with the actual request credential")
+    }
+
+    static func appleIntelligenceIsCommandModeOnly() {
+        let settings = self.fixture()
+        let id = AppleIntelligenceAvailability.providerID
+        AppleIntelligenceAvailability.unavailableReason = nil
+        self.check(!settings.commandModeModelCatalog().contains { $0.providerID == id }, "Default catalog, used by Meeting Summary, never lists Apple Intelligence")
+        let fingerprints = settings.verifiedProviderFingerprints
+        guard let option = settings.commandModeModelCatalog(includeAppleIntelligence: true).first(where: { $0.providerID == id }) else { preconditionFailure("Apple option missing") }
+        self.check(option.modelID == AppleIntelligenceAvailability.modelID, "Apple Intelligence lists its single system model")
+        self.check(settings.selectCommandModeModel(option) && settings.effectiveCommandModeProviderID == id && settings.commandModeReadinessIssue == nil, "Apple Intelligence is selectable and ready when available")
+        self.check(settings.selectedProviderID == "openai" && settings.rewriteModeSelectedProviderID == "anthropic" && settings.verifiedProviderFingerprints == fingerprints, "Selecting Apple leaves global, Edit, and verification untouched")
+        AppleIntelligenceAvailability.unavailableReason = "Turn on Apple Intelligence"
+        self.check(!settings.commandModeModelCatalog(includeAppleIntelligence: true).contains { $0.providerID == id }, "Unavailable Apple Intelligence is not listed")
+        self.check(settings.commandModeReadinessIssue == "Turn on Apple Intelligence", "Readiness returns the unavailable reason")
     }
 }

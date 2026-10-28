@@ -598,7 +598,7 @@ struct CommandModeView: View {
     }
 
     private func refreshModelCatalog() {
-        let options = self.settings.commandModeModelCatalog()
+        let options = self.settings.commandModeModelCatalog(includeAppleIntelligence: true)
         let providerKey = ModelRepository.shared.providerKey(for: self.settings.effectiveCommandModeProviderID)
         let modelID = self.settings.effectiveCommandModeSelectedModel
         let selected = options.first {

@@ -75,6 +75,14 @@ final class CommandModeService: ObservableObject {
             case user
             case assistant
             case tool
+
+            var appleRole: AppleIntelligenceTurn.Role {
+                switch self {
+                case .user: return .user
+                case .assistant: return .assistant
+                case .tool: return .tool
+                }
+            }
         }
 
         enum StepType: Equatable {
@@ -829,6 +837,18 @@ final class CommandModeService: ObservableObject {
         let settings = SettingsStore.shared
         if let issue = settings.commandModeReadinessIssue {
             throw LLMError.invalidRequest(issue)
+        }
+
+        if settings.effectiveCommandModeProviderID == AppleIntelligenceAvailability.providerID {
+            let history = self.conversationHistory.map {
+                (role: $0.role.appleRole, content: $0.content, call: $0.toolCall.map {
+                    AppleIntelligenceCall(id: $0.id, command: $0.command, workingDirectory: $0.workingDirectory, purpose: $0.purpose)
+                })
+            }
+            let reply = try await AppleIntelligenceCommandProvider.respond(to: AppleIntelligenceTurn.turns(history))
+            return LLMResponse(content: reply.content, thinking: nil, toolCall: reply.call.map {
+                LLMResponse.ToolCallData(id: $0.id, command: $0.command, workingDirectory: $0.workingDirectory, purpose: $0.purpose)
+            })
         }
 
         let providerID = settings.effectiveCommandModeProviderID

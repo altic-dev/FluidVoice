@@ -69,6 +69,8 @@ extension SettingsStore {
             return "Command Mode needs a chat model. The selected model is not supported by the chat/completions endpoint."
         }
 
+        if providerID == AppleIntelligenceAvailability.providerID { return AppleIntelligenceAvailability.unavailableReason }
+
         guard self.isCommandModeProviderVerified(providerID) else {
             if self.commandModeLinkedToGlobal {
                 return "Command Mode needs a verified chat provider. Choose a verified model, or verify a provider in AI Settings."
@@ -80,6 +82,7 @@ extension SettingsStore {
     }
 
     func commandModeModels(for providerID: String) -> [String] {
+        if providerID == AppleIntelligenceAvailability.providerID { return [AppleIntelligenceAvailability.modelID] }
         let canonicalKey = ModelRepository.shared.providerKey(for: providerID)
         let keys = [canonicalKey] + ModelRepository.shared.providerKeys(for: providerID).filter { $0 != canonicalKey }.sorted()
         let storedList = keys.lazy
@@ -102,7 +105,7 @@ extension SettingsStore {
     }
 
     /// Build on presentation/catalog events, not while rendering rows. Credentials use the existing process cache.
-    func commandModeModelCatalog() -> [CommandModelOption] {
+    func commandModeModelCatalog(includeAppleIntelligence: Bool = false) -> [CommandModelOption] {
         let apiKeys = self.providerAPIKeys
         let providers = ModelRepository.shared.builtInProvidersList() + self.savedProviders.map { (id: $0.id, name: $0.name) }
         var seenProviders = Set<String>()
@@ -125,6 +128,14 @@ extension SettingsStore {
                 ))
             }
         }
+        if includeAppleIntelligence, AppleIntelligenceAvailability.isAvailable {
+            options.append(CommandModelOption(
+                providerID: AppleIntelligenceAvailability.providerID,
+                providerName: "Apple Intelligence",
+                modelID: AppleIntelligenceAvailability.modelID,
+                displayName: AppleIntelligenceAvailability.modelID
+            ))
+        }
         return options
     }
 
@@ -132,7 +143,7 @@ extension SettingsStore {
     @discardableResult
     func selectCommandModeModel(_ option: CommandModelOption) -> Bool {
         let key = ModelRepository.shared.providerKey(for: option.providerID)
-        guard let current = self.commandModeModelCatalog().first(where: {
+        guard let current = self.commandModeModelCatalog(includeAppleIntelligence: true).first(where: {
             ModelRepository.shared.providerKey(for: $0.providerID) == key && $0.modelID == option.modelID
         }) else { return false }
         self.commandModeSelectedProviderID = current.providerID
