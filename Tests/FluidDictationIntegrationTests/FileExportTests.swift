@@ -11,7 +11,7 @@ final class FileExportTests: XCTestCase {
               directory.path == URL(fileURLWithPath: configured).resolvingSymlinksInPath().standardizedFileURL.path,
               directory.path.contains("fluid-export-tests-")
         else {
-            throw XCTSkip("Launch the test host with an owned fluid-export-tests-* TMPDIR and matching FLUID_EXPORT_TEST_SANDBOX_TEMP")
+            throw XCTSkip("Use an isolated test host with a Foundation temporary directory matching FLUID_EXPORT_TEST_SANDBOX_TEMP (fluid-export-tests-*)")
         }
         return directory
     }
@@ -46,8 +46,12 @@ final class FileExportTests: XCTestCase {
             throw XCTSkip("Refusing to replace pre-existing temporary files")
         }
         let sentinel = Data("Owned export test sentinel".utf8)
-        for url in urls { try sentinel.write(to: url, options: .withoutOverwriting) }
-        defer { for url in urls { try? FileManager.default.removeItem(at: url) } }
+        for url in urls {
+            try sentinel.write(to: url, options: .withoutOverwriting)
+        }
+        defer { for url in urls {
+            try? FileManager.default.removeItem(at: url)
+        } }
 
         for format in FileTranscriptionView.ExportFormat.allCases {
             _ = try self.document(self.fixture(), format: format).makeFileWrapper()
@@ -71,7 +75,9 @@ final class FileExportTests: XCTestCase {
         DispatchQueue.concurrentPerform(iterations: documents.count) { index in
             do {
                 let bytes = try documents[index].makeFileWrapper().regularFileContents
-                if bytes != expected[index] { outcomes.record("Wrong payload for document \(index)") }
+                if bytes != expected[index] {
+                    outcomes.record("Wrong payload for document \(index)")
+                }
             } catch {
                 outcomes.record("Document \(index) failed: \(error)")
             }
