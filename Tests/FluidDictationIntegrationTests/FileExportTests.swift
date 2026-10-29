@@ -8,10 +8,9 @@ final class FileExportTests: XCTestCase {
         let directory = FileManager.default.temporaryDirectory.resolvingSymlinksInPath().standardizedFileURL
         let configured = ProcessInfo.processInfo.environment["FLUID_EXPORT_TEST_SANDBOX_TEMP"]
         guard let configured,
-              directory.path == URL(fileURLWithPath: configured).resolvingSymlinksInPath().standardizedFileURL.path,
-              directory.path.contains("fluid-export-tests-")
+              directory.path == URL(fileURLWithPath: configured).resolvingSymlinksInPath().standardizedFileURL.path
         else {
-            throw XCTSkip("Use an isolated test host with a Foundation temporary directory matching FLUID_EXPORT_TEST_SANDBOX_TEMP (fluid-export-tests-*)")
+            throw XCTSkip("Use a disposable test account or runner and set FLUID_EXPORT_TEST_SANDBOX_TEMP to its Foundation temporary directory")
         }
         return directory
     }
