@@ -879,6 +879,10 @@ struct TranscriptionDocument: FileDocument {
     }
 
     func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
+        try self.makeFileWrapper()
+    }
+
+    nonisolated func makeFileWrapper() throws -> FileWrapper {
         let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent("temp.\(self.format.fileExtension)")
 
         switch self.format {

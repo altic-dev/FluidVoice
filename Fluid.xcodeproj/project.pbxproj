@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		F1E2026102900000000000002 /* FileExportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1E2026102900000000000001 /* FileExportTests.swift */; };
 		AD1130000000000000000004 /* OverlayCaptionPresentationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD1130000000000000000003 /* OverlayCaptionPresentationTests.swift */; };
 		AD1030000000000000000004 /* HoldToMutePresentationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD1030000000000000000003 /* HoldToMutePresentationTests.swift */; };
 		AD1030000000000000000002 /* HoldToMuteTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD1030000000000000000001 /* HoldToMuteTests.swift */; };
@@ -203,6 +204,7 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		F1E2026102900000000000001 /* FileExportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileExportTests.swift; sourceTree = "<group>"; };
 		AD1130000000000000000003 /* OverlayCaptionPresentationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OverlayCaptionPresentationTests.swift; sourceTree = "<group>"; };
 		AD1030000000000000000003 /* HoldToMutePresentationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HoldToMutePresentationTests.swift; sourceTree = "<group>"; };
 		AD1030000000000000000001 /* HoldToMuteTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HoldToMuteTests.swift; sourceTree = "<group>"; };
@@ -510,6 +512,7 @@
 				F5E000000000000000000020 /* FluidServeTests.swift */,
 				BE24123456789ABCDEF00003 /* ModelTemperatureSupportTests.swift */,
 				B1016A0000000000000000A1 /* LLMClientIdleConnectionTests.swift */,
+				F1E2026102900000000000001 /* FileExportTests.swift */,
 				C2B100000000000000000001 /* MeetingTranscriptAssemblerTests.swift */,
 				D9B100000000000000000001 /* VoiceModelDeletionTests.swift */,
 				C2B200000000000000000001 /* MeetingCanonicalPipelineTests.swift */,
@@ -917,6 +920,7 @@
 				F5E000000000000000000021 /* FluidServeTests.swift in Sources */,
 				BE24123456789ABCDEF00004 /* ModelTemperatureSupportTests.swift in Sources */,
 				B1016A0000000000000000A2 /* LLMClientIdleConnectionTests.swift in Sources */,
+				F1E2026102900000000000002 /* FileExportTests.swift in Sources */,
 				C2B100000000000000000002 /* MeetingTranscriptAssemblerTests.swift in Sources */,
 				D9B100000000000000000002 /* VoiceModelDeletionTests.swift in Sources */,
 				C2B200000000000000000002 /* MeetingCanonicalPipelineTests.swift in Sources */,
