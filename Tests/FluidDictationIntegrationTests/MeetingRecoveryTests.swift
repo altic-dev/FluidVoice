@@ -1466,7 +1466,7 @@ final class MeetingRecoveryTests: XCTestCase {
         let dir = self.makeTempDirectory()
         defer { try? FileManager.default.removeItem(at: dir) }
         let store = MeetingSessionStore(rootDirectory: dir)
-        let session = self.makeSession(state: .completed)
+        let session = self.makeSession(state: .completed, audioTracks: [self.makeMicrophoneTrack(chunks: [])])
         try await store.create(session)
         let directory = try await store.sessionDirectory(for: session.id)
         let manifest = directory.appendingPathComponent("session.json")
@@ -1493,7 +1493,7 @@ final class MeetingRecoveryTests: XCTestCase {
         let dir = self.makeTempDirectory()
         defer { try? FileManager.default.removeItem(at: dir) }
         let store = MeetingSessionStore(rootDirectory: dir)
-        let session = self.makeSession(state: .completed)
+        let session = self.makeSession(state: .completed, audioTracks: [self.makeMicrophoneTrack(chunks: [])])
         try await store.create(session)
         let directory = try await store.sessionDirectory(for: session.id)
         let manifest = directory.appendingPathComponent("session.json")
@@ -1520,9 +1520,10 @@ final class MeetingRecoveryTests: XCTestCase {
         let dir = self.makeTempDirectory()
         defer { try? FileManager.default.removeItem(at: dir) }
         let store = MeetingSessionStore(rootDirectory: dir)
-        let older = self.makeSession(state: .completed, startedAt: Date(timeIntervalSince1970: 100))
-        let newer = self.makeSession(state: .completed, startedAt: Date(timeIntervalSince1970: 200))
-        let corrupt = self.makeSession(state: .completed)
+        let track = self.makeMicrophoneTrack(chunks: [])
+        let older = self.makeSession(state: .completed, startedAt: Date(timeIntervalSince1970: 100), audioTracks: [track])
+        let newer = self.makeSession(state: .completed, startedAt: Date(timeIntervalSince1970: 200), audioTracks: [track])
+        let corrupt = self.makeSession(state: .completed, audioTracks: [track])
         for session in [older, newer, corrupt] { try await store.create(session) }
         let directory = try await store.sessionDirectory(for: corrupt.id)
         let manifest = directory.appendingPathComponent("session.json")
@@ -1540,8 +1541,9 @@ final class MeetingRecoveryTests: XCTestCase {
         let dir = self.makeTempDirectory()
         defer { try? FileManager.default.removeItem(at: dir) }
         let store = MeetingSessionStore(rootDirectory: dir)
-        let missingManifest = self.makeSession(state: .completed)
-        let missingDirectory = self.makeSession(state: .completed)
+        let track = self.makeMicrophoneTrack(chunks: [])
+        let missingManifest = self.makeSession(state: .completed, audioTracks: [track])
+        let missingDirectory = self.makeSession(state: .completed, audioTracks: [track])
         try await store.create(missingManifest)
         try await store.create(missingDirectory)
         let firstDirectory = try await store.sessionDirectory(for: missingManifest.id)
