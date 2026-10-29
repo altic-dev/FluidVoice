@@ -1460,6 +1460,111 @@ final class MeetingRecoveryTests: XCTestCase {
         return (session, speakerA.id, speakerB.id, segment.id)
     }
 
+    // MARK: - Catalog read failures
+
+    func testCatalogThrowsWhenEveryManifestIsCorrupt() async throws {
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MeetingSessionStore(rootDirectory: dir)
+        let session = self.makeSession(state: .completed)
+        try await store.create(session)
+        let directory = try await store.sessionDirectory(for: session.id)
+        let manifest = directory.appendingPathComponent("session.json")
+        let corruptData = Data("{invalid session".utf8)
+        try corruptData.write(to: manifest)
+
+        let reads: [@Sendable () async throws -> [MeetingSession]] = [
+            { try await store.loadHistory() },
+            { try await store.loadAll() },
+            { try await store.loadRecoverable() },
+        ]
+        for read in reads {
+            do {
+                _ = try await read()
+                XCTFail("An unreadable catalog must not look like empty history")
+            } catch {
+                XCTAssertTrue(error is DecodingError, "Preserve the underlying manifest error: \(error)")
+            }
+            XCTAssertEqual(try Data(contentsOf: manifest), corruptData)
+        }
+    }
+
+    func testHistorySnapshotRetainsRowsWhenStoredManifestBecomesCorrupt() async throws {
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MeetingSessionStore(rootDirectory: dir)
+        let session = self.makeSession(state: .completed)
+        try await store.create(session)
+        let directory = try await store.sessionDirectory(for: session.id)
+        let manifest = directory.appendingPathComponent("session.json")
+        let originalData = try Data(contentsOf: manifest)
+        let snapshot = MeetingHistorySnapshot { try await store.loadHistory() }
+        await snapshot.refresh()
+        XCTAssertEqual(snapshot.sessions.map(\.id), [session.id])
+
+        let corruptData = Data("{invalid session".utf8)
+        try corruptData.write(to: manifest)
+        await snapshot.refresh()
+        XCTAssertEqual(snapshot.sessions.map(\.id), [session.id])
+        XCTAssertNotNil(snapshot.errorMessage)
+        XCTAssertTrue(snapshot.hasLoaded)
+        XCTAssertEqual(try Data(contentsOf: manifest), corruptData)
+
+        try originalData.write(to: manifest)
+        await snapshot.refresh()
+        XCTAssertEqual(snapshot.sessions.map(\.id), [session.id])
+        XCTAssertNil(snapshot.errorMessage)
+    }
+
+    func testCatalogKeepsValidSessionsWhenAnotherManifestIsCorrupt() async throws {
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MeetingSessionStore(rootDirectory: dir)
+        let older = self.makeSession(state: .completed, startedAt: Date(timeIntervalSince1970: 100))
+        let newer = self.makeSession(state: .completed, startedAt: Date(timeIntervalSince1970: 200))
+        let corrupt = self.makeSession(state: .completed)
+        for session in [older, newer, corrupt] { try await store.create(session) }
+        let directory = try await store.sessionDirectory(for: corrupt.id)
+        let manifest = directory.appendingPathComponent("session.json")
+        let corruptData = Data("{invalid session".utf8)
+        try corruptData.write(to: manifest)
+
+        let history = try await store.loadHistory()
+        let all = try await store.loadAll()
+        XCTAssertEqual(history.map(\.id), [newer.id, older.id])
+        XCTAssertEqual(all.map(\.id), [newer.id, older.id])
+        XCTAssertEqual(try Data(contentsOf: manifest), corruptData)
+    }
+
+    func testCatalogWithStaleIndexAndMissingManifestsIsEmpty() async throws {
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MeetingSessionStore(rootDirectory: dir)
+        let missingManifest = self.makeSession(state: .completed)
+        let missingDirectory = self.makeSession(state: .completed)
+        try await store.create(missingManifest)
+        try await store.create(missingDirectory)
+        let firstDirectory = try await store.sessionDirectory(for: missingManifest.id)
+        let secondDirectory = try await store.sessionDirectory(for: missingDirectory.id)
+        try FileManager.default.removeItem(at: firstDirectory.appendingPathComponent("session.json"))
+        try FileManager.default.removeItem(at: secondDirectory)
+
+        let history = try await store.loadHistory()
+        let all = try await store.loadAll()
+        XCTAssertTrue(history.isEmpty)
+        XCTAssertTrue(all.isEmpty)
+    }
+
+    func testNewCatalogIsEmpty() async throws {
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MeetingSessionStore(rootDirectory: dir.appendingPathComponent("Meetings", isDirectory: true))
+        let history = try await store.loadHistory()
+        let all = try await store.loadAll()
+        XCTAssertTrue(history.isEmpty)
+        XCTAssertTrue(all.isEmpty)
+    }
+
     // MARK: - Test 1: loadRecoverable classification
 
     func testLoadRecoverableClassification() async throws {
