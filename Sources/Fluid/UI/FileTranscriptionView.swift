@@ -129,8 +129,7 @@ struct FileTranscriptionView: View {
             isPresented: self.$showingExportDialog,
             document: TranscriptionDocument(
                 result: self.exportResult ?? TranscriptionResult(text: "", confidence: 0, duration: 0, processingTime: 0, fileName: "transcript"),
-                format: self.exportFormat,
-                service: self.transcriptionService
+                format: self.exportFormat
             ),
             contentType: self.exportFormat == .text ? .plainText : .json,
             defaultFilename: "\((self.exportResult?.fileName).map { "\($0)_transcript" } ?? "transcript").\(self.exportFormat.fileExtension)"
@@ -860,18 +859,17 @@ struct TranscriptionDocument: FileDocument {
         [.plainText, .json]
     }
 
-    let result: TranscriptionResult
-    let format: FileTranscriptionView.ExportFormat
-    let service: FileTranscriptionService
+    private let data: Result<Data, Error>
 
-    init(
-        result: TranscriptionResult,
-        format: FileTranscriptionView.ExportFormat,
-        service: FileTranscriptionService
-    ) {
-        self.result = result
-        self.format = format
-        self.service = service
+    init(result: TranscriptionResult, format: FileTranscriptionView.ExportFormat) {
+        self.data = Result {
+            switch format {
+            case .text:
+                Data(result.textExport.utf8)
+            case .json:
+                try result.jsonExport
+            }
+        }
     }
 
     init(configuration: ReadConfiguration) throws {
@@ -879,19 +877,11 @@ struct TranscriptionDocument: FileDocument {
     }
 
     func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
-        let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent("temp.\(self.format.fileExtension)")
+        try self.makeFileWrapper()
+    }
 
-        switch self.format {
-        case .text:
-            try self.service.exportToText(self.result, to: tempURL)
-        case .json:
-            try self.service.exportToJSON(self.result, to: tempURL)
-        }
-
-        let data = try Data(contentsOf: tempURL)
-        try? FileManager.default.removeItem(at: tempURL)
-
-        return FileWrapper(regularFileWithContents: data)
+    nonisolated func makeFileWrapper() throws -> FileWrapper {
+        try FileWrapper(regularFileWithContents: self.data.get())
     }
 }
 
