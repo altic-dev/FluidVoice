@@ -36,8 +36,7 @@ final class FileExportTests: XCTestCase {
         _ result: TranscriptionResult,
         format: FileTranscriptionView.ExportFormat
     ) throws -> TranscriptionDocument {
-        _ = try self.requireOwnedTemporaryDirectory()
-        return TranscriptionDocument(result: result, format: format, service: FileTranscriptionService(asrService: ASRService()))
+        TranscriptionDocument(result: result, format: format)
     }
 
     func testExportLeavesExistingTemporaryFilesUntouched() throws {
