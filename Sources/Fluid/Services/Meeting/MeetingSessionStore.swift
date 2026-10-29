@@ -156,7 +156,9 @@ actor MeetingSessionStore: MeetingSessionStoring {
                 let session = try reconcileAudio ? self.load(id: id) : self.readTranscript(id: id)
                 if let session { sessions.append(session) }
             } catch {
-                if firstLoadError == nil { firstLoadError = error }
+                if firstLoadError == nil {
+                    firstLoadError = error
+                }
                 DebugLogger.shared.error(
                     "Failed to load meeting session \(id): \(error.localizedDescription)",
                     source: "MeetingSessionStore"
@@ -164,7 +166,9 @@ actor MeetingSessionStore: MeetingSessionStoring {
             }
         }
         // Keep partial results, but do not replace history with an empty catalog after a read failure.
-        if sessions.isEmpty, let firstLoadError { throw firstLoadError }
+        if sessions.isEmpty, let firstLoadError {
+            throw firstLoadError
+        }
         return sessions.sorted { $0.startedAt > $1.startedAt }
     }
 

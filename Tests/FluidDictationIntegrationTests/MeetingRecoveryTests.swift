@@ -1524,7 +1524,9 @@ final class MeetingRecoveryTests: XCTestCase {
         let older = self.makeSession(state: .completed, startedAt: Date(timeIntervalSince1970: 100), audioTracks: [track])
         let newer = self.makeSession(state: .completed, startedAt: Date(timeIntervalSince1970: 200), audioTracks: [track])
         let corrupt = self.makeSession(state: .completed, audioTracks: [track])
-        for session in [older, newer, corrupt] { try await store.create(session) }
+        for session in [older, newer, corrupt] {
+            try await store.create(session)
+        }
         let directory = try await store.sessionDirectory(for: corrupt.id)
         let manifest = directory.appendingPathComponent("session.json")
         let corruptData = Data("{invalid session".utf8)
