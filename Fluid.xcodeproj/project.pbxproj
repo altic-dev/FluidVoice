@@ -48,6 +48,7 @@
 		CD1C7A0000000000000000B2 /* CustomDictionaryManualEntryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD1C7A0000000000000000B1 /* CustomDictionaryManualEntryTests.swift */; };
 		7CDB0A2E2F3C4D5600FB7CAD /* AudioFixtureLoader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7CDB0A2A2F3C4D5600FB7CAD /* AudioFixtureLoader.swift */; };
 		86CAA2D4EF18433096185602 /* LLMClientRequestBodyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 343B29013F4441D6A797D12D /* LLMClientRequestBodyTests.swift */; };
+		7CAA000A2F99000000000001 /* NemotronCacheRecoveryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7CAA000B2F99000000000002 /* NemotronCacheRecoveryTests.swift */; };
 		272BFB5CB271489892CAE50C /* TemperatureSupportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 980330F3CE464336ADCE3E23 /* TemperatureSupportTests.swift */; };
 		A11A00000000000000000002 /* AnalyticsDatabaseTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A11A00000000000000000001 /* AnalyticsDatabaseTests.swift */; };
 		2E9B00000000000000000007 /* ZeppelinDataLayerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E9B00000000000000000006 /* ZeppelinDataLayerTests.swift */; };
@@ -226,6 +227,7 @@
 		BE24123456789ABCDEF00003 /* ModelTemperatureSupportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelTemperatureSupportTests.swift; sourceTree = "<group>"; };
 		B1016A0000000000000000A1 /* LLMClientIdleConnectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LLMClientIdleConnectionTests.swift; sourceTree = "<group>"; };
 		343B29013F4441D6A797D12D /* LLMClientRequestBodyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LLMClientRequestBodyTests.swift; sourceTree = "<group>"; };
+		7CAA000B2F99000000000002 /* NemotronCacheRecoveryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NemotronCacheRecoveryTests.swift; sourceTree = "<group>"; };
 		980330F3CE464336ADCE3E23 /* TemperatureSupportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TemperatureSupportTests.swift; sourceTree = "<group>"; };
 		A11A00000000000000000001 /* AnalyticsDatabaseTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnalyticsDatabaseTests.swift; sourceTree = "<group>"; };
 		2E9B00000000000000000006 /* ZeppelinDataLayerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ZeppelinDataLayerTests.swift; sourceTree = "<group>"; };
@@ -486,6 +488,7 @@
 				7C91B0A22F42AA0100C0DEF0 /* DeliveryTargetAssessmentTests.swift */,
 				C0DE89000000000000000001 /* SettingsNavigationStateTests.swift */,
 				343B29013F4441D6A797D12D /* LLMClientRequestBodyTests.swift */,
+				7CAA000B2F99000000000002 /* NemotronCacheRecoveryTests.swift */,
 				980330F3CE464336ADCE3E23 /* TemperatureSupportTests.swift */,
 				A11A00000000000000000001 /* AnalyticsDatabaseTests.swift */,
 				2E9B00000000000000000006 /* ZeppelinDataLayerTests.swift */,
@@ -893,6 +896,7 @@
 				7C91B0A12F42AA0100C0DEF0 /* DeliveryTargetAssessmentTests.swift in Sources */,
 				C0DE89000000000000000002 /* SettingsNavigationStateTests.swift in Sources */,
 				86CAA2D4EF18433096185602 /* LLMClientRequestBodyTests.swift in Sources */,
+				7CAA000A2F99000000000001 /* NemotronCacheRecoveryTests.swift in Sources */,
 				272BFB5CB271489892CAE50C /* TemperatureSupportTests.swift in Sources */,
 				A11A00000000000000000002 /* AnalyticsDatabaseTests.swift in Sources */,
 				2E9B00000000000000000007 /* ZeppelinDataLayerTests.swift in Sources */,
