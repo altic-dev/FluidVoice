@@ -279,6 +279,13 @@ final class NemotronProvider: TranscriptionProvider {
             throw Self.makeError("Nemotron provider is not ready.")
         }
 
+        return try await self.transcribeFile(at: fileURL, transcribeChunk: self.transcribeSinglePass)
+    }
+
+    func transcribeFile(
+        at fileURL: URL,
+        transcribeChunk: ([Float]) async throws -> String
+    ) async throws -> ASRTranscriptionResult {
         let audioFile = try AVAudioFile(forReading: fileURL)
         let sourceFormat = audioFile.processingFormat
         let targetSampleRate = 16_000.0
@@ -305,7 +312,7 @@ final class NemotronProvider: TranscriptionProvider {
             ))
             while pendingSamples.count > self.maxTranscriptionSamples {
                 let end = self.chunkEnd(in: pendingSamples, offset: 0)
-                let text = try await self.transcribeSinglePass(Array(pendingSamples[..<end]))
+                let text = try await transcribeChunk(Array(pendingSamples[..<end]))
                     .trimmingCharacters(in: .whitespacesAndNewlines)
                 if text.isEmpty == false {
                     transcriptions.append(text)
@@ -315,9 +322,12 @@ final class NemotronProvider: TranscriptionProvider {
             currentFrame += AVAudioFramePosition(framesToRead)
         }
 
-        if pendingSamples.count >= Int(targetSampleRate) {
-            let result = try await self.transcribeBatched(pendingSamples)
-            let text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if pendingSamples.isEmpty == false {
+            if pendingSamples.count < self.minimumFinalChunkSamples {
+                pendingSamples.append(contentsOf: repeatElement(Float(0), count: self.minimumFinalChunkSamples - pendingSamples.count))
+            }
+            let text = try await transcribeChunk(pendingSamples)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
             if text.isEmpty == false {
                 transcriptions.append(text)
             }
