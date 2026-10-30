@@ -1,3 +1,4 @@
+import AppKit
 import ApplicationServices
 import Foundation
 
@@ -59,7 +60,28 @@ enum DeliveryTargetAssessment: Equatable {
 
         var valueSettable = DarwinBoolean(false)
         let settableResult = AXUIElementIsAttributeSettable(element, kAXValueAttribute as CFString, &valueSettable)
+        if role == "AXButton", settableResult != .success || !valueSettable.boolValue {
+            var pid: pid_t = 0
+            if AXUIElementGetPid(element, &pid) == .success,
+               NSRunningApplication(processIdentifier: pid)?.bundleIdentifier == "com.meta.endo"
+            {
+                var titleRef: CFTypeRef?
+                var descriptionRef: CFTypeRef?
+                AXUIElementCopyAttributeValue(element, kAXTitleAttribute as CFString, &titleRef)
+                AXUIElementCopyAttributeValue(element, kAXDescriptionAttribute as CFString, &descriptionRef)
+                if self.isMuseComposer(bundleID: "com.meta.endo", role: role, title: titleRef as? String, description: descriptionRef as? String) {
+                    return .unknown(reason: "muse_composer")
+                }
+            }
+        }
         return self.classify(role: role, valueSettable: settableResult == .success && valueSettable.boolValue)
+    }
+
+    nonisolated static func isMuseComposer(bundleID: String?, role: String, title: String?, description: String?) -> Bool {
+        guard bundleID == "com.meta.endo", role == "AXButton" else { return false }
+        return [title, description].compactMap { $0 }.contains {
+            $0.split(whereSeparator: \.isWhitespace).joined(separator: " ") == "Message Attach file Send"
+        }
     }
 
     /// Pure role decision, kept separate from the AX queries so it can be tested.
