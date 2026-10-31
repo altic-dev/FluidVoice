@@ -160,7 +160,7 @@ enum PasteVerifier {
         let insertedLength = needle.utf16.count
         let countDelta = insertedLength - (before.caret?.length ?? 0)
         if let beforeCount = before.characterCount, let afterCount = after.characterCount,
-           countDelta != 0,
+           afterCount != beforeCount,
            afterCount - beforeCount == countDelta || afterCount - beforeCount == countDelta + 1
         {
             return .confirmed(method: "count")

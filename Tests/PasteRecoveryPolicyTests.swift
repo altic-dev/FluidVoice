@@ -68,6 +68,38 @@ enum PasteRecoveryPolicyTests {
         let result6 = await self.verify(replacementBefore, [replacementAfter]).0
         precondition(result6 == .confirmed(method: "caret"))
 
+        // A six-unit selection replaced by five units expects -1. The optional
+        // newline tolerance must never turn an unchanged count into success.
+        let longerSelection = self.snapshot("xxxxxx", count: 6, caret: CFRange(location: 0, length: 6))
+        let blockedReplacement = await self.verify(longerSelection, [longerSelection])
+        guard blockedReplacement.0 == .notLanded(reason: "value_count_caret_unchanged") else {
+            print("FAIL: a blocked six-to-five replacement was reported as successful: \(blockedReplacement.0)")
+            exit(1)
+        }
+        precondition(blockedReplacement.1.count == 3 && blockedReplacement.1.reduce(0, +) == 2)
+
+        let countOnlySelection = self.snapshot(nil, count: 6, caret: CFRange(location: 0, length: 6))
+        let blockedCountOnly = await self.verify(countOnlySelection, [countOnlySelection])
+        precondition(blockedCountOnly.0 == .notLanded(reason: "value_count_caret_unchanged"))
+        let shorterReplacement = await self.verify(countOnlySelection, [replacementAfter])
+        precondition(shorterReplacement.0 == .confirmed(method: "count"), "An actual shorter replacement must still confirm")
+
+        let selectedEmoji = self.snapshot(nil, count: 3, caret: CFRange(location: 0, length: 3))
+        let blockedEmoji = await self.verify(selectedEmoji, [selectedEmoji], text: "😀")
+        precondition(blockedEmoji.0 == .notLanded(reason: "value_count_caret_unchanged"))
+        let shorterEmoji = await self.verify(selectedEmoji, [emojiAfter], text: "😀")
+        precondition(shorterEmoji.0 == .confirmed(method: "count"))
+
+        let newlineAfter = self.snapshot(nil, count: 6, caret: nil)
+        let newlineInsertion = await self.verify(emojiBefore, [newlineAfter])
+        precondition(newlineInsertion.0 == .confirmed(method: "count"), "An actual +1 newline count change must still confirm")
+        let equalLengthWithNewline = await self.verify(replacementBefore, [newlineAfter])
+        precondition(equalLengthWithNewline.0 == .confirmed(method: "count"), "Equal-length replacement with an actual extra newline must still confirm")
+        let longerSelectionWithNewline = self.snapshot(nil, count: 8, caret: CFRange(location: 0, length: 8))
+        let shorterWithNewline = await self.verify(longerSelectionWithNewline, [newlineAfter])
+        precondition(shorterWithNewline.0 == .confirmed(method: "count"), "A shrinking replacement with newline tolerance must still confirm")
+        print("PASS: blocked one-unit-shorter replacements never confirm unchanged counts; real replacements, emoji and newline tolerance still confirm")
+
         let policy = PasteRecoveryPresentationPolicy()
         let first = policy.beginDelivery()
         precondition(!policy.claim(first, alertsEnabled: false, isBusy: false, userActed: false))
