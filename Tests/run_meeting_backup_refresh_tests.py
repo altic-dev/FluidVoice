@@ -63,7 +63,7 @@ import Foundation
 
 enum MeetingCaptureMode { case onlineCall, inRoom }
 typealias MeetingRecordingDefaults = Defaults
-struct Defaults { var languageCode: String? = "en"; var mode: MeetingCaptureMode = .onlineCall; var isConfigured = false; var applicationBundleIdentifier: String? }
+struct Defaults { var languageCode: String? = "en"; var mode: MeetingCaptureMode = .onlineCall; var isConfigured = false; var applicationBundleIdentifier: String?; var applicationDisplayName: String? }
 final class SettingsStore {
     static let shared = SettingsStore()
     var meetingRecordingDefaults = Defaults()
@@ -71,7 +71,8 @@ final class SettingsStore {
     var meetingAutoDetectBrowserEnabled = true
     var meetingAudioRetentionPolicy = 7
 }
-struct Identity { let id: String }
+typealias MeetingApplicationIdentity = Identity
+struct Identity { let id: String; var bundleIdentifier: String { id }; var displayName: String { id } }
 struct Option { let identity: Identity }
 final class Coordinator { var isQuiescent = true; var activeLanguage = "en" }
 ''' + draft + r'''

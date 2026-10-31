@@ -62,6 +62,38 @@ final class MeetingRecordingSourceTests: XCTestCase {
         XCTAssertNil(MeetingRecordingSourceSnapshot.suggestedApplication(defaults: defaults, target: nil, foreground: self.browser, applications: [restarted]))
     }
 
+    func testInPersonSettingsKeepTheRememberedAppWithoutRunningApplications() {
+        var defaults = MeetingRecordingDefaults.unconfigured
+        defaults.isConfigured = true
+        defaults.applicationBundleIdentifier = self.browser.bundleIdentifier
+        defaults.applicationDisplayName = self.browser.displayName
+        defaults.microphoneCaptureDeviceID = "chosen-mic"
+        defaults.languageCode = "fr"
+        var draft = MeetingTranscriptionSetupDraft(defaults: defaults, autoDetectEnabled: true, browserDetectionEnabled: true)
+        draft.mode = .inRoom
+        let inPerson = draft.applyingSource(to: defaults, application: nil)
+        XCTAssertEqual(inPerson.mode, .inRoom)
+        XCTAssertEqual(inPerson.applicationBundleIdentifier, self.browser.bundleIdentifier)
+        XCTAssertEqual(inPerson.applicationDisplayName, self.browser.displayName)
+        XCTAssertEqual(inPerson.microphoneCaptureDeviceID, "chosen-mic")
+        XCTAssertEqual(inPerson.languageCode, "fr")
+
+        var reopened = MeetingTranscriptionSetupDraft(defaults: inPerson, autoDetectEnabled: true, browserDetectionEnabled: true)
+        let saved = reopened.applyingSource(to: inPerson, application: nil)
+        XCTAssertEqual(saved.applicationBundleIdentifier, self.browser.bundleIdentifier)
+        XCTAssertEqual(saved.applicationDisplayName, self.browser.displayName)
+        reopened.mode = .onlineCall
+        XCTAssertEqual(MeetingRecordingSourceSnapshot.suggestedApplication(defaults: reopened.applyingSource(to: saved, application: nil), target: nil, foreground: nil, applications: [self.browser]), self.browser)
+
+        let changed = reopened.applyingSource(to: saved, application: self.zoom)
+        XCTAssertEqual(changed.applicationBundleIdentifier, self.zoom.bundleIdentifier)
+        XCTAssertEqual(changed.applicationDisplayName, self.zoom.displayName)
+        reopened.usesAutomaticApplication = true
+        let automatic = reopened.applyingSource(to: changed, application: self.zoom)
+        XCTAssertNil(automatic.applicationBundleIdentifier, "An explicit Automatic choice must still clear the saved app")
+        XCTAssertNil(automatic.applicationDisplayName)
+    }
+
     func testSavedChoiceWinsAndMissingSavedAppCannotBecomeAnotherSource() {
         var defaults = MeetingRecordingDefaults.unconfigured
         defaults.isConfigured = true
@@ -225,6 +257,45 @@ final class MeetingRecordingSourceTests: XCTestCase {
         XCTAssertEqual(controller.snapshot?.defaults.mode, .onlineCall)
         XCTAssertTrue(controller.canConfirm)
         controller.cancel()
+    }
+
+    func testPageMicrophoneChoiceSurvivesPickerDiscoveryAndConfirmation() async {
+        let defaultsBefore = SettingsStore.shared.meetingRecordingDefaults
+        let chosen = MeetingMicrophoneIdentity(captureDeviceID: "chosen", coreAudioUID: "chosen", displayName: "Chosen microphone")
+        var loaded = self.snapshot()
+        loaded.microphones = MeetingMicrophoneCatalogSnapshot(identities: [self.mic, chosen], defaultCoreAudioUID: "mic")
+        var recordedMicrophone: String?
+        let controller = MeetingRecordingSourcePromptController(showsPanel: false, load: { _ in loaded }, start: { snapshot in
+            let configuration = try snapshot.configuration(applications: loaded.applications, microphones: loaded.microphones.identities)
+            recordedMicrophone = configuration.microphone.captureDeviceID
+        })
+        controller.handleShortcut(microphoneID: chosen.captureDeviceID)
+        await self.waitUntil { !controller.isLoading }
+        XCTAssertEqual(controller.snapshot?.selectedMicrophoneID, chosen.captureDeviceID)
+        XCTAssertNil(recordedMicrophone, "Opening the picker must not start capture")
+        controller.refresh()
+        await self.waitUntil { !controller.isLoading }
+        XCTAssertEqual(controller.snapshot?.selectedMicrophoneID, chosen.captureDeviceID)
+        controller.confirm()
+        await self.waitUntil { !controller.isPresented }
+        XCTAssertEqual(recordedMicrophone, chosen.captureDeviceID)
+        XCTAssertEqual(SettingsStore.shared.meetingRecordingDefaults, defaultsBefore)
+    }
+
+    func testMissingPageMicrophoneRequiresAChoiceInsteadOfUsingDefaultInput() async {
+        var starts = 0
+        let controller = MeetingRecordingSourcePromptController(showsPanel: false, load: { _ in self.snapshot() }, start: { _ in starts += 1 })
+        controller.handleShortcut(microphoneID: "disconnected")
+        await self.waitUntil { !controller.isLoading }
+        XCTAssertNil(controller.snapshot?.selectedMicrophoneID)
+        XCTAssertFalse(controller.canConfirm)
+        controller.confirm()
+        XCTAssertEqual(starts, 0)
+        controller.selectMicrophone(self.mic.captureDeviceID)
+        XCTAssertTrue(controller.canConfirm)
+        controller.confirm()
+        await self.waitUntil { !controller.isPresented }
+        XCTAssertEqual(starts, 1)
     }
 
     func testOnlySourcePickerPanelsCanTakeKeyboardFocus() {

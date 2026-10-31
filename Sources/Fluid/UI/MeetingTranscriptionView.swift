@@ -78,6 +78,22 @@ struct MeetingTranscriptionSetupDraft: Equatable {
         guard let applicationDisplayName, !applicationDisplayName.isEmpty else { return "Meeting" }
         return "\(applicationDisplayName) call"
     }
+
+    func applyingSource(to previous: MeetingRecordingDefaults, application: MeetingApplicationIdentity?) -> MeetingRecordingDefaults {
+        var defaults = previous
+        defaults.isConfigured = true
+        defaults.mode = self.mode
+        if self.usesAutomaticApplication {
+            defaults.applicationBundleIdentifier = nil
+            defaults.applicationDisplayName = nil
+        } else {
+            let bundleIdentifier = application?.bundleIdentifier ?? self.preferredApplicationBundleIdentifier
+            defaults.applicationBundleIdentifier = bundleIdentifier
+            defaults.applicationDisplayName = application?.displayName
+                ?? (previous.applicationBundleIdentifier == bundleIdentifier ? previous.applicationDisplayName : nil)
+        }
+        return defaults
+    }
 }
 
 struct MeetingSetupReadiness: Equatable {
@@ -761,7 +777,7 @@ struct MeetingTranscriptionView: View {
     private func startRecording() {
         guard !self.isStarting else { return }
         if self.setupDraft.mode == .onlineCall, self.setupDraft.selectedApplicationID == nil {
-            MeetingRecordingSourcePromptController.shared.handleShortcut()
+            MeetingRecordingSourcePromptController.shared.handleShortcut(microphoneID: self.setupDraft.selectedMicrophoneID)
             return
         }
         let readiness = self.readiness
@@ -1279,16 +1295,12 @@ struct MeetingTranscriptionView: View {
             return
         }
 
-        settings.meetingRecordingDefaults = MeetingRecordingDefaults(
-            isConfigured: true,
-            mode: self.setupDraft.mode,
-            applicationBundleIdentifier: self.setupDraft.usesAutomaticApplication ? nil : application?.identity.bundleIdentifier,
-            applicationDisplayName: self.setupDraft.usesAutomaticApplication ? nil : application?.identity.displayName,
-            microphoneCaptureDeviceID: microphone.identity.captureDeviceID,
-            microphoneCoreAudioUID: microphone.identity.coreAudioUID,
-            microphoneRole: .unknown,
-            languageCode: self.setupDraft.languageCode
-        )
+        var defaults = self.setupDraft.applyingSource(to: settings.meetingRecordingDefaults, application: application?.identity)
+        defaults.microphoneCaptureDeviceID = microphone.identity.captureDeviceID
+        defaults.microphoneCoreAudioUID = microphone.identity.coreAudioUID
+        defaults.microphoneRole = .unknown
+        defaults.languageCode = self.setupDraft.languageCode
+        settings.meetingRecordingDefaults = defaults
 
         let previousRetentionPolicy = settings.meetingAudioRetentionPolicy
         settings.meetingAutoDetectEnabled = self.setupDraft.autoDetectEnabled
@@ -2287,12 +2299,10 @@ private struct MeetingSetupCanvas: View {
     }
 
     private func persistSourceChoice() {
-        var defaults = SettingsStore.shared.meetingRecordingDefaults
-        defaults.isConfigured = true
-        defaults.mode = self.draft.mode
-        defaults.applicationBundleIdentifier = self.draft.usesAutomaticApplication ? nil : self.draft.preferredApplicationBundleIdentifier
-        defaults.applicationDisplayName = self.draft.usesAutomaticApplication ? nil : self.resolvedApplication?.identity.displayName
-        SettingsStore.shared.meetingRecordingDefaults = defaults
+        SettingsStore.shared.meetingRecordingDefaults = self.draft.applyingSource(
+            to: SettingsStore.shared.meetingRecordingDefaults,
+            application: self.resolvedApplication?.identity
+        )
     }
 
     private func sourceEntry(_ title: String, systemImage: String, selected: Bool, action: @escaping () -> Void) -> some View {

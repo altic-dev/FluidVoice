@@ -85,7 +85,7 @@ final class MeetingRecordingSourcePromptController: ObservableObject {
     }
 
     /// Called only after the shortcut/menu has checked that no recording or dictation is active.
-    func handleShortcut(foreground: MeetingApplicationIdentity? = nil, restoring selection: MeetingRecordingSourceSnapshot? = nil) {
+    func handleShortcut(foreground: MeetingApplicationIdentity? = nil, restoring selection: MeetingRecordingSourceSnapshot? = nil, microphoneID: String? = nil) {
         guard SettingsStore.shared.fluidMeetEnabled else { self.cancel(); return }
         if self.isPresented {
             self.confirm()
@@ -125,6 +125,11 @@ final class MeetingRecordingSourcePromptController: ObservableObject {
                     if snapshot.microphones.identities.contains(where: { $0.captureDeviceID == selection.selectedMicrophoneID }) {
                         snapshot.selectedMicrophoneID = selection.selectedMicrophoneID
                     }
+                }
+                if let microphoneID {
+                    // A page selection is explicit. If it disappeared, require another
+                    // choice instead of replacing it with the system's default input.
+                    snapshot.selectedMicrophoneID = snapshot.microphones.identities.contains(where: { $0.captureDeviceID == microphoneID }) ? microphoneID : nil
                 }
                 guard !Task.isCancelled, self.generation == generation, self.isPresented else { return }
                 self.snapshot = snapshot
