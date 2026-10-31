@@ -1,0 +1,274 @@
+import AppKit
+
+/// Exercises the production data provider and coordinator on private pasteboards.
+/// Only Cmd+V posting is replaced; no system clipboard or keyboard is touched.
+@main
+@MainActor
+enum PasteReadReceiptReproductionTests {
+    static func main() async {
+        await self.testOwnershipChecksDoNotCreateReceipts()
+        await self.testReadBeforeObserverIsNotLost()
+        await self.testDelayedConsumerGetsDictation()
+        await self.testNormalReadRestoresOriginal()
+        await self.testTimeoutRetainsTextAndReleasesQueue()
+        await self.testExternalCopyWins(afterRead: false)
+        await self.testExternalCopyWins(afterRead: true)
+        await self.testCancelledTimeoutRestoresOriginal()
+        await self.testRepeatedReadsDoNotPostAgain()
+        await self.testQueuedDeliveryWaitsForReadAndSettlement()
+        await self.testStaleReceiptCannotSettleNewDelivery()
+        await self.testReadReceiptKeepsItsOriginalPipeline()
+        print("PASS: 12 paste receipt cases; no real keys or system clipboard used")
+    }
+
+    static func board() -> NSPasteboard {
+        NSPasteboard(name: .init("fluidvoice.read-receipt-tests.\(UUID().uuidString)"))
+    }
+
+    static func waitUntil(_ condition: () -> Bool) async {
+        let deadline = ProcessInfo.processInfo.systemUptime + 3
+        while !condition(), ProcessInfo.processInfo.systemUptime < deadline {
+            try? await Task.sleep(nanoseconds: 5_000_000)
+        }
+        precondition(condition(), "Condition did not become true before the bounded deadline")
+    }
+
+    static func testOwnershipChecksDoNotCreateReceipts() async {
+        let board = self.board()
+        defer { board.releaseGlobally() }
+        let manager = SystemPasteboardManager(pasteboard: board)
+        precondition(manager.writeTemporaryText("dictation", sessionID: "one"))
+        var reads = 0
+        precondition(manager.observeTemporaryTextRead(sessionID: "one") { _ in reads += 1 })
+        for _ in 0..<10 {
+            precondition(manager.isOwned(sessionID: "one", expectedText: "dictation"))
+            precondition(!manager.isOwned(sessionID: "one", expectedText: "wrong text"))
+            _ = board.types
+        }
+        try? await Task.sleep(nanoseconds: 20_000_000)
+        precondition(reads == 0, "Our own ownership/type checks must not manufacture a read receipt")
+        precondition(board.string(forType: .string) == "dictation")
+        await self.waitUntil { reads == 1 }
+        _ = board.string(forType: .string)
+        try? await Task.sleep(nanoseconds: 20_000_000)
+        precondition(reads == 1)
+        print("PASS: ownership checks do not consume the promise; the first actual read notifies once")
+    }
+
+    static func testReadBeforeObserverIsNotLost() async {
+        let board = self.board()
+        defer { board.releaseGlobally() }
+        let manager = SystemPasteboardManager(pasteboard: board)
+        precondition(manager.writeTemporaryText("early read", sessionID: "early"))
+        precondition(board.string(forType: .string) == "early read")
+        var reads = 0
+        precondition(manager.observeTemporaryTextRead(sessionID: "early") { _ in reads += 1 })
+        await self.waitUntil { reads == 1 }
+        print("PASS: an immediate consumer read before observer registration is retained")
+    }
+
+    static func testDelayedConsumerGetsDictation() async {
+        let board = self.board()
+        defer { board.releaseGlobally() }
+        let manager = SystemPasteboardManager(pasteboard: board)
+        precondition(manager.writeIntentionalText("previous clipboard"))
+        let poster = ReceiptTestPoster()
+        let coordinator = PasteDeliveryCoordinator(pasteboard: manager, commandPoster: poster)
+        let result = await coordinator.deliver("delayed dictation", preserveTranscriptOnClipboard: false)
+        precondition(result == .commandPosted)
+        let temporaryRevision = board.changeCount
+        try? await Task.sleep(nanoseconds: 800_000_000)
+        precondition(board.changeCount == temporaryRevision, "Must not restore at 500 ms before consumption")
+        precondition(board.string(forType: .string) == "delayed dictation")
+        await self.waitUntil { board.changeCount != temporaryRevision }
+        precondition(board.string(forType: .string) == "previous clipboard")
+        precondition(poster.count == 1)
+        print("PASS: real 800 ms delayed read receives dictation, then the previous clipboard is restored")
+    }
+
+    static func testNormalReadRestoresOriginal() async {
+        let board = self.board()
+        defer { board.releaseGlobally() }
+        let manager = SystemPasteboardManager(pasteboard: board)
+        precondition(manager.writeIntentionalText("original"))
+        let coordinator = PasteDeliveryCoordinator(pasteboard: manager, commandPoster: ReceiptTestPoster(), settlementDelayNanoseconds: 30_000_000)
+        _ = await coordinator.deliver("normal", preserveTranscriptOnClipboard: false)
+        let revision = board.changeCount
+        precondition(board.string(forType: .string) == "normal")
+        await self.waitUntil { board.changeCount != revision }
+        precondition(board.string(forType: .string) == "original")
+        print("PASS: normal read restores the original clipboard")
+    }
+
+    static func testTimeoutRetainsTextAndReleasesQueue() async {
+        let board = self.board()
+        defer { board.releaseGlobally() }
+        let manager = SystemPasteboardManager(pasteboard: board)
+        precondition(manager.writeIntentionalText("original"))
+        let poster = ReceiptTestPoster()
+        let coordinator = PasteDeliveryCoordinator(pasteboard: manager, commandPoster: poster, settlementDelayNanoseconds: 20_000_000, readTimeoutNanoseconds: 60_000_000)
+        _ = await coordinator.deliver("late first", preserveTranscriptOnClipboard: false)
+        let revision = board.changeCount
+        await self.waitUntil { board.changeCount != revision }
+        precondition(board.string(forType: .string) == "late first", "Timeout must not expose unrelated clipboard content to a late Cmd+V")
+        precondition(board.types?.contains(.init("org.nspasteboard.TransientType")) == false)
+        _ = await coordinator.deliver("second", preserveTranscriptOnClipboard: false)
+        let nextRevision = board.changeCount
+        precondition(board.string(forType: .string) == "second")
+        await self.waitUntil { board.changeCount != nextRevision }
+        precondition(board.string(forType: .string) == "late first")
+        precondition(poster.count == 2)
+        print("PASS: timeout retains plain text and releases the queue for the next delivery")
+    }
+
+    static func testExternalCopyWins(afterRead: Bool) async {
+        let board = self.board()
+        defer { board.releaseGlobally() }
+        let manager = SystemPasteboardManager(pasteboard: board)
+        precondition(manager.writeIntentionalText("original"))
+        let coordinator = PasteDeliveryCoordinator(pasteboard: manager, commandPoster: ReceiptTestPoster(), settlementDelayNanoseconds: 30_000_000, readTimeoutNanoseconds: 60_000_000)
+        _ = await coordinator.deliver("dictation", preserveTranscriptOnClipboard: false)
+        if afterRead { _ = board.string(forType: .string) }
+        board.clearContents()
+        precondition(board.setString("new user copy", forType: .string))
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        precondition(board.string(forType: .string) == "new user copy")
+        print("PASS: newer user copy wins afterRead=\(afterRead)")
+    }
+
+    static func testCancelledTimeoutRestoresOriginal() async {
+        let board = self.board()
+        defer { board.releaseGlobally() }
+        let manager = SystemPasteboardManager(pasteboard: board)
+        precondition(manager.writeIntentionalText("original"))
+        let coordinator = PasteDeliveryCoordinator(pasteboard: manager, commandPoster: ReceiptTestPoster(), readTimeoutNanoseconds: 40_000_000)
+        var valid = true
+        _ = await coordinator.deliver("cancelled", preserveTranscriptOnClipboard: false, isOutputValid: { valid })
+        let revision = board.changeCount
+        valid = false
+        await self.waitUntil { board.changeCount != revision }
+        precondition(board.string(forType: .string) == "original")
+        print("PASS: cancelled output is not kept as a timeout backup")
+    }
+
+    static func testRepeatedReadsDoNotPostAgain() async {
+        let board = self.board()
+        defer { board.releaseGlobally() }
+        let manager = SystemPasteboardManager(pasteboard: board)
+        precondition(manager.writeIntentionalText("original"))
+        let poster = ReceiptTestPoster()
+        let coordinator = PasteDeliveryCoordinator(pasteboard: manager, commandPoster: poster, settlementDelayNanoseconds: 10_000_000)
+        for index in 0..<20 {
+            let text = "dictation \(index)"
+            _ = await coordinator.deliver(text, preserveTranscriptOnClipboard: false)
+            let revision = board.changeCount
+            for _ in 0..<3 {
+                precondition(board.string(forType: .string) == text)
+            }
+            await self.waitUntil { board.changeCount != revision }
+            precondition(board.string(forType: .string) == "original")
+        }
+        precondition(poster.count == 20, "Receipts must never retry or duplicate insertion")
+        print("PASS: 20 sequential deliveries restore correctly without duplicate commands")
+    }
+
+    static func testQueuedDeliveryWaitsForReadAndSettlement() async {
+        let board = self.board()
+        defer { board.releaseGlobally() }
+        let manager = SystemPasteboardManager(pasteboard: board)
+        precondition(manager.writeIntentionalText("original"))
+        let poster = ReceiptTestPoster()
+        let coordinator = PasteDeliveryCoordinator(pasteboard: manager, commandPoster: poster, settlementDelayNanoseconds: 20_000_000)
+        _ = await coordinator.deliver("first", preserveTranscriptOnClipboard: false)
+        var secondResult: TextDeliveryResult?
+        let next = Task { @MainActor in
+            secondResult = await coordinator.deliver("second", preserveTranscriptOnClipboard: false)
+        }
+        try? await Task.sleep(nanoseconds: 40_000_000)
+        precondition(poster.count == 1 && secondResult == nil)
+        precondition(board.string(forType: .string) == "first")
+        await self.waitUntil { secondResult != nil }
+        precondition(secondResult == .commandPosted && poster.count == 2)
+        let revision = board.changeCount
+        precondition(board.string(forType: .string) == "second")
+        await self.waitUntil { board.changeCount != revision }
+        precondition(board.string(forType: .string) == "original")
+        await next.value
+        print("PASS: a queued paste cannot replace the first payload before its read and settlement")
+    }
+
+    static func testStaleReceiptCannotSettleNewDelivery() async {
+        let board = self.board()
+        defer { board.releaseGlobally() }
+        let manager = ReceiptObservingPasteboard(board: board)
+        precondition(manager.base.writeIntentionalText("original"))
+        let coordinator = PasteDeliveryCoordinator(pasteboard: manager, commandPoster: ReceiptTestPoster(), settlementDelayNanoseconds: 10_000_000, readTimeoutNanoseconds: 80_000_000)
+        _ = await coordinator.deliver("first", preserveTranscriptOnClipboard: false)
+        let oldHandler = manager.handlers[0]
+        let firstRevision = board.changeCount
+        await self.waitUntil { board.changeCount != firstRevision }
+        _ = await coordinator.deliver("second", preserveTranscriptOnClipboard: false)
+        let secondRevision = board.changeCount
+        oldHandler(ProcessInfo.processInfo.systemUptime)
+        try? await Task.sleep(nanoseconds: 30_000_000)
+        precondition(board.changeCount == secondRevision, "A stale first receipt must not schedule the next delivery's restoration")
+        precondition(board.string(forType: .string) == "second")
+        await self.waitUntil { board.changeCount != secondRevision }
+        precondition(board.string(forType: .string) == "first")
+        print("PASS: a late receipt from the previous generation cannot settle the current paste")
+    }
+
+    static func testReadReceiptKeepsItsOriginalPipeline() async {
+        let board = self.board()
+        defer { board.releaseGlobally() }
+        let manager = SystemPasteboardManager(pasteboard: board)
+        precondition(manager.writeIntentionalText("original"))
+        let coordinator = PasteDeliveryCoordinator(pasteboard: manager, commandPoster: ReceiptTestPoster())
+        _ = await DebugLogger.$pipelineID.withValue("receipt-trace") {
+            await coordinator.deliver("trace text", preserveTranscriptOnClipboard: false)
+        }
+        precondition(DebugLogger.pipelineID == nil)
+        // AppKit's reader is outside the request task; its callback must recover
+        // the delivery's trace rather than log under whichever task reads it.
+        _ = DebugLogger.$pipelineID.withValue("unrelated-reader") { board.string(forType: .string) }
+        await self.waitUntil {
+            DebugLogger.shared.infoEvents.contains { $0.message.hasPrefix("PASTE_READ ") && $0.pipelineID == "receipt-trace" }
+        }
+        precondition(!DebugLogger.shared.infoEvents.contains { $0.message.hasPrefix("PASTE_READ ") && $0.pipelineID == "unrelated-reader" })
+        coordinator.runPendingSettlementForTesting()
+        precondition(board.string(forType: .string) == "original")
+        print("PASS: a clipboard read outside the request retains its original pipeline ID")
+    }
+}
+
+@MainActor
+private final class ReceiptObservingPasteboard: PasteboardManaging {
+    nonisolated deinit {}
+    let base: SystemPasteboardManager
+    var handlers: [@MainActor @Sendable (TimeInterval) -> Void] = []
+    init(board: NSPasteboard) { self.base = SystemPasteboardManager(pasteboard: board) }
+    var changeCount: Int { self.base.changeCount }
+    func captureSnapshot() -> PasteboardSnapshot? { self.base.captureSnapshot() }
+    func writeTemporaryText(_ text: String, sessionID: String) -> Bool { self.base.writeTemporaryText(text, sessionID: sessionID) }
+    func writeIntentionalText(_ text: String) -> Bool { self.base.writeIntentionalText(text) }
+    func isOwned(sessionID: String, expectedText: String) -> Bool { self.base.isOwned(sessionID: sessionID, expectedText: expectedText) }
+    func restore(_ snapshot: PasteboardSnapshot) -> Bool { self.base.restore(snapshot) }
+    func restoreTemporarySnapshot(_ snapshot: PasteboardSnapshot, sessionID: String, expectedText: String) -> Bool {
+        self.base.restoreTemporarySnapshot(snapshot, sessionID: sessionID, expectedText: expectedText)
+    }
+
+    func observeTemporaryTextRead(sessionID: String, onRead: @escaping @MainActor @Sendable (TimeInterval) -> Void) -> Bool {
+        self.handlers.append(onRead)
+        return self.base.observeTemporaryTextRead(sessionID: sessionID, onRead: onRead)
+    }
+}
+
+@MainActor
+private final class ReceiptTestPoster: PasteCommandPosting {
+    nonisolated deinit {}
+    var count = 0
+    func postGlobalPasteCommand() async -> Bool {
+        self.count += 1
+        return true
+    }
+}

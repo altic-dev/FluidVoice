@@ -132,13 +132,17 @@ final class PasteDeliveryCoordinatorTests: XCTestCase {
         XCTAssertEqual(pasteboard.restoreCount, 1)
     }
 
-    func testPasteCheckAlertsDefaultOffAndRoundTripThroughBackup() {
+    func testPasteCheckAlertsDefaultOnAndPreserveExplicitOffThroughBackup() {
         let settings = SettingsStore.shared
         let original = settings.showPasteCheckAlerts
         defer { settings.showPasteCheckAlerts = original }
 
         UserDefaults.standard.removeObject(forKey: "ShowPasteCheckAlerts")
+        XCTAssertTrue(settings.showPasteCheckAlerts)
+
+        settings.showPasteCheckAlerts = false
         XCTAssertFalse(settings.showPasteCheckAlerts)
+        XCTAssertEqual(settings.makeBackupPayload().showPasteCheckAlerts, false)
 
         settings.showPasteCheckAlerts = true
         XCTAssertTrue(settings.showPasteCheckAlerts)
@@ -539,10 +543,9 @@ final class PasteDeliveryCoordinatorTests: XCTestCase {
         XCTAssertEqual(state.textDeliveryFailureTranscript, "retained output")
     }
 
-    func testPasteNotLandedVerdictWaitsAtLeastOneAndAHalfSeconds() {
-        // A slow app that applies Cmd+V late must never draw a failure card.
-        XCTAssertGreaterThanOrEqual(PasteVerifier.totalDecisionDelay, 1.5)
-        XCTAssertEqual(PasteVerifier.finalCheckDelay, 1.0)
+    func testPasteNotLandedVerdictGivesLateAppsTwoSeconds() {
+        XCTAssertEqual(PasteVerifier.totalDecisionDelay, 2)
+        XCTAssertEqual(PasteVerifier.finalCheckDelay, 1.5)
     }
 
     func testAccessibilityMessagingTimeoutIsBounded() {

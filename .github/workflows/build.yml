@@ -88,6 +88,15 @@ jobs:
     - name: Show Xcode version
       run: xcodebuild -version
       
+    - name: Run paste reliability regressions
+      run: |
+        sh Tests/run_clipboard_backup_reproduction.sh
+        sh Tests/run_paste_read_receipt_tests.sh
+        sh Tests/run_paste_command_event_tests.sh
+        sh Tests/run_paste_key_cache_tests.sh
+        sh Tests/run_paste_recovery_policy_tests.sh
+        sh Tests/run_dictation_accessibility_preparation_tests.sh
+
     - name: Run standalone onboarding regressions
       run: sh Tests/run_onboarding_tests.sh
 
