@@ -143,6 +143,9 @@ final class AppServices: ObservableObject {
                     session: coordinator?.activeSession,
                     detector: self?._meetingAutoDetector
                 )
+                if let currentState = coordinator?.state, MeetingOverlayVisibility.isVisible(for: currentState) {
+                    MeetingRecordingSourcePromptController.shared.recordingDidStart()
+                }
                 guard !MeetingOverlayVisibility.isVisible(for: state) else { return }
                 MeetingStillRecordingNudgeController.shared.hide()
             }
@@ -194,7 +197,11 @@ final class AppServices: ObservableObject {
         detector.onAutomaticTargetChanged = { [weak self] target in
             self?.meetingAutomaticTarget = target
         }
-        detector.onPromptRequested = { request in
+        detector.onPromptRequested = { [weak detector] request in
+            guard !MeetingRecordingSourcePromptController.shared.isPresented else {
+                detector?.timeoutDismissed(episodeID: request.episodeID)
+                return
+            }
             MeetingDetectionPromptController.shared.present(request)
         }
         detector.onHealthChanged = { [weak self] health in
@@ -338,6 +345,7 @@ final class AppServices: ObservableObject {
             self.meetingAutomaticTarget = nil
             self.meetingAutoDetectHealth = nil
             MeetingDetectionPromptController.shared.cancelForFeatureDisable()
+            MeetingRecordingSourcePromptController.shared.cancel()
             MeetingStillRecordingNudgeController.shared.hide()
             MeetingRecordingPillController.shared.deactivate()
             return
@@ -397,6 +405,7 @@ final class AppServices: ObservableObject {
     }
 
     func shutdownForTermination() async {
+        MeetingRecordingSourcePromptController.shared.cancel()
         self._meetingAutoDetector?.stop()
         self._meetingAutoDetector = nil
         if let meetingSessionCoordinator = self._meetingSessionCoordinator {

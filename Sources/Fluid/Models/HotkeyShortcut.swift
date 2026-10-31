@@ -1,6 +1,7 @@
 import AppKit
 import Carbon
 import Foundation
+import IOKit.hidsystem
 
 struct HotkeyShortcut: Codable, Equatable {
     enum ShortcutKind: String, Codable {
@@ -17,7 +18,7 @@ struct HotkeyShortcut: Codable, Equatable {
 
     var displayString: String {
         if self.isMouseShortcut, let mouseButton {
-            var parts = Self.modifierDisplayParts(for: self.relevantModifierFlags)
+            var parts = Self.modifierDisplayParts(for: self.modifierFlags)
             parts.append(Self.mouseButtonToString(mouseButton))
             return parts.joined(separator: " + ")
         }
@@ -74,10 +75,10 @@ struct HotkeyShortcut: Codable, Equatable {
     private static func modifierDisplayParts(for flags: NSEvent.ModifierFlags) -> [String] {
         var parts: [String] = []
         if flags.contains(.function) { parts.append("🌐") }
-        if flags.contains(.command) { parts.append("⌘") }
-        if flags.contains(.option) { parts.append("⌥") }
-        if flags.contains(.control) { parts.append("⌃") }
-        if flags.contains(.shift) { parts.append("⇧") }
+        for (flag, symbol) in [(NSEvent.ModifierFlags.command, "⌘"), (.option, "⌥"), (.control, "⌃"), (.shift, "⇧")] where flags.contains(flag) {
+            let sides = Self.modifierSides.filter { Self.modifierFlag(forKeyCode: $0.keyCode) == flag && flags.rawValue & $0.mask != 0 }
+            parts.append(contentsOf: sides.isEmpty ? [symbol] : sides.compactMap { Self.keyCodeToString($0.keyCode) })
+        }
         return parts
     }
 
@@ -147,7 +148,7 @@ struct HotkeyShortcut: Codable, Equatable {
             }
         } else {
             self.keyCode = keyCode
-            self.modifierFlags = modifierFlags
+            self.modifierFlags = modifierFlags.intersection(Self.shortcutModifierMask)
             self.modifierKeyCodes = []
         }
     }
@@ -155,7 +156,7 @@ struct HotkeyShortcut: Codable, Equatable {
     init(mouseButton: Int, modifierFlags: NSEvent.ModifierFlags) {
         self.kind = .mouse
         self.keyCode = 0
-        self.modifierFlags = modifierFlags.intersection(Self.relevantModifierMask)
+        self.modifierFlags = modifierFlags.intersection(Self.shortcutModifierMask)
         self.modifierKeyCodes = []
         self.mouseButton = mouseButton
     }
@@ -163,6 +164,49 @@ struct HotkeyShortcut: Codable, Equatable {
 
 extension HotkeyShortcut {
     static let relevantModifierMask: NSEvent.ModifierFlags = [.function, .command, .option, .control, .shift]
+
+    // NSEvent and CGEvent retain physical sides in the device-dependent IOKit bits.
+    // Keeping them in the existing encoded flags preserves old, either-side bindings.
+    private static let modifierSides: [(keyCode: UInt16, mask: UInt)] = [
+        (55, UInt(NX_DEVICELCMDKEYMASK)), (54, UInt(NX_DEVICERCMDKEYMASK)),
+        (58, UInt(NX_DEVICELALTKEYMASK)), (61, UInt(NX_DEVICERALTKEYMASK)),
+        (59, UInt(NX_DEVICELCTLKEYMASK)), (62, UInt(NX_DEVICERCTLKEYMASK)),
+        (56, UInt(NX_DEVICELSHIFTKEYMASK)), (60, UInt(NX_DEVICERSHIFTKEYMASK)),
+    ]
+    private static let modifierSideGroups: [UInt] = [
+        UInt(NX_DEVICELCMDKEYMASK | NX_DEVICERCMDKEYMASK),
+        UInt(NX_DEVICELALTKEYMASK | NX_DEVICERALTKEYMASK),
+        UInt(NX_DEVICELCTLKEYMASK | NX_DEVICERCTLKEYMASK),
+        UInt(NX_DEVICELSHIFTKEYMASK | NX_DEVICERSHIFTKEYMASK),
+    ]
+    static let shortcutModifierMask = relevantModifierMask.union(NSEvent.ModifierFlags(rawValue: modifierSideGroups.reduce(0, |)))
+
+    private var modifierSideBits: UInt {
+        Self.modifierSides.reduce(0) { bits, side in
+            guard let flag = Self.modifierFlag(forKeyCode: side.keyCode), self.modifierFlags.contains(flag) else { return bits }
+            return bits | (self.modifierFlags.rawValue & side.mask)
+        }
+    }
+
+    private func matchesModifierSides(_ modifiers: NSEvent.ModifierFlags) -> Bool {
+        let expected = self.modifierSideBits
+        return Self.modifierSideGroups.allSatisfy { mask in
+            expected & mask == 0 || expected & mask == modifiers.rawValue & mask
+        }
+    }
+
+    /// Duplicate detection allows old bindings without side bits to match either side.
+    /// Keep this separate from equality, which must remain transitive for stored settings.
+    func hasSameTrigger(as other: HotkeyShortcut) -> Bool {
+        if self.isModifierOnlyShortcut || other.isModifierOnlyShortcut { return self == other }
+        guard self.kind == other.kind, self.keyCode == other.keyCode, self.mouseButton == other.mouseButton,
+              self.relevantModifierFlags == other.relevantModifierFlags else { return false }
+        let lhs = self.modifierSideBits
+        let rhs = other.modifierSideBits
+        return Self.modifierSideGroups.allSatisfy { mask in
+            lhs & mask == 0 || rhs & mask == 0 || lhs & mask == rhs & mask
+        }
+    }
 
     static func modifierFlag(forKeyCode keyCode: UInt16) -> NSEvent.ModifierFlags? {
         switch keyCode {
@@ -245,8 +289,7 @@ extension HotkeyShortcut {
             let modifierOnly = self.isModifierOnlyShortcut ? self : other
             let keyed = self.isModifierOnlyShortcut ? other : self
             if modifierOnly.isModifierOnlyShortcut, !keyed.isModifierOnlyShortcut, !keyed.isMouseShortcut,
-               let modifiers = modifierOnly.expectedModifierFlags, !modifiers.isEmpty,
-               modifiers.isSubset(of: keyed.relevantModifierFlags) { return true }
+               keyed.modifiersOverlap(modifierOnlyShortcut: modifierOnly) { return true }
         }
         if self.isModifierOnlyShortcut, other.isModifierOnlyShortcut {
             let lhs = Set(self.normalizedModifierKeyCodes)
@@ -258,23 +301,28 @@ extension HotkeyShortcut {
         }
 
         if self.isMouseShortcut, other.isModifierOnlyShortcut {
-            return self.mouseModifiersOverlap(modifierOnlyShortcut: other)
+            return self.modifiersOverlap(modifierOnlyShortcut: other)
         }
 
         if other.isMouseShortcut, self.isModifierOnlyShortcut {
-            return other.mouseModifiersOverlap(modifierOnlyShortcut: self)
+            return other.modifiersOverlap(modifierOnlyShortcut: self)
         }
 
         return false
     }
 
-    private func mouseModifiersOverlap(modifierOnlyShortcut: HotkeyShortcut) -> Bool {
-        guard self.isMouseShortcut,
-              let expectedModifiers = modifierOnlyShortcut.expectedModifierFlags,
-              !expectedModifiers.isEmpty
+    private func modifiersOverlap(modifierOnlyShortcut: HotkeyShortcut) -> Bool {
+        guard let expectedModifiers = modifierOnlyShortcut.expectedModifierFlags,
+              !expectedModifiers.isEmpty, expectedModifiers.isSubset(of: self.relevantModifierFlags)
         else { return false }
-
-        return expectedModifiers.isSubset(of: self.relevantModifierFlags)
+        let sideBits = self.modifierSideBits
+        // Legacy flag-only modifier shortcuts activate on either side at runtime.
+        let keys = modifierOnlyShortcut.normalizedModifierKeyCodes
+        return keys.allSatisfy { key in
+            guard let side = Self.modifierSides.first(where: { $0.keyCode == key }),
+                  let group = Self.modifierSideGroups.first(where: { $0 & side.mask != 0 }) else { return true }
+            return sideBits & group == 0 || sideBits & side.mask != 0
+        }
     }
 
     var isModifierOnlyShortcut: Bool {
@@ -309,13 +357,13 @@ extension HotkeyShortcut {
 
     func matches(keyCode: UInt16, modifiers: NSEvent.ModifierFlags) -> Bool {
         guard !self.isMouseShortcut else { return false }
-        return keyCode == self.keyCode && modifiers.intersection(Self.relevantModifierMask) == self.relevantModifierFlags
+        return keyCode == self.keyCode && modifiers.intersection(Self.relevantModifierMask) == self.relevantModifierFlags && self.matchesModifierSides(modifiers)
     }
 
     func matchesMouse(button: Int, modifiers: NSEvent.ModifierFlags) -> Bool {
         guard self.isMouseShortcut, let mouseButton else { return false }
         guard !self.isUnmodifiedLeftOrRightClick else { return false }
-        return mouseButton == button && modifiers.intersection(Self.relevantModifierMask) == self.relevantModifierFlags
+        return mouseButton == button && modifiers.intersection(Self.relevantModifierMask) == self.relevantModifierFlags && self.matchesModifierSides(modifiers)
     }
 
     static func == (lhs: HotkeyShortcut, rhs: HotkeyShortcut) -> Bool {
@@ -324,7 +372,7 @@ extension HotkeyShortcut {
         switch lhs.kind {
         case .mouse:
             return lhs.mouseButton == rhs.mouseButton &&
-                lhs.relevantModifierFlags == rhs.relevantModifierFlags
+                lhs.relevantModifierFlags == rhs.relevantModifierFlags && lhs.modifierSideBits == rhs.modifierSideBits
         case .keyboard:
             let lhsModifierKeyCodes = lhs.normalizedModifierKeyCodes
             let rhsModifierKeyCodes = rhs.normalizedModifierKeyCodes
@@ -332,7 +380,7 @@ extension HotkeyShortcut {
                 return lhsModifierKeyCodes == rhsModifierKeyCodes
             }
 
-            return lhs.keyCode == rhs.keyCode && lhs.relevantModifierFlags == rhs.relevantModifierFlags
+            return lhs.keyCode == rhs.keyCode && lhs.relevantModifierFlags == rhs.relevantModifierFlags && lhs.modifierSideBits == rhs.modifierSideBits
         }
     }
 

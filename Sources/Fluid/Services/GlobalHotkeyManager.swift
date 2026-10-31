@@ -934,13 +934,7 @@ final class GlobalHotkeyManager: NSObject {
     }
 
     nonisolated static func modifierFlags(from flags: CGEventFlags) -> NSEvent.ModifierFlags {
-        var modifiers: NSEvent.ModifierFlags = []
-        if flags.contains(.maskSecondaryFn) { modifiers.insert(.function) }
-        if flags.contains(.maskCommand) { modifiers.insert(.command) }
-        if flags.contains(.maskAlternate) { modifiers.insert(.option) }
-        if flags.contains(.maskControl) { modifiers.insert(.control) }
-        if flags.contains(.maskShift) { modifiers.insert(.shift) }
-        return modifiers
+        NSEvent.ModifierFlags(rawValue: UInt(flags.rawValue)).intersection(HotkeyShortcut.shortcutModifierMask)
     }
 
     private nonisolated static func isTapEnabled(_ tap: CFMachPort?) -> Bool {

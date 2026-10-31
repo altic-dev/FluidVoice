@@ -101,6 +101,7 @@
 		0B05F11E000000000000A002 /* SupportedFileExtensionsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B05F11E000000000000A001 /* SupportedFileExtensionsTests.swift */; };
 		BF1510100000000000000002 /* FileTranscriptionAudioTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BF1510100000000000000001 /* FileTranscriptionAudioTests.swift */; };
 		CD0E00000000000000000002 /* MeetingOverlayModelsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD0E00000000000000000001 /* MeetingOverlayModelsTests.swift */; };
+		AE1223000000000000000002 /* MeetingRecordingSourceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AE1223000000000000000001 /* MeetingRecordingSourceTests.swift */; };
 		CD0F00000000000000000002 /* MeetingProcessingConfigurationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD0F00000000000000000001 /* MeetingProcessingConfigurationTests.swift */; };
 		CD100000000000000000000002 /* MeetingProviderOptionsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD100000000000000000000001 /* MeetingProviderOptionsTests.swift */; };
 		CD110000000000000000000002 /* MeetingASRPreparationOwnerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD110000000000000000000001 /* MeetingASRPreparationOwnerTests.swift */; };
@@ -297,6 +298,7 @@
 		0B05F11E000000000000A001 /* SupportedFileExtensionsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SupportedFileExtensionsTests.swift; sourceTree = "<group>"; };
 		BF1510100000000000000001 /* FileTranscriptionAudioTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileTranscriptionAudioTests.swift; sourceTree = "<group>"; };
 		CD0E00000000000000000001 /* MeetingOverlayModelsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingOverlayModelsTests.swift; sourceTree = "<group>"; };
+		AE1223000000000000000001 /* MeetingRecordingSourceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingRecordingSourceTests.swift; sourceTree = "<group>"; };
 		CD0F00000000000000000001 /* MeetingProcessingConfigurationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingProcessingConfigurationTests.swift; sourceTree = "<group>"; };
 		CD100000000000000000000001 /* MeetingProviderOptionsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingProviderOptionsTests.swift; sourceTree = "<group>"; };
 		CD110000000000000000000001 /* MeetingASRPreparationOwnerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingASRPreparationOwnerTests.swift; sourceTree = "<group>"; };
@@ -558,6 +560,7 @@
 				BF1510100000000000000001 /* FileTranscriptionAudioTests.swift */,
 				FEED67600000000000000001 /* PasteDeliveryCoordinatorTests.swift */,
 				CD0E00000000000000000001 /* MeetingOverlayModelsTests.swift */,
+				AE1223000000000000000001 /* MeetingRecordingSourceTests.swift */,
 				CD0F00000000000000000001 /* MeetingProcessingConfigurationTests.swift */,
 				CD100000000000000000000001 /* MeetingProviderOptionsTests.swift */,
 				CD110000000000000000000001 /* MeetingASRPreparationOwnerTests.swift */,
@@ -966,6 +969,7 @@
 				BF1510100000000000000002 /* FileTranscriptionAudioTests.swift in Sources */,
 				FEED67600000000000000002 /* PasteDeliveryCoordinatorTests.swift in Sources */,
 				CD0E00000000000000000002 /* MeetingOverlayModelsTests.swift in Sources */,
+				AE1223000000000000000002 /* MeetingRecordingSourceTests.swift in Sources */,
 				CD0F00000000000000000002 /* MeetingProcessingConfigurationTests.swift in Sources */,
 				CD100000000000000000000002 /* MeetingProviderOptionsTests.swift in Sources */,
 				CD110000000000000000000002 /* MeetingASRPreparationOwnerTests.swift in Sources */,

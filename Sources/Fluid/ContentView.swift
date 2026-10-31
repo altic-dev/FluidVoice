@@ -934,14 +934,14 @@ struct ContentView: View {
     }
 
     private func handleShortcutCaptureEvent(_ event: NSEvent) -> NSEvent? {
-        let eventModifiers = event.modifierFlags.intersection([.function, .command, .option, .control, .shift])
+        let eventModifiers = event.modifierFlags.intersection(HotkeyShortcut.shortcutModifierMask)
         let isRecordingAnyShortcut = self.isRecordingAnyShortcutCapture
         let recordingTarget = self.activeShortcutRecordingTarget
 
         if event.type == .keyDown {
             return self.handleShortcutKeyDownEvent(event, modifiers: eventModifiers, isRecordingAnyShortcut: isRecordingAnyShortcut, recordingTarget: recordingTarget)
         } else if event.type == .flagsChanged {
-            return self.handleShortcutFlagsChangedEvent(event, modifiers: eventModifiers, isRecordingAnyShortcut: isRecordingAnyShortcut, recordingTarget: recordingTarget)
+            return self.handleShortcutFlagsChangedEvent(event, modifiers: eventModifiers.intersection(HotkeyShortcut.relevantModifierMask), isRecordingAnyShortcut: isRecordingAnyShortcut, recordingTarget: recordingTarget)
         } else if event.type == .leftMouseDown || event.type == .rightMouseDown || event.type == .otherMouseDown {
             return self.handleShortcutMouseDownEvent(event, modifiers: eventModifiers, isRecordingAnyShortcut: isRecordingAnyShortcut, recordingTarget: recordingTarget)
         }
@@ -1286,7 +1286,7 @@ struct ContentView: View {
 
         let replacingPrimaryIndex = target.primaryDictationReplacementIndex
         for (index, configuredShortcut) in self.primaryDictationShortcuts.enumerated() where replacingPrimaryIndex != index {
-            if configuredShortcut == shortcut {
+            if configuredShortcut.hasSameTrigger(as: shortcut) {
                 return "Duplicate with Primary Dictation Shortcut"
             }
             if shortcut.conflictsWith(configuredShortcut, includingKeyboardModifierPrefixes: target == .meeting) {
@@ -1313,7 +1313,7 @@ struct ContentView: View {
         ]
 
         for (otherTarget, configuredShortcut) in configuredShortcuts where otherTarget != target {
-            if configuredShortcut == shortcut {
+            if configuredShortcut.hasSameTrigger(as: shortcut) {
                 return "Duplicate with \(otherTarget.title)"
             }
             if shortcut.conflictsWith(configuredShortcut, includingKeyboardModifierPrefixes: target == .meeting || otherTarget == .meeting) {
@@ -1322,7 +1322,7 @@ struct ContentView: View {
         }
         for (otherTarget, configuredShortcut) in optionalConfiguredShortcuts where otherTarget != target {
             guard let configuredShortcut else { continue }
-            if configuredShortcut == shortcut {
+            if configuredShortcut.hasSameTrigger(as: shortcut) {
                 return "Duplicate with \(otherTarget.title)"
             }
             if shortcut.conflictsWith(configuredShortcut, includingKeyboardModifierPrefixes: target == .meeting || otherTarget == .meeting) {
@@ -1337,7 +1337,7 @@ struct ContentView: View {
             else {
                 continue
             }
-            if assignment.shortcut == shortcut {
+            if assignment.shortcut.hasSameTrigger(as: shortcut) {
                 return "Duplicate with Prompt Shortcut"
             }
             if shortcut.conflictsWith(assignment.shortcut, includingKeyboardModifierPrefixes: target == .meeting) {
@@ -5205,7 +5205,7 @@ struct ContentView: View {
         self.hotkeyManager?.setMeetingRecordingCallback {
             Task { @MainActor in
                 await self.menuBarManager.toggleMeetingRecordingFromShortcut {
-                    try await AppServices.shared.startMeetingRecordingFromMenuBar()
+                    MeetingRecordingSourcePromptController.shared.handleShortcut()
                 }
             }
         }

@@ -448,11 +448,8 @@ final class MeetingMenuBarStartTests: XCTestCase {
         XCTAssertThrowsError(try self.configuration(targetPID: 42, availablePID: 43))
     }
 
-    func testNoDetectedMeetingUsesMicrophoneOnly() throws {
-        let configuration = try self.configuration(targetPID: nil, availablePID: 43)
-        XCTAssertEqual(configuration.mode, .inRoom)
-        XCTAssertNil(configuration.application)
-        XCTAssertNil(configuration.platform)
+    func testNoDetectedMeetingRequiresAnApplication() {
+        XCTAssertThrowsError(try self.configuration(targetPID: nil, availablePID: 43))
     }
 
     func testInRoomModeIgnoresDetectedApplication() throws {

@@ -715,12 +715,11 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
         eventHandler: @escaping @Sendable (MeetingCaptureEvent) -> Void,
         liveAudioHandler: (@Sendable (MeetingAudioTrackKind, CMSampleBuffer) -> Void)?
     ) async throws -> ScreenCaptureMeetingRuntime {
-        let electedMicrophone = includeMicrophone
-            ? await MeetingCaptureDeviceElection.elect(original: microphone).identity
-            : microphone
+        // Initial capture honors the microphone shown at confirmation. Route recovery
+        // can elect a replacement later, but starting cannot silently switch inputs.
         let resolvedMicrophone = includeMicrophone
-            ? try MeetingAVCaptureMicrophoneResolver.resolve(electedMicrophone)
-            : electedMicrophone
+            ? try MeetingAVCaptureMicrophoneResolver.resolve(microphone)
+            : microphone
         let built = try await Self.buildStream(
             application: application,
             microphone: resolvedMicrophone,
@@ -760,7 +759,8 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
     private static func buildStream(
         application: MeetingApplicationIdentity,
         microphone: MeetingMicrophoneIdentity,
-        includeMicrophone: Bool
+        includeMicrophone: Bool,
+        allowApplicationRelaunch: Bool = false
     ) async throws -> BuiltStream {
         let content: SCShareableContent
         do {
@@ -768,13 +768,19 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
         } catch {
             throw MeetingCaptureError.screenCapturePermissionDenied(error.localizedDescription)
         }
-        let byProcessID = application.processID.flatMap { processID in
-            content.applications.first(where: { $0.processID == processID })
+        let candidates = content.applications.map {
+            MeetingApplicationIdentity(bundleIdentifier: $0.bundleIdentifier, processID: $0.processID, displayName: $0.applicationName)
         }
-        // The saved PID goes stale when the app relaunches; the bundle match keeps rebuilds working.
-        guard let runningApplication = byProcessID ?? content.applications.first(where: {
-            $0.bundleIdentifier == application.bundleIdentifier
-        }) else {
+        var requested = application
+        // Only an already-running recording may recover after the app relaunches.
+        // Initial capture must use exactly the process the user confirmed.
+        if allowApplicationRelaunch, !candidates.contains(where: { $0.processID == application.processID && $0.bundleIdentifier == application.bundleIdentifier }) {
+            requested.processID = nil
+        }
+        let resolved = try MeetingRecordingSourceResolver.resolve(
+            mode: .onlineCall, source: MeetingRecordingSource(application: requested), target: nil, applications: candidates
+        )
+        guard let runningApplication = content.applications.first(where: { $0.processID == resolved?.processID }) else {
             throw MeetingCaptureError.applicationUnavailable(application.displayName)
         }
 
@@ -1643,7 +1649,8 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
             built = try await Self.buildStream(
                 application: self.application,
                 microphone: resolved,
-                includeMicrophone: self.includeMicrophone
+                includeMicrophone: self.includeMicrophone,
+                allowApplicationRelaunch: true
             )
         } catch {
             guard self.isCurrentRouteRevision(revision) else { return .superseded }
@@ -1834,7 +1841,7 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
                 do {
                     let microphone = self.stateLock.withLock { self.activeMicrophone }
                     let built = try await Self.buildStream(
-                        application: self.application, microphone: microphone, includeMicrophone: self.includeMicrophone
+                        application: self.application, microphone: microphone, includeMicrophone: self.includeMicrophone, allowApplicationRelaunch: true
                     )
                     guard self.stateLock.withLock({ !self.stopping && self.rebuildOwner == owner }) else { return }
                     built.delegateProxy.owner = self

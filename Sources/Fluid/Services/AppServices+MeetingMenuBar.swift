@@ -46,22 +46,13 @@ extension AppServices {
             throw MeetingCaptureError.microphoneUnavailable
         }
         microphone.role = .unknown
-        var application: MeetingApplicationIdentity?
-        if defaults.mode == .onlineCall, let target {
-            guard var match = applications.first(where: {
-                $0.bundleIdentifier == target.bundleIdentifier && $0.processID == target.pid
-            }) else {
-                throw MeetingCaptureError.applicationUnavailable(target.bundleIdentifier)
-            }
-            match.windowID = target.windowID
-            application = match
-        } else if defaults.mode == .onlineCall, defaults.isConfigured, let bundleIdentifier = defaults.applicationBundleIdentifier {
-            guard let saved = defaults.savedApplication(in: applications), let pid = saved.processID, pid > 0 else {
-                throw MeetingCaptureError.applicationUnavailable(bundleIdentifier)
-            }
-            application = saved
-        }
-        let mode: MeetingCaptureMode = application == nil ? .inRoom : .onlineCall
+        let application = try MeetingRecordingSourceResolver.resolve(
+            mode: defaults.mode,
+            source: MeetingRecordingSource(defaults: defaults),
+            target: target,
+            applications: applications
+        )
+        let mode = defaults.mode
         return MeetingCaptureConfiguration(
             mode: mode,
             title: MeetingTranscriptionSetupDraft.defaultTitle(mode: mode, applicationDisplayName: application?.displayName),

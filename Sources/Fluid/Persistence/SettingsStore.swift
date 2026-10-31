@@ -2083,6 +2083,24 @@ final class SettingsStore: ObservableObject {
         }
     }
 
+    /// Picker recency is separate from the saved recording source.
+    var meetingRecentApplication: MeetingApplicationIdentity? {
+        get {
+            guard let data = self.defaults.data(forKey: Keys.meetingRecentApplication) else { return nil }
+            return try? JSONDecoder().decode(MeetingApplicationIdentity.self, from: data)
+        }
+        set {
+            guard var application = newValue else {
+                self.defaults.removeObject(forKey: Keys.meetingRecentApplication)
+                return
+            }
+            application.windowID = nil
+            application.displayID = nil
+            guard let data = try? JSONEncoder().encode(application) else { return }
+            self.defaults.set(data, forKey: Keys.meetingRecentApplication)
+        }
+    }
+
     var meetingAudioRetentionPolicy: MeetingAudioRetentionPolicy {
         get {
             guard let raw = self.defaults.string(forKey: Keys.meetingAudioRetentionPolicy),
@@ -5963,6 +5981,7 @@ private extension SettingsStore {
         static let suppressedMicrophoneUIDs = "SuppressedMicrophoneUIDs"
         static let preferredOutputDeviceUID = "PreferredOutputDeviceUID"
         static let meetingRecordingDefaults = "MeetingRecordingDefaults"
+        static let meetingRecentApplication = "MeetingRecentApplication"
         static let meetingAudioRetentionPolicy = "MeetingAudioRetentionPolicy"
         static let meetingTranscriptionBackendID = "MeetingTranscriptionBackendID"
         static let fluidMeetEnabled = "FluidMeetEnabled"
