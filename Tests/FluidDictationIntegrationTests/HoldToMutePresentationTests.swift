@@ -13,16 +13,19 @@ final class HoldToMutePresentationTests: XCTestCase {
         let priorText = state.transcriptionText
         let priorProcessing = state.isProcessing
         let priorMode = state.mode
+        let priorPresented = state.isBottomOverlayPresented
         defer {
             settings.overlaySize = priorSize
             state.isDictationMuted = priorMuted
             state.updateTranscription(priorText)
             state.isProcessing = priorProcessing
             state.mode = priorMode
+            state.setBottomOverlayPresented(priorPresented)
         }
         state.mode = .dictation
         state.isProcessing = false
         state.isDictationMuted = true
+        state.setBottomOverlayPresented(true)
         state.updateTranscription("This is the thought I want to keep.")
 
         for size in SettingsStore.OverlaySize.allCases {

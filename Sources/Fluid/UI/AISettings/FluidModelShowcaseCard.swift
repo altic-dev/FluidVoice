@@ -26,7 +26,13 @@ struct FluidModelShowcaseCard: View {
             VStack(alignment: .leading, spacing: self.theme.metrics.spacing.md) {
                 Color.clear.frame(height: 20)
                     .overlay(alignment: .leading) {
-                        if self.isRecommended {
+                        if let badge = presentation.badge {
+                            Text(badge)
+                                .font(self.theme.typography.captionSmall)
+                                .foregroundStyle(self.theme.palette.secondaryText)
+                                .lineLimit(1)
+                                .padding(.trailing, 24)
+                        } else if self.isRecommended {
                             Text(self.compact ? "Recommended" : "Recommended for your Mac")
                                 .font(self.theme.typography.captionStrong)
                                 .foregroundStyle(FluidBrandColors.blue)
@@ -35,18 +41,10 @@ struct FluidModelShowcaseCard: View {
                                 .help("Based on your Mac’s RAM. You can choose either model.")
                         }
                     }
-                HStack(spacing: 8) {
-                    Text(self.model.displayName.replacingOccurrences(of: "Fluid-1", with: "Fluid 1"))
-                        .font(self.compact ? self.theme.typography.sectionTitle : self.theme.typography.title)
-                        .foregroundStyle(self.theme.palette.primaryText)
-                        .lineLimit(2).minimumScaleFactor(0.85)
-                    if self.isSelected {
-                        Image(systemName: "checkmark.circle.fill")
-                            .font(.fluidSystem(size: 18, weight: .semibold))
-                            .foregroundStyle(FluidBrandColors.blue)
-                            .accessibilityLabel("Selected")
-                    }
-                }
+                Text(self.model.displayName.replacingOccurrences(of: "Fluid-1", with: "Fluid 1"))
+                    .font(self.compact ? self.theme.typography.sectionTitle : self.theme.typography.title)
+                    .foregroundStyle(self.theme.palette.primaryText)
+                    .lineLimit(self.compact ? 2 : 1).minimumScaleFactor(0.85)
                 ZStack(alignment: .topLeading) {
                     VStack(alignment: .leading, spacing: self.theme.metrics.spacing.md) {
                         Text(presentation.summary)
@@ -63,6 +61,9 @@ struct FluidModelShowcaseCard: View {
                     .accessibilityHidden(self.showsInfo)
                     VStack(alignment: .leading, spacing: self.theme.metrics.spacing.md) {
                         self.infoRow("Languages", value: presentation.language)
+                        if let memory = self.model.recommendedMemoryGB {
+                            self.infoRow("Recommended", value: "Mac with \(memory) GB+ RAM")
+                        }
                         if let bytes = self.model.artifact.byteCount, bytes > 0 {
                             self.infoRow("Download size", value: "≈\(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))")
                         }
@@ -75,6 +76,13 @@ struct FluidModelShowcaseCard: View {
                 Spacer(minLength: self.theme.metrics.spacing.sm)
                 // Separate sibling controls are overlaid by the carousel; never nest buttons.
                 Color.clear.frame(height: 64)
+                    .overlay(alignment: .bottomLeading) {
+                        if self.compact, self.isSelected {
+                            Text("Active")
+                                .font(self.theme.typography.captionStrong)
+                                .foregroundStyle(FluidBrandColors.blue)
+                        }
+                    }
             }
             .padding(self.theme.metrics.spacing.xl)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
@@ -102,7 +110,7 @@ struct FluidModelShowcaseCard: View {
         .onHover { self.hovered = $0 }
         .animation(self.reduceMotion ? nil : .easeOut(duration: 0.12), value: self.hovered)
         .accessibilityLabel("Preview \(self.model.displayName.replacingOccurrences(of: "Fluid-1", with: "Fluid 1"))")
-        .accessibilityValue([self.isPreview ? "Previewed" : "", self.isRecommended ? "Recommended for your Mac" : ""].filter { !$0.isEmpty }.joined(separator: ", "))
+        .accessibilityValue([self.isPreview ? "Previewed" : "", self.isSelected ? "Selected" : "", self.isRecommended ? "Recommended for your Mac" : ""].filter { !$0.isEmpty }.joined(separator: ", "))
         .accessibilityHint(self.showsInfo ? self.infoAccessibilityDescription : "\(presentation.summary). \(presentation.useCase) Browse without changing the selected model.")
         .overlay(alignment: .topTrailing) {
             // Sibling to the browse button: opening details never selects or activates a model.
@@ -134,8 +142,12 @@ struct FluidModelShowcaseCard: View {
 
     private var infoAccessibilityDescription: String {
         let language = PrivateAIModelPresentation.forModel(id: self.model.id).language
-        guard let bytes = self.model.artifact.byteCount, bytes > 0 else { return "Languages: \(language)" }
-        return "Languages: \(language). Download size: approximately \(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))."
+        var parts = ["Languages: \(language)."]
+        if let memory = self.model.recommendedMemoryGB { parts.append("Recommended: Mac with \(memory) GB or more RAM.") }
+        if let bytes = self.model.artifact.byteCount, bytes > 0 {
+            parts.append("Download size: approximately \(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)).")
+        }
+        return parts.joined(separator: " ")
     }
 }
 

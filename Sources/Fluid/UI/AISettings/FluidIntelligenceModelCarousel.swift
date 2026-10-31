@@ -42,7 +42,13 @@ struct FluidIntelligenceModelCarousel<Controls: View>: View {
                         }
                         .overlay(alignment: .bottom) {
                             if position == 0, let model = self.models.first(where: { $0.id == id }) {
-                                self.controls(model).padding(.horizontal, 16).padding(.bottom, 16)
+                                VStack(alignment: .leading, spacing: 8) {
+                                    if PrivateAIIntegrationService.readsDictationContext(model: model.id) {
+                                        ScreenContextChip(settings: SettingsStore.shared)
+                                    }
+                                    self.controls(model)
+                                }
+                                .padding(.horizontal, 16).padding(.bottom, 16)
                             }
                         }
                         .frame(width: position == 0 ? cardWidth : sideWidth, height: AppTheme.Metrics.Showcase.cardHeight)
@@ -131,7 +137,7 @@ struct FluidIntelligenceModelCarousel<Controls: View>: View {
                     .font(compact ? self.theme.typography.sectionTitle : self.theme.typography.title)
                     .foregroundStyle(self.theme.palette.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)
-                Text("Not available yet")
+                Text(model.note)
                     .font(self.theme.typography.body)
                     .foregroundStyle(self.theme.palette.tertiaryText)
                 Spacer(minLength: 0)

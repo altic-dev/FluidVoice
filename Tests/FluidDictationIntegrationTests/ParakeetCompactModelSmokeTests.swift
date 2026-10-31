@@ -172,10 +172,14 @@ final class ParakeetCompactModelSmokeTests: XCTestCase {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("FluidVoiceCompactModels-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let selection = SettingsStore.shared.selectedSpeechModel
-        for descriptor in [ParakeetSpeechModelCatalog.mini, ParakeetSpeechModelCatalog.pico] {
+        let hosted: [(ParakeetSpeechModelCatalog.Descriptor, SettingsStore.SpeechModel)] = [
+            (ParakeetSpeechModelCatalog.mini, .fluidParakeetMini),
+            (ParakeetSpeechModelCatalog.pico, .fluidParakeetPico),
+            (ParakeetSpeechModelCatalog.pro, .fluidParakeetPro),
+        ]
+        for (descriptor, model) in hosted {
             // Exercise first-download publication through the real provider's staged proof.
             do {
-                let model: SettingsStore.SpeechModel = descriptor.variant == .mini ? .fluidParakeetMini : .fluidParakeetPico
                 let provider = FluidAudioProvider(modelOverride: model, configureWordBoosting: false)
                 provider.modelCacheRootForTesting = root
                 try await provider.prepare()
@@ -186,7 +190,8 @@ final class ParakeetCompactModelSmokeTests: XCTestCase {
             XCTAssertTrue(descriptor.artifactsAreComplete(at: directory))
             let models = try await AsrModels.loadLocalOnly(from: directory, version: descriptor.asrModelVersion)
             XCTAssertEqual(models.version, descriptor.asrModelVersion)
-            XCTAssertNotNil(models.splitEncoder)
+            // Pro's Mac pack keeps one encoder; Mini and Pico ship theirs in pieces.
+            XCTAssertEqual(models.splitEncoder != nil, descriptor.variant != .pro)
             XCTAssertEqual(models.encoderOutputShape.count, 3)
             let hiddenDimension = try XCTUnwrap(models.encoderOutputShape.dropFirst().first)
             XCTAssertEqual(hiddenDimension, models.version.encoderHiddenSize)

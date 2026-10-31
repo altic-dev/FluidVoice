@@ -78,7 +78,7 @@ struct BottomWaveformView: View {
                     .foregroundStyle(self.barFillColor)
 
                 if self.isProcessingVisualActive {
-                    CompositorShimmerSweep(duration: 1.05, peakOpacity: 0.9)
+                    CompositorShimmerSweep(duration: 1.05, peakOpacity: 0.9, isActive: self.contentState.isBottomOverlayPresented)
                         .mask {
                             self.barsView
                         }

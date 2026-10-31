@@ -32,6 +32,7 @@ final class MeetingSummaryInputTests: XCTestCase {
             MeetingSummaryInput.fingerprint(MeetingSummaryInput.transcript(for: live)),
             MeetingSummaryInput.fingerprint(MeetingSummaryInput.transcript(for: reloaded))
         )
+        XCTAssertEqual(MeetingSummaryInput.contentFingerprint(for: live), MeetingSummaryInput.contentFingerprint(for: reloaded))
     }
 
     func testDurationLineIsUnchangedForMeetingsAlreadyOnWholeSeconds() {
@@ -49,12 +50,23 @@ final class MeetingSummaryInputTests: XCTestCase {
 
     func testChangedTextOrSpeakerInvalidatesSavedSummary() {
         var session = self.session(origin: 0, segmentStart: 0, segmentEnd: 1, gapStart: 2, gapEnd: 3)
-        let original = MeetingSummaryInput.fingerprint(MeetingSummaryInput.transcript(for: session))
+        let original = MeetingSummaryInput.contentFingerprint(for: session)
         session.transcriptSegments[0].text = "Corrected transcript"
-        let corrected = MeetingSummaryInput.fingerprint(MeetingSummaryInput.transcript(for: session))
+        let corrected = MeetingSummaryInput.contentFingerprint(for: session)
         XCTAssertNotEqual(original, corrected)
         session.speakers[0].displayName = "Maya"
-        XCTAssertNotEqual(corrected, MeetingSummaryInput.fingerprint(MeetingSummaryInput.transcript(for: session)))
+        XCTAssertNotEqual(corrected, MeetingSummaryInput.contentFingerprint(for: session))
+    }
+
+    func testRenamingKeepsContentFingerprintButUpdatesModelInput() {
+        var session = self.session(origin: 0, segmentStart: 0, segmentEnd: 1, gapStart: 2, gapEnd: 3)
+        let original = MeetingSummaryInput.contentFingerprint(for: session)
+        for title in ["Weekly Sync", "A title\nwith a second line", ""] {
+            session.title = title
+            session.updatedAt = session.updatedAt.addingTimeInterval(1)
+            XCTAssertEqual(MeetingSummaryInput.contentFingerprint(for: session), original)
+            XCTAssertTrue(MeetingSummaryInput.transcript(for: session).hasPrefix("Title: \(title)\n"))
+        }
     }
 
     @MainActor

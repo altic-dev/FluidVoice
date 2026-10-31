@@ -647,6 +647,7 @@ final class MeetingStillRecordingNudgeController: ObservableObject {
             panel.setFrame(Self.frame(abovePill: pillFrame, within: screen), display: false)
         }
         panel.orderFrontRegardless()
+        DebugLogger.shared.log("end-of-meeting-prompt-shown", source: "MeetingAutoDetector")
     }
 
     /// Centered just above the recording pill, pulled back inside the screen when the pill sits
@@ -665,6 +666,9 @@ final class MeetingStillRecordingNudgeController: ObservableObject {
     }
 
     func hide() {
+        if self.isPresented {
+            DebugLogger.shared.log("end-of-meeting-prompt-hidden", source: "MeetingAutoDetector")
+        }
         self.isPresented = false
         self.panel?.orderOut(nil)
     }

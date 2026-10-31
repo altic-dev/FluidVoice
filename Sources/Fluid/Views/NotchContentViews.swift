@@ -129,8 +129,15 @@ class NotchContentState: ObservableObject {
     @Published var recordingTargetPID: pid_t? = nil
     var recordingTargetContext: TypingService.RecordingTargetContext?
 
-    /// Cached transcription preview text to avoid recomputing on every render
-    @Published private(set) var cachedPreviewText: String = ""
+    /// The preview keeps its source position so trimming cannot move wrapped caption lines.
+    @Published private(set) var captionPreview: OverlayCaptionText = .empty
+    var cachedPreviewText: String { self.captionPreview.text }
+    private var transcriptionSourceOffset = 0
+
+    /// Bounded recovery context for a revision or a chunk that skips past the short preview.
+    var captionContext: OverlayCaptionText {
+        OverlayCaptionText(text: self.transcriptionText, sourceOffset: self.transcriptionSourceOffset)
+    }
 
     // MARK: - Expanded Command Output State
 
@@ -235,35 +242,23 @@ class NotchContentState: ObservableObject {
 
     /// Update transcription and recompute cached lines
     func updateTranscription(_ text: String) {
-        let boundedText = Self.tailCharacters(in: text, maxCharacters: Self.maxStoredTranscriptionCharacters)
-        guard boundedText != self.transcriptionText else { return }
+        let bounded = OverlayCaptionText.tail(text, limit: Self.maxStoredTranscriptionCharacters)
+        guard bounded.text != self.transcriptionText || bounded.sourceOffset != self.transcriptionSourceOffset else { return }
 
-        self.transcriptionText = boundedText
+        self.transcriptionSourceOffset = bounded.sourceOffset
+        self.transcriptionText = bounded.text
         self.recomputeTranscriptionLines()
     }
 
     /// Recompute cached transcription lines (called only when text changes)
     private func recomputeTranscriptionLines() {
-        let text = self.transcriptionText
-
-        guard !text.isEmpty else {
-            if !self.cachedPreviewText.isEmpty {
-                self.cachedPreviewText = ""
-            }
-            return
-        }
-
-        let maxChars = SettingsStore.shared.transcriptionPreviewCharLimit
-        let previewText = Self.tailCharacters(in: text, maxCharacters: maxChars)
-        guard previewText != self.cachedPreviewText else { return }
-        self.cachedPreviewText = previewText
-    }
-
-    private static func tailCharacters(in text: String, maxCharacters: Int) -> String {
-        guard maxCharacters > 0, !text.isEmpty else { return "" }
-
-        let start = text.index(text.endIndex, offsetBy: -maxCharacters, limitedBy: text.startIndex) ?? text.startIndex
-        return String(text[start..<text.endIndex])
+        let preview = OverlayCaptionText.tail(
+            self.transcriptionText,
+            limit: SettingsStore.shared.transcriptionPreviewCharLimit,
+            sourceOffset: self.transcriptionSourceOffset
+        )
+        guard preview != self.captionPreview else { return }
+        self.captionPreview = preview
     }
 
     // MARK: - Recording State for Expanded View
@@ -427,17 +422,23 @@ struct ShimmerText: View {
 }
 
 struct CompositorShimmerSweep: NSViewRepresentable {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var duration: CFTimeInterval = 1.0
     var peakOpacity: CGFloat = 0.88
+    var isActive = true
 
     func makeNSView(context: Context) -> CompositorShimmerSweepView {
         let view = CompositorShimmerSweepView()
-        view.configure(duration: self.duration, peakOpacity: self.peakOpacity)
+        view.configure(duration: self.duration, peakOpacity: self.peakOpacity, isActive: self.isActive && !self.reduceMotion)
         return view
     }
 
     func updateNSView(_ nsView: CompositorShimmerSweepView, context: Context) {
-        nsView.configure(duration: self.duration, peakOpacity: self.peakOpacity)
+        nsView.configure(duration: self.duration, peakOpacity: self.peakOpacity, isActive: self.isActive && !self.reduceMotion)
+    }
+
+    static func dismantleNSView(_ nsView: CompositorShimmerSweepView, coordinator: ()) {
+        nsView.configure(duration: 1, peakOpacity: 0, isActive: false)
     }
 }
 
@@ -445,6 +446,8 @@ final class CompositorShimmerSweepView: NSView {
     private let gradientLayer = CAGradientLayer()
     private var animationDuration: CFTimeInterval = 1.0
     private var peakOpacity: CGFloat = 0.88
+    private var isActive = true
+    private var visibilitySubscriptions = Set<AnyCancellable>()
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -476,14 +479,35 @@ final class CompositorShimmerSweepView: NSView {
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        if self.window == nil {
-            self.gradientLayer.removeAnimation(forKey: "fluid.shimmer.locations")
-        } else {
-            self.startAnimationIfNeeded()
+        self.visibilitySubscriptions.removeAll()
+        if let window {
+            NotificationCenter.default.publisher(for: NSWindow.didChangeOcclusionStateNotification)
+                .filter { [weak window] in $0.object as? NSWindow === window }
+                .sink { [weak self] _ in self?.updateAnimation() }
+                .store(in: &self.visibilitySubscriptions)
+            // Alpha-zero panels remain ordered in. Stop on that property change
+            // immediately; occlusion notifications arrive later from WindowServer.
+            window.publisher(for: \.alphaValue, options: [.new])
+                .sink { [weak self] _ in self?.updateAnimation() }
+                .store(in: &self.visibilitySubscriptions)
+            window.publisher(for: \.isVisible, options: [.new])
+                .sink { [weak self] _ in self?.updateAnimation() }
+                .store(in: &self.visibilitySubscriptions)
         }
+        self.updateAnimation()
     }
 
-    func configure(duration: CFTimeInterval, peakOpacity: CGFloat) {
+    override func viewDidHide() {
+        super.viewDidHide()
+        self.updateAnimation()
+    }
+
+    override func viewDidUnhide() {
+        super.viewDidUnhide()
+        self.updateAnimation()
+    }
+
+    func configure(duration: CFTimeInterval, peakOpacity: CGFloat, isActive: Bool = true) {
         let clampedDuration = max(duration, 0.2)
         let clampedOpacity = min(max(peakOpacity, 0.0), 1.0)
         let shouldRestart = abs(self.animationDuration - clampedDuration) > 0.01
@@ -491,12 +515,14 @@ final class CompositorShimmerSweepView: NSView {
 
         self.animationDuration = clampedDuration
         self.peakOpacity = clampedOpacity
+        self.isActive = isActive
         if shouldUpdateColors {
             self.updateColors()
         }
         if shouldRestart {
-            self.startAnimationIfNeeded()
+            self.gradientLayer.removeAnimation(forKey: "fluid.shimmer.locations")
         }
+        self.updateAnimation()
     }
 
     private func updateColors() {
@@ -507,9 +533,15 @@ final class CompositorShimmerSweepView: NSView {
         ]
     }
 
-    private func startAnimationIfNeeded() {
-        guard self.window != nil else { return }
-        self.gradientLayer.removeAnimation(forKey: "fluid.shimmer.locations")
+    private func updateAnimation() {
+        guard self.isActive, !self.isHiddenOrHasHiddenAncestor,
+              let window = self.window, window.isVisible, window.alphaValue > 0,
+              window.occlusionState.contains(.visible)
+        else {
+            self.gradientLayer.removeAnimation(forKey: "fluid.shimmer.locations")
+            return
+        }
+        guard self.gradientLayer.animation(forKey: "fluid.shimmer.locations") == nil else { return }
 
         let animation = CABasicAnimation(keyPath: "locations")
         animation.fromValue = [-0.45, -0.15, 0.15]
@@ -1133,31 +1165,14 @@ struct NotchExpandedView: View {
             } else if self.presentationPolicy.showsStreamingPreview && self.hasTranscription && !self.contentState.isProcessing {
                 let previewText = self.visiblePreviewText
                 if !previewText.isEmpty {
-                    ScrollViewReader { proxy in
-                        ScrollView(.vertical, showsIndicators: false) {
-                            Text(previewText)
-                                .font(.fluidSystem(size: 10, weight: .medium))
-                                .foregroundStyle(.white.opacity(0.75))
-                                .multilineTextAlignment(.leading)
-                                .lineLimit(nil)
-                                .fixedSize(horizontal: false, vertical: true)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                            Color.clear.frame(height: 1).id("bottom")
-                        }
-                        .frame(width: self.previewMaxWidth, alignment: .leading)
-                        .frame(maxHeight: self.previewMaxHeight, alignment: .leading)
-                        .clipped()
-                        .onAppear {
-                            DispatchQueue.main.async {
-                                proxy.scrollTo("bottom", anchor: .bottom)
-                            }
-                        }
-                        .onChange(of: previewText) { _, _ in
-                            DispatchQueue.main.async {
-                                proxy.scrollTo("bottom", anchor: .bottom)
-                            }
-                        }
-                    }
+                    OverlayCaptionView(
+                        caption: self.contentState.captionPreview,
+                        context: self.contentState.captionContext,
+                        fontSize: 10,
+                        maxHeight: self.previewMaxHeight,
+                        opacity: 0.75
+                    )
+                    .frame(width: self.previewMaxWidth, alignment: .leading)
                     .frame(maxWidth: .infinity, alignment: .center)
                     .transition(.opacity.combined(with: .scale(scale: 0.95)))
                 }
@@ -1401,13 +1416,17 @@ struct NotchCompactBottomView: View {
 
     var body: some View {
         ZStack(alignment: .leading) {
-            Text(self.compactPreviewText)
-                .font(.fluidSystem(size: 9, weight: .medium))
-                .foregroundStyle(.white.opacity(0.82))
-                .lineLimit(1)
-                .truncationMode(.head)
-                .offset(y: self.shouldShowPreview ? 0 : -4)
-                .opacity(self.shouldShowPreview ? 1 : 0)
+            OverlayCaptionView(
+                caption: self.contentState.captionPreview,
+                context: self.contentState.captionContext,
+                fontSize: 9,
+                maxHeight: self.previewHeight,
+                opacity: 0.82,
+                maxLines: 1,
+                isActive: self.shouldShowPreview
+            )
+            .offset(y: self.shouldShowPreview ? 0 : -4)
+            .opacity(self.shouldShowPreview ? 1 : 0)
         }
         .frame(width: self.previewWidth, height: SettingsStore.shared.enableStreamingPreview ? self.previewHeight : 0, alignment: .leading)
         .padding(.horizontal, SettingsStore.shared.enableStreamingPreview ? 10 : 0)
@@ -1432,6 +1451,7 @@ struct NotchCommandOutputExpandedView: View {
     @State private var inputText: String = ""
     @FocusState private var isInputFocused: Bool
     @State private var scrollProxy: ScrollViewProxy?
+    @State private var pendingScrollWorkItem: DispatchWorkItem?
     @State private var isHoveringNewChat = false
     @State private var isHoveringRecent = false
     @State private var isHoveringClear = false
@@ -1447,8 +1467,12 @@ struct NotchCommandOutputExpandedView: View {
     private var dynamicHeight: CGFloat {
         let baseHeight: CGFloat = 120 // Minimum height
         let contentHeight = self.estimateContentHeight()
+        // Reserve the caption's full height while recording so its wrapped lines
+        // cannot squeeze the header and follow-up input out of the window.
+        let captionHeight = self.contentState.isRecordingInExpandedMode && !self.contentState.cachedPreviewText.isEmpty
+            ? self.previewMaxHeight + 12 : 0
         let maxHeight = (NSScreen.main?.frame.height ?? 800) * 0.45 // 45% of screen
-        return min(max(baseHeight, contentHeight), maxHeight)
+        return min(max(baseHeight, contentHeight) + captionHeight, maxHeight)
     }
 
     private func estimateContentHeight() -> CGFloat {
@@ -1652,30 +1676,14 @@ struct NotchCommandOutputExpandedView: View {
             if self.contentState.isRecordingInExpandedMode && !self.contentState.transcriptionText.isEmpty {
                 let previewText = self.contentState.cachedPreviewText
                 if !previewText.isEmpty {
-                    ScrollViewReader { proxy in
-                        ScrollView(.vertical, showsIndicators: false) {
-                            Text(previewText)
-                                .font(.fluidSystem(size: 11, weight: .medium))
-                                .foregroundStyle(.white.opacity(0.75))
-                                .multilineTextAlignment(.leading)
-                                .lineLimit(nil)
-                                .fixedSize(horizontal: false, vertical: true)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                            Color.clear.frame(height: 1).id("bottom")
-                        }
-                        .frame(maxWidth: .infinity, maxHeight: self.previewMaxHeight)
-                        .clipped()
-                        .onAppear {
-                            DispatchQueue.main.async {
-                                proxy.scrollTo("bottom", anchor: .bottom)
-                            }
-                        }
-                        .onChange(of: previewText) { _, _ in
-                            DispatchQueue.main.async {
-                                proxy.scrollTo("bottom", anchor: .bottom)
-                            }
-                        }
-                    }
+                    OverlayCaptionView(
+                        caption: self.contentState.captionPreview,
+                        context: self.contentState.captionContext,
+                        fontSize: 11,
+                        maxHeight: self.previewMaxHeight,
+                        opacity: 0.75
+                    )
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 6)
                     .background(self.commandRed.opacity(0.1))
@@ -1684,7 +1692,6 @@ struct NotchCommandOutputExpandedView: View {
             }
         }
         .animation(.easeInOut(duration: 0.2), value: self.contentState.isRecordingInExpandedMode)
-        .animation(.easeInOut(duration: 0.15), value: self.contentState.transcriptionText)
     }
 
     // MARK: - Conversation Area
@@ -1720,6 +1727,11 @@ struct NotchCommandOutputExpandedView: View {
                 // Always scroll to bottom when view appears
                 self.scrollToBottom(proxy, animated: false)
             }
+            .onDisappear {
+                self.pendingScrollWorkItem?.cancel()
+                self.pendingScrollWorkItem = nil
+                self.scrollProxy = nil
+            }
             .onChange(of: self.contentState.commandConversationHistory.count) { _, _ in
                 self.scrollToBottom(proxy, animated: true)
             }
@@ -1735,7 +1747,10 @@ struct NotchCommandOutputExpandedView: View {
     }
 
     private func scrollToBottom(_ proxy: ScrollViewProxy, animated: Bool = true) {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+        guard self.pendingScrollWorkItem == nil else { return }
+        let work = DispatchWorkItem {
+            self.pendingScrollWorkItem = nil
+            guard self.scrollProxy != nil else { return }
             if animated {
                 withAnimation(.easeOut(duration: 0.15)) {
                     proxy.scrollTo("bottom", anchor: .bottom)
@@ -1744,6 +1759,8 @@ struct NotchCommandOutputExpandedView: View {
                 proxy.scrollTo("bottom", anchor: .bottom)
             }
         }
+        self.pendingScrollWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05, execute: work)
     }
 
     // MARK: - Message Views

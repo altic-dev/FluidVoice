@@ -48,7 +48,7 @@ struct VoiceEngineLanguageRoute: Identifiable, Equatable {
 
     var badgeText: String? {
         switch self.model {
-        case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico:
+        case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico, .fluidParakeetPro:
             return "Optimized for FluidVoice"
         default:
             return nil
@@ -168,6 +168,7 @@ enum VoiceEngineLanguageCatalog {
         if language.id == "en" {
             routes.append(Self.route(language, .fluidParakeetMini, .automatic))
             routes.append(Self.route(language, .fluidParakeetPico, .automatic))
+            routes.append(Self.route(language, .fluidParakeetPro, .automatic))
         }
 
         if let cohereLanguage = Self.cohereLanguage(for: language.id) {

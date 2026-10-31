@@ -44,7 +44,8 @@ final class ActiveAppMonitor: ObservableObject {
             queue: .main
         ) { [weak self] _ in
             Task { @MainActor [weak self] in
-                self?.updateActiveApp()
+                guard let self, self.isMonitoring else { return }
+                self.updateActiveApp()
             }
         }
     }

@@ -214,6 +214,30 @@ final class FluidServeTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(FluidServeMeetings.entries(root: self.root).first).meeting.durationSeconds, 35)
     }
 
+    func testVersionedSummariesSurviveTitleChangesButNotTranscriptChanges() throws {
+        var session = self.session(title: "Weekly sync")
+        try self.save(session)
+        let hash = MeetingSummaryInput.contentFingerprint(for: session)
+        try self.saveSummary("Detailed recap.", style: "detailed", for: session, transcriptHash: hash, transcriptHashVersion: 2)
+        try self.saveSummary("Custom recap.", style: "custom", for: session, transcriptHash: hash, promptHash: MeetingSummaryInput.fingerprint("Focus on risks"), transcriptHashVersion: 2)
+        try self.saveSummary("Unknown format.", style: "topics", for: session, transcriptHash: hash, transcriptHashVersion: 99)
+        try self.saveSummary("Legacy recap.", style: "executive", for: session)
+        let original = try XCTUnwrap(FluidServeMeetings.entries(root: self.root).first)
+        XCTAssertEqual(FluidServeMeetings.savedSummaries(for: original, customPrompt: "Focus on risks").map(\.style), ["custom", "detailed", "executive"])
+
+        session.title = "Renamed weekly sync"
+        try self.save(session)
+        let renamed = try XCTUnwrap(FluidServeMeetings.entries(root: self.root).first)
+        XCTAssertEqual(FluidServeMeetings.savedSummaries(for: renamed, customPrompt: "Focus on risks").map(\.style), ["custom", "detailed"])
+        XCTAssertEqual(FluidServeMeetings.savedSummaries(for: renamed, customPrompt: "New prompt").map(\.style), ["detailed"])
+        XCTAssertTrue(self.run("meet", "summary", "latest", "--style", "detailed").output.hasSuffix("Detailed recap."))
+
+        session.transcriptSegments[0].text = "Corrected transcript"
+        try self.save(session)
+        let corrected = try XCTUnwrap(FluidServeMeetings.entries(root: self.root).first)
+        XCTAssertTrue(FluidServeMeetings.savedSummaries(for: corrected, customPrompt: "Focus on risks").isEmpty)
+    }
+
     func testCommandNeverChangesTheMeetingsFolder() throws {
         let session = self.session(title: "Weekly sync")
         try self.save(session)
@@ -713,7 +737,8 @@ final class FluidServeTests: XCTestCase {
         for session: MeetingSession,
         providerID: String? = "on-device",
         transcriptHash: String? = nil,
-        promptHash: String? = nil
+        promptHash: String? = nil,
+        transcriptHashVersion: Int? = nil
     ) throws {
         let saved = MeetingSummaryController.SavedSummary(
             transcriptHash: transcriptHash ?? MeetingSummaryInput.fingerprint(MeetingSummaryInput.transcript(for: session)),
@@ -722,7 +747,8 @@ final class FluidServeTests: XCTestCase {
             providerID: providerID,
             generatedAt: Date(timeIntervalSince1970: 1_700_000_500),
             promptHash: promptHash,
-            modelName: "Qwen3.5 9B"
+            modelName: "Qwen3.5 9B",
+            transcriptHashVersion: transcriptHashVersion
         )
         try JSONEncoder().encode(saved).write(to: self.directory(for: session).appendingPathComponent("manual-summary-\(style).json"))
     }

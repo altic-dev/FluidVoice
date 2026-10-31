@@ -53,6 +53,13 @@ nonisolated enum MeetingSummaryInput {
     static func fingerprint(_ text: String) -> String {
         SHA256.hash(data: Data(text.utf8)).map { String(format: "%02x", $0) }.joined()
     }
+
+    static func contentFingerprint(for session: MeetingSession) -> String {
+        // Keep the title in the model's input, but exclude it from summary validity.
+        var source = session
+        source.title = ""
+        return self.fingerprint(self.transcript(for: source))
+    }
 }
 
 /// Keeps summary admission separate from ordinary processing, including cloud calls that
@@ -148,6 +155,12 @@ final class MeetingSummaryController: ObservableObject {
     @Published private(set) var error: String?
     private var operation: Task<Void, Never>?
     private var generation = UUID()
+    private let store: any MeetingSessionStoring
+
+    init(store: any MeetingSessionStoring = MeetingSessionStore.shared) {
+        self.store = store
+    }
+
     var busy: Bool {
         self.downloading || self.generating || self.deleting
     }
@@ -157,7 +170,9 @@ final class MeetingSummaryController: ObservableObject {
     }
 
     nonisolated struct SavedSummary: Codable {
-        let transcriptHash: String
+        static let currentTranscriptHashVersion = 2
+
+        var transcriptHash: String
         let modelID: String
         let text: String
         var providerID: String?
@@ -169,6 +184,8 @@ final class MeetingSummaryController: ObservableObject {
         var promptHash: String?
         /// Display name of an on-device model, whose ID is not meant to be read.
         var modelName: String?
+        /// Version 2 excludes the meeting title. A missing version uses the original full input.
+        var transcriptHashVersion: Int?
 
         var provenance: String {
             "\(self.providerName ?? "Fluid Intelligence") · \(self.modelName ?? self.modelID)"
@@ -185,6 +202,37 @@ final class MeetingSummaryController: ObservableObject {
         func isCurrent(transcriptHash: String, promptHash: String?) -> Bool {
             self.providerID != nil && self.transcriptHash == transcriptHash && self.promptHash == promptHash
         }
+
+        func isCurrent(session: MeetingSession, promptHash: String?) -> Bool {
+            let hash: String
+            switch self.transcriptHashVersion {
+            case nil:
+                hash = MeetingSummaryInput.fingerprint(MeetingSummaryInput.transcript(for: session))
+            case Self.currentTranscriptHashVersion:
+                hash = MeetingSummaryInput.contentFingerprint(for: session)
+            default:
+                return false
+            }
+            return self.isCurrent(transcriptHash: hash, promptHash: promptHash)
+        }
+
+        /// Upgrade before saving a rename, while the original title can still verify old files.
+        /// Each upgrade remains valid even if a later write (including the rename) fails.
+        static func migrateLegacySummaries(in directory: URL, for session: MeetingSession) throws {
+            let legacyHash = MeetingSummaryInput.fingerprint(MeetingSummaryInput.transcript(for: session))
+            let contentHash = MeetingSummaryInput.contentFingerprint(for: session)
+            for kind in MeetingSummaryKind.allCases {
+                let url = directory.appendingPathComponent("manual-summary-\(kind.rawValue).json")
+                guard var saved = try? JSONDecoder().decode(Self.self, from: Data(contentsOf: url)),
+                      saved.transcriptHashVersion == nil,
+                      saved.providerID != nil,
+                      saved.transcriptHash == legacyHash
+                else { continue }
+                saved.transcriptHash = contentHash
+                saved.transcriptHashVersion = Self.currentTranscriptHashVersion
+                try JSONEncoder().encode(saved).write(to: url, options: .atomic)
+            }
+        }
     }
 
     func refresh(session: MeetingSession?, kind: MeetingSummaryKind, customPrompt: String = "") async {
@@ -197,15 +245,16 @@ final class MeetingSummaryController: ObservableObject {
         self.error = nil
         self.checking = true
         let model = self.model
+        let store = self.store
         let promptHash = kind == .custom ? MeetingSummaryInput.fingerprint(customPrompt.trimmingCharacters(in: .whitespacesAndNewlines)) : nil
         let snapshot = await Task.detached(priority: .utility) { () -> (Bool, SavedSummary?) in
             let installed = model.map { PrivateAIIntegrationService.isModelInstalled($0) } ?? false
             guard let session,
-                  let directory = try? await MeetingSessionStore.shared.existingSessionDirectory(for: session.id),
+                  let directory = try? await store.existingSessionDirectory(for: session.id),
                   let data = try? Data(contentsOf: directory.appendingPathComponent("manual-summary-\(kind.rawValue).json")),
                   let saved = try? JSONDecoder().decode(SavedSummary.self, from: data),
                   saved.isCurrent(
-                      transcriptHash: MeetingSummaryInput.fingerprint(MeetingSummaryInput.transcript(for: session)),
+                      session: session,
                       promptHash: promptHash
                   )
             else { return (installed, nil) }
@@ -281,7 +330,9 @@ final class MeetingSummaryController: ObservableObject {
             }
             do {
                 try await MeetingSummaryActivityCoordinator.shared.withRemoteSummary {
-                    let transcript = await Task.detached(priority: .utility) { MeetingSummaryInput.transcript(for: session) }.value
+                    let (transcript, contentHash) = await Task.detached(priority: .utility) {
+                        (MeetingSummaryInput.transcript(for: session), MeetingSummaryInput.contentFingerprint(for: session))
+                    }.value
                     guard session.transcriptSegments.contains(where: { !$0.isEcho && !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) else {
                         throw MeetingPostProcessingError.invalidOutput
                     }
@@ -294,11 +345,11 @@ final class MeetingSummaryController: ObservableObject {
                         customInstructions: instructions
                     )
                     try Task.checkCancellation()
-                    guard let directory = try await MeetingSessionStore.shared.existingSessionDirectory(for: session.id) else {
+                    guard let directory = try await self.store.existingSessionDirectory(for: session.id) else {
                         throw MeetingPostProcessingError.checkpointFailed
                     }
                     let saved = SavedSummary(
-                        transcriptHash: MeetingSummaryInput.fingerprint(transcript),
+                        transcriptHash: contentHash,
                         modelID: route.modelID,
                         text: text,
                         providerID: route.providerID,
@@ -306,7 +357,8 @@ final class MeetingSummaryController: ObservableObject {
                         configurationHash: route.configurationHash,
                         promptVersion: 1,
                         generatedAt: Date(),
-                        promptHash: kind == .custom ? MeetingSummaryInput.fingerprint(instructions) : nil
+                        promptHash: kind == .custom ? MeetingSummaryInput.fingerprint(instructions) : nil,
+                        transcriptHashVersion: SavedSummary.currentTranscriptHashVersion
                     )
                     try await Task.detached(priority: .utility) {
                         try JSONEncoder().encode(saved).write(to: directory.appendingPathComponent("manual-summary-\(kind.rawValue).json"), options: .atomic)
@@ -344,7 +396,9 @@ final class MeetingSummaryController: ObservableObject {
             }
             do {
                 try await MeetingSummaryActivityCoordinator.shared.withSummary(activity: asr) {
-                    let transcript = await Task.detached(priority: .utility) { MeetingSummaryInput.transcript(for: session) }.value
+                    let (transcript, contentHash) = await Task.detached(priority: .utility) {
+                        (MeetingSummaryInput.transcript(for: session), MeetingSummaryInput.contentFingerprint(for: session))
+                    }.value
                     guard transcript.utf8.count <= MeetingSummaryOnDevice.maximumTranscriptBytes else {
                         throw MeetingPostProcessingError.inputTooLarge
                     }
@@ -367,11 +421,11 @@ final class MeetingSummaryController: ObservableObject {
                     }
                     try Task.checkCancellation()
                     guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw MeetingPostProcessingError.invalidOutput }
-                    guard let directory = try await MeetingSessionStore.shared.existingSessionDirectory(for: session.id) else {
+                    guard let directory = try await self.store.existingSessionDirectory(for: session.id) else {
                         throw MeetingPostProcessingError.checkpointFailed
                     }
                     let saved = SavedSummary(
-                        transcriptHash: MeetingSummaryInput.fingerprint(transcript),
+                        transcriptHash: contentHash,
                         modelID: model.id,
                         text: text,
                         providerID: MeetingSummaryOnDevice.providerID,
@@ -380,7 +434,8 @@ final class MeetingSummaryController: ObservableObject {
                         promptVersion: 1,
                         generatedAt: Date(),
                         promptHash: kind == .custom ? MeetingSummaryInput.fingerprint(instructions) : nil,
-                        modelName: model.displayName
+                        modelName: model.displayName,
+                        transcriptHashVersion: SavedSummary.currentTranscriptHashVersion
                     )
                     try await Task.detached(priority: .utility) {
                         try JSONEncoder().encode(saved).write(to: directory.appendingPathComponent("manual-summary-\(kind.rawValue).json"), options: .atomic)

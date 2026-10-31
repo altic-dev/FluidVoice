@@ -444,7 +444,7 @@ struct MeetingResultCanvas: View {
 
                 if self.documentSection == .summary {
                     MeetingSummaryView(session: self.session, isQuiescent: self.isQuiescent)
-                        .id("\(self.session.id)-\(self.session.updatedAt)")
+                        .id(self.session.id)
                 } else {
                     if let warning = self.session.microphoneEchoWarning {
                         MeetingAudioTranscriptNotice(

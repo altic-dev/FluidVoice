@@ -32,7 +32,7 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/altic-dev/FluidAudio.git",
       "state" : {
-        "revision" : "eb1e6628998e47022799d305b52c2680d3576801"
+        "revision" : "386f7195670b77f2954c7ee143ec63fcb50b6c3b"
       }
     },
     {

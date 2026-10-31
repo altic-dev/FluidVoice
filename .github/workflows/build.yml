@@ -108,12 +108,29 @@ jobs:
     - name: Build and test (excluding flaky Tiny Whisper E2E)
       run: |
         set -o pipefail
+        mkdir -p build/test-results
         xcodebuild test \
           -project Fluid.xcodeproj \
           -scheme Fluid \
           -destination 'platform=macOS,arch=arm64' \
+          -resultBundlePath build/test-results/Fluid.xcresult \
           -skip-testing:FluidDictationIntegrationTests/DictationE2ETests/testDictationEndToEnd_whisperTiny_transcribesFixture \
           CODE_SIGN_IDENTITY="" \
           CODE_SIGNING_REQUIRED=NO \
           CODE_SIGNING_ALLOWED=NO \
-          | xcpretty
+          2>&1 | tee build/test-results/xcodebuild.log | xcpretty
+
+    - name: Collect crash reports
+      if: always()
+      run: |
+        mkdir -p build/test-results/crashes
+        find "$HOME/Library/Logs/DiagnosticReports" -maxdepth 1 -type f -name 'FluidVoice*' -exec cp {} build/test-results/crashes/ \; 2>/dev/null || true
+
+    - name: Save test diagnostics
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: macos-test-results
+        path: build/test-results
+        if-no-files-found: ignore
+        retention-days: 7

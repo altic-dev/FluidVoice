@@ -254,6 +254,9 @@ protocol PrivateAIIntegrationProviding: Sendable {
     func commitModelUpdate(_ token: PrivateAIModelUpdateToken) async
     func rollbackModelUpdate(_ token: PrivateAIModelUpdateToken) async
     func shouldHandleDictation(model: String) -> Bool
+    /// True when the model was trained to read the text before the cursor
+    /// and on screen, so dictation only captures them for that model.
+    func readsDictationContext(model: String) -> Bool
     func status(for runtime: PrivateAIIntegrationService.RuntimeConfiguration) async -> PrivateAIStatus
     func loadedModelState() async -> PrivateAIIntegrationService.LoadedModelState?
     func residencySnapshot() async throws -> MeetingResidentModel?
@@ -307,6 +310,8 @@ extension PrivateAIIntegrationProviding {
     }
 
     func restoreResidency(_: MeetingResidentModel) async throws {}
+
+    func readsDictationContext(model _: String) -> Bool { false }
 
     func verifyModel(_ model: PrivateAIRegisteredModel) async throws -> PrivateAIStatus {
         try await self.loadModel(model)

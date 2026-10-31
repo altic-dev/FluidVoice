@@ -166,6 +166,7 @@ final class MeetingAutoDetector {
     private var titleEnrichmentInFlight: Set<Int32> = []
     private var lastHealth: Health?
     private var audioQueryUnknown = false
+    private var lastEndWatchStatus: String?
 
     init(
         workspaceEvents: any WorkspaceEventsProviding,
@@ -667,6 +668,7 @@ final class MeetingAutoDetector {
         case .ended:
             if watched.browserCallEndedAt == nil {
                 watched.browserCallEndedAt = now
+                DebugLogger.shared.log("browser-call-state=ended evidence=post-call-page bundle=\(bundleIdentifier)", source: "MeetingAutoDetector")
             }
         case .inCall:
             watched.browserCallEndedAt = nil
@@ -791,7 +793,10 @@ final class MeetingAutoDetector {
     func adoptStartedEpisode(episodeID: UUID) {
         guard let key = self.episodesByKey.first(where: { $0.value.id == episodeID })?.key,
               var episode = self.episodesByKey[key]
-        else { return }
+        else {
+            DebugLogger.shared.log("end-of-meeting-watch-not-attached reason=episode-retired", source: "MeetingAutoDetector")
+            return
+        }
         episode.consumed = true
         self.episodesByKey[key] = episode
         self.activeConsumedEpisodeKey = key
@@ -811,6 +816,8 @@ final class MeetingAutoDetector {
             sawProcessAudio: record?.processAudioWasActive == true,
             browserCallEvidenceKey: record?.windowEvidenceKey
         )
+        self.lastEndWatchStatus = nil
+        DebugLogger.shared.log("end-of-meeting-watch-started path=prompt bundle=\(episode.bundleIdentifier)", source: "MeetingAutoDetector")
     }
 
     /// Called for every real recording, including manual and menu-bar starts. This observes
@@ -844,17 +851,32 @@ final class MeetingAutoDetector {
                 sawProcessAudio: record.processAudioWasActive,
                 browserCallEvidenceKey: record.windowEvidenceKey
             )
+            self.lastEndWatchStatus = nil
         }
+        DebugLogger.shared.log("end-of-meeting-watch-started bundle=\(application.bundleIdentifier)", source: "MeetingAutoDetector")
     }
 
     /// Our recording is over, however it ended. Nothing is left to ask about.
-    func recordingStopped() {
+    func recordingStopped(reason: String = "recording-stopped") {
+        if let watched = self.watchedRecording {
+            DebugLogger.shared.log("end-of-meeting-watch-stopped reason=\(reason) bundle=\(watched.bundleIdentifier)", source: "MeetingAutoDetector")
+        }
         self.watchedRecording = nil
+        self.lastEndWatchStatus = nil
     }
 
     /// The user closed the "Meeting ended?" question without stopping.
     func stillRecordingNudgeDismissed() {
         self.watchedRecording?.silenced = true
+        if let watched = self.watchedRecording {
+            self.logEndWatchStatus("dismissed-by-user", bundleIdentifier: watched.bundleIdentifier)
+        }
+    }
+
+    private func logEndWatchStatus(_ status: String, bundleIdentifier: String) {
+        guard self.lastEndWatchStatus != status else { return }
+        self.lastEndWatchStatus = status
+        DebugLogger.shared.log("end-of-meeting-watch state=\(status) bundle=\(bundleIdentifier)", source: "MeetingAutoDetector")
     }
 
     /// Atomic gate re-check + single-shot consume. Returns false if the episode is unknown,
@@ -1018,6 +1040,17 @@ final class MeetingAutoDetector {
         if shouldAsk { watched.asked = true }
         if shouldWithdraw { watched.asked = false }
         self.watchedRecording = watched
+        let status: String
+        if watched.asked {
+            status = "question-requested"
+        } else if askAt != nil {
+            status = stillTalking ? "waiting-for-caption-quiet" : "waiting-for-end-grace"
+        } else if audioUnknown {
+            status = "audio-query-unknown"
+        } else {
+            status = watched.sawProcessAudio ? "no-end-signal" : "waiting-for-app-audio"
+        }
+        self.logEndWatchStatus(status, bundleIdentifier: watched.bundleIdentifier)
         if shouldAsk {
             DebugLogger.shared.log("end-of-meeting-asked", source: "MeetingAutoDetector")
             self.onStillRecordingNudge?()
@@ -1043,7 +1076,7 @@ final class MeetingAutoDetector {
         self.activeConsumedEpisodeKey = nil
         // With the records gone the app would look like it quit. Stop watching instead of guessing.
         // A question already on screen stays there for the user to answer.
-        self.watchedRecording = nil
+        self.recordingStopped(reason: "lock-sleep-or-session-switch")
         self.lastBrowserPollAt = [:]
         for episodeID in unconsumedIDs {
             self.onEpisodeInvalidated?(episodeID)

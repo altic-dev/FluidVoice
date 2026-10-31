@@ -73,6 +73,7 @@ enum SettingsSearchTarget: Hashable {
     case fasterLongDictation
     case dictionaryMatcherExperiments
     case historyPerformance
+    case dictationScreenContext
 
     var section: SettingsSection {
         switch self {
@@ -132,7 +133,7 @@ enum SettingsSearchTarget: Hashable {
         case .dataAndDiagnostics, .backupAndRestore, .debugLogs:
             return .dataAndDiagnostics
 
-        case .experimental, .returnToStartingField, .fasterLongDictation, .dictionaryMatcherExperiments, .historyPerformance:
+        case .experimental, .returnToStartingField, .fasterLongDictation, .dictionaryMatcherExperiments, .historyPerformance, .dictationScreenContext:
             return .experimental
         }
     }
@@ -174,6 +175,7 @@ struct SettingsSearchAvailability {
     let savesTranscriptionHistory: Bool
     let savesAudioWithTranscriptionHistory: Bool
     let overlayAtBottom: Bool
+    let privateAIAvailable: Bool
 
     static var current: Self {
         let settings = SettingsStore.shared
@@ -182,7 +184,8 @@ struct SettingsSearchAvailability {
             accessibilityEnabled: AXIsProcessTrusted(),
             savesTranscriptionHistory: settings.saveTranscriptionHistory,
             savesAudioWithTranscriptionHistory: settings.saveAudioWithTranscriptionHistory,
-            overlayAtBottom: settings.overlayPosition == .bottom
+            overlayAtBottom: settings.overlayPosition == .bottom,
+            privateAIAvailable: PrivateAIProviderFeature.shared.isAvailable
         )
     }
 
@@ -216,6 +219,8 @@ struct SettingsSearchAvailability {
                 self.savesAudioWithTranscriptionHistory
         case .bottomOffset:
             return self.overlayAtBottom
+        case .dictationScreenContext:
+            return self.privateAIAvailable
         default:
             return true
         }
@@ -461,6 +466,11 @@ enum SettingsSearchIndex {
             target: .historyPerformance,
             title: "Show Performance in History",
             terms: ["timing speed tokens per second ASR cleanup Fluid Intelligence"]
+        ),
+        .init(
+            target: .dictationScreenContext,
+            title: "Use my active screen to improve dictation accuracy",
+            terms: ["experimental Fluid Intelligence context OCR screen words window capture recording permission accessibility cursor names spelling"]
         ),
     ]
 

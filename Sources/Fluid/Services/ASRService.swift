@@ -1211,7 +1211,7 @@ final class ASRService: ObservableObject {
             }
         case .appleSpeech:
             return self.getAppleSpeechProvider()
-        case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico:
+        case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico, .fluidParakeetPro:
             return self.getFluidAudioProvider()
         case .parakeetRealtime:
             return self.getParakeetRealtimeProvider()
@@ -1343,7 +1343,7 @@ final class ASRService: ObservableObject {
             }
         case .appleSpeech:
             return AppleSpeechProvider()
-        case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico:
+        case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico, .fluidParakeetPro:
             // Create a new provider configured for the specific model
             return FluidAudioProvider(modelOverride: model, configureWordBoosting: false, updateCompactWeights: updateWeights)
         case .parakeetRealtime:
