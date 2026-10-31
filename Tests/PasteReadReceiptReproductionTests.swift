@@ -221,19 +221,26 @@ enum PasteReadReceiptReproductionTests {
         defer { board.releaseGlobally() }
         let manager = ReceiptObservingPasteboard(board: board)
         self.expect(manager.base.writeIntentionalText("original"))
-        let coordinator = PasteDeliveryCoordinator(pasteboard: manager, commandPoster: ReceiptTestPoster(), settlementDelayNanoseconds: 10_000_000, readTimeoutNanoseconds: 80_000_000)
+        // This case checks stale receipts; timeout retention has its own case.
+        // Keep the unread lease alive until this test explicitly reads it.
+        let coordinator = PasteDeliveryCoordinator(pasteboard: manager, commandPoster: ReceiptTestPoster(), settlementDelayNanoseconds: 10_000_000, readTimeoutNanoseconds: .max)
         _ = await coordinator.deliver("first", preserveTranscriptOnClipboard: false)
         let oldHandler = manager.handlers[0]
         let firstRevision = board.changeCount
+        self.expect(board.string(forType: .string) == "first")
         await self.waitUntil { board.changeCount != firstRevision }
         _ = await coordinator.deliver("second", preserveTranscriptOnClipboard: false)
         let secondRevision = board.changeCount
         oldHandler(ProcessInfo.processInfo.systemUptime)
         try? await Task.sleep(nanoseconds: 30_000_000)
         self.expect(board.changeCount == secondRevision, "A stale first receipt must not schedule the next delivery's restoration")
+        // A busy CI runner may resume after the old 80 ms timeout. Deliberately
+        // delay the reader so timeout behavior cannot masquerade as a stale receipt.
+        try? await Task.sleep(nanoseconds: 120_000_000)
         self.expect(board.string(forType: .string) == "second")
         await self.waitUntil { board.changeCount != secondRevision }
-        self.expect(board.string(forType: .string) == "first")
+        let restored = board.string(forType: .string)
+        self.expect(restored == "original", "Current receipt should restore its captured clipboard; got \(String(describing: restored))")
         print("PASS: a late receipt from the previous generation cannot settle the current paste")
     }
 
