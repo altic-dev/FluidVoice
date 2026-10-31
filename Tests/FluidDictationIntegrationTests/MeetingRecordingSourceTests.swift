@@ -35,6 +35,13 @@ final class MeetingRecordingSourceTests: XCTestCase {
         )
     }
 
+    func testMicrophoneLabelWhenNoDevicesAreAvailable() {
+        var snapshot = self.snapshot()
+        snapshot.microphones = MeetingMicrophoneCatalogSnapshot(identities: [], defaultCoreAudioUID: nil)
+        snapshot.selectedMicrophoneID = nil
+        XCTAssertEqual(snapshot.microphoneSelectionLabel, "No microphone available")
+    }
+
     func testDraftRestoresManualSourceWithoutPersistingAutomaticSuggestions() {
         var defaults = MeetingRecordingDefaults.unconfigured
         defaults.isConfigured = true
@@ -260,6 +267,95 @@ final class MeetingRecordingSourceTests: XCTestCase {
         XCTAssertEqual(controller.snapshot?.selectedMicrophoneID, secondMic.captureDeviceID)
         XCTAssertEqual(controller.snapshot?.defaults.mode, .onlineCall)
         XCTAssertTrue(controller.canConfirm)
+        controller.cancel()
+    }
+
+    func testRefreshRequiresAReplacementForADisconnectedMicrophone() async {
+        let chosen = MeetingMicrophoneIdentity(captureDeviceID: "chosen", coreAudioUID: "chosen", displayName: "Chosen microphone")
+        var loaded = self.snapshot()
+        loaded.microphones = MeetingMicrophoneCatalogSnapshot(identities: [self.mic, chosen], defaultCoreAudioUID: "mic")
+        var recordedMicrophone: String?
+        let controller = MeetingRecordingSourcePromptController(showsPanel: false, load: { _ in loaded }, start: { snapshot in
+            recordedMicrophone = try snapshot.configuration(applications: loaded.applications, microphones: loaded.microphones.identities).microphone.captureDeviceID
+        })
+        controller.handleShortcut()
+        await self.waitUntil { !controller.isLoading }
+        controller.selectMicrophone(chosen.captureDeviceID)
+
+        loaded.microphones = MeetingMicrophoneCatalogSnapshot(identities: [self.mic], defaultCoreAudioUID: "mic")
+        controller.refresh()
+        await self.waitUntil { !controller.isLoading }
+        XCTAssertNil(controller.snapshot?.selectedMicrophoneID)
+        XCTAssertEqual(controller.snapshot?.microphoneSelectionLabel, "Choose a microphone…")
+        XCTAssertFalse(controller.canConfirm)
+        controller.confirm()
+        XCTAssertNil(recordedMicrophone)
+
+        controller.refresh()
+        await self.waitUntil { !controller.isLoading }
+        XCTAssertNil(controller.snapshot?.selectedMicrophoneID, "Refreshing without a selection must not choose the default")
+        XCTAssertFalse(controller.canConfirm)
+        controller.selectMicrophone(self.mic.captureDeviceID)
+        XCTAssertEqual(controller.snapshot?.microphoneSelectionLabel, self.mic.displayName)
+        XCTAssertTrue(controller.canConfirm)
+        controller.confirm()
+        await self.waitUntil { !controller.isPresented }
+        XCTAssertEqual(recordedMicrophone, self.mic.captureDeviceID)
+    }
+
+    func testFailedRefreshDoesNotForgetThePreviousMicrophone() async {
+        let chosen = MeetingMicrophoneIdentity(captureDeviceID: "chosen", coreAudioUID: "chosen", displayName: "Chosen microphone")
+        var loaded = self.snapshot()
+        loaded.microphones = MeetingMicrophoneCatalogSnapshot(identities: [self.mic, chosen], defaultCoreAudioUID: "mic")
+        var shouldFail = false
+        var starts = 0
+        let controller = MeetingRecordingSourcePromptController(
+            showsPanel: false,
+            load: { _ in
+                if shouldFail { throw MeetingCaptureError.microphoneUnavailable }
+                return loaded
+            },
+            start: { _ in starts += 1 }
+        )
+        controller.handleShortcut()
+        await self.waitUntil { !controller.isLoading }
+        controller.selectMicrophone(chosen.captureDeviceID)
+
+        shouldFail = true
+        controller.refresh()
+        await self.waitUntil { !controller.isLoading }
+        XCTAssertNotNil(controller.errorMessage)
+        XCTAssertFalse(controller.canConfirm)
+        controller.confirm()
+        XCTAssertEqual(starts, 0)
+
+        shouldFail = false
+        loaded.microphones = MeetingMicrophoneCatalogSnapshot(identities: [self.mic], defaultCoreAudioUID: "mic")
+        controller.refresh()
+        await self.waitUntil { !controller.isLoading }
+        XCTAssertNil(controller.snapshot?.selectedMicrophoneID)
+        XCTAssertFalse(controller.canConfirm)
+        controller.cancel()
+    }
+
+    func testFailedInitialDiscoveryKeepsThePageMicrophoneChoiceOnRetry() async {
+        var shouldFail = true
+        let controller = MeetingRecordingSourcePromptController(
+            showsPanel: false,
+            load: { _ in
+                if shouldFail { throw MeetingCaptureError.microphoneUnavailable }
+                return self.snapshot()
+            },
+            start: { _ in XCTFail("An unavailable microphone must not start recording") }
+        )
+        controller.handleShortcut(microphoneID: "disconnected")
+        await self.waitUntil { !controller.isLoading }
+        XCTAssertNotNil(controller.errorMessage)
+        shouldFail = false
+        controller.refresh()
+        await self.waitUntil { !controller.isLoading }
+        XCTAssertNil(controller.snapshot?.selectedMicrophoneID)
+        XCTAssertFalse(controller.canConfirm)
         controller.cancel()
     }
 

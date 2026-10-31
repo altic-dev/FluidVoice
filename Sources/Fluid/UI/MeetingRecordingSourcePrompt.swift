@@ -13,6 +13,13 @@ nonisolated struct MeetingRecordingSourceSnapshot: Sendable {
     var sourceMessage: String?
     var recentApplication: MeetingApplicationIdentity?
 
+    var microphoneSelectionLabel: String {
+        if let selected = self.microphones.identities.first(where: { $0.captureDeviceID == self.selectedMicrophoneID }) {
+            return selected.displayName
+        }
+        return self.microphones.identities.isEmpty ? "No microphone available" : "Choose a microphone…"
+    }
+
     var availableRecentApplication: MeetingApplicationIdentity? {
         guard let recentApplication else { return nil }
         if let exact = try? MeetingRecordingSourceResolver.resolve(
@@ -92,6 +99,8 @@ final class MeetingRecordingSourcePromptController: ObservableObject {
     private var generation = UUID()
     private var task: Task<Void, Never>?
     private var panel: MeetingFloatingCaptionsPanel?
+    private var refreshSelection: MeetingRecordingSourceSnapshot?
+    private var refreshMicrophoneID: String?
     private let load: Loader
     private let start: Starter
     private let showsPanel: Bool
@@ -121,6 +130,8 @@ final class MeetingRecordingSourcePromptController: ObservableObject {
         }
         self.generation = UUID()
         let generation = self.generation
+        self.refreshSelection = selection
+        self.refreshMicrophoneID = microphoneID
         self.snapshot = nil
         self.errorMessage = nil
         self.isLoading = true
@@ -146,9 +157,10 @@ final class MeetingRecordingSourcePromptController: ObservableObject {
                     } else if selection.defaults.mode == .inRoom {
                         snapshot.selectedApplication = nil
                     }
-                    if snapshot.microphones.identities.contains(where: { $0.captureDeviceID == selection.selectedMicrophoneID }) {
-                        snapshot.selectedMicrophoneID = selection.selectedMicrophoneID
-                    }
+                    // A refresh must not replace a disconnected or absent selection
+                    // with the newly discovered default microphone.
+                    snapshot.selectedMicrophoneID = snapshot.microphones.identities.contains(where: { $0.captureDeviceID == selection.selectedMicrophoneID })
+                        ? selection.selectedMicrophoneID : nil
                 }
                 if let microphoneID {
                     // A page selection is explicit. If it disappeared, require another
@@ -156,6 +168,8 @@ final class MeetingRecordingSourcePromptController: ObservableObject {
                     snapshot.selectedMicrophoneID = snapshot.microphones.identities.contains(where: { $0.captureDeviceID == microphoneID }) ? microphoneID : nil
                 }
                 guard !Task.isCancelled, self.generation == generation, self.isPresented else { return }
+                self.refreshSelection = nil
+                self.refreshMicrophoneID = nil
                 self.snapshot = snapshot
                 self.errorMessage = snapshot.sourceMessage
                 self.isLoading = false
@@ -185,9 +199,10 @@ final class MeetingRecordingSourcePromptController: ObservableObject {
 
     func refresh() {
         guard !self.isStarting, !self.isLoading else { return }
-        let selection = self.snapshot
+        let selection = self.snapshot ?? self.refreshSelection
+        let microphoneID = self.refreshMicrophoneID
         self.cancel()
-        self.handleShortcut(foreground: selection?.selectedApplication, restoring: selection)
+        self.handleShortcut(foreground: selection?.selectedApplication, restoring: selection, microphoneID: microphoneID)
     }
 
     func confirm() {
@@ -227,6 +242,8 @@ final class MeetingRecordingSourcePromptController: ObservableObject {
         self.isLoading = false
         self.isStarting = false
         self.snapshot = nil
+        self.refreshSelection = nil
+        self.refreshMicrophoneID = nil
         self.panel?.orderOut(nil)
     }
 
@@ -399,12 +416,12 @@ struct MeetingRecordingSourcePromptContent: View {
                 Button(microphone.displayName) { self.controller.selectMicrophone(microphone.captureDeviceID) }
             }
         } label: {
-            Text(snapshot.microphones.identities.first(where: { $0.captureDeviceID == snapshot.selectedMicrophoneID })?.displayName ?? "No microphone available")
+            Text(snapshot.microphoneSelectionLabel)
                 .lineLimit(1).truncationMode(.middle)
         }
         .fluidDropdownStyle(fillsWidth: true)
         .accessibilityLabel("Microphone to record")
-        .accessibilityValue(snapshot.microphones.identities.first(where: { $0.captureDeviceID == snapshot.selectedMicrophoneID })?.displayName ?? "No microphone available")
+        .accessibilityValue(snapshot.microphoneSelectionLabel)
         .disabled(self.controller.isStarting)
     }
 }
