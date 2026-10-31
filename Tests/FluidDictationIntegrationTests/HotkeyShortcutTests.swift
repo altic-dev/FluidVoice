@@ -418,6 +418,9 @@ final class HotkeyShortcutTests: XCTestCase {
         manager.setPasteLastTranscriptionCallback {}
         let down = try XCTUnwrap(CGEvent(mouseEventSource: nil, mouseType: .otherMouseDown, mouseCursorPosition: .zero, mouseButton: .center))
         let up = try XCTUnwrap(CGEvent(mouseEventSource: nil, mouseType: .otherMouseUp, mouseCursorPosition: .zero, mouseButton: .center))
+        // Keep this unmodified click independent of keys held during the test run.
+        down.flags = []
+        up.flags = []
 
         XCTAssertNil(manager.handleMouseShortcutEvent(type: .otherMouseDown, event: down))
         manager.updatePrimaryShortcuts([HotkeyShortcut(keyCode: 3, modifierFlags: [.control, .command])])

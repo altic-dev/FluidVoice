@@ -45,6 +45,7 @@ struct MeetingTranscriptionSetupDraft: Equatable {
     var selectedApplicationID: String?
     var usesAutomaticApplication = true
     var preferredApplicationBundleIdentifier: String?
+    var applicationSelectionWasEdited = false
     var selectedMicrophoneID: String?
     /// Once true, the default title stops following the selected application/mode.
     var languageCode: String
@@ -1257,6 +1258,7 @@ struct MeetingTranscriptionView: View {
         self.meetingSettingsInitialSection = section
         self.setupDraft.autoDetectEnabled = SettingsStore.shared.meetingAutoDetectEnabled
         self.setupDraft.browserDetectionEnabled = SettingsStore.shared.meetingAutoDetectBrowserEnabled
+        self.setupDraft.applicationSelectionWasEdited = false
         self.setupDraftBeforeEditing = self.setupDraft
         self.draftMeetingAudioRetentionPolicy = SettingsStore.shared.meetingAudioRetentionPolicy
         self.isShowingMeetingSettings = true
@@ -1301,6 +1303,11 @@ struct MeetingTranscriptionView: View {
         defaults.microphoneRole = .unknown
         defaults.languageCode = self.setupDraft.languageCode
         settings.meetingRecordingDefaults = defaults
+        if self.setupDraft.applicationSelectionWasEdited, self.setupDraft.mode == .onlineCall,
+           !self.setupDraft.usesAutomaticApplication, let application
+        {
+            settings.meetingRecentApplication = application.identity
+        }
 
         let previousRetentionPolicy = settings.meetingAudioRetentionPolicy
         settings.meetingAutoDetectEnabled = self.setupDraft.autoDetectEnabled
@@ -1310,6 +1317,7 @@ struct MeetingTranscriptionView: View {
             Task { await self.coordinator.sweepExpiredAudio() }
         }
 
+        self.setupDraft.applicationSelectionWasEdited = false
         self.setupDraftBeforeEditing = self.setupDraft
         self.actionErrorMessage = nil
         self.isShowingMeetingSettings = false
@@ -2303,6 +2311,9 @@ private struct MeetingSetupCanvas: View {
             to: SettingsStore.shared.meetingRecordingDefaults,
             application: self.resolvedApplication?.identity
         )
+        if self.draft.mode == .onlineCall, !self.draft.usesAutomaticApplication, let application = self.resolvedApplication {
+            SettingsStore.shared.meetingRecentApplication = application.identity
+        }
     }
 
     private func sourceEntry(_ title: String, systemImage: String, selected: Bool, action: @escaping () -> Void) -> some View {

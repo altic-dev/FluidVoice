@@ -9,15 +9,19 @@ final class MeetingRecordingSourceTests: XCTestCase {
     private let browser = MeetingApplicationIdentity(bundleIdentifier: "browser", processID: 43, displayName: "Browser")
     private let mic = MeetingMicrophoneIdentity(captureDeviceID: "mic", coreAudioUID: "mic", displayName: "Microphone")
     private var originalFeature: Any?
+    private var originalRecentApplication: Any?
 
     override func setUp() {
         super.setUp()
         self.originalFeature = UserDefaults.standard.object(forKey: "FluidMeetEnabled")
+        self.originalRecentApplication = UserDefaults.standard.object(forKey: "MeetingRecentApplication")
+        SettingsStore.shared.meetingRecentApplication = nil
         SettingsStore.shared.fluidMeetEnabled = true
     }
 
     override func tearDown() {
         UserDefaults.standard.set(self.originalFeature, forKey: "FluidMeetEnabled")
+        UserDefaults.standard.set(self.originalRecentApplication, forKey: "MeetingRecentApplication")
         super.tearDown()
     }
 
@@ -298,6 +302,70 @@ final class MeetingRecordingSourceTests: XCTestCase {
         XCTAssertEqual(starts, 1)
     }
 
+    func testRecentTagMovesWithExplicitChoicesAndSurvivesReopening() async {
+        let defaultsBefore = SettingsStore.shared.meetingRecordingDefaults
+        var starts = 0
+        let controller = MeetingRecordingSourcePromptController(showsPanel: false, load: { _ in self.snapshot() }, start: { _ in starts += 1 })
+        controller.handleShortcut()
+        await self.waitUntil { !controller.isLoading }
+        XCTAssertNil(controller.snapshot?.availableRecentApplication, "An automatic suggestion is not a recent explicit choice")
+        controller.selectApplication(self.browser)
+        XCTAssertEqual(controller.snapshot?.applicationLabel(self.browser), "Browser (Recent)")
+        XCTAssertEqual(controller.snapshot?.applicationLabel(self.zoom), "Zoom")
+        XCTAssertEqual(SettingsStore.shared.meetingRecentApplication, self.browser)
+        controller.selectApplication(self.zoom)
+        XCTAssertEqual(controller.snapshot?.applicationLabel(self.zoom), "Zoom (Recent)")
+        XCTAssertEqual(controller.snapshot?.applicationLabel(self.browser), "Browser")
+        controller.selectApplication(nil)
+        XCTAssertEqual(SettingsStore.shared.meetingRecentApplication, self.zoom, "In person does not replace the most recent app")
+        controller.selectApplication(self.browser)
+        controller.cancel()
+
+        let reopened = MeetingRecordingSourcePromptController(showsPanel: false, load: { _ in self.snapshot() }, start: { _ in starts += 1 })
+        reopened.handleShortcut()
+        await self.waitUntil { !reopened.isLoading }
+        XCTAssertEqual(reopened.snapshot?.availableRecentApplication, self.browser)
+        XCTAssertEqual(reopened.snapshot?.selectedApplication, self.zoom, "Recency must not replace the detected or foreground suggestion")
+        XCTAssertEqual(reopened.snapshot?.applicationLabel(self.browser), "Browser (Recent)")
+        XCTAssertEqual(SettingsStore.shared.meetingRecordingDefaults, defaultsBefore)
+        XCTAssertEqual(starts, 0)
+        reopened.cancel()
+    }
+
+    func testRecentTagFollowsARelaunchedAppWithoutChoosingAmongDuplicateCopies() {
+        var snapshot = self.snapshot()
+        snapshot.recentApplication = self.browser
+        var restarted = self.browser
+        restarted.processID = 99
+        snapshot.applications = [self.zoom, restarted]
+        XCTAssertEqual(snapshot.availableRecentApplication, restarted)
+        XCTAssertEqual(snapshot.applicationLabel(restarted), "Browser (Recent)")
+        var duplicate = restarted
+        duplicate.processID = 100
+        snapshot.applications.append(duplicate)
+        XCTAssertNil(snapshot.availableRecentApplication)
+        XCTAssertEqual(snapshot.applicationLabel(restarted), "Browser")
+        snapshot.recentApplication = duplicate
+        XCTAssertEqual(snapshot.availableRecentApplication, duplicate)
+        XCTAssertEqual(snapshot.applicationLabel(restarted), "Browser")
+        XCTAssertEqual(snapshot.applicationLabel(duplicate), "Browser (Recent)")
+        snapshot.applications = [self.zoom]
+        XCTAssertNil(snapshot.availableRecentApplication)
+        XCTAssertEqual(snapshot.selectedApplication, self.zoom)
+    }
+
+    func testRecentAppPersistenceDoesNotKeepWindowOrDisplayTargets() {
+        var choice = self.browser
+        choice.windowID = 7
+        choice.displayID = 8
+        SettingsStore.shared.meetingRecentApplication = choice
+        let restored = SettingsStore.shared.meetingRecentApplication
+        XCTAssertEqual(restored?.bundleIdentifier, choice.bundleIdentifier)
+        XCTAssertEqual(restored?.processID, choice.processID)
+        XCTAssertNil(restored?.windowID)
+        XCTAssertNil(restored?.displayID)
+    }
+
     func testOnlySourcePickerPanelsCanTakeKeyboardFocus() {
         let captions = MeetingFloatingCaptionsPanel()
         XCTAssertFalse(captions.canBecomeKey)
@@ -315,8 +383,11 @@ final class MeetingRecordingSourceTests: XCTestCase {
         inRoom.selectedApplication = nil
         var unavailable = self.snapshot()
         unavailable.sourceMessage = "The selected app is no longer available. Refresh sources to choose it again."
-        let scenarios = [("selected", self.snapshot()), ("empty", empty), ("in-person", inRoom), ("unavailable", unavailable)]
+        var recent = self.snapshot()
+        recent.recentApplication = self.zoom
+        let scenarios = [("selected", self.snapshot()), ("empty", empty), ("in-person", inRoom), ("unavailable", unavailable), ("recent", recent)]
         for (name, snapshot) in scenarios {
+            SettingsStore.shared.meetingRecentApplication = snapshot.recentApplication
             let controller = MeetingRecordingSourcePromptController(showsPanel: false, load: { _ in snapshot }, start: { _ in starts += 1 })
             controller.handleShortcut()
             await self.waitUntil { !controller.isLoading }

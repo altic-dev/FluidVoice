@@ -341,6 +341,7 @@ struct MeetingRecordingSettingsSheet: View {
         Binding(
             get: { self.draft.usesAutomaticApplication ? nil : self.draft.selectedApplicationID },
             set: {
+                self.draft.applicationSelectionWasEdited = true
                 self.draft.usesAutomaticApplication = $0 == nil
                 self.draft.selectedApplicationID = $0
                 self.draft.preferredApplicationBundleIdentifier = self.applications.first(where: { $0.id == self.draft.selectedApplicationID })?.identity.bundleIdentifier

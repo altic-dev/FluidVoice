@@ -11,6 +11,29 @@ nonisolated struct MeetingRecordingSourceSnapshot: Sendable {
     var selectedApplication: MeetingApplicationIdentity?
     var selectedMicrophoneID: String?
     var sourceMessage: String?
+    var recentApplication: MeetingApplicationIdentity?
+
+    var availableRecentApplication: MeetingApplicationIdentity? {
+        guard let recentApplication else { return nil }
+        if let exact = try? MeetingRecordingSourceResolver.resolve(
+            mode: .onlineCall, source: MeetingRecordingSource(application: recentApplication), target: nil, applications: self.applications
+        ) { return exact }
+        guard !recentApplication.bundleIdentifier.isEmpty else { return nil }
+        return try? MeetingRecordingSourceResolver.resolve(
+            mode: .onlineCall,
+            source: .application(bundleIdentifier: recentApplication.bundleIdentifier, processID: nil, displayName: recentApplication.displayName),
+            target: nil,
+            applications: self.applications
+        )
+    }
+
+    func applicationLabel(_ application: MeetingApplicationIdentity) -> String {
+        let name = application.displayName.isEmpty ? "Audio source (\(application.processID ?? 0))" : application.displayName
+        guard self.recentApplication?.bundleIdentifier == application.bundleIdentifier,
+              let recent = self.availableRecentApplication,
+              recent.bundleIdentifier == application.bundleIdentifier, recent.processID == application.processID else { return name }
+        return "\(name) (Recent)"
+    }
 
     static func suggestedApplication(
         defaults: MeetingRecordingDefaults,
@@ -110,6 +133,7 @@ final class MeetingRecordingSourcePromptController: ObservableObject {
             guard let self else { return }
             do {
                 var snapshot = try await self.load(foreground)
+                snapshot.recentApplication = SettingsStore.shared.meetingRecentApplication
                 if let selection {
                     snapshot.defaults.mode = selection.defaults.mode
                     if let selected = selection.selectedApplication {
@@ -144,9 +168,13 @@ final class MeetingRecordingSourcePromptController: ObservableObject {
     }
 
     func selectApplication(_ application: MeetingApplicationIdentity?) {
-        guard !self.isStarting else { return }
+        guard !self.isStarting, self.snapshot != nil else { return }
         self.snapshot?.defaults.mode = application == nil ? .inRoom : .onlineCall
         self.snapshot?.selectedApplication = application
+        if let application {
+            SettingsStore.shared.meetingRecentApplication = application
+            self.snapshot?.recentApplication = application
+        }
         self.errorMessage = nil
     }
 
@@ -320,13 +348,18 @@ struct MeetingRecordingSourcePromptContent: View {
     }
 
     private func sourceSelector(_ snapshot: MeetingRecordingSourceSnapshot) -> some View {
+        let recent = snapshot.availableRecentApplication
         let sections = MeetingAppRegistry.pickerSections(
-            snapshot.applications.map(MeetingApplicationOption.init),
+            snapshot.applications.filter { $0 != recent }.map(MeetingApplicationOption.init),
             bundleIdentifier: { $0.identity.bundleIdentifier },
             name: { $0.identity.displayName },
             isBackgroundItem: { _ in false }
         )
         return Menu {
+            if let recent {
+                self.applicationEntry(MeetingApplicationOption(identity: recent), snapshot: snapshot)
+                Divider()
+            }
             Button("In person · mic only") { self.controller.selectApplication(nil) }
             Divider()
             ForEach(sections.usual) { option in
@@ -340,17 +373,17 @@ struct MeetingRecordingSourcePromptContent: View {
                 }
             }
         } label: {
-            Text(snapshot.defaults.mode == .inRoom ? "In person · mic only" : snapshot.selectedApplication?.displayName ?? "Choose an app…")
+            Text(snapshot.defaults.mode == .inRoom ? "In person · mic only" : snapshot.selectedApplication.map(snapshot.applicationLabel) ?? "Choose an app…")
                 .lineLimit(1).truncationMode(.middle)
         }
         .fluidDropdownStyle(fillsWidth: true)
         .accessibilityLabel("App to record")
-        .accessibilityValue(snapshot.defaults.mode == .inRoom ? "In person, microphone only" : snapshot.selectedApplication?.displayName ?? "No app selected")
+        .accessibilityValue(snapshot.defaults.mode == .inRoom ? "In person, microphone only" : snapshot.selectedApplication.map(snapshot.applicationLabel) ?? "No app selected")
         .disabled(self.controller.isStarting)
     }
 
     private func applicationEntry(_ option: MeetingApplicationOption, snapshot: MeetingRecordingSourceSnapshot) -> some View {
-        let name = option.identity.displayName.isEmpty ? "Audio source (\(option.identity.processID ?? 0))" : option.identity.displayName
+        let name = snapshot.applicationLabel(option.identity)
         return Button { self.controller.selectApplication(option.identity) } label: {
             if snapshot.selectedApplication?.processID == option.identity.processID {
                 Label(name, systemImage: "checkmark")
