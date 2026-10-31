@@ -3296,6 +3296,19 @@ struct ContentView: View {
             DebugLogger.shared.debug("Routing transcription through AI post-processing", source: "ContentView")
             postProcessingModel = postProcessingModelInfo.model
             let postProcessingInputChars = normalizedTranscribedText.count
+            let privateProvider = PrivateAIProviderFeature.shared.providerID
+            let isLocalCleanup = route.deliversText && practiceModelID == nil &&
+                [privateProvider, "custom:\(privateProvider)"].contains(postProcessingModelInfo.provider ?? "")
+            // This reads cached residency only, after capture. It never loads a model or sends helper IPC.
+            let loadedModel = isLocalCleanup ? await PrivateAIIntegrationService.shared.loadedModelState() : nil
+            let memoryAttempt = self.overlayLifecycleID == expectedOverlayLifecycleID &&
+                self.cancelledOutputLifecycleID != expectedOverlayLifecycleID
+                ? LowMemorySlowdownMonitor.shared.beginCleanup(
+                    model: postProcessingModel,
+                    isLocal: isLocalCleanup,
+                    isModelReady: loadedModel?.state == .ready && loadedModel?.modelID == postProcessingModel,
+                    inputCharacters: postProcessingInputChars
+                ) : nil
             let postProcessingStart = ProcessInfo.processInfo.systemUptime
             let processingFeedback = self.makeAIProcessingFeedback(lifecycleID: expectedOverlayLifecycleID)
             let refiningStatusTask = processingFeedback.statusTask
@@ -3341,6 +3354,13 @@ struct ContentView: View {
                 ((ProcessInfo.processInfo.systemUptime - postProcessingStart) * 1000).rounded()
             )
             aiProcessingDurationMilliseconds = postProcessingLatencyMs
+            LowMemorySlowdownMonitor.shared.finishCleanup(
+                id: memoryAttempt,
+                tokensPerSecond: aiTokensPerSecond,
+                succeeded: aiFallbackReason == nil && !Task.isCancelled &&
+                    self.overlayLifecycleID == expectedOverlayLifecycleID &&
+                    self.cancelledOutputLifecycleID != expectedOverlayLifecycleID
+            )
             let postProcessingProviderName = postProcessingModelInfo.provider ?? "unknown"
             let postProcessingModelName = postProcessingModelInfo.model ?? "unknown"
             DebugLogger.shared.info(
