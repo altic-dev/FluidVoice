@@ -3672,11 +3672,11 @@ final class SettingsStore: ObservableObject {
     }
 
     /// Whether a card is shown when a paste could not be confirmed in the target field.
-    /// Off by default: the read-back is a guess, and a wrong guess interrupts for nothing.
+    /// Enabled by default for strong unchanged-field results; explicit user choices persist.
     var showPasteCheckAlerts: Bool {
         get {
             let value = self.defaults.object(forKey: Keys.showPasteCheckAlerts)
-            return value as? Bool ?? false
+            return value as? Bool ?? true
         }
         set {
             objectWillChange.send()

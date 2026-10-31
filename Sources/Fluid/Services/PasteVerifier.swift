@@ -3,8 +3,8 @@ import ApplicationServices
 import Foundation
 
 /// Reads the focused element back after a paste to learn whether the text
-/// landed. `notLanded` is returned only when the same element, its value,
-/// its character count and its caret all stayed unchanged across two reads.
+/// landed. `notLanded` requires an unchanged caret plus an unchanged readable
+/// value or character count in the same element through the final check.
 /// Every other situation is `unknown`, and the caller stays silent.
 enum PasteVerifier {
     struct Snapshot {
@@ -66,12 +66,11 @@ enum PasteVerifier {
         )
     }
 
-    /// Delays before each read-back. The verdict is only "not landed" after
-    /// the last one, so a slow app that applies the paste late never draws a
-    /// failure card.
+    /// Bounded read-back grace, separate from the one-second clipboard timeout.
+    /// A late paste inside this window does not produce a failure verdict.
     static let firstCheckDelay: TimeInterval = 0.15
     static let secondCheckDelay: TimeInterval = 0.35
-    static let finalCheckDelay: TimeInterval = 1.0
+    static let finalCheckDelay: TimeInterval = 1.5
     static var totalDecisionDelay: TimeInterval { self.firstCheckDelay + self.secondCheckDelay + self.finalCheckDelay }
 
     /// A key press or click after the paste means the user acted on the field
@@ -84,27 +83,41 @@ enum PasteVerifier {
     nonisolated static func secondsSinceLastUserInput() -> TimeInterval {
         min(
             CGEventSource.secondsSinceLastEventType(.hidSystemState, eventType: .keyDown),
-            CGEventSource.secondsSinceLastEventType(.hidSystemState, eventType: .leftMouseDown)
+            CGEventSource.secondsSinceLastEventType(.hidSystemState, eventType: .leftMouseDown),
+            CGEventSource.secondsSinceLastEventType(.hidSystemState, eventType: .rightMouseDown),
+            CGEventSource.secondsSinceLastEventType(.hidSystemState, eventType: .otherMouseDown)
         )
     }
 
     /// Call off the main thread after the paste command was posted.
-    nonisolated static func verify(before: Snapshot, pastedText: String) async -> Verdict {
+    nonisolated static func verify(
+        before: Snapshot,
+        pastedText: String,
+        capture: () -> Snapshot? = { Self.capture() },
+        wait: (TimeInterval) async -> Bool = { delay in
+            do {
+                try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                return !Task.isCancelled
+            } catch {
+                return false
+            }
+        }
+    ) async -> Verdict {
         let needle = self.normalize(pastedText)
         guard !needle.isEmpty else { return .unknown(reason: "empty_text") }
         guard before.value != nil || before.characterCount != nil || before.caret != nil else {
             return .unknown(reason: "before_unreadable")
         }
 
-        try? await Task.sleep(nanoseconds: UInt64(self.firstCheckDelay * 1_000_000_000))
-        guard let first = self.capture() else { return .unknown(reason: "after_unreadable") }
+        guard await wait(self.firstCheckDelay) else { return .unknown(reason: "cancelled") }
+        guard let first = capture() else { return .unknown(reason: "after_unreadable") }
         guard CFEqual(first.element, before.element) else { return .unknown(reason: "focus_moved") }
 
         if let verdict = self.confirmation(before: before, after: first, needle: needle) { return verdict }
 
         // Nothing changed yet. Give slow apps a second chance before deciding.
-        try? await Task.sleep(nanoseconds: UInt64(self.secondCheckDelay * 1_000_000_000))
-        guard let second = self.capture(), CFEqual(second.element, before.element) else {
+        guard await wait(self.secondCheckDelay) else { return .unknown(reason: "cancelled") }
+        guard let second = capture(), CFEqual(second.element, before.element) else {
             return .unknown(reason: "focus_moved_late")
         }
         if let verdict = self.confirmation(before: before, after: second, needle: needle) { return verdict }
@@ -112,8 +125,8 @@ enum PasteVerifier {
 
         // Still unchanged. A failure card is disruptive, so wait once more for
         // apps that apply Cmd+V on a later run-loop turn before deciding.
-        try? await Task.sleep(nanoseconds: UInt64(self.finalCheckDelay * 1_000_000_000))
-        guard let final = self.capture(), CFEqual(final.element, before.element) else {
+        guard await wait(self.finalCheckDelay) else { return .unknown(reason: "cancelled") }
+        guard let final = capture(), CFEqual(final.element, before.element) else {
             return .unknown(reason: "focus_moved_final")
         }
         if let verdict = self.confirmation(before: before, after: final, needle: needle) { return verdict }
@@ -126,11 +139,11 @@ enum PasteVerifier {
         let valueKnown = before.value != nil && after.value != nil
         let countKnown = before.characterCount != nil && after.characterCount != nil
         let caretKnown = before.caret != nil && after.caret != nil
-        guard valueKnown, countKnown, caretKnown else {
+        guard valueKnown || countKnown, caretKnown else {
             return .unknown(reason: "signals_incomplete value=\(valueKnown) count=\(countKnown) caret=\(caretKnown)")
         }
-        guard before.value == after.value,
-              before.characterCount == after.characterCount,
+        guard !valueKnown || before.value == after.value,
+              !countKnown || before.characterCount == after.characterCount,
               before.caret?.location == after.caret?.location,
               before.caret?.length == after.caret?.length
         else { return .unknown(reason: "changed_without_text") }
@@ -144,13 +157,17 @@ enum PasteVerifier {
                 return .confirmed(method: "value")
             }
         }
+        let insertedLength = needle.utf16.count
+        let countDelta = insertedLength - (before.caret?.length ?? 0)
         if let beforeCount = before.characterCount, let afterCount = after.characterCount,
-           afterCount - beforeCount == needle.count || afterCount - beforeCount == needle.count + 1
+           afterCount != beforeCount,
+           afterCount - beforeCount == countDelta || afterCount - beforeCount == countDelta + 1
         {
             return .confirmed(method: "count")
         }
         if let beforeCaret = before.caret, let afterCaret = after.caret,
-           afterCaret.location - beforeCaret.location - beforeCaret.length == needle.count
+           afterCaret.location - beforeCaret.location == insertedLength,
+           afterCaret.length == 0
         {
             return .confirmed(method: "caret")
         }
@@ -186,6 +203,31 @@ enum PasteVerifier {
         var range = CFRange()
         guard AXValueGetValue(unsafeBitCast(ref, to: AXValue.self), .cfRange, &range) else { return nil }
         return range
+    }
+}
+
+/// Warning identity only: never controls capture, clipboard writes or retries.
+/// A new delivery/recording invalidates older checks across TypingService instances.
+@MainActor
+final class PasteRecoveryPresentationPolicy {
+    static let shared = PasteRecoveryPresentationPolicy()
+    private var generation: UInt64 = 0
+    private var presentedGeneration: UInt64?
+
+    nonisolated deinit {}
+
+    @discardableResult
+    func beginDelivery() -> UInt64 {
+        self.generation &+= 1
+        return self.generation
+    }
+
+    func isCurrent(_ id: UInt64) -> Bool { self.generation == id }
+
+    func claim(_ id: UInt64, alertsEnabled: Bool, isBusy: Bool, userActed: Bool) -> Bool {
+        guard alertsEnabled, !isBusy, !userActed, self.isCurrent(id), self.presentedGeneration != id else { return false }
+        self.presentedGeneration = id
+        return true
     }
 }
 

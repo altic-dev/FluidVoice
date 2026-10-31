@@ -339,26 +339,25 @@ final class SpokenSendTests: XCTestCase {
 
     // MARK: - Adversarial: paste key sequence
 
-    func testPasteSequencePressesAndReleasesCommandExplicitly() throws {
+    func testPasteSequenceUsesSessionVEventsWithLeftCommandFlags() throws {
         let events = SystemPasteCommandPoster.makePasteEvents()
-        XCTAssertEqual(events.count, 4)
+        XCTAssertEqual(SystemPasteCommandPoster.pasteEventTapLocation, .cgSessionEventTap)
+        XCTAssertEqual(events.count, 2)
         let keyCodes = events.map { CGKeyCode($0.getIntegerValueField(.keyboardEventKeycode)) }
         XCTAssertEqual(keyCodes, [
-            CGKeyCode(kVK_Command), TypingService.pasteVirtualKeyCode, TypingService.pasteVirtualKeyCode, CGKeyCode(kVK_Command),
+            TypingService.pasteVirtualKeyCode, TypingService.pasteVirtualKeyCode,
         ])
-        // Modifier presses are flagsChanged events, exactly like a physical Command key.
-        XCTAssertEqual(events.map(\.type), [.flagsChanged, .keyDown, .keyUp, .flagsChanged])
+        // The chord posts V down/up rather than physical Command-key events.
+        XCTAssertEqual(events.map(\.type), [.keyDown, .keyUp])
         // Command has to be the only modifier. A leaked Shift, Option, Control, or Fn
         // turns Cmd+V into a different shortcut, and a bare V is what inserts "v".
-        XCTAssertEqual(events[0].flags, .maskCommand)
-        XCTAssertEqual(events[1].flags, .maskCommand)
-        XCTAssertEqual(events[2].flags, .maskCommand)
-        XCTAssertEqual(events[3].flags, CGEventFlags(), "the final event must release Command")
+        XCTAssertEqual(events[0].flags, [.maskCommand, CGEventFlags(rawValue: UInt64(NX_DEVICELCMDKEYMASK))])
+        XCTAssertEqual(events[1].flags, [.maskCommand, CGEventFlags(rawValue: UInt64(NX_DEVICELCMDKEYMASK))])
     }
 
     func testPasteSequenceIsInvisibleToTheHotkeyTap() throws {
         let events = SystemPasteCommandPoster.makePasteEvents()
-        XCTAssertEqual(events.count, 4)
+        XCTAssertEqual(events.count, 2)
         for event in events {
             XCTAssertTrue(GlobalHotkeyManager.isSynthesizedTypingEvent(event))
         }
