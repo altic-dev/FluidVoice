@@ -2400,6 +2400,7 @@ private struct DynamicPreviewHeightPreferenceKey: PreferenceKey {
 // MARK: - Bottom Overlay SwiftUI View
 
 struct BottomOverlayView: View {
+    @ObservedObject var lowMemory: LowMemorySlowdownMonitor = .shared
     @ObservedObject private var contentState = NotchContentState.shared
     @ObservedObject private var appServices = AppServices.shared
     @ObservedObject private var activeAppMonitor = ActiveAppMonitor.shared
@@ -3389,6 +3390,11 @@ struct BottomOverlayView: View {
         .id(failureID)
     }
 
+    private var emptyProcessingPreview: some View {
+        LowMemoryCleanupNotice(monitor: self.lowMemory, fontSize: max(self.layout.modeFontSize - 1, 9))
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
     private var scrollingCaption: some View {
         OverlayCaptionView(
             caption: self.contentState.captionPreview,
@@ -3450,9 +3456,9 @@ struct BottomOverlayView: View {
                                 // )
                                 // .id(self.processingStatusCycleID)
                                 // .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
-                                Color.clear
+                                self.emptyProcessingPreview
                             } else if self.contentState.isProcessing {
-                                Color.clear
+                                self.emptyProcessingPreview
                             } else if self.hasTranscription {
                                 let previewText = self.transcriptionPreviewText
                                 if !previewText.isEmpty {
@@ -3493,9 +3499,9 @@ struct BottomOverlayView: View {
                                 //     font: .fluidSystem(size: self.layout.transFontSize, weight: .medium)
                                 // )
                                 // .id(self.processingStatusCycleID)
-                                Color.clear
+                                self.emptyProcessingPreview
                             } else if self.contentState.isProcessing {
-                                Color.clear
+                                self.emptyProcessingPreview
                             } else {
                                 Color.clear
                             }

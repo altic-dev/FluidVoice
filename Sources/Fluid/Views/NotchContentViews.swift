@@ -558,6 +558,7 @@ final class CompositorShimmerSweepView: NSView {
 // MARK: - Expanded View (Main Content) - Minimal Design
 
 struct NotchExpandedView: View {
+    @ObservedObject var lowMemory: LowMemorySlowdownMonitor = .shared
     let audioPublisher: AnyPublisher<CGFloat, Never>
     @ObservedObject private var contentState = NotchContentState.shared
     @ObservedObject private var settings = SettingsStore.shared
@@ -1162,6 +1163,11 @@ struct NotchExpandedView: View {
                 .foregroundStyle(.white.opacity(0.9))
                 .frame(width: self.previewMaxWidth, alignment: .leading)
                 .transition(.opacity.combined(with: .scale(scale: 0.95)))
+            } else if self.presentationPolicy.showsStreamingPreview && self.settings.enableStreamingPreview && self.contentState.isProcessing &&
+                !self.hasTranscription && self.lowMemory.isNoticeVisible
+            {
+                LowMemoryCleanupNotice(monitor: self.lowMemory, fontSize: 9)
+                    .frame(width: self.previewMaxWidth, height: 14)
             } else if self.presentationPolicy.showsStreamingPreview && self.hasTranscription && !self.contentState.isProcessing {
                 let previewText = self.visiblePreviewText
                 if !previewText.isEmpty {
@@ -1386,6 +1392,7 @@ struct NotchCompactTrailingView: View {
 }
 
 struct NotchCompactBottomView: View {
+    @ObservedObject var lowMemory: LowMemorySlowdownMonitor = .shared
     @ObservedObject private var contentState = NotchContentState.shared
 
     private let previewWidth: CGFloat = 250
@@ -1416,6 +1423,9 @@ struct NotchCompactBottomView: View {
 
     var body: some View {
         ZStack(alignment: .leading) {
+            if !self.shouldShowPreview, SettingsStore.shared.enableStreamingPreview {
+                LowMemoryCleanupNotice(monitor: self.lowMemory, fontSize: 9)
+            }
             OverlayCaptionView(
                 caption: self.contentState.captionPreview,
                 context: self.contentState.captionContext,

@@ -151,6 +151,7 @@ final class NotchOverlayManager {
     }
 
     func show(audioLevelPublisher: AnyPublisher<CGFloat, Never>, mode: OverlayMode) {
+        LowMemorySlowdownMonitor.shared.cancelCleanup()
         // A new recording supersedes output that has not appeared yet.
         self.commandOutputPresentationTask?.cancel()
         self.commandOutputPresentationTask = nil
@@ -315,6 +316,7 @@ final class NotchOverlayManager {
     }
 
     func hide() {
+        LowMemorySlowdownMonitor.shared.cancelCleanup()
         guard SettingsStore.shared.overlayClosingAnimationEnabled else {
             self.hideImmediately()
             return
@@ -343,6 +345,7 @@ final class NotchOverlayManager {
     /// Removes a successfully completed recording overlay synchronously so it
     /// cannot outlive the text insertion that follows.
     func hideImmediately() {
+        LowMemorySlowdownMonitor.shared.cancelCleanup()
         var trace = OverlayCloseTrace("manager.hide")
         defer { trace.finish() }
         let startedAt = ProcessInfo.processInfo.systemUptime
@@ -393,6 +396,7 @@ final class NotchOverlayManager {
     /// Reports whether the active overlay finished hiding or a newer
     /// presentation superseded this request.
     func hideAndWait() async -> RecordingOverlayHideOutcome {
+        LowMemorySlowdownMonitor.shared.cancelCleanup()
         guard SettingsStore.shared.overlayClosingAnimationEnabled else {
             self.hideImmediately()
             return .hidden
