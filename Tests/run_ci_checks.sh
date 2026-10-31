@@ -98,7 +98,7 @@ run_check meeting-backup python3 Tests/run_meeting_backup_refresh_tests.py
 
 task_phase="Xcode build and tests"
 task_build_args=(test -project Fluid.xcodeproj -scheme Fluid
-    -destination 'platform=macOS,arch=arm64'
+    -destination "platform=macOS,arch=$(uname -m)"
     -resultBundlePath "$task_result_dir/Fluid.xcresult"
     -skip-testing:FluidDictationIntegrationTests/DictationE2ETests/testDictationEndToEnd_whisperTiny_transcribesFixture)
 # Unsigned test hosts are permitted only on GitHub Actions. Local Debug builds
