@@ -1163,7 +1163,7 @@ struct NotchExpandedView: View {
                 .foregroundStyle(.white.opacity(0.9))
                 .frame(width: self.previewMaxWidth, alignment: .leading)
                 .transition(.opacity.combined(with: .scale(scale: 0.95)))
-            } else if self.presentationPolicy.showsStreamingPreview && self.contentState.isProcessing &&
+            } else if self.presentationPolicy.showsStreamingPreview && self.settings.enableStreamingPreview && self.contentState.isProcessing &&
                 !self.hasTranscription && self.lowMemory.isNoticeVisible
             {
                 LowMemoryCleanupNotice(monitor: self.lowMemory, fontSize: 9)

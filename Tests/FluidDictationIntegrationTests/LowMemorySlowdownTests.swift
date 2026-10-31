@@ -400,6 +400,49 @@ final class LowMemorySlowdownMonitorTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(300))
     }
 
+    func testStandardNotchRespectsDisabledLivePreview() async throws {
+        let settings = SettingsStore.shared
+        let manager = NotchOverlayManager.shared
+        let previousPosition = settings.overlayPosition
+        let previousMode = settings.notchPresentationMode
+        let previousPreview = settings.enableStreamingPreview
+        let panel = NSPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        panel.isReleasedWhenClosed = false
+        let host = NSHostingView(rootView: AnyView(EmptyView()))
+        panel.contentView = host
+        defer {
+            self.monitor.cancelCleanup()
+            manager.hideImmediately()
+            panel.orderOut(nil)
+            panel.contentView = nil
+            panel.close()
+            settings.overlayPosition = previousPosition
+            settings.notchPresentationMode = previousMode
+            settings.enableStreamingPreview = previousPreview
+        }
+        settings.overlayPosition = .bottom
+        settings.notchPresentationMode = .standard
+        settings.enableStreamingPreview = false
+        manager.show(audioLevelPublisher: Just(CGFloat.zero).eraseToAnyPublisher(), mode: .dictation)
+        manager.setProcessing(true)
+        manager.updateTranscriptionText("Refining")
+        await self.seedEvidence()
+        _ = try await self.requestNotice()
+        host.rootView = AnyView(NotchExpandedView(lowMemory: self.monitor, audioPublisher: Just(CGFloat.zero).eraseToAnyPublisher()).padding(12).background(Color.black))
+        try await self.capture(host, panel: panel, name: "standard-notch-preview-disabled")
+        guard panel.occlusionState.contains(.visible) else {
+            await self.sleeper.advance()
+            throw XCTSkip("Visible overlay verification requires an unlocked, unobscured desktop")
+        }
+        XCTAssertNil(self.defaults.object(forKey: LowMemorySlowdownMonitor.lastShownKey), "Disabled previews must not spend the notice allowance")
+
+        settings.enableStreamingPreview = true
+        try await self.capture(host, panel: panel, name: "standard-notch-preview-enabled")
+        XCTAssertNotNil(self.defaults.object(forKey: LowMemorySlowdownMonitor.lastShownKey), "The notice should appear when previews are enabled")
+        try await self.waitUntil { await self.sleeper.durations.count == 2 }
+        await self.sleeper.advance()
+    }
+
     private func capture(_ host: NSHostingView<AnyView>, panel: NSPanel, name: String) async throws {
         host.layoutSubtreeIfNeeded()
         panel.setContentSize(host.fittingSize)
