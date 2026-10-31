@@ -170,9 +170,10 @@ nonisolated enum MeetingInCallURLMatcher {
         }
     }
 
-    /// `/xxx-yyyy-zzz` — a lowercase-letter room code, three groups separated by hyphens.
+    /// `/xxx-yyyy-zzz` or `/meet/xxx-yyyy-zzz` — the same lowercase-letter room code.
     private static func matchesGoogleMeetPath(_ path: String) -> Bool {
-        let segment = path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        var segment = path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        if segment.hasPrefix("meet/") { segment.removeFirst("meet/".count) }
         let parts = segment.split(separator: "-")
         guard parts.count == 3 else { return false }
         let lengths = parts.map(\.count)
