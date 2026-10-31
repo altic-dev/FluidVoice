@@ -10,6 +10,7 @@ nonisolated extension ParakeetSpeechModelCatalog.Descriptor {
         case .v3: .v3
         case .mini: .fluidParakeetMini
         case .pico: .fluidParakeetPico
+        case .pro: .fluidParakeetPro
         }
     }
 }

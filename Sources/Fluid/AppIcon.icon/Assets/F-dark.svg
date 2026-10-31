@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+<defs>
+ <linearGradient id="back" x1="0" y1="0" x2="1" y2="0"><stop stop-color="#f7f8fb"/><stop offset=".72" stop-color="#7e828a"/><stop offset="1" stop-color="#bfc3cc"/></linearGradient>
+ <linearGradient id="face" x1="0" y1="0" x2=".3" y2="1"><stop stop-color="#ffffff"/><stop offset="1" stop-color="#e9ebef"/></linearGradient>
+ <linearGradient id="fold" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#7e828a"/><stop offset=".45" stop-color="#f7f8fb"/><stop offset="1" stop-color="#bfc3cc"/></linearGradient>
+</defs>
+<g transform="translate(284.625 205) scale(.959375)">
+ <path d="M0 640 V200 C0 85 80 0 194 0 H474 C460 100 400 155 290 155 H184 V255 H443 C427 344 368 390 276 390 H184 V505 C184 592 116 640 0 640 Z" fill="url(#back)"/>
+ <path d="M0 270 C40 200 100 155 184 155 V255 C110 280 28 348 0 500 Z" fill="url(#fold)"/>
+ <path d="M0 270 V200 C0 85 80 0 194 0 H474 C460 100 400 155 290 155 H184 C100 155 40 200 0 270 Z" fill="url(#face)"/>
+ <path d="M0 500 C28 348 110 255 235 255 H443 C427 344 368 390 276 390 H184 C95 390 30 435 0 500 Z" fill="url(#face)"/>
+</g></svg>

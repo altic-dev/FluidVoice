@@ -155,3 +155,31 @@ final class SettingsBackupRoundTripTests: XCTestCase {
         try body()
     }
 }
+
+extension SettingsBackupRoundTripTests {
+    func testMeetingShortcutRestoreAssignedUnassignedAndLegacyBackups() throws {
+        try self.withSavedDefaults {
+            let settings = SettingsStore.shared
+            let assigned = HotkeyShortcut(keyCode: 46, modifierFlags: [.control, .option, .command])
+            let replacement = HotkeyShortcut(keyCode: 46, modifierFlags: [.command, .shift])
+            let primary = settings.primaryDictationShortcuts
+            let meetingDefaults = settings.meetingRecordingDefaults
+            settings.meetingRecordingHotkeyShortcut = assigned
+            let assignedPayload = try JSONDecoder().decode(SettingsBackupPayload.self, from: JSONEncoder().encode(settings.makeBackupPayload()))
+            settings.meetingRecordingHotkeyShortcut = nil
+            let unassignedPayload = try JSONDecoder().decode(SettingsBackupPayload.self, from: JSONEncoder().encode(settings.makeBackupPayload()))
+            let legacyPayload = try self.payload(removing: ["meetingRecordingHotkeyShortcut", "meetingRecordingShortcutEnabled"])
+
+            settings.meetingRecordingHotkeyShortcut = replacement
+            settings.restore(from: assignedPayload)
+            XCTAssertEqual(settings.meetingRecordingHotkeyShortcut, assigned)
+            settings.restore(from: unassignedPayload)
+            XCTAssertNil(settings.meetingRecordingHotkeyShortcut)
+            settings.meetingRecordingHotkeyShortcut = replacement
+            settings.restore(from: legacyPayload)
+            XCTAssertEqual(settings.meetingRecordingHotkeyShortcut, replacement)
+            XCTAssertEqual(settings.primaryDictationShortcuts, primary)
+            XCTAssertEqual(settings.meetingRecordingDefaults, meetingDefaults)
+        }
+    }
+}

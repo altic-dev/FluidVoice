@@ -7,6 +7,8 @@ nonisolated protocol MeetingSessionStoring: Sendable {
     func save(_ session: MeetingSession) async throws
     func load(id: MeetingSessionID) async throws -> MeetingSession?
     func loadAll() async throws -> [MeetingSession]
+    func loadHistory() async throws -> [MeetingSession]
+    func loadTranscript(id: MeetingSessionID) async throws -> MeetingSession?
     func loadRecoverable() async throws -> [MeetingSession]
     func sessionDirectory(for id: MeetingSessionID) async throws -> URL
     func existingSessionDirectory(for id: MeetingSessionID) async throws -> URL?
@@ -14,6 +16,12 @@ nonisolated protocol MeetingSessionStoring: Sendable {
     /// Removes the `tracks/` directory and any processing checkpoint, leaving the manifest and
     /// transcript untouched. Idempotent — missing paths are not an error.
     func deleteAudioFiles(for id: MeetingSessionID) async throws
+}
+
+// Test/custom stores retain their existing behavior unless they provide the lighter reads.
+nonisolated extension MeetingSessionStoring {
+    func loadHistory() async throws -> [MeetingSession] { try await self.loadAll() }
+    func loadTranscript(id: MeetingSessionID) async throws -> MeetingSession? { try await self.load(id: id) }
 }
 
 private final nonisolated class MeetingSessionFileSystem: @unchecked Sendable {
@@ -110,7 +118,31 @@ actor MeetingSessionStore: MeetingSessionStoring {
         return migrated
     }
 
+    /// Reading transcript/history never opens or hashes audio. Recovery and audio consumers
+    /// keep using load(id:), which still reconciles and validates the requested recording.
+    func loadTranscript(id: MeetingSessionID) async throws -> MeetingSession? {
+        try self.readTranscript(id: id)
+    }
+
+    private func readTranscript(id: MeetingSessionID) throws -> MeetingSession? {
+        guard !self.tombstonedIDs.contains(id) else { return nil }
+        let url = self.sessionManifestURL(for: id)
+        guard self.fileSystem.manager.fileExists(atPath: url.path) else { return nil }
+        let session = try self.decodeSession(at: url)
+        let migrated = self.migrateCanonicalTranscriptTimelineIfNeeded(session)
+        if migrated != session { try self.writeSession(migrated) }
+        return migrated
+    }
+
+    func loadHistory() async throws -> [MeetingSession] {
+        try self.loadCatalog(reconcileAudio: false)
+    }
+
     func loadAll() throws -> [MeetingSession] {
+        try self.loadCatalog(reconcileAudio: true)
+    }
+
+    private func loadCatalog(reconcileAudio: Bool) throws -> [MeetingSession] {
         try self.prepareRootDirectory()
         let indexedIDs = (try? self.readIndex().sessionIDs) ?? []
         let discoveredIDs = try self.discoverSessionIDs()
@@ -120,9 +152,8 @@ actor MeetingSessionStore: MeetingSessionStoring {
         sessions.reserveCapacity(allIDs.count)
         for id in allIDs {
             do {
-                if let session = try self.load(id: id) {
-                    sessions.append(session)
-                }
+                let session = try reconcileAudio ? self.load(id: id) : self.readTranscript(id: id)
+                if let session { sessions.append(session) }
             } catch {
                 DebugLogger.shared.error(
                     "Failed to load meeting session \(id): \(error.localizedDescription)",
@@ -134,22 +165,42 @@ actor MeetingSessionStore: MeetingSessionStoring {
     }
 
     func loadRecoverable() throws -> [MeetingSession] {
-        try self.loadAll().filter {
-            guard $0.recoveryResolvedAt == nil, $0.retention.audioDeletedAt == nil else { return false }
-            switch $0.state {
-            case .preparing, .recording, .recordingDegraded, .stopping, .processing, .interrupted:
-                return true
-            case .failed:
-                return $0.failures.last?.recoverable == true &&
-                    $0.endedAt != nil &&
-                    $0.audioTracks.contains { track in
-                        track.chunks.contains {
-                            $0.finalizationState == .finalized && $0.byteCount > 0
-                        }
-                    }
-            case .completed:
-                return false
+        // Completed history must not make startup hash the whole audio library. Only the
+        // recordings that may actually be resumed need full audio reconciliation here.
+        var recovered: [MeetingSession] = []
+        for candidate in try self.loadCatalog(reconcileAudio: false) where Self.needsRecoveryInspection(candidate) {
+            do {
+                if let session = try self.load(id: candidate.id), Self.isRecoverable(session) {
+                    recovered.append(session)
+                }
+            } catch {
+                DebugLogger.shared.warning(
+                    "Could not inspect interrupted meeting \(candidate.id): \(error.localizedDescription)",
+                    source: "MeetingSessionStore"
+                )
             }
+        }
+        return recovered
+    }
+
+    private static func needsRecoveryInspection(_ session: MeetingSession) -> Bool {
+        guard session.recoveryResolvedAt == nil, session.retention.audioDeletedAt == nil else { return false }
+        switch session.state {
+        case .preparing, .recording, .recordingDegraded, .stopping, .processing, .interrupted:
+            return true
+        case .failed:
+            // A track manifest can contain finalized audio missing from session.json after a crash.
+            return session.failures.last?.recoverable == true && session.endedAt != nil
+        case .completed:
+            return false
+        }
+    }
+
+    private static func isRecoverable(_ session: MeetingSession) -> Bool {
+        guard self.needsRecoveryInspection(session) else { return false }
+        guard session.state == .failed else { return true }
+        return session.audioTracks.contains { track in
+            track.chunks.contains { $0.finalizationState == .finalized && $0.byteCount > 0 }
         }
     }
 

@@ -1,9 +1,13 @@
 import Accelerate
 import Foundation
 
-/// Master pronunciation switch. Off disables all audio matching and enrollment.
+/// Pronunciation is on by default; a saved Off choice disables matching and enrollment.
 nonisolated enum DictionaryMatcherExperiment {
-    static var sharedFeaturesEnabled: Bool { UserDefaults.standard.bool(forKey: "DictionarySharedFeatureMatcherEnabled") }
+    static let defaultEnabled = true
+    static var sharedFeaturesEnabled: Bool {
+        UserDefaults.standard.object(forKey: "DictionarySharedFeatureMatcherEnabled") as? Bool ?? self.defaultEnabled
+    }
+
     static let didChangeNotification = Notification.Name("DictionaryPronunciationDidChange")
     static var generation: String { UserDefaults.standard.string(forKey: "DictionaryPronunciationGeneration") ?? "initial" }
     static func setEnabled(_ enabled: Bool) {

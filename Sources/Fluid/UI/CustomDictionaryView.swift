@@ -9,6 +9,7 @@
 //
 
 import AppKit
+import Combine
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -16,9 +17,10 @@ import UniformTypeIdentifiers
 // swiftlint:disable:next type_body_length
 struct CustomDictionaryView: View {
     var formattingOnly = false
-    @State private var isWordDrawerPresented = false
+    @State private var isWordDrawerPresented = true
     @State private var wordSearch = ""
     @State private var isDrawerActionsPresented = false
+    @State private var newWordFocusRequest = 0
     @State private var drawerDeletion: SettingsStore.CustomDictionaryEntry?
     @Environment(\.theme) private var theme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -50,11 +52,13 @@ struct CustomDictionaryView: View {
     @State private var trainingReplacement = ""
     @State private var trainingSaveID: UUID?
     @State private var trainingVariants: [String] = []
-    @AppStorage("DictionarySharedFeatureMatcherEnabled") private var pronunciationEnabled = false
+    @State private var manualTrainingSpellings = Set<String>()
+    @AppStorage("DictionarySharedFeatureMatcherEnabled") private var pronunciationEnabled = DictionaryMatcherExperiment.defaultEnabled
     @State private var pronunciationMatchingEnabled = SettingsStore.shared.pronunciationMatchingEnabled
     @State private var trainingPronunciationEnrollments: [PronunciationEnrollmentCapture] = []
     @State private var trainingSampleCount = 0
     @State private var lastTrainingOutput = ""
+    @State private var trainingAttempts: [String] = []
     @State private var lastTrainingOutputIsCovered = false
     @State private var consecutiveCoveredCaptures = 0
     @State private var trainingStatusMessage = "Type the correct text."
@@ -65,6 +69,7 @@ struct CustomDictionaryView: View {
     @State private var trainingStopRequestedDuringStart = false
     @State private var isTrainingProcessing = false
     @State private var isAutomaticTrainingEnabled = false
+    @StateObject private var trainingRestart = DictionaryTrainingRestart()
     @State private var isTrainedReplacementButtonHovered = false
     @State private var isTrainedReplacementGlowExpanded = false
     @State private var replacementConfirmation: ReplacementConfirmation?
@@ -73,6 +78,8 @@ struct CustomDictionaryView: View {
     @State private var manualReturnStep: DictionaryWordWizardStep = .spelling
     @State private var manualTriggerDraft = ""
     @State private var manualReplacement = ""
+    @State private var manualEntryFocusRequest = 0
+    @FocusState private var manualReplacementFocused: Bool
     @State private var isYourDictionaryPresented = false
     @State private var isPunctuationDictionaryPresented = false
     @State private var punctuationAutoConvertEnabled = SettingsStore.shared.autoConvertPunctuationEnabled
@@ -218,6 +225,10 @@ struct CustomDictionaryView: View {
             self.manualDuplicateTriggers.isEmpty
     }
 
+    private var isManualEntryBlocked: Bool {
+        self.isTrainingStarting || self.isTrainingRecording || self.isTrainingProcessing || self.isAutomaticTrainingEnabled
+    }
+
     private var punctuationEditorTitle: String {
         self.editingPunctuationRuleID == nil ? "Add Rule" : "Edit Rule"
     }
@@ -346,7 +357,8 @@ struct CustomDictionaryView: View {
         .sheet(item: self.$editingEntry) { entry in
             EditDictionaryEntrySheet(
                 entry: entry,
-                existingTriggers: self.allExistingTriggers(excluding: entry.id)
+                existingTriggers: self.allExistingTriggers(excluding: entry.id),
+                isCaptureBusy: self.asr.isRunning || self.isTrainingStarting || self.isTrainingRecording || self.isTrainingProcessing || self.isAutomaticTrainingEnabled
             ) { updatedEntry in
                 if let index = self.entries.firstIndex(where: { $0.id == updatedEntry.id }) {
                     self.entries[index] = updatedEntry
@@ -385,8 +397,19 @@ struct CustomDictionaryView: View {
             guard !self.formattingOnly else { return }
             self.pronunciationRevisionNoticeRefresh &+= 1
         }
+        .onReceive(self.asr.$isDictionaryTrainingCaptureActive.removeDuplicates().dropFirst()) { active in
+            guard !self.formattingOnly, !active else { return }
+            self.handleTrainingCaptureEndedElsewhere()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in
+            guard self.trainingRestart.isWaiting else { return }
+            self.trainingRestart.cancel()
+            self.isAutomaticTrainingEnabled = false
+        }
         .onChange(of: self.pronunciationEnabled) { _, enabled in
             guard !enabled else { return }
+            self.trainingRestart.cancel()
+            self.isAutomaticTrainingEnabled = false
             self.trainingPronunciationEnrollments = []
             if self.trainingSaveID != nil {
                 self.trainingSaveID = nil
@@ -397,6 +420,7 @@ struct CustomDictionaryView: View {
         }
         .onDisappear {
             guard !self.formattingOnly else { return }
+            self.trainingRestart.cancel()
             if self.trainingSaveID != nil {
                 self.trainingSaveID = nil
                 self.isTrainingProcessing = false
@@ -441,30 +465,43 @@ struct CustomDictionaryView: View {
             HStack(alignment: .center, spacing: 8) {
                 Text("Your dictionary").font(self.theme.typography.sectionTitle)
                 Spacer()
-                Button { self.isDrawerActionsPresented.toggle() } label: {
-                    Image(systemName: "ellipsis")
-                        .font(.system(size: 13, weight: .semibold))
-                        .frame(width: 20, height: 20)
-                }
-                .fluidGlassAction(circular: true)
-                .accessibilityLabel("Dictionary actions")
-                .popover(isPresented: self.$isDrawerActionsPresented) {
-                    VStack(alignment: .leading, spacing: 12) {
-                        Button("Import…") {
-                            self.isDrawerActionsPresented = false
-                            self.importDictionary()
-                        }.fluidGlassAction()
-                        Button("Export…") {
-                            self.isDrawerActionsPresented = false
-                            self.exportDictionary()
-                        }.fluidGlassAction()
-                        Divider()
-                        Button("Custom Words (Advanced)…") {
-                            self.isDrawerActionsPresented = false
-                            self.presentCustomWords()
-                        }.fluidGlassAction()
+                FluidGlassControlGroup {
+                    HStack(spacing: 8) {
+                        Button(action: self.openNewManualDictionaryEntry) {
+                            Image(systemName: "plus")
+                                .font(.system(size: 12, weight: .semibold))
+                                .frame(width: 18, height: 18)
+                        }
+                        .fluidGlassAction(circular: true, quiet: true)
+                        .disabled(self.isManualEntryBlocked)
+                        .accessibilityLabel("Add word")
+                        .help(self.isManualEntryBlocked ? "Finish the current word recording or save first" : "Add a word manually")
+                        Button { self.isDrawerActionsPresented.toggle() } label: {
+                            Image(systemName: "ellipsis")
+                                .font(.system(size: 12, weight: .semibold))
+                                .frame(width: 18, height: 18)
+                        }
+                        .fluidGlassAction(circular: true, quiet: true)
+                        .accessibilityLabel("Dictionary actions")
+                        .popover(isPresented: self.$isDrawerActionsPresented) {
+                            VStack(alignment: .leading, spacing: 12) {
+                                Button("Import…") {
+                                    self.isDrawerActionsPresented = false
+                                    self.importDictionary()
+                                }.fluidGlassAction()
+                                Button("Export…") {
+                                    self.isDrawerActionsPresented = false
+                                    self.exportDictionary()
+                                }.fluidGlassAction()
+                                Divider()
+                                Button("Custom Words (Advanced)…") {
+                                    self.isDrawerActionsPresented = false
+                                    self.presentCustomWords()
+                                }.fluidGlassAction()
+                            }
+                            .padding(16)
+                        }
                     }
-                    .padding(16)
                 }
             }
             HStack(spacing: 8) {
@@ -487,32 +524,25 @@ struct CustomDictionaryView: View {
                                     .font(self.theme.typography.caption)
                                     .foregroundStyle(self.theme.palette.secondaryText)
                                     .lineLimit(3)
-                                Button("Test word") {
-                                    self.wizardSavedWord = entry.replacement
-                                    self.wizardStep = .saved
-                                    self.isWordDrawerPresented = false
-                                }.fluidGlassAction()
-                                    .disabled(self.asr.isRunning || self.isTrainingStarting || self.isTrainingProcessing)
-                                    .accessibilityLabel("Test \(entry.replacement)")
                             }
                             Spacer()
                             Button { self.editingEntry = entry } label: {
                                 FluidPencilShape()
                                     .stroke(style: StrokeStyle(lineWidth: 1.7, lineCap: .round, lineJoin: .round))
-                                    .frame(width: 20, height: 20)
-                                    .frame(width: 22, height: 22)
+                                    .frame(width: 14, height: 14)
+                                    .frame(width: 18, height: 18)
                                     .contentShape(Rectangle())
                             }
-                            .fluidGlassAction(circular: true)
+                            .fluidGlassAction(circular: true, quiet: true)
                             .help("Edit word")
                             .accessibilityLabel("Edit \(entry.replacement)")
                             Button(role: .destructive) { self.drawerDeletion = entry } label: {
                                 Image(systemName: "trash")
-                                    .font(.fluidSystem(size: 15, weight: .regular))
-                                    .frame(width: 22, height: 22)
+                                    .font(.fluidSystem(size: 12, weight: .regular))
+                                    .frame(width: 18, height: 18)
                                     .contentShape(Rectangle())
                             }
-                            .fluidGlassAction(circular: true)
+                            .fluidGlassAction(circular: true, quiet: true)
                             .help("Delete word")
                             .accessibilityLabel("Delete \(entry.replacement)")
                         }
@@ -530,7 +560,7 @@ struct CustomDictionaryView: View {
                     }
                 }
             }
-            Text("\(self.entries.count) saved words")
+            Text(self.wordSearch.isEmpty ? "\(self.entries.count) saved words" : "\(self.drawerEntries.count) of \(self.entries.count) words")
                 .font(self.theme.typography.caption)
                 .foregroundStyle(self.theme.palette.secondaryText)
         }
@@ -604,7 +634,7 @@ struct CustomDictionaryView: View {
                     count: self.trainingSampleCount,
                     heard: self.lastTrainingOutput,
                     variants: self.trainingVariants,
-                    busy: self.isTrainingRecording || self.isTrainingProcessing || self.isTrainingStarting,
+                    busy: self.isTrainingRecording || self.isTrainingProcessing || self.isTrainingStarting || self.trainingRestart.isWaiting,
                     recording: self.isTrainingRecording,
                     processing: self.isTrainingProcessing || self.isTrainingStarting,
                     starting: self.isTrainingStarting,
@@ -618,19 +648,13 @@ struct CustomDictionaryView: View {
                     },
                     onRecord: {
                         self.wizardStep = .recording
-                        Task { await self.toggleAutomaticTraining() }
+                        Task { await self.startAutomaticTrainingIfIdle() }
                     },
                     onSave: {
-                        if self.trainingAlreadyCorrectWithoutReplacement {
-                            self.wizardSavedWord = self.normalizedTrainingReplacement
-                            self.resetTraining()
-                            self.wizardStep = .saved
-                        } else {
-                            Task { await self.addTrainedReplacement() }
-                        }
+                        Task { await self.addTrainedReplacement() }
                     },
                     onBack: { self.wizardStep = .spelling },
-                    onNewWord: { self.resetTraining(); self.wizardStep = .spelling },
+                    onNewWord: self.startNewDictionaryWord,
                     onManual: {
                         self.manualReturnStep = self.wizardStep
                         if self.manualSourceWord != self.normalizedTrainingReplacement || self.manualReplacement.isEmpty {
@@ -649,10 +673,17 @@ struct CustomDictionaryView: View {
                         self.resetTraining(keepingWord: true)
                         self.wizardStep = .recording
                     },
+                    wordFocusRequest: self.newWordFocusRequest,
                     automaticCaptureActive: self.isAutomaticTrainingEnabled,
+                    waiting: self.trainingRestart.isWaiting,
+                    canSave: self.canAddTrainedReplacement || self.trainingAlreadyCorrectWithoutReplacement,
+                    onPauseRecording: { Task { await self.pauseAutomaticTraining() } },
+                    onAddSpelling: self.addManualTrainingSpelling,
+                    onRemoveSpelling: self.removeTrainingVariant,
                     audioLevels: self.asr.audioLevelPublisher,
                     pronunciationNotice: self.trainingProgress.pronunciationNotice,
-                    pronunciationIncomplete: self.activePronunciationMatching && !self.trainingProgress.pronunciationReady
+                    pronunciationIncomplete: self.activePronunciationMatching && !self.trainingProgress.pronunciationReady,
+                    attempts: self.trainingAttempts
                 )
                 .onChange(of: self.trainingReplacement) { oldValue, newValue in
                     self.handleTrainingReplacementChange(oldValue: oldValue, newValue: newValue)
@@ -771,13 +802,13 @@ struct CustomDictionaryView: View {
         VStack(alignment: .leading, spacing: self.theme.metrics.spacing.md) {
             ViewThatFits(in: .horizontal) {
                 HStack(alignment: .top, spacing: self.theme.metrics.spacing.md) {
-                    self.manualReplacementField
                     self.manualTriggerField
+                    self.manualReplacementField
                 }
 
                 VStack(alignment: .leading, spacing: self.theme.metrics.spacing.md) {
-                    self.manualReplacementField
                     self.manualTriggerField
+                    self.manualReplacementField
                 }
             }
 
@@ -818,11 +849,12 @@ struct CustomDictionaryView: View {
 
     private var manualTriggerField: some View {
         VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
-            Text("What FluidVoice types wrong")
+            Text("Replace")
                 .font(self.theme.typography.captionStrong)
 
             TextField("fluid voice, fluid boys", text: self.$manualTriggerDraft)
                 .dictionaryInputChrome()
+                .accessibilityLabel("Text to replace")
                 .onSubmit { self.addManualReplacementIfValid() }
 
             Text("Separate different versions with commas. Enter only commas to replace comma punctuation.")
@@ -833,11 +865,18 @@ struct CustomDictionaryView: View {
 
     private var manualReplacementField: some View {
         VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
-            Text("Correct word")
+            Text("With")
                 .font(self.theme.typography.captionStrong)
             TextField("FluidVoice", text: self.$manualReplacement)
                 .dictionaryInputChrome()
+                .focused(self.$manualReplacementFocused)
+                .accessibilityLabel("Correct spelling")
                 .onSubmit { self.addManualReplacementIfValid() }
+                .task(id: self.manualEntryFocusRequest) {
+                    await Task.yield()
+                    guard !Task.isCancelled else { return }
+                    self.manualReplacementFocused = true
+                }
             Text("The spelling you want in your transcription.")
                 .font(self.theme.typography.caption)
                 .foregroundStyle(self.theme.palette.secondaryText)
@@ -2245,13 +2284,24 @@ struct CustomDictionaryView: View {
 
     private func toggleAutomaticTraining() async {
         if self.isAutomaticTrainingEnabled {
-            self.isAutomaticTrainingEnabled = false
-            if self.isTrainingRecording {
-                await self.stopTrainingSample()
-            }
+            await self.pauseAutomaticTraining()
             return
         }
+        await self.startAutomaticTrainingIfIdle()
+    }
 
+    private func pauseAutomaticTraining() async {
+        self.trainingRestart.cancel()
+        self.isAutomaticTrainingEnabled = false
+        if self.isTrainingRecording {
+            await self.stopTrainingSample()
+        }
+    }
+
+    private func startAutomaticTrainingIfIdle() async {
+        guard !self.isAutomaticTrainingEnabled, !self.isTrainingStarting,
+              !self.isTrainingRecording, !self.isTrainingProcessing, !self.trainingRestart.isWaiting
+        else { return }
         if self.canRetryTrainingAfterMaximum {
             self.resetTrainingVerificationAttempts()
         }
@@ -2307,6 +2357,20 @@ struct CustomDictionaryView: View {
         await self.finishTrainingSampleStop()
     }
 
+    /// Our own stop clears `isTrainingRecording` before the recorder stops, so reaching here with it
+    /// still set means something else ended the capture, such as Escape. Leave the screen idle.
+    private func handleTrainingCaptureEndedElsewhere() {
+        guard self.isTrainingRecording, !self.isTrainingStarting, !self.isTrainingProcessing else { return }
+        DictionaryTrainingEndpointMonitor.shared.stop()
+        self.trainingRestart.cancel()
+        self.isAutomaticTrainingEnabled = false
+        self.isTrainingRecording = false
+        self.trainingStopRequestedDuringStart = false
+        self.trainingHasError = true
+        self.trainingStatusMessage = "Recording stopped. Press Record to continue."
+        DebugLogger.shared.info("DICTIONARY_TRAINING capture ended outside the editor; returning to idle", source: "CustomDictionary")
+    }
+
     private func handleAutomaticTrainingSpeechEnd() {
         guard self.isAutomaticTrainingEnabled, self.isTrainingRecording else { return }
         Task { await self.stopTrainingSample() }
@@ -2347,25 +2411,35 @@ struct CustomDictionaryView: View {
             self.isAutomaticTrainingEnabled = false
             self.wizardStep = .review
         }
-        await self.continueAutomaticTrainingIfNeeded()
+        self.continueAutomaticTrainingIfNeeded()
     }
 
-    private func continueAutomaticTrainingIfNeeded() async {
-        guard self.isAutomaticTrainingEnabled,
-              !self.trainingFinalOutputIsReady,
-              !self.trainingAlreadyCorrectWithoutReplacement,
-              self.trainingSampleCount < CustomDictionaryTrainingMerge.maxSamples
-        else {
+    private var canContinueAutomaticTraining: Bool {
+        NSApp.isActive && self.isAutomaticTrainingEnabled && !self.trainingFinalOutputIsReady &&
+            !self.trainingAlreadyCorrectWithoutReplacement &&
+            self.trainingSampleCount < CustomDictionaryTrainingMerge.maxSamples
+    }
+
+    private func continueAutomaticTrainingIfNeeded() {
+        guard self.canContinueAutomaticTraining else {
+            self.trainingRestart.cancel()
             self.isAutomaticTrainingEnabled = false
             return
         }
-
-        await Task.yield()
-        await self.startTrainingSample()
+        self.trainingRestart.schedule(canContinue: {
+            guard self.canContinueAutomaticTraining else {
+                self.isAutomaticTrainingEnabled = false
+                return false
+            }
+            return true
+        }) {
+            await self.startTrainingSample()
+        }
     }
 
     private func resetTrainingVerificationAttempts() {
         self.trainingSampleCount = 0
+        self.trainingAttempts = []
         self.lastTrainingOutput = ""
         self.lastTrainingOutputIsCovered = false
         self.consecutiveCoveredCaptures = 0
@@ -2385,6 +2459,7 @@ struct CustomDictionaryView: View {
 
         self.lastTrainingOutput = detected
         self.trainingSampleCount = min(self.trainingSampleCount + 1, CustomDictionaryTrainingMerge.maxSamples)
+        self.trainingAttempts = Array((self.trainingAttempts + [detected]).suffix(CustomDictionaryTrainingMerge.maxSamples))
 
         if detected.caseInsensitiveCompare(self.normalizedTrainingReplacement) == .orderedSame {
             self.lastTrainingOutputIsCovered = true
@@ -2437,7 +2512,13 @@ struct CustomDictionaryView: View {
     }
 
     private func addTrainedReplacement() async {
-        guard self.canAddTrainedReplacement else { return }
+        guard !Task.isCancelled, !self.isTrainingRecording, !self.isTrainingProcessing,
+              self.canAddTrainedReplacement || self.trainingAlreadyCorrectWithoutReplacement else { return }
+        if self.trainingAlreadyCorrectWithoutReplacement {
+            self.trainingHasError = true
+            self.trainingStatusMessage = "FluidVoice already recognises this word. Nothing new was saved."
+            return
+        }
         self.isTrainingProcessing = true
         let saveID = UUID()
         self.trainingSaveID = saveID
@@ -2451,17 +2532,15 @@ struct CustomDictionaryView: View {
         let enrollments = self.trainingPronunciationEnrollments
         let savePronunciation = self.trainingProgress.pronunciationReady
         let pronunciationGeneration = DictionaryMatcherExperiment.generation
-        let filtered = await VoiceTrainingAliasFilter.filter(self.trainingVariants)
+        let filtered = await VoiceTrainingAliasFilter.filter(self.trainingVariants, manuallyConfirmed: self.manualTrainingSpellings)
         guard self.trainingSaveID == saveID, !Task.isCancelled else { return }
         DebugLogger.shared.info(
-            "VOICE_TRAINING_ALIAS_FILTER accepted=\(filtered.accepted.count) rejected=\(filtered.rejected.count) available=\(filtered.lookupAvailable)",
+            "VOICE_TRAINING_ALIAS_FILTER accepted=\(filtered.accepted.count) rejected=\(filtered.rejected.count)",
             source: "CustomDictionary"
         )
         guard savePronunciation || !filtered.accepted.isEmpty else {
             self.trainingHasError = true
-            self.trainingStatusMessage = filtered.lookupAvailable
-                ? "These recordings contain everyday words. Try again, or add a replacement manually."
-                : "Couldn't check these words. Try saving again, or add a replacement manually."
+            self.trainingStatusMessage = filtered.rejectionMessage
             return
         }
 
@@ -2472,6 +2551,11 @@ struct CustomDictionaryView: View {
             triggers: filtered.accepted,
             savePronunciation: savePronunciation
         )
+        guard savePronunciation || updatedEntries != originalEntries else {
+            self.trainingHasError = true
+            self.trainingStatusMessage = "These spellings are already covered. Nothing new was saved."
+            return
+        }
         let entry = updatedEntries.first {
             $0.replacement.caseInsensitiveCompare(replacementText) == .orderedSame
         }
@@ -2518,8 +2602,24 @@ struct CustomDictionaryView: View {
     }
 
     private func removeTrainingVariant(_ variant: String) {
+        guard !self.isManualEntryBlocked else { return }
         self.trainingVariants.removeAll { $0 == variant }
+        self.manualTrainingSpellings.remove(variant)
         self.refreshLastTrainingCoverage()
+    }
+
+    private func addManualTrainingSpelling(_ spelling: String) -> String? {
+        guard !self.isManualEntryBlocked else { return "Pause learning before editing spellings." }
+        guard self.trainingVariants.count < CustomDictionaryTrainingMerge.maxSamples else { return "Remove a spelling before adding another." }
+        guard let normalized = CustomDictionaryTrainingMerge.normalizedTrigger(spelling) else { return "Enter the spelling FluidVoice gets wrong." }
+        guard normalized.count <= 160 else { return "Use 160 characters or fewer." }
+        guard normalized.caseInsensitiveCompare(self.normalizedTrainingReplacement) != .orderedSame else { return "That is already the correct spelling." }
+        guard !self.trainingVariants.contains(where: { $0.caseInsensitiveCompare(normalized) == .orderedSame }) else { return "That spelling is already in this list." }
+        guard !self.allExistingTriggers().contains(normalized) else { return "That spelling already belongs to a saved word." }
+        self.trainingVariants.append(normalized)
+        self.manualTrainingSpellings.insert(normalized)
+        self.refreshLastTrainingCoverage()
+        return nil
     }
 
     private func refreshLastTrainingCoverage() {
@@ -2542,14 +2642,37 @@ struct CustomDictionaryView: View {
         }
     }
 
+    private func openNewManualDictionaryEntry() {
+        guard !self.isManualEntryBlocked else { return }
+        self.isDrawerActionsPresented = false
+        if self.wizardStep != .manual {
+            self.manualReturnStep = self.wizardStep
+            self.manualSourceWord = ""
+            self.manualReplacement = ""
+            self.manualTriggerDraft = ""
+            self.wizardStep = .manual
+        }
+        self.manualEntryFocusRequest &+= 1
+    }
+
+    private func startNewDictionaryWord() {
+        self.isDrawerActionsPresented = false
+        self.resetTraining()
+        self.wizardStep = .spelling
+        self.newWordFocusRequest &+= 1
+    }
+
     private func resetTraining(statusMessage: String = "Type the correct text.", keepingWord: Bool = false) {
+        self.trainingRestart.cancel()
         self.trainingSaveID = nil
         self.isAutomaticTrainingEnabled = false
         DictionaryTrainingEndpointMonitor.shared.stop()
         if !keepingWord { self.trainingReplacement = "" }
         self.trainingVariants = []
+        self.manualTrainingSpellings = []
         self.trainingPronunciationEnrollments = []
         self.trainingSampleCount = 0
+        self.trainingAttempts = []
         self.lastTrainingOutput = ""
         self.lastTrainingOutputIsCovered = false
         self.consecutiveCoveredCaptures = 0
@@ -2566,6 +2689,8 @@ struct CustomDictionaryView: View {
         let oldKey = CustomDictionaryTrainingMerge.normalizedReplacement(oldValue).lowercased()
         let newKey = CustomDictionaryTrainingMerge.normalizedReplacement(newValue).lowercased()
         guard oldKey != newKey else { return }
+        self.trainingRestart.cancel()
+        self.isAutomaticTrainingEnabled = false
 
         if self.trainingSaveID != nil {
             self.trainingSaveID = nil
@@ -2573,8 +2698,10 @@ struct CustomDictionaryView: View {
         }
 
         self.trainingVariants = self.existingTrainingVariants(for: newValue)
+        self.manualTrainingSpellings = []
         self.trainingPronunciationEnrollments = []
         self.trainingSampleCount = 0
+        self.trainingAttempts = []
         self.lastTrainingOutput = ""
         self.lastTrainingOutputIsCovered = false
         self.consecutiveCoveredCaptures = 0
@@ -2812,10 +2939,12 @@ private extension CustomDictionaryView {
     }
 
     func handlePronunciationMatchingChange(enabled: Bool) {
+        self.trainingRestart.cancel()
         SettingsStore.shared.pronunciationMatchingEnabled = enabled
         self.isAutomaticTrainingEnabled = false
         DictionaryTrainingEndpointMonitor.shared.stop()
         self.trainingVariants = self.existingTrainingVariants(for: self.trainingReplacement)
+        self.manualTrainingSpellings = []
         self.trainingPronunciationEnrollments = []
         self.resetTrainingVerificationAttempts()
         self.trainingStatusMessage = self.normalizedTrainingReplacement.isEmpty
@@ -3232,7 +3361,7 @@ nonisolated enum DictionaryPronunciationRevisionPolicy {
     ) -> String? {
         guard descriptor.variant == .mini || descriptor.variant == .pico else { return nil }
         let current = Set(profiles.filter {
-            $0.modelKey == descriptor.pronunciationModelKey && $0.isEligibleForMatching
+            ParakeetSpeechModelCatalog.sharesPronunciationFamily($0.modelKey, with: descriptor.pronunciationModelKey) && $0.isEligibleForMatching
         }.map(\.dictionaryEntryID))
         let outdated = profiles.filter {
             entryIDs.contains($0.dictionaryEntryID) && !current.contains($0.dictionaryEntryID)
@@ -4001,10 +4130,13 @@ struct EditDictionaryEntrySheet: View {
 
     let entry: SettingsStore.CustomDictionaryEntry
     let existingTriggers: Set<String>
+    let isCaptureBusy: Bool
     let onSave: (SettingsStore.CustomDictionaryEntry) -> Void
 
     @State private var triggersText = ""
     @State private var replacement = ""
+    @State private var isTestingWord = false
+    @State private var isTestBusy = false
 
     private var duplicateTriggers: [String] {
         self.parseTriggers().filter { self.existingTriggers.contains($0) }
@@ -4014,6 +4146,11 @@ struct EditDictionaryEntrySheet: View {
         !self.parseTriggers().isEmpty &&
             !CustomDictionaryManualEntry.sanitizedReplacement(self.replacement).isEmpty &&
             self.duplicateTriggers.isEmpty
+    }
+
+    private var hasUnsavedChanges: Bool {
+        self.parseTriggers() != self.entry.triggers ||
+            CustomDictionaryManualEntry.sanitizedReplacement(self.replacement) != self.entry.replacement
     }
 
     var body: some View {
@@ -4030,71 +4167,100 @@ struct EditDictionaryEntrySheet: View {
 
             Divider()
 
-            ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
-                    // Triggers input
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Misheard Words (triggers)")
-                            .font(.fluidSystem(.subheadline).weight(.medium))
-                        Text("Add one version per line. Commas can be saved too.")
-                            .font(.fluidSystem(.caption))
-                            .foregroundStyle(.secondary)
-                        TextEditor(text: self.$triggersText)
-                            .font(.fluidSystem(.body))
-                            .frame(minHeight: 54, maxHeight: 76)
-                            .scrollContentBackground(.hidden)
-                            .dictionaryInputChrome(minHeight: 54)
+            ScrollViewReader { scroll in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 20) {
+                        // Triggers input
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Misheard Words (triggers)")
+                                .font(.fluidSystem(.subheadline).weight(.medium))
+                            Text("Add one version per line. Commas can be saved too.")
+                                .font(.fluidSystem(.caption))
+                                .foregroundStyle(.secondary)
+                            TextEditor(text: self.$triggersText)
+                                .font(.fluidSystem(.body))
+                                .frame(minHeight: 54, maxHeight: 76)
+                                .scrollContentBackground(.hidden)
+                                .dictionaryInputChrome(minHeight: 54)
 
-                        // Duplicate warning
-                        if !self.duplicateTriggers.isEmpty {
-                            HStack(spacing: 4) {
-                                Image(systemName: "exclamationmark.triangle.fill")
-                                    .foregroundStyle(.orange)
-                                Text("Duplicate triggers: \(self.duplicateTriggers.joined(separator: ", "))")
-                                    .foregroundStyle(.orange)
+                            // Duplicate warning
+                            if !self.duplicateTriggers.isEmpty {
+                                HStack(spacing: 4) {
+                                    Image(systemName: "exclamationmark.triangle.fill")
+                                        .foregroundStyle(.orange)
+                                    Text("Duplicate triggers: \(self.duplicateTriggers.joined(separator: ", "))")
+                                        .foregroundStyle(.orange)
+                                }
+                                .font(.fluidSystem(.caption))
                             }
-                            .font(.fluidSystem(.caption))
+                        }
+                        .disabled(self.isTestBusy)
+
+                        // Replacement input
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Correct Spelling (replacement)")
+                                .font(.fluidSystem(.subheadline).weight(.medium))
+                            Text("This is what will appear in the final transcription.")
+                                .font(.fluidSystem(.caption))
+                                .foregroundStyle(.secondary)
+                            TextField("FluidVoice", text: self.$replacement)
+                                .dictionaryInputChrome()
+                                .onSubmit { self.saveIfValid() }
+                        }
+                        .disabled(self.isTestBusy)
+
+                        if !self.parseTriggers().isEmpty && !self.replacement.isEmpty {
+                            DictionaryReplacementPreview(
+                                triggers: self.parseTriggers(),
+                                replacement: self.replacement,
+                                duplicateTriggers: self.duplicateTriggers
+                            )
+                        }
+
+                        if self.isTestingWord {
+                            Divider()
+                            DictionaryWordPlayground(
+                                word: self.entry.replacement,
+                                onPracticeMore: nil,
+                                busy: self.$isTestBusy
+                            )
+                            .id("dictionary-word-test")
                         }
                     }
-
-                    // Replacement input
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Correct Spelling (replacement)")
-                            .font(.fluidSystem(.subheadline).weight(.medium))
-                        Text("This is what will appear in the final transcription.")
-                            .font(.fluidSystem(.caption))
-                            .foregroundStyle(.secondary)
-                        TextField("FluidVoice", text: self.$replacement)
-                            .dictionaryInputChrome()
-                            .onSubmit { self.saveIfValid() }
-                    }
-
-                    if !self.parseTriggers().isEmpty && !self.replacement.isEmpty {
-                        DictionaryReplacementPreview(
-                            triggers: self.parseTriggers(),
-                            replacement: self.replacement,
-                            duplicateTriggers: self.duplicateTriggers
-                        )
-                    }
+                    .padding(2)
                 }
-                .padding(2)
+                .task(id: self.isTestingWord) {
+                    guard self.isTestingWord else { return }
+                    await Task.yield()
+                    guard !Task.isCancelled else { return }
+                    scroll.scrollTo("dictionary-word-test", anchor: .bottom)
+                }
             }
             .frame(minHeight: 0, maxHeight: .infinity)
 
             Divider()
             // Save button
             HStack {
+                Button(self.isTestingWord ? "Hide test" : "Test word") {
+                    self.isTestingWord.toggle()
+                }
+                .fluidGlassAction(quiet: true)
+                .disabled(self.hasUnsavedChanges || self.isCaptureBusy || self.isTestBusy)
+                .help(self.hasUnsavedChanges ? "Save your changes before testing this word." : "Try this word with your dictation shortcut.")
                 Spacer()
                 Button("Save Changes") { self.saveIfValid() }
                     .fluidGlassAction(prominent: true, tone: self.theme.palette.accent)
-                    .disabled(!self.canSave)
+                    .disabled(!self.canSave || self.isTestBusy)
                     .keyboardShortcut(.return, modifiers: [])
             }
         }
         .padding(20)
         .frame(minWidth: 400, idealWidth: 480, maxWidth: 560)
-        .frame(minHeight: 360, idealHeight: 500, maxHeight: 600)
+        .frame(minHeight: 360, idealHeight: self.isTestingWord ? 680 : 500, maxHeight: self.isTestingWord ? 780 : 600)
         .dismissTextFocusOnBackgroundTap()
+        .onChange(of: self.hasUnsavedChanges) { _, changed in
+            if changed { self.isTestingWord = false }
+        }
         .onAppear {
             self.triggersText = self.entry.triggers.joined(separator: "\n")
             self.replacement = self.entry.replacement
@@ -4108,7 +4274,7 @@ struct EditDictionaryEntrySheet: View {
     }
 
     private func saveIfValid() {
-        guard self.canSave else { return }
+        guard self.canSave, !self.isTestBusy else { return }
 
         let updatedEntry = SettingsStore.CustomDictionaryEntry(
             id: self.entry.id,

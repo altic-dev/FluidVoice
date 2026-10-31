@@ -5,6 +5,44 @@ import XCTest
 
 @MainActor
 final class PasteDeliveryCoordinatorTests: XCTestCase {
+    func testEachRecoveryFailureGetsANewIdentityEvenForIdenticalText() {
+        let state = NotchContentState.shared
+        defer { state.clearTextDeliveryFailure() }
+        state.recordTextDeliveryFailure(.noEditableTarget, transcript: "same transcript")
+        let firstID = state.textDeliveryFailureID
+        state.recordTextDeliveryFailure(.noEditableTarget, transcript: "same transcript")
+        XCTAssertNotEqual(state.textDeliveryFailureID, firstID)
+        XCTAssertEqual(state.textDeliveryFailureTranscript, "same transcript")
+        XCTAssertEqual(state.textDeliveryFailure, .noEditableTarget)
+        XCTAssertTrue(state.isTextDeliveryFailureVisible)
+    }
+
+    func testOldRecoveryDismissCannotClearANewerFailure() {
+        let state = NotchContentState.shared
+        defer { state.clearTextDeliveryFailure() }
+        state.recordTextDeliveryFailure(.noEditableTarget, transcript: "first transcript")
+        let firstID = state.textDeliveryFailureID
+        state.recordTextDeliveryFailure(.pasteNotLanded, transcript: "second transcript")
+        let secondID = state.textDeliveryFailureID
+        XCTAssertFalse(state.clearTextDeliveryFailure(ifPresentationID: firstID))
+        XCTAssertEqual(state.textDeliveryFailureID, secondID)
+        XCTAssertEqual(state.textDeliveryFailureTranscript, "second transcript")
+        XCTAssertEqual(state.textDeliveryFailure, .pasteNotLanded)
+        XCTAssertTrue(state.isTextDeliveryFailureVisible)
+        XCTAssertTrue(state.clearTextDeliveryFailure(ifPresentationID: secondID))
+        XCTAssertFalse(state.isTextDeliveryFailureVisible)
+        XCTAssertFalse(state.clearTextDeliveryFailure(ifPresentationID: secondID))
+        XCTAssertNil(state.textDeliveryFailure)
+    }
+
+    func testEmptyRecoveryTranscriptStillHasNoVisibleFailureCard() {
+        let state = NotchContentState.shared
+        defer { state.clearTextDeliveryFailure() }
+        state.recordTextDeliveryFailure(.emptyText, transcript: "")
+        XCTAssertFalse(state.isTextDeliveryFailureVisible)
+        XCTAssertFalse(state.clearTextDeliveryFailure(ifPresentationID: state.textDeliveryFailureID))
+    }
+
     func testCancelledFocusPreparationDoesNotCopyBackup() async {
         let pasteboard = FakePasteboardManager(text: "before")
         let poster = FakePasteCommandPoster()

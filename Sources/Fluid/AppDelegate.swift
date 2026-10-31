@@ -367,6 +367,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     private func scheduleMeetingAutoDetectorStart() {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
             Task { @MainActor in
+                guard SettingsStore.shared.fluidMeetEnabled else { return }
                 _ = AppServices.shared.meetingAutoDetector
             }
         }

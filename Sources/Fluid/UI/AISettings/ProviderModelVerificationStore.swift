@@ -5,6 +5,9 @@ import Foundation
 /// Stores only hashes and timestamps, never API keys, URLs, or request contents.
 @MainActor
 final class ProviderModelVerificationStore {
+    // Explicitly nonisolated: on macOS 15.4+ the synthesized main-actor deinit can abort until the OS runtime has the fix (swiftlang/swift#88036).
+    nonisolated deinit {}
+
     static let defaultsKey = "ProviderModelVerificationsV1"
     static let maximumEntries = 256
     private let defaults: UserDefaults

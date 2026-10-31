@@ -173,10 +173,7 @@ final class MeetingSessionCoordinator: ObservableObject {
         case rename(speakerID: SessionSpeakerID, previousName: String)
         case reassign(
             segmentID: MeetingTranscriptSegmentID,
-            previousSpeakerID: SessionSpeakerID?,
-            previousOverlap: MeetingTranscriptOverlap,
-            previousAttributionState: MeetingTranscriptAttributionState?,
-            previousRevision: Int
+            previousSegments: [(index: Int, segment: MeetingTranscriptSegment)]
         )
         case nameUnknown(
             segmentID: MeetingTranscriptSegmentID,
@@ -191,6 +188,10 @@ final class MeetingSessionCoordinator: ObservableObject {
             movedSegments: [(id: MeetingTranscriptSegmentID, previousRevision: Int)]
         )
         case renameBatch([(speakerID: SessionSpeakerID, previousName: String)])
+        case speakerEdits(
+            previousSpeakers: [MeetingSessionSpeaker],
+            movedSegments: [(id: MeetingTranscriptSegmentID, speakerID: SessionSpeakerID?, revision: Int)]
+        )
     }
 
     private var correctionUndoStacks: [MeetingSessionID: [TranscriptCorrection]] = [:]
@@ -348,6 +349,7 @@ final class MeetingSessionCoordinator: ObservableObject {
         passiveOffer: MeetingSession?,
         resolvingSourceID: MeetingSessionID?
     ) async throws -> MeetingSession {
+        guard SettingsStore.shared.fluidMeetEnabled else { throw MeetingCoordinatorError.featureDisabled }
         guard self.startReservation == nil else { throw MeetingCoordinatorError.recordingAlreadyActive }
         guard !self.hasBlockingActivityTask,
               self.canBeginNewRecording, !self.isDeleting
@@ -390,8 +392,10 @@ final class MeetingSessionCoordinator: ObservableObject {
         // open indefinitely; reserving meeting audio first would unnecessarily block dictation.
         try await self.validateRecordingModels()
         try Task.checkCancellation()
+        guard SettingsStore.shared.fluidMeetEnabled else { throw MeetingCoordinatorError.featureDisabled }
         try await self.capture.preflightPermissions()
         try Task.checkCancellation()
+        guard SettingsStore.shared.fluidMeetEnabled else { throw MeetingCoordinatorError.featureDisabled }
         guard self.startReservation == reservation,
               self.activeSession?.id == passiveOffer?.id,
               !self.hasBlockingActivityTaskExceptStart,
@@ -406,6 +410,7 @@ final class MeetingSessionCoordinator: ObservableObject {
         let lease = try await self.audioArbiter.acquireMeetingCapture()
         do {
             try Task.checkCancellation()
+            guard SettingsStore.shared.fluidMeetEnabled else { throw MeetingCoordinatorError.featureDisabled }
             guard self.startReservation == reservation,
                   self.activeSession?.id == passiveOffer?.id,
                   !self.hasBlockingActivityTaskExceptStart,
@@ -873,7 +878,7 @@ final class MeetingSessionCoordinator: ObservableObject {
     private func resolveSession(_ id: MeetingSessionID) async throws -> MeetingSession {
         if let active = self.activeSession, active.id == id { return active }
         if let completed = self.latestCompletedSession, completed.id == id { return completed }
-        if let loaded = try await self.store.load(id: id) { return loaded }
+        if let loaded = try await self.store.loadTranscript(id: id) { return loaded }
         throw MeetingCoordinatorError.noActiveMeeting
     }
 
@@ -933,6 +938,28 @@ final class MeetingSessionCoordinator: ObservableObject {
     }
 
     @discardableResult
+    func editSpeakers(sessionID: MeetingSessionID, edits: MeetingSpeakerEdits) async throws -> MeetingSession {
+        try await self.performCorrection(sessionID: sessionID) { session in
+            let merges = try edits.resolvedMerges()
+            let previousSpeakers = session.speakers
+            let movedSegments: [(id: MeetingTranscriptSegmentID, speakerID: SessionSpeakerID?, revision: Int)] = session.transcriptSegments.compactMap { segment in
+                guard let speakerID = segment.speakerID, merges[speakerID] != nil else { return nil }
+                return (id: segment.id, speakerID: segment.speakerID, revision: segment.revision)
+            }
+            for source in merges.keys.sorted(by: { $0.uuidString < $1.uuidString }) {
+                if let target = merges[source] { try session.mergeSpeakers(source, into: target) }
+            }
+            for (speakerID, name) in edits.names {
+                guard session.speakers.contains(where: { $0.id == speakerID && $0.mergedIntoSpeakerID == nil }) else { continue }
+                let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmed.isEmpty else { continue }
+                try session.renameSpeaker(id: speakerID, to: trimmed)
+            }
+            return .speakerEdits(previousSpeakers: previousSpeakers, movedSegments: movedSegments)
+        }
+    }
+
+    @discardableResult
     func reassignSegment(
         sessionID: MeetingSessionID,
         segmentID: MeetingTranscriptSegmentID,
@@ -942,17 +969,16 @@ final class MeetingSessionCoordinator: ObservableObject {
             guard let segment = session.transcriptSegments.first(where: { $0.id == segmentID }) else {
                 throw MeetingDomainError.segmentNotFound
             }
-            let previousSpeakerID = segment.speakerID
-            let previousOverlap = segment.overlap
-            let previousAttributionState = segment.attributionState
-            let previousRevision = segment.revision
+            let before = session.transcriptSegments
             try session.reassignSegment(id: segmentID, to: speakerID)
+            let affectedIDs = segment.speakerID == nil
+                ? session.mergeTaggedSegmentWithNeighbors(id: segmentID)
+                : Set([segmentID])
             return .reassign(
                 segmentID: segmentID,
-                previousSpeakerID: previousSpeakerID,
-                previousOverlap: previousOverlap,
-                previousAttributionState: previousAttributionState,
-                previousRevision: previousRevision
+                previousSegments: before.enumerated().compactMap {
+                    affectedIDs.contains($0.element.id) ? (index: $0.offset, segment: $0.element) : nil
+                }
             )
         }
     }
@@ -1049,6 +1075,13 @@ final class MeetingSessionCoordinator: ObservableObject {
         guard !trimmed.isEmpty else { throw MeetingDomainError.emptyMeetingTitle }
         guard target.title != trimmed else { return target }
 
+        if let directory = try await self.store.existingSessionDirectory(for: sessionID) {
+            let snapshot = target
+            try await Task.detached(priority: .utility) {
+                try MeetingSummaryController.SavedSummary.migrateLegacySummaries(in: directory, for: snapshot)
+            }.value
+        }
+
         target.title = trimmed
         target.defaultTitleBase = nil
         target.updatedAt = Date()
@@ -1126,7 +1159,7 @@ final class MeetingSessionCoordinator: ObservableObject {
 
         let sessions: [MeetingSession]
         do {
-            sessions = try await self.store.loadAll()
+            sessions = try await self.store.loadHistory()
         } catch {
             DebugLogger.shared.warning(
                 "Retention sweep could not load sessions; leaving the current timer as-is: \(error)",
@@ -1231,18 +1264,12 @@ final class MeetingSessionCoordinator: ObservableObject {
             guard let index = session.speakers.firstIndex(where: { $0.id == speakerID }) else { return false }
             session.speakers[index].displayName = previousName
             return true
-        case let .reassign(
-            segmentID,
-            previousSpeakerID,
-            previousOverlap,
-            previousAttributionState,
-            previousRevision
-        ):
-            guard let index = session.transcriptSegments.firstIndex(where: { $0.id == segmentID }) else { return false }
-            session.transcriptSegments[index].speakerID = previousSpeakerID
-            session.transcriptSegments[index].overlap = previousOverlap
-            session.transcriptSegments[index].attributionState = previousAttributionState
-            session.transcriptSegments[index].revision = previousRevision
+        case let .reassign(segmentID, previousSegments):
+            guard session.transcriptSegments.contains(where: { $0.id == segmentID }) else { return false }
+            session.transcriptSegments.removeAll { $0.id == segmentID }
+            for original in previousSegments.sorted(by: { $0.index < $1.index }) {
+                session.transcriptSegments.insert(original.segment, at: min(original.index, session.transcriptSegments.count))
+            }
             return true
         case let .nameUnknown(
             segmentID,
@@ -1279,6 +1306,16 @@ final class MeetingSessionCoordinator: ObservableObject {
                 restored = true
             }
             return restored
+        case let .speakerEdits(previousSpeakers, movedSegments):
+            guard Set(session.speakers.map(\.id)) == Set(previousSpeakers.map(\.id)) else { return false }
+            let previous = Dictionary(uniqueKeysWithValues: movedSegments.map { ($0.id, $0) })
+            session.speakers = previousSpeakers
+            for index in session.transcriptSegments.indices {
+                guard let original = previous[session.transcriptSegments[index].id] else { continue }
+                session.transcriptSegments[index].speakerID = original.speakerID
+                session.transcriptSegments[index].revision = original.revision
+            }
+            return true
         }
     }
 
@@ -1767,7 +1804,23 @@ final class MeetingSessionCoordinator: ObservableObject {
 
     private func handleCaptureEvent(_ event: MeetingCaptureEvent, generation: UUID) {
         guard self.captureGeneration == generation, var session = self.activeSession else { return }
+        self.liveTranscriptionCoordinator?.recordComparisonCaptureEvent(event)
         switch event {
+        case let .audioComparisonProbeStarted(probe):
+            self.liveTranscriptionCoordinator?.attachComparisonProbe(probe)
+            return // Diagnostic-only: no recording, persistence, navigation or transcript writes.
+        case let .microphoneEchoProtectionChanged(protection):
+            let kind: MeetingInterruptionKind = protection == .unfiltered ? .echoFilteringUnavailable : .echoFilteringRestored
+            if session.events.last(where: { $0.kind == .echoFilteringUnavailable || $0.kind == .echoFilteringRestored })?.kind == kind {
+                return
+            }
+            session.events.append(MeetingSessionEvent(
+                id: UUID(),
+                occurredAt: Date(),
+                kind: kind,
+                trackID: nil,
+                detail: protection.transcriptWarning
+            ))
         case let .trackHealth(trackID, health):
             if health.status == .healthy {
                 self.startupWriterFailures.remove(trackID)
@@ -2170,6 +2223,7 @@ final class MeetingSessionCoordinator: ObservableObject {
 }
 
 enum MeetingCoordinatorError: LocalizedError {
+    case featureDisabled
     case recordingAlreadyActive
     case noActiveMeeting
     case noRecoverableAudio
@@ -2180,6 +2234,8 @@ enum MeetingCoordinatorError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
+        case .featureDisabled:
+            return "Enable FluidMeet in Settings to record a meeting."
         case .recordingAlreadyActive:
             return "Another meeting recording is already active."
         case .noActiveMeeting:

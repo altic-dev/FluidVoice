@@ -180,8 +180,13 @@ import FluidAudio
 /// TranscriptionProvider implementation using FluidAudio (optimized for Apple Silicon)
 /// This wraps the existing FluidAudio-based ASR for use on Apple Silicon Macs.
 final class FluidAudioProvider: TranscriptionProvider {
+    // Explicitly nonisolated: on macOS 15.4+ the synthesized main-actor deinit can abort until the OS runtime has the fix (swiftlang/swift#88036).
+    nonisolated deinit {}
+
     private static let incrementalChunkingThresholdSamples = 240_000
     private static let incrementalAppendBlockSamples = 240_000
+    /// Mac capture opens on ~0.17 s of dead audio; 0.25 s of silence first lets Parakeet catch the first word.
+    static let finalLeadInSamples = 4000
 
     /// Stable admission keeps a ninth word from evicting references used by the next match.
     struct TemporalReferenceCache {
@@ -254,6 +259,7 @@ final class FluidAudioProvider: TranscriptionProvider {
     private var incrementalAcceptedSampleCount = 0
     private var recordingGeneration = UUID()
     private var incrementalPronunciationProfiles: [PronunciationDictionaryProfile] = []
+    private var hasEligibleExplicitPronunciationProfiles = false
     private var automaticPronunciationProfiles: [PronunciationDictionaryProfile] = []
     private var didLoadAutomaticPronunciationProfiles = false
 
@@ -274,7 +280,15 @@ final class FluidAudioProvider: TranscriptionProvider {
     private var incrementalSharedFeatures = false
     private var incrementalSharedEvidence: [Int: [(Range<Int>, DictionaryAcousticEvidence)]] = [:]
     private var temporalModels: AsrModels?
-    private var temporalReferenceCache = TemporalReferenceCache()
+    /// Prepared word recordings, per speech model. Saving a dictionary word replaces this provider, so the
+    /// cache lives outside it: otherwise every voice word would be re-encoded after each save, and the next
+    /// dictation would wait for all of them instead of only the new word.
+    private static var sharedTemporalReferenceCaches: [String: TemporalReferenceCache] = [:]
+    private var temporalReferenceCache: TemporalReferenceCache {
+        get { Self.sharedTemporalReferenceCaches[self.pronunciationModelKey] ?? TemporalReferenceCache() }
+        set { Self.sharedTemporalReferenceCaches[self.pronunciationModelKey] = newValue }
+    }
+
     private var temporalWarmTask: Task<Void, Never>?
     private var temporalWarmRequest: (profiles: [PronunciationDictionaryProfile], generation: String)?
     private var pronunciationProfilesToWarm: [PronunciationDictionaryProfile] = []
@@ -346,24 +360,27 @@ final class FluidAudioProvider: TranscriptionProvider {
     }
 
     private var effectivePronunciationMatchingEnabled: Bool {
-        DictionaryMatcherExperiment.sharedFeaturesEnabled && (self.explicitPronunciationMatchingEnabled
+        DictionaryMatcherExperiment.sharedFeaturesEnabled && ((self.explicitPronunciationMatchingEnabled && self.hasEligibleExplicitPronunciationProfiles)
             || (self.automaticPronunciationMatchingEnabled && !self.automaticPronunciationProfiles.isEmpty))
     }
 
     /// Read the actor-owned store once after capture begins, never on the microphone startup path.
     private func refreshAutomaticPronunciationProfiles(warmReferences: Bool = true) async throws {
         guard DictionaryMatcherExperiment.sharedFeaturesEnabled else {
+            self.hasEligibleExplicitPronunciationProfiles = false
             self.automaticPronunciationProfiles = []
+            self.didLoadAutomaticPronunciationProfiles = false
             return
         }
         guard !self.didLoadAutomaticPronunciationProfiles else { return }
         let generation = self.recordingGeneration
         guard self.meetingOptions == nil, self.enhancementOptions == nil || self.explicitPronunciationMatchingEnabled, !self.effectiveCustomDictionaryEntries.isEmpty else {
+            self.hasEligibleExplicitPronunciationProfiles = false
             self.automaticPronunciationProfiles = []
             self.didLoadAutomaticPronunciationProfiles = true
             return
         }
-        let stored = await self.pronunciationStore.profiles(modelKey: self.pronunciationModelKey)
+        let stored = await self.pronunciationStore.sharedProfiles(modelKey: self.pronunciationModelKey, hiddenSize: self.temporalModels?.version.encoderHiddenSize)
         try self.requireCurrentRecording(generation)
         self.automaticPronunciationProfiles = Self.matchingProfiles(
             stored,
@@ -373,6 +390,8 @@ final class FluidAudioProvider: TranscriptionProvider {
         )
         self.didLoadAutomaticPronunciationProfiles = true
         let activeProfiles = Self.matchingProfiles(stored, entries: self.effectiveCustomDictionaryEntries, includeManual: self.explicitPronunciationMatchingEnabled)
+        // The switch allows matching; only eligible saved words should change dictation routing.
+        self.hasEligibleExplicitPronunciationProfiles = self.explicitPronunciationMatchingEnabled && !activeProfiles.isEmpty
         let activeKeys = Set(activeProfiles.map(DictionaryNegativeEvidenceResolver.profileKey))
         self.temporalReferenceCache.retain(keys: activeKeys)
         let inspectionIDs = Set(activeProfiles.flatMap(\.enrollments).compactMap(\.inspectionID))
@@ -406,6 +425,12 @@ final class FluidAudioProvider: TranscriptionProvider {
     #if DEBUG
     func setWordBoostingActiveForTesting(_ active: Bool) {
         self.isWordBoostingActive = active
+    }
+
+    func refreshPronunciationRoutingForTesting(modelKey: String) async throws -> Bool {
+        self.pronunciationModelKey = modelKey
+        try await self.refreshAutomaticPronunciationProfiles(warmReferences: false)
+        return self.usesIncrementalDictation
     }
 
     /// Read-only snapshot of the actual effective enhancement getters for baseline tests.
@@ -514,7 +539,7 @@ final class FluidAudioProvider: TranscriptionProvider {
                 if installedHash == nil {
                     let release = descriptor
                     let validator: ParakeetArchiveDownloader.StageValidator?
-                    if release.variant == .mini || release.variant == .pico {
+                    if release.isHostedPack {
                         validator = { directory in
                             progressRelay.report(.loading)
                             try await CompactSpeechModelRuntimeCheck.validateStagedWeights(at: directory, descriptor: release)
@@ -611,7 +636,7 @@ final class FluidAudioProvider: TranscriptionProvider {
         }
 
         if DictionaryMatcherExperiment.sharedFeaturesEnabled, self.meetingOptions == nil {
-            let stored = await self.pronunciationStore.profiles(modelKey: self.pronunciationModelKey)
+            let stored = await self.pronunciationStore.sharedProfiles(modelKey: self.pronunciationModelKey, hiddenSize: self.temporalModels?.version.encoderHiddenSize)
             let eligible = Self.matchingProfiles(stored, entries: self.effectiveCustomDictionaryEntries, includeManual: self.explicitPronunciationMatchingEnabled)
             self.scheduleTemporalWarmup(eligible)
         }
@@ -621,6 +646,7 @@ final class FluidAudioProvider: TranscriptionProvider {
         self.latestStreamingPreviewSampleCount = 0
         self.latestStreamingPreviewFinishedAt = nil
         self.recordingGeneration = UUID()
+        self.hasEligibleExplicitPronunciationProfiles = false
         self.automaticPronunciationProfiles = []
         self.didLoadAutomaticPronunciationProfiles = false
         self.resetIncrementalSession()
@@ -643,6 +669,7 @@ final class FluidAudioProvider: TranscriptionProvider {
         self.latestStreamingPreviewSampleCount = 0
         self.latestStreamingPreviewFinishedAt = nil
         self.recordingGeneration = UUID()
+        self.hasEligibleExplicitPronunciationProfiles = false
         self.automaticPronunciationProfiles = []
         self.didLoadAutomaticPronunciationProfiles = false
         self.resetIncrementalSession()
@@ -891,7 +918,7 @@ final class FluidAudioProvider: TranscriptionProvider {
         // manager so the user still gets a transcription (just without CTC rescoring).
         do {
             let startedAt = Date().timeIntervalSince1970
-            let outcome = try await self.transcribeFinalResult(samples, manager: manager)
+            let outcome = try await self.transcribeFinalResult(samples, manager: manager, leadIn: true)
             try self.requireCurrentRecording(generation)
             self.logFinalBenchmark(samples: samples, text: outcome.result.text, startedAt: startedAt, usedFallback: false)
             return outcome.result
@@ -905,7 +932,7 @@ final class FluidAudioProvider: TranscriptionProvider {
                 source: "FluidAudioProvider"
             )
             let startedAt = Date().timeIntervalSince1970
-            let outcome = try await self.transcribeFinalResult(samples, manager: fallback)
+            let outcome = try await self.transcribeFinalResult(samples, manager: fallback, leadIn: true)
             try self.requireCurrentRecording(generation)
             self.logFinalBenchmark(samples: samples, text: outcome.result.text, startedAt: startedAt, usedFallback: true)
             return outcome.result
@@ -981,13 +1008,23 @@ final class FluidAudioProvider: TranscriptionProvider {
                 for (frames, item) in items {
                     let indices = wordIndex.substantiallyOverlappingWordIndices(startTime: Double(frames.lowerBound) * 0.08, endTime: Double(frames.upperBound) * 0.08, minimumOverlapRatio: 0)
                     guard let first = indices.first, let last = indices.last else { continue }
-                    acousticEvidence.append(DictionaryAcousticEvidence(id: item.id, entryID: item.entryID, label: item.label, profileKey: item.profileKey, modelKey: item.modelKey, sourceWordRange: first..<(last + 1), frames: item.frames))
+                    acousticEvidence.append(DictionaryAcousticEvidence(
+                        id: item.id,
+                        entryID: item.entryID,
+                        label: item.label,
+                        profileKey: item.profileKey,
+                        modelKey: item.modelKey,
+                        sourceWordRange: first..<(last + 1),
+                        frames: item.frames,
+                        matchFrameRange: frames
+                    ))
                 }
             }
         } else if let manager = self.finalAsrManager ?? self.streamingAsrManager, originalText == result.text {
             matches = try await self.refineEdgeMatches(matches, profiles: profiles, samples: samples, manager: manager, transcript: result.text, timings: result.tokenTimings ?? [], evidence: &acousticEvidence, temporalMatches: &temporalMatches)
         }
         try self.requireCurrentRecording(generation)
+        var voiceSpellings: [DictionaryVoiceSpelling] = []
         let text = self.effectivePronunciationMatchingEnabled && originalText == result.text
             ? Self.applyPronunciationMatches(
                 result: result,
@@ -995,9 +1032,11 @@ final class FluidAudioProvider: TranscriptionProvider {
                 profiles: profiles,
                 labels: Self.dictionaryLabels(from: self.effectiveCustomDictionaryEntries).filter { eligibleIDs.contains($0.key) },
                 temporalMatches: temporalMatches,
-                onAccepted: { id, label, range in
-                    acceptedEvidence += acousticEvidence.filter { $0.entryID == id && $0.label == label && $0.sourceWordRange == range }
-                }
+                entries: self.effectiveCustomDictionaryEntries + BuiltInDictionary.entries,
+                onAccepted: { id, label, range, frames in
+                    acceptedEvidence += Self.acceptedAcousticEvidence(acousticEvidence, entryID: id, label: label, wordRange: range, frameRange: frames)
+                },
+                onReplaced: { voiceSpellings.append($0) }
             ) : result.text
         let finishFinishedAt = ProcessInfo.processInfo.systemUptime
         DebugLogger.shared.debug(
@@ -1010,6 +1049,7 @@ final class FluidAudioProvider: TranscriptionProvider {
         var alignment = self.learningAlignment(for: result)
         alignment?.acousticOutput = text
         alignment?.acousticEvidence = acceptedEvidence
+        alignment?.voiceSpellings = voiceSpellings
         return ASRTranscriptionResult(
             text: text,
             confidence: result.confidence,
@@ -1058,7 +1098,7 @@ final class FluidAudioProvider: TranscriptionProvider {
         guard self.effectivePronunciationMatchingEnabled else { return [] }
         let stored: [PronunciationDictionaryProfile]
         if self.explicitPronunciationMatchingEnabled {
-            stored = await self.pronunciationStore.profiles(modelKey: self.pronunciationModelKey)
+            stored = await self.pronunciationStore.sharedProfiles(modelKey: self.pronunciationModelKey, hiddenSize: self.temporalModels?.version.encoderHiddenSize)
         } else {
             stored = self.automaticPronunciationProfiles
         }
@@ -1173,6 +1213,38 @@ final class FluidAudioProvider: TranscriptionProvider {
         }
     }
 
+    /// Pronunciation matching reads encoder frames against the recording itself, and a full window has no room left.
+    static func usesFinalLeadIn(sampleCount: Int, hasPronunciationProfiles: Bool) -> Bool {
+        !hasPronunciationProfiles && sampleCount + self.finalLeadInSamples <= self.incrementalChunkingThresholdSamples
+    }
+
+    static func withLeadIn(_ samples: [Float]) -> [Float] {
+        [Float](repeating: 0, count: self.finalLeadInSamples) + samples
+    }
+
+    /// Puts timings back on the recording's own clock after transcribing `withLeadIn(_:)`.
+    static func removingLeadIn(from result: ASRResult) -> ASRResult {
+        let offset = TimeInterval(Self.finalLeadInSamples) / 16_000
+        return ASRResult(
+            text: result.text,
+            confidence: result.confidence,
+            duration: max(0, result.duration - offset),
+            processingTime: result.processingTime,
+            tokenTimings: result.tokenTimings?.map {
+                TokenTiming(
+                    token: $0.token,
+                    tokenId: $0.tokenId,
+                    startTime: max(0, $0.startTime - offset),
+                    endTime: max(0, $0.endTime - offset),
+                    confidence: $0.confidence
+                )
+            },
+            performanceMetrics: result.performanceMetrics,
+            ctcDetectedTerms: result.ctcDetectedTerms,
+            ctcAppliedTerms: result.ctcAppliedTerms
+        )
+    }
+
     private func learningAlignment(for result: ASRResult) -> DictionaryLearningAlignment? {
         guard DictionaryMatcherExperiment.sharedFeaturesEnabled, SettingsStore.shared.automaticDictionaryLearningEnabled || DictionaryMatcherExperiment.collectNegatives, !self.isWordBoostingActive,
               let timings = result.tokenTimings, !timings.isEmpty
@@ -1181,20 +1253,26 @@ final class FluidAudioProvider: TranscriptionProvider {
     }
 
     private func transcribeFinalResult(
-        _ samples: [Float], manager: AsrManager
+        _ samples: [Float], manager: AsrManager, leadIn: Bool = false
     ) async throws -> (result: ASRTranscriptionResult, tokenTimings: [TokenTiming]?, textMayBeCorrected: Bool) { // swiftlint:disable:this discouraged_optional_collection
-        if self.effectivePronunciationMatchingEnabled, samples.count > Self.incrementalChunkingThresholdSamples {
+        let generation = self.recordingGeneration
+        let profiles = self.effectivePronunciationMatchingEnabled ? Self.preparedEdgeProfiles(await self.pronunciationProfiles(), cache: self.edgeReferenceCache) : []
+        try self.requireCurrentRecording(generation)
+        if !profiles.isEmpty, samples.count > Self.incrementalChunkingThresholdSamples {
             self.resetIncrementalSession()
             try await self.startIncrementalSession(manager: manager)
             return try (await self.transcribeIncrementalFinal(samples), nil, true)
         }
-        let matchingEnabled = self.effectivePronunciationMatchingEnabled && samples.count <= 16_000 * 15
-        let profiles = matchingEnabled ? Self.preparedEdgeProfiles(await self.pronunciationProfiles(), cache: self.edgeReferenceCache) : []
         // Rewritten text leaves timings on the old tokens; realigning would revert corrections.
         let textMayBeCorrected = self.isWordBoostingActive || !profiles.isEmpty
         await manager.setPronunciationCustomizationEnabled(!profiles.isEmpty)
         do {
-            let result = try await manager.transcribe(samples, source: AudioSource.microphone)
+            let result: ASRResult
+            if leadIn, Self.usesFinalLeadIn(sampleCount: samples.count, hasPronunciationProfiles: !profiles.isEmpty) {
+                result = try await Self.removingLeadIn(from: manager.transcribe(Self.withLeadIn(samples), source: AudioSource.microphone))
+            } else {
+                result = try await manager.transcribe(samples, source: AudioSource.microphone)
+            }
             let features = await manager.consumePronunciationEncoderFeatures()
             await manager.setPronunciationCustomizationEnabled(false)
             guard DictionaryMatcherExperiment.sharedFeaturesEnabled, let features, !profiles.isEmpty else {
@@ -1234,19 +1312,23 @@ final class FluidAudioProvider: TranscriptionProvider {
                 temporalMatches: &temporalMatches,
                 features: features
             )
+            var voiceSpellings: [DictionaryVoiceSpelling] = []
             let corrected = Self.applyPronunciationMatches(
                 result: result,
                 matches: DictionaryMatcherExperiment.sharedFeaturesEnabled ? refined : [],
                 profiles: references.map(\.profile),
                 labels: Self.dictionaryLabels(from: self.effectiveCustomDictionaryEntries),
                 temporalMatches: temporalMatches,
-                onAccepted: { id, label, range in
-                    acceptedEvidence += acousticEvidence.filter { $0.entryID == id && $0.label == label && $0.sourceWordRange == range }
-                }
+                entries: self.effectiveCustomDictionaryEntries + BuiltInDictionary.entries,
+                onAccepted: { id, label, range, frames in
+                    acceptedEvidence += Self.acceptedAcousticEvidence(acousticEvidence, entryID: id, label: label, wordRange: range, frameRange: frames)
+                },
+                onReplaced: { voiceSpellings.append($0) }
             )
             var alignment = self.learningAlignment(for: result)
             alignment?.acousticOutput = corrected
             alignment?.acousticEvidence = acceptedEvidence
+            alignment?.voiceSpellings = voiceSpellings
             return (
                 ASRTranscriptionResult(
                     text: corrected,
@@ -1273,7 +1355,7 @@ final class FluidAudioProvider: TranscriptionProvider {
     static func preparedEdgeProfiles(_ profiles: [PronunciationDictionaryProfile], cache: [UUID: PronunciationEmbedding]) -> [PronunciationDictionaryProfile] {
         guard DictionaryMatcherExperiment.sharedFeaturesEnabled else { return [] }
         return profiles.compactMap { profile in
-            if profile.hasOriginalAudio { return profile }
+            if profile.hasOriginalAudio || !profile.hasTemporalRecordings { return profile }
             var prepared = profile
             for index in prepared.enrollments.indices {
                 if prepared.enrollments[index].edgeEmbedding != nil { continue }
@@ -1326,56 +1408,94 @@ final class FluidAudioProvider: TranscriptionProvider {
         var used: [Int: [Range<Int>]] = [:]
         let compareNegatives = DictionaryMatcherExperiment.compareNegatives
         let collectNegatives = DictionaryMatcherExperiment.collectNegatives
-        var sharedComparisons = 0
         let negativeRevision = compareNegatives ? await DictionaryNegativeExampleStore.shared.revision() : nil
+        // Words recorded in the Add Word screen: slide each recording along the whole dictation.
+        // This does not depend on the averaged-window shortlist, which misses words said differently in a sentence.
+        let query = DictionaryStampMatcher.prepare(DictionaryMatchFrames(hiddenSize: features.hiddenSize, values: features.values))
+        // Right after a word is saved, its recordings are still being prepared. A dictation that
+        // finishes first would be checked against nothing, so wait briefly for that one preparation.
+        let deadline = ContinuousClock.now + .seconds(2)
+        while self.temporalWarmTask != nil, ContinuousClock.now < deadline,
+              profiles.contains(where: { $0.hasTemporalRecordings && self.temporalReferenceCache[DictionaryNegativeEvidenceResolver.profileKey($0)] == nil })
+        {
+            try await Task.sleep(for: .milliseconds(40))
+        }
+        var stampedProfiles = Set<String>()
+        var stamped: [(index: Int, profile: PronunciationDictionaryProfile, referenceKey: String, references: [DictionaryMatchFrames])] = []
+        for (index, profile) in profiles.enumerated() where profile.hasTemporalRecordings {
+            let referenceKey = DictionaryNegativeEvidenceResolver.profileKey(profile)
+            guard stampedProfiles.insert(referenceKey).inserted,
+                  let references = self.temporalReferenceCache[referenceKey] else { continue }
+            stamped.append((index, profile, referenceKey, references))
+        }
+        // One comparison for every recorded word at once; per word it costs a fraction of a millisecond.
+        let stampHits = query.map { DictionaryStampMatcher.hits(words: stamped.map(\.references), in: $0) } ?? []
+        for (word, hits) in zip(stamped, stampHits) {
+            try Task.checkCancellation()
+            let (index, profile, referenceKey, references) = word
+            // Old isolated-query negatives must not be compared with sentence-context queries.
+            let targetSuffix = profile.modelKey == self.pronunciationModelKey ? "" : ":" + self.pronunciationModelKey
+            let evidenceKey = referenceKey + ":shared-features-v1" + targetSuffix
+            for hit in hits {
+                let indices = wordIndex.substantiallyOverlappingWordIndices(
+                    startTime: Double(hit.frames.lowerBound) * 0.08,
+                    endTime: Double(hit.frames.upperBound) * 0.08,
+                    minimumOverlapRatio: 0
+                )
+                guard let first = indices.first, let last = indices.last else { continue }
+                let hitFrames = DictionaryMatchFrames(
+                    hiddenSize: features.hiddenSize,
+                    values: Array(features.values[(hit.frames.lowerBound * features.hiddenSize)..<(hit.frames.upperBound * features.hiddenSize)])
+                )
+                if compareNegatives {
+                    let negatives = await DictionaryNegativeExampleStore.shared.frames(entryID: profile.dictionaryEntryID, profileKey: evidenceKey, modelKey: self.pronunciationModelKey)
+                    let allowed = await DictionaryExperimentalMatcher.compareNegative(query: hitFrames, references: references, negatives: negatives)
+                    if !allowed, DictionaryMatcherExperiment.compareNegatives,
+                       await DictionaryNegativeExampleStore.shared.revision() == negativeRevision { continue }
+                }
+                try Task.checkCancellation()
+                guard DictionaryMatcherExperiment.sharedFeaturesEnabled else { continue }
+                temporalMatches.insert(TemporalMatchKey(prototypeIndex: index, frameRange: hit.frames))
+                output.append(PronunciationWindowMatch(prototypeIndex: index, score: 1 - hit.distance, frameRange: hit.frames))
+                if collectNegatives, DictionaryMatcherExperiment.collectNegatives {
+                    evidence.append(DictionaryAcousticEvidence(
+                        id: UUID(),
+                        entryID: profile.dictionaryEntryID,
+                        label: profile.label,
+                        profileKey: evidenceKey,
+                        modelKey: self.pronunciationModelKey,
+                        sourceWordRange: first..<(last + 1),
+                        frames: hitFrames,
+                        matchFrameRange: hit.frames
+                    ))
+                }
+                DebugLogger.shared.info(
+                    "DICTIONARY_STAMP_MATCH distance=\(String(format: "%.3f", hit.distance)) frames=\(hit.frames.lowerBound)-\(hit.frames.upperBound)",
+                    source: "PronunciationMatching"
+                )
+            }
+        }
         // Bounded experimental reranking: up to three non-overlapping candidates per word, 24 comparisons total.
         for match in matches.sorted(by: { $0.score > $1.score }) {
             try Task.checkCancellation()
             guard DictionaryMatcherExperiment.sharedFeaturesEnabled else { break }
-            guard profiles.indices.contains(match.prototypeIndex) else { continue }
+            guard profiles.indices.contains(match.prototypeIndex),
+                  !profiles[match.prototypeIndex].hasTemporalRecordings else { continue }
             // Score the complete overlapping transcript span, never just the prefix of a split word.
             let indices = wordIndex.substantiallyOverlappingWordIndices(
                 startTime: Double(match.frameRange.lowerBound) * 0.08,
                 endTime: Double(match.frameRange.upperBound) * 0.08,
                 minimumOverlapRatio: 0
             )
-            guard let first = indices.first, let last = indices.last else { continue }
-            let firstFrame = max(0, Int(floor(words[first].startTime / 0.08)))
-            let lastFrame = max(firstFrame + 1, Int(ceil(words[last].endTime / 0.08)))
-            let alignedFrames = firstFrame..<lastFrame
-            let lower = min(samples.count, firstFrame * 1280)
-            let upper = min(samples.count, max(lower, lastFrame * 1280))
-            let range = lower..<upper
-            guard !range.isEmpty, range.count <= 16_000 * 15,
-                  (used[match.prototypeIndex]?.count ?? 0) < 3,
-                  !(used[match.prototypeIndex] ?? []).contains(where: { $0.overlaps(range) }),
-                  let trimmed = DictionaryPronunciationExperiment.trimmedRange(samples, within: range) else { continue }
-            do {
-                guard sharedComparisons < 24 else { break }
-                used[match.prototypeIndex, default: []].append(range)
-                sharedComparisons += 1
-                let profile = profiles[match.prototypeIndex]
-                let referenceKey = DictionaryNegativeEvidenceResolver.profileKey(profile)
-                // Old isolated-query negatives must not be compared with sentence-context queries.
-                let evidenceKey = referenceKey + ":shared-features-v1"
-                guard let query = Self.sharedPronunciationFrames(features, sampleRange: trimmed),
-                      let references = self.temporalReferenceCache[referenceKey] else { continue }
-                guard let decision = await DictionaryExperimentalMatcher.compareSharedFeatures(query: query, references: references, chunked: sharedChunk) else { continue }
-                guard decision.accepted, DictionaryMatcherExperiment.sharedFeaturesEnabled else { continue }
-                if compareNegatives {
-                    let negatives = await DictionaryNegativeExampleStore.shared.frames(entryID: profile.dictionaryEntryID, profileKey: evidenceKey, modelKey: profile.modelKey)
-                    let allowed = await DictionaryExperimentalMatcher.compareNegative(query: query, references: references, negatives: negatives)
-                    if !allowed, DictionaryMatcherExperiment.compareNegatives,
-                       await DictionaryNegativeExampleStore.shared.revision() == negativeRevision { continue }
-                }
-                try Task.checkCancellation()
-                guard DictionaryMatcherExperiment.sharedFeaturesEnabled else { continue }
-                temporalMatches.insert(TemporalMatchKey(prototypeIndex: match.prototypeIndex, frameRange: alignedFrames))
-                output.append(PronunciationWindowMatch(prototypeIndex: match.prototypeIndex, score: decision.meanRelative, frameRange: alignedFrames))
-                if collectNegatives, DictionaryMatcherExperiment.collectNegatives {
-                    evidence.append(DictionaryAcousticEvidence(id: UUID(), entryID: profile.dictionaryEntryID, label: profile.label, profileKey: evidenceKey, modelKey: profile.modelKey, sourceWordRange: first..<(last + 1), frames: query))
-                }
-                continue
+            guard !indices.isEmpty else { continue }
+            let range = match.frameRange.lowerBound..<match.frameRange.upperBound
+            guard (used[match.prototypeIndex]?.count ?? 0) < 3,
+                  !(used[match.prototypeIndex] ?? []).contains(where: { $0.overlaps(range) }) else { continue }
+            used[match.prototypeIndex, default: []].append(range)
+            // Words learned from corrections have no recordings; the averaged score decides.
+            let heard = indices.map { words[$0].text }.joined(separator: " ")
+            if DictionaryPronunciationDecision.accepts(score: match.score, heardText: heard, profile: profiles[match.prototypeIndex]) {
+                output.append(match)
             }
         }
         return DictionaryMatcherExperiment.sharedFeaturesEnabled && DictionaryMatcherExperiment.generation == pronunciationGeneration ? output : []
@@ -1431,8 +1551,9 @@ final class FluidAudioProvider: TranscriptionProvider {
 
     private func temporalReferences(_ profile: PronunciationDictionaryProfile, key: String, models: AsrModels) async throws -> [DictionaryMatchFrames] {
         guard DictionaryMatcherExperiment.sharedFeaturesEnabled else { return [] }
-        guard profile.modelKey == self.pronunciationModelKey,
-              profile.enrollments.allSatisfy({ $0.modelKey == profile.modelKey })
+        guard profile.modelKey == self.pronunciationModelKey ||
+            ParakeetSpeechModelCatalog.sharesPronunciationFamily(profile.modelKey, with: self.pronunciationModelKey),
+            profile.enrollments.allSatisfy({ $0.modelKey == profile.modelKey })
         else { throw PronunciationDictionaryStoreError.outdatedModelRevision }
         if let cached = self.temporalReferenceCache[key] { return cached }
         guard profile.enrollments.count >= 3 else { return [] }
@@ -1449,7 +1570,27 @@ final class FluidAudioProvider: TranscriptionProvider {
             let samples: [Float]
             if let id = capture.inspectionID {
                 let audio = try await self.pronunciationStore.inspection(for: id)
-                samples = Array(audio.samples.prefix(audio.recordedSampleCount))
+                let recorded = Array(audio.samples.prefix(audio.recordedSampleCount))
+                // Encode the whole recording, then keep only the word's frames. The word keeps its
+                // natural surroundings for the encoder, and the reference excludes silence and noise.
+                if let word = DictionaryPronunciationExperiment.wordRange(recorded, words: audio.words),
+                   recorded.count <= 240_000
+                {
+                    let encoded = try await DictionaryTemporalEncoder.encode(recorded, models: models)
+                    guard !encoded.values.isEmpty else { return [] }
+                    let first = min(encoded.count - 1, word.lowerBound / 1280)
+                    let last = min(encoded.count, max(first + 1, (word.upperBound + 1279) / 1280))
+                    let hidden = encoded.hiddenSize
+                    let spoken = DictionaryPronunciationExperiment.spokenFrames(recorded, frames: first..<last)
+                    let frames = DictionaryMatchFrames(
+                        hiddenSize: hidden,
+                        values: spoken.flatMap { encoded.values[($0 * hidden)..<(($0 + 1) * hidden)] }
+                    )
+                    guard frames.isValid else { return [] }
+                    result.append(frames)
+                    continue
+                }
+                samples = recorded
             } else if capture.originalAudioID != nil {
                 samples = try await self.pronunciationStore.originalAudioSamples(for: capture, entryID: profile.dictionaryEntryID)
             } else { return [] }
@@ -1498,25 +1639,38 @@ final class FluidAudioProvider: TranscriptionProvider {
         return capture
     }
 
+    /// Keep the selected acoustic hit's identity while aligning its rough word times to the final replacement.
+    static func acceptedAcousticEvidence(
+        _ evidence: [DictionaryAcousticEvidence], entryID: UUID, label: String, wordRange: Range<Int>, frameRange: Range<Int>
+    ) -> [DictionaryAcousticEvidence] {
+        evidence.filter { $0.entryID == entryID && $0.matchFrameRange == frameRange }
+            .map { $0.aligned(to: wordRange, label: label) }
+    }
+
     static func applyPronunciationMatches(
         result: ASRResult,
         matches: [PronunciationWindowMatch],
         profiles: [PronunciationDictionaryProfile],
         labels: [UUID: String],
         temporalMatches: Set<TemporalMatchKey> = [],
-        onAccepted: ((UUID, String, Range<Int>) -> Void)? = nil
+        entries: [SettingsStore.CustomDictionaryEntry] = [],
+        onAccepted: ((UUID, String, Range<Int>, Range<Int>) -> Void)? = nil,
+        onReplaced: ((DictionaryVoiceSpelling) -> Void)? = nil
     ) -> String {
         guard let timings = result.tokenTimings else { return result.text }
         let words = WordAudioChunkExtractor.words(from: timings)
         guard !words.isEmpty else { return result.text }
 
         let wordIndex = WordAudioOverlapIndex(words: words)
+        // The text layer runs after this and owns every word a saved spelling already covers.
+        let textClaimed = DictionaryAudioSpan.textClaimed(words: words.map(\.text), entries: entries)
 
         struct Candidate {
             let entryID: UUID
             let label: String
             let score: Float
             let wordIndices: [Int]
+            let frameRange: Range<Int>
         }
         var candidates: [Candidate] = []
         for match in matches {
@@ -1527,14 +1681,29 @@ final class FluidAudioProvider: TranscriptionProvider {
             else { continue }
             let startTime = Double(match.frameRange.lowerBound) * 0.08
             let endTime = Double(match.frameRange.upperBound) * 0.08
-            let indices = wordIndex.substantiallyOverlappingWordIndices(
-                startTime: startTime,
-                endTime: endTime
-            )
-            guard !indices.isEmpty else { continue }
             let profile = profiles[match.prototypeIndex]
-            let heard = indices.map { words[$0].text }.joined(separator: " ")
             let temporalAccepted = temporalMatches.contains(TemporalMatchKey(prototypeIndex: match.prototypeIndex, frameRange: match.frameRange))
+            let indices: [Int]
+            if temporalAccepted {
+                // Recognizer word times are rough, so start from every word the match touches and
+                // settle on the whole run of free words that looks most like this word.
+                let touched = wordIndex.substantiallyOverlappingWordIndices(startTime: startTime, endTime: endTime, minimumOverlapRatio: 0)
+                let spellings = entries.first { $0.id == profile.dictionaryEntryID }?.triggers ?? []
+                let targets = [label] + spellings
+                guard let run = DictionaryAudioSpan.span(words: words.map(\.text), touched: touched, claimed: textClaimed, targets: targets)
+                else { continue }
+                // Grey zone: the sound is close but not certain, so the words must also look like the word.
+                if 1 - match.score >= DictionaryStampMatcher.sureDistance,
+                   DictionaryAudioSpan.resemblance(words: words.map(\.text), run: run, targets: targets)
+                   < DictionaryAudioSpan.greyZoneMinimumResemblance
+                { continue }
+                indices = Array(run)
+            } else {
+                indices = wordIndex.substantiallyOverlappingWordIndices(startTime: startTime, endTime: endTime)
+                guard indices.allSatisfy({ !textClaimed.contains($0) }) else { continue }
+            }
+            guard !indices.isEmpty else { continue }
+            let heard = indices.map { words[$0].text }.joined(separator: " ")
             guard temporalAccepted || DictionaryPronunciationDecision.accepts(score: match.score, heardText: heard, profile: profile) else { continue }
             var correctedLabel = label
             if profile.hasOriginalAudio {
@@ -1543,7 +1712,7 @@ final class FluidAudioProvider: TranscriptionProvider {
                     label, heardText: heard, profile: profile
                 )
             }
-            candidates.append(Candidate(entryID: profile.dictionaryEntryID, label: correctedLabel, score: match.score, wordIndices: indices))
+            candidates.append(Candidate(entryID: profile.dictionaryEntryID, label: correctedLabel, score: match.score, wordIndices: indices, frameRange: match.frameRange))
         }
 
         var leaders: [Int: [(label: String, score: Float)]] = [:]
@@ -1581,7 +1750,8 @@ final class FluidAudioProvider: TranscriptionProvider {
             guard let first = candidate.wordIndices.first, let last = candidate.wordIndices.last else { return nil }
             let heard = candidate.wordIndices.map { words[$0].text }.joined(separator: " ")
             if DictionaryNegativeEvidenceResolver.normalized(heard) != DictionaryNegativeEvidenceResolver.normalized(candidate.label) {
-                onAccepted?(candidate.entryID, candidate.label, first..<(last + 1))
+                onAccepted?(candidate.entryID, candidate.label, first..<(last + 1), candidate.frameRange)
+                onReplaced?(DictionaryVoiceSpelling(entryID: candidate.entryID, label: candidate.label, spelling: heard))
             }
             return PronunciationTextReplacement(wordRange: first...last, label: candidate.label)
         }
@@ -1672,7 +1842,7 @@ final class FluidAudioProvider: TranscriptionProvider {
     func modelsExistOnDisk() -> Bool {
         let selectedModel = self.resolvedSpeechModel
         switch selectedModel {
-        case .fluidParakeetMini, .fluidParakeetPico:
+        case .fluidParakeetMini, .fluidParakeetPico, .fluidParakeetPro:
             return SpeechModelInstallationSnapshot.shared.isInstalled(modelID: selectedModel.id)
         case .parakeetTDT, .parakeetTDTv2:
             return selectedModel.isInstalled
@@ -1696,7 +1866,7 @@ final class FluidAudioProvider: TranscriptionProvider {
     }
 
     var preservesInstalledCompactWeights: Bool {
-        self.resolvedSpeechModel == .fluidParakeetMini || self.resolvedSpeechModel == .fluidParakeetPico
+        [.fluidParakeetMini, .fluidParakeetPico, .fluidParakeetPro].contains(self.resolvedSpeechModel)
     }
 
     var shouldClearCacheAfterCancellation: Bool {
@@ -1799,6 +1969,9 @@ final class FluidAudioProvider: TranscriptionProvider {
 #else
 /// Check-shim for Intel Macs where FluidAudio is not available
 final class FluidAudioProvider: TranscriptionProvider {
+    // Explicitly nonisolated: on macOS 15.4+ the synthesized main-actor deinit can abort until the OS runtime has the fix (swiftlang/swift#88036).
+    nonisolated deinit {}
+
     let name = "FluidAudio (Apple Silicon ONLY)"
     var isAvailable: Bool { false }
     var isReady: Bool { false }

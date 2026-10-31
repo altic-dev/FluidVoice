@@ -20,6 +20,7 @@ nonisolated enum MeetingAECFailure: String, Error, Equatable, Sendable {
     case invalidDuration
     case unsupportedFormat
     case unsupportedSampleRate
+    case formatValidationTimedOut
     case formatChanged
     case nonFiniteSamples
     case streamChanged
@@ -147,7 +148,7 @@ nonisolated enum MeetingAECConstants {
 
     static let provenance = MeetingAECProvenance(
         upstreamRevision: "d9bd07ba5f614156021df666ba4052ac73cf7953",
-        bridgeConfigurationID: "webrtc-aec3-48k-mono-cxx20-no-protobuf-no-log-v1",
+        bridgeConfigurationID: "webrtc-aec3-48k-mono-speech-protection-v2",
         sampleRateHz: sampleRateHz,
         frameDurationMilliseconds: 10
     )

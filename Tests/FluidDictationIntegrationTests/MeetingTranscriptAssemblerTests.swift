@@ -826,6 +826,112 @@ final class MeetingTranscriptAssemblerTests: XCTestCase {
         XCTAssertEqual(result.segments.map(\.text), ["inside"])
     }
 
+    func testBoundaryRetentionKeepsTailButEchoVetoStillWins() throws {
+        let (plan, manifest, span) = try self.onlineMicFixture()
+        let token = MeetingBackendSpeakerToken(analysisEpochID: span.analysisEpochID, label: "slot-0")
+        let activity = [MeetingBackendSpeakerActivity(token: token, start: 0, end: 1.439_999_938)]
+        let anchor = self.unit(id: "anchor", span: span, analysisStart: 1.2, analysisEnd: 1.52)
+        let tail = self.unit(id: "tail", span: span, text: "ending", analysisStart: 1.52, analysisEnd: 2.16)
+        for suppressed in [false, true] {
+            let result = try MeetingTranscriptAssembler().assemble(MeetingAssemblyInput(
+                plan: plan,
+                manifest: manifest,
+                evidence: self.evidence(plan: plan, units: [anchor, tail], activity: activity),
+                coverageReceipts: self.receipts(for: manifest),
+                echoVerdicts: [anchor.id: .notEcho, tail.id: suppressed ? .echoSuppressed(duplicateOfUnitID: nil) : .notEcho]
+            ))
+            XCTAssertEqual(self.dispositions(result)[tail.id]?.disposition, suppressed ? .echoSuppressed : .emitted)
+            XCTAssertEqual(result.segments.map(\.text).contains("ending"), !suppressed)
+        }
+    }
+
+    func testBoundaryRecoveryRetainsCompetingTailWithoutAssigningPreviousSpeaker() throws {
+        let (_, _, span) = try self.onlineMicFixture()
+        let token = MeetingBackendSpeakerToken(analysisEpochID: span.analysisEpochID, label: "slot-0")
+        let other = MeetingBackendSpeakerToken(analysisEpochID: span.analysisEpochID, label: "slot-1")
+        let anchor = self.unit(id: "anchor", span: span, analysisStart: 1.2, analysisEnd: 1.52)
+        let tail = self.unit(id: "tail", span: span, analysisStart: 1.52, analysisEnd: 2.16, speaker: .unassigned)
+        for otherInterval in [(1.4, 1.48), (1.55, 1.56), (2.17, 2.3)] {
+            let activity = [
+                MeetingBackendSpeakerActivity(token: token, start: 0, end: 1.439_999_938),
+                MeetingBackendSpeakerActivity(token: other, start: otherInterval.0, end: otherInterval.1),
+            ]
+            let assignments = MeetingWordBoundaryRecovery.assignments(
+                units: [anchor, tail], activityByEpoch: [span.analysisEpochID: activity]
+            )
+            XCTAssertEqual(assignments[tail.id], .unassigned, "a competing onset must veto inherited identity")
+            XCTAssertFalse(MeetingSpeakerActivityCoverage.isOutside(
+                tail, activityByEpoch: [span.analysisEpochID: activity], boundaryAssignments: assignments
+            ), "timing uncertainty must not remove recognized text")
+        }
+    }
+
+    func testFloat32EndpointAllowanceIsBoundedForLongEpochs() throws {
+        let (_, _, span) = try self.onlineMicFixture(duration: 7210)
+        let token = MeetingBackendSpeakerToken(analysisEpochID: span.analysisEpochID, label: "slot-0")
+        for endpoint in [19.2, 7201.44] {
+            let roundedEndpoint = Double(Float(endpoint))
+            let start = endpoint + 0.08
+            let anchor = self.unit(id: "anchor", span: span, analysisStart: start - 0.32, analysisEnd: start)
+            let tail = self.unit(id: "tail", span: span, analysisStart: start, analysisEnd: start + 0.32, speaker: .unassigned)
+            let activity = [MeetingBackendSpeakerActivity(token: token, start: 0, end: roundedEndpoint)]
+            let recovered = MeetingWordBoundaryRecovery.assignments(
+                units: [anchor, tail], activityByEpoch: [span.analysisEpochID: activity]
+            )
+            XCTAssertEqual(recovered[tail.id], .assigned(token), "Float32 rounding must not exclude the last word")
+            let later = self.unit(id: "later", span: span, analysisStart: start + 0.003, analysisEnd: start + 0.32, speaker: .unassigned)
+            XCTAssertNil(MeetingWordBoundaryRecovery.assignments(
+                units: [anchor, later], activityByEpoch: [span.analysisEpochID: activity]
+            )[later.id], "precision allowance must not become an unbounded speech extension")
+        }
+    }
+
+    func testDirectlySupportedShortWordCanStillAnchorAnEnding() throws {
+        let (_, _, span) = try self.onlineMicFixture()
+        let token = MeetingBackendSpeakerToken(analysisEpochID: span.analysisEpochID, label: "slot-0")
+        let words = [
+            self.unit(id: "first", span: span, analysisStart: 0.6, analysisEnd: 1),
+            self.unit(id: "short", span: span, analysisStart: 1, analysisEnd: 1.16),
+            self.unit(id: "tail", span: span, analysisStart: 1.16, analysisEnd: 1.6, speaker: .unassigned),
+        ]
+        let result = MeetingWordBoundaryRecovery.assignments(
+            units: words,
+            activityByEpoch: [span.analysisEpochID: [
+                MeetingBackendSpeakerActivity(token: token, start: 0, end: 1.08),
+            ]]
+        )
+        XCTAssertNil(result["short"], "direct evidence needs no repair")
+        XCTAssertEqual(result["tail"], .assigned(token))
+    }
+
+    func testBoundaryRecoveryCannotChainThroughSilenceOrOverrideSpeakers() throws {
+        let (_, _, span) = try self.onlineMicFixture()
+        let token = MeetingBackendSpeakerToken(analysisEpochID: span.analysisEpochID, label: "slot-0")
+        let other = MeetingBackendSpeakerToken(analysisEpochID: span.analysisEpochID, label: "slot-1")
+        let activity = [MeetingBackendSpeakerActivity(token: token, start: 0, end: 1.439_999_938)]
+        let anchor = self.unit(id: "anchor", span: span, analysisStart: 1.2, analysisEnd: 1.52)
+        let tail = self.unit(id: "tail", span: span, analysisStart: 1.52, analysisEnd: 2.16)
+        let silence = self.unit(id: "silence", span: span, analysisStart: 2.16, analysisEnd: 2.4, speaker: .unassigned)
+        let recovered = MeetingWordBoundaryRecovery.assignments(
+            units: [anchor, tail, silence], activityByEpoch: [span.analysisEpochID: activity]
+        )
+        XCTAssertEqual(recovered[tail.id], .assigned(token))
+        XCTAssertNil(recovered[silence.id], "a recovered tail cannot anchor another recovery")
+        for candidate in [
+            self.unit(id: "gap", span: span, analysisStart: 1.61, analysisEnd: 2.16, speaker: .unassigned),
+            self.unit(id: "long", span: span, analysisStart: 1.52, analysisEnd: 3, speaker: .unassigned),
+            self.unit(id: "other", span: span, analysisStart: 1.52, analysisEnd: 2.16, speaker: .assigned(other)),
+            self.unit(id: "ambiguous", span: span, analysisStart: 1.52, analysisEnd: 2.16, speaker: .ambiguous([token, other])),
+            self.unit(id: "span", span: span, analysisStart: 1.52, analysisEnd: 2.16, spanIDs: ["another-span"]),
+            self.unit(id: "epoch", span: span, analysisStart: 1.52, analysisEnd: 2.16, epoch: .init(trackID: span.trackID, ordinal: 9)),
+            self.unit(id: "invalid", span: span, analysisStart: .nan, analysisEnd: 2.16),
+        ] {
+            XCTAssertNil(MeetingWordBoundaryRecovery.assignments(
+                units: [anchor, candidate], activityByEpoch: [span.analysisEpochID: activity]
+            )[candidate.id], "unsafe candidate \(candidate.id) must not recover")
+        }
+    }
+
     func testSpeakerActivityMustStayInsideItsEpoch() throws {
         let (plan, manifest, span) = try self.onlineMicFixture()
         let unit = self.unit(id: "u-0", span: span, analysisStart: 1, analysisEnd: 2)

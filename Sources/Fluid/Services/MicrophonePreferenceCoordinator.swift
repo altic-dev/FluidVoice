@@ -34,6 +34,9 @@ struct CoreAudioDeviceManager: AudioDeviceManaging {
 
 @MainActor
 final class MicrophonePreferenceCoordinator: ObservableObject {
+    // Explicitly nonisolated: on macOS 15.4+ the synthesized main-actor deinit can abort until the OS runtime has the fix (swiftlang/swift#88036).
+    nonisolated deinit {}
+
     private let settings: SettingsStore
     private let devices: any AudioDeviceManaging
     private var lastResolvedInputUID: String?

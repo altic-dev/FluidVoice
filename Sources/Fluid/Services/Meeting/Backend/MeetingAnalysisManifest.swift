@@ -344,6 +344,7 @@ nonisolated enum MeetingCanonicalAdmissionRationale: String, Codable, CaseIterab
     case onlineMicrophoneVoiceProcessed
     case onlineMicrophoneAcousticallyClosed
     case onlineMicrophoneSoftwareEchoCancelled
+    case onlineMicrophoneUnfiltered
     case onlineMicrophoneUnprotected
     /// Legacy-era audio stays usable only through the existing explicit legacy compatibility
     /// policy. The canonical backend has no such policy, so it is inadmissible here.
@@ -357,7 +358,8 @@ nonisolated enum MeetingCanonicalAdmissionRationale: String, Codable, CaseIterab
              .inRoomMicrophone,
              .onlineMicrophoneVoiceProcessed,
              .onlineMicrophoneAcousticallyClosed,
-             .onlineMicrophoneSoftwareEchoCancelled:
+             .onlineMicrophoneSoftwareEchoCancelled,
+             .onlineMicrophoneUnfiltered:
             return .admissible
         case .onlineMicrophoneUnprotected,
              .onlineMicrophoneLegacyUnclassified,
@@ -383,6 +385,7 @@ nonisolated enum MeetingCanonicalAdmission {
         case .voiceProcessed: return .onlineMicrophoneVoiceProcessed
         case .acousticallyClosed: return .onlineMicrophoneAcousticallyClosed
         case .softwareEchoCancelled: return .onlineMicrophoneSoftwareEchoCancelled
+        case .unfiltered: return .onlineMicrophoneUnfiltered
         case .unprotected: return .onlineMicrophoneUnprotected
         case .legacyUnclassified: return .onlineMicrophoneLegacyUnclassified
         case .none: return .onlineMicrophoneProtectionMissing

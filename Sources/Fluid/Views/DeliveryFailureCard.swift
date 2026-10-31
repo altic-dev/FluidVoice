@@ -48,6 +48,10 @@ struct DeliveryFailureCard: View {
         .frame(maxWidth: self.maxWidth, alignment: .leading)
         .onAppear(perform: self.scheduleAutoDismiss)
         .onDisappear(perform: self.cancelAutoDismiss)
+        .onChange(of: self.transcript) { _, _ in
+            self.didCopy = false
+            self.scheduleAutoDismiss()
+        }
     }
 
     private var glyph: some View {
@@ -92,14 +96,19 @@ struct DeliveryFailureCard: View {
     }
 
     private func copy() {
-        guard !self.didCopy else { return }
-        _ = ClipboardService.copyToClipboard(self.transcript)
+        guard ClipboardService.copyToClipboard(self.transcript) else {
+            self.didCopy = false
+            self.scheduleAutoDismiss()
+            return
+        }
         withAnimation(.easeOut(duration: 0.18)) { self.didCopy = true }
         self.cancelAutoDismiss()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.1) {
+        let workItem = DispatchWorkItem {
             guard self.didCopy else { return }
             self.dismiss()
         }
+        self.autoDismissWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.1, execute: workItem)
     }
 
     private func dismiss() {

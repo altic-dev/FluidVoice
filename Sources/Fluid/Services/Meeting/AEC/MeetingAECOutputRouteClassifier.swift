@@ -7,8 +7,8 @@ nonisolated enum MeetingAECOutputRouteDisposition: Equatable, Sendable {
     case ambiguous
 }
 
-/// Positive route classifier for the direct SCK microphone path. Absence of headphone evidence is
-/// never sufficient to infer a speaker; the initial deployment supports only built-in speakers.
+/// Stable output routes may attempt AEC regardless of transport. Admission still depends on real
+/// PCM format/clock checks and warm-up; this classification alone never blesses processed audio.
 nonisolated enum MeetingAECOutputRouteClassifier {
     static func classify(
         first: MeetingOutputRouteSnapshot,
@@ -27,12 +27,7 @@ nonisolated enum MeetingAECOutputRouteClassifier {
         {
             return .physicallyClosed
         }
-        guard !route.isBluetooth else { return .ambiguous }
-        guard !debugDisabled,
-              route.isBuiltIn,
-              !route.isHeadphonesDataSource,
-              !route.terminalTypes.contains(kAudioStreamTerminalTypeHeadphones)
-        else { return .ambiguous }
+        guard !debugDisabled else { return .ambiguous }
         return .supportedSpeaker
     }
 }

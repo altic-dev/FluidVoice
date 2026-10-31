@@ -44,7 +44,12 @@ struct ReleaseHighlightsPresenter: ViewModifier {
     private let highlights = ReleaseHighlightsContent.current(hasPrivateAI: PrivateAIProviderFeature.shared.isAvailable)
     private let coordinator = ReleaseHighlightsCoordinator.shared
 
-    private final class WindowReference { weak var window: NSWindow? }
+    private final class WindowReference {
+        weak var window: NSWindow?
+
+        // Explicitly nonisolated: on macOS 15.4+ the synthesized main-actor deinit can abort until the OS runtime has the fix (swiftlang/swift#88036).
+        nonisolated deinit {}
+    }
 
     private var canExplore: Bool { self.isEligible && !self.processing && !self.refining }
 
@@ -129,6 +134,7 @@ struct ReleaseHighlightsPresenter: ViewModifier {
             case .meetings: self.onExplore(.meetingTranscription)
             case .dashboard: self.onExplore(.welcome)
             case .aiProviders: self.onExplore(.aiEnhancements)
+            case .voiceEngine: self.onExplore(.voiceEngine)
             }
         } else if result == false {
             self.presentIfNeeded()

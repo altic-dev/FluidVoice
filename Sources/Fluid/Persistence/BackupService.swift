@@ -42,6 +42,9 @@ struct SettingsBackupPayload: Codable, Equatable {
     let rewriteModeSelectedModel: String?
     let rewriteModeSelectedProviderID: String
     let rewriteModeLinkedToGlobal: Bool
+    // Optional so older backups preserve the user's current meeting shortcut.
+    let meetingRecordingHotkeyShortcut: HotkeyShortcut?
+    let meetingRecordingShortcutEnabled: Bool?
     let cancelRecordingHotkeyShortcut: HotkeyShortcut?
     // Optional so older backup files (which predate this setting) still decode.
     let pasteLastTranscriptionHotkeyShortcut: HotkeyShortcut?

@@ -6,6 +6,9 @@ import Foundation
 /// instead of typing into other apps.
 @MainActor
 final class DictationPromptTestCoordinator: ObservableObject {
+    // Explicitly nonisolated: on macOS 15.4+ the synthesized main-actor deinit can abort until the OS runtime has the fix (swiftlang/swift#88036).
+    nonisolated deinit {}
+
     static let shared = DictationPromptTestCoordinator()
 
     @Published private(set) var isActive: Bool = false

@@ -54,18 +54,24 @@ nonisolated enum MeetingAssignSpeakersValidation {
 }
 
 struct MeetingAssignSpeakersSheet: View {
+    private struct MergeRequest {
+        let source: SessionSpeakerID
+        let target: SessionSpeakerID
+    }
+
     let speakers: [MeetingSessionSpeaker]
     let quotesBySpeaker: [SessionSpeakerID: [String]]
     let tints: [SessionSpeakerID: Color]
     let accentColor: Color
     let focusedSpeakerID: SessionSpeakerID?
-    let onSave: ([SessionSpeakerID: String]) async -> String?
+    let onSave: (MeetingSpeakerEdits) async -> String?
     let onCancel: () -> Void
 
     @Environment(\.theme) private var theme
-    @State private var drafts: [SessionSpeakerID: String]
+    @State private var edits: MeetingSpeakerEdits
     @State private var isSaving = false
     @State private var errorMessage: String?
+    @State private var pendingMerge: MergeRequest?
     @FocusState private var focusedField: SessionSpeakerID?
 
     init(
@@ -74,7 +80,7 @@ struct MeetingAssignSpeakersSheet: View {
         tints: [SessionSpeakerID: Color],
         accentColor: Color,
         focusedSpeakerID: SessionSpeakerID? = nil,
-        onSave: @escaping ([SessionSpeakerID: String]) async -> String?,
+        onSave: @escaping (MeetingSpeakerEdits) async -> String?,
         onCancel: @escaping () -> Void
     ) {
         self.speakers = speakers
@@ -84,7 +90,7 @@ struct MeetingAssignSpeakersSheet: View {
         self.focusedSpeakerID = focusedSpeakerID
         self.onSave = onSave
         self.onCancel = onCancel
-        self._drafts = State(initialValue: Dictionary(uniqueKeysWithValues: speakers.map { ($0.id, $0.displayName) }))
+        self._edits = State(initialValue: MeetingSpeakerEdits(names: Dictionary(uniqueKeysWithValues: speakers.map { ($0.id, $0.displayName) })))
     }
 
     var body: some View {
@@ -128,7 +134,7 @@ struct MeetingAssignSpeakersSheet: View {
                         .keyboardShortcut(.cancelAction)
                         .disabled(self.isSaving)
                     Spacer()
-                    Button(self.isSaving ? "Saving…" : "Save names") { Task { await self.save() } }
+                    Button(self.isSaving ? "Saving…" : "Save changes") { Task { await self.save() } }
                         .meetingGlassAction(prominent: true)
                         .keyboardShortcut(.defaultAction)
                         .disabled(self.isSaving)
@@ -139,14 +145,30 @@ struct MeetingAssignSpeakersSheet: View {
         .frame(minWidth: 480, idealWidth: 560, maxWidth: 560)
         .frame(minHeight: 420, idealHeight: 560)
         .background(self.theme.palette.windowBackground)
+        .alert(
+            "Merge speakers?",
+            isPresented: Binding(
+                get: { self.pendingMerge != nil },
+                set: { if !$0 { self.pendingMerge = nil } }
+            ),
+            presenting: self.pendingMerge
+        ) { request in
+            Button("Cancel", role: .cancel) { self.pendingMerge = nil }
+            Button("Confirm merge") {
+                self.edits.setMerge(source: request.source, into: request.target)
+                self.pendingMerge = nil
+            }
+        } message: { request in
+            Text("All of \(self.speakerName(request.source))’s transcript will belong to \(self.speakerName(request.target)) when you save changes.")
+        }
     }
 
     private var header: some View {
         HStack(alignment: .top, spacing: self.theme.metrics.spacing.md) {
             VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xs) {
-                Text("Assign speakers")
+                Text("Edit speakers")
                     .font(self.theme.typography.title)
-                Text("Name each voice and we'll relabel the whole transcript.")
+                Text("Rename voices or merge duplicate speakers. Changes apply when you save.")
                     .font(self.theme.typography.bodySmall)
                     .foregroundStyle(self.theme.palette.secondaryText)
             }
@@ -164,6 +186,7 @@ struct MeetingAssignSpeakersSheet: View {
     @ViewBuilder
     private func row(for speaker: MeetingSessionSpeaker) -> some View {
         let tint = speaker.isLocalUser ? self.accentColor : (self.tints[speaker.id] ?? self.theme.palette.tertiaryText)
+        let targets = self.mergeTargets(for: speaker)
         VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
             HStack(spacing: self.theme.metrics.spacing.sm) {
                 Circle()
@@ -199,35 +222,81 @@ struct MeetingAssignSpeakersSheet: View {
                 }
             }
 
-            TextField(
-                speaker.displayName,
-                text: Binding(
-                    get: { self.drafts[speaker.id] ?? speaker.displayName },
-                    set: { self.drafts[speaker.id] = $0 }
-                ),
-                prompt: Text(speaker.displayName)
-            )
-            .textFieldStyle(.roundedBorder)
-            .controlSize(.large)
-            .accessibilityLabel("Name for \(speaker.displayName)")
-            .focused(self.$focusedField, equals: speaker.id)
-            .disabled(self.isSaving)
+            HStack(spacing: self.theme.metrics.spacing.md) {
+                TextField(
+                    speaker.displayName,
+                    text: Binding(
+                        get: { self.edits.names[speaker.id] ?? speaker.displayName },
+                        set: { self.edits.names[speaker.id] = $0 }
+                    ),
+                    prompt: Text(speaker.displayName)
+                )
+                .textFieldStyle(.roundedBorder)
+                .controlSize(.large)
+                .accessibilityLabel("Name for \(speaker.displayName)")
+                .focused(self.$focusedField, equals: speaker.id)
+                .disabled(self.isSaving || self.edits.merges[speaker.id] != nil)
+
+                if self.edits.merges[speaker.id] == nil, !speaker.isLocalUser, !targets.isEmpty {
+                    Menu("Merge…") {
+                        ForEach(targets) { target in
+                            Button(self.speakerName(target.id)) {
+                                self.pendingMerge = MergeRequest(source: speaker.id, target: target.id)
+                            }
+                        }
+                    }
+                    .meetingGlassAction()
+                    .fixedSize()
+                    .disabled(self.isSaving)
+                    .accessibilityLabel("Merge \(self.speakerName(speaker.id)) with another speaker")
+                }
+            }
+
+            if let target = self.edits.merges[speaker.id] {
+                HStack(spacing: self.theme.metrics.spacing.md) {
+                    Text("Will merge into \(self.speakerName(target))")
+                        .font(self.theme.typography.caption)
+                        .foregroundStyle(self.theme.palette.secondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 0)
+                    Button("Cancel merge") { self.edits.setMerge(source: speaker.id, into: nil) }
+                        .meetingGlassAction()
+                        .disabled(self.isSaving)
+                }
+            } else if speaker.isLocalUser || targets.isEmpty {
+                Text(speaker.isLocalUser ? "Your microphone voice is kept separate" :
+                    (speaker.trackKind == .microphone ? "No other microphone speakers" : "No other meeting-audio speakers"))
+                    .font(self.theme.typography.caption)
+                    .foregroundStyle(self.theme.palette.tertiaryText)
+            }
         }
+    }
+
+    private func mergeTargets(for speaker: MeetingSessionSpeaker) -> [MeetingSessionSpeaker] {
+        self.speakers.filter {
+            $0.id != speaker.id && !$0.isLocalUser && $0.trackKind == speaker.trackKind
+                && self.edits.merges[$0.id] == nil
+        }
+    }
+
+    private func speakerName(_ id: SessionSpeakerID) -> String {
+        let name = self.edits.names[id]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return name.isEmpty ? (self.speakers.first { $0.id == id }?.displayName ?? "Speaker") : name
     }
 
     private func save() async {
         self.errorMessage = nil
 
         if let duplicate = MeetingAssignSpeakersValidation.duplicateName(
-            current: self.speakers.map { (id: $0.id, displayName: $0.displayName) },
-            drafts: self.drafts
+            current: self.speakers.filter { self.edits.merges[$0.id] == nil }.map { (id: $0.id, displayName: $0.displayName) },
+            drafts: self.edits.names
         ) {
-            self.errorMessage = "Two speakers are both named \"\(duplicate)\". Give them different names, or merge them from the transcript."
+            self.errorMessage = "Two speakers are both named \"\(duplicate)\". Give them different names, or merge them here."
             return
         }
 
         self.isSaving = true
-        let message = await self.onSave(self.drafts)
+        let message = await self.onSave(self.edits)
         self.isSaving = false
 
         if let message {

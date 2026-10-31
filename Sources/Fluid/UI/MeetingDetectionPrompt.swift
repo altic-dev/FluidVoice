@@ -72,6 +72,7 @@ final class MeetingDetectionPromptController: ObservableObject {
     private init() {}
 
     func present(_ request: MeetingAutoDetector.PromptRequest) {
+        guard SettingsStore.shared.fluidMeetEnabled else { return }
         switch Self.incomingPromptPolicy(
             isStarting: self.isStarting,
             currentEpisodeID: self.request?.episodeID,
@@ -185,6 +186,10 @@ final class MeetingDetectionPromptController: ObservableObject {
         guard let request = self.request, self.isAutoDismissPaused, !self.isStarting else { return }
         self.isAutoDismissPaused = false
         self.scheduleAutoDismiss(for: request.episodeID)
+    }
+
+    func cancelForFeatureDisable() {
+        self.hide()
     }
 
     private func hide() {
@@ -633,6 +638,7 @@ final class MeetingStillRecordingNudgeController: ObservableObject {
     private init() {}
 
     func present() {
+        guard SettingsStore.shared.fluidMeetEnabled else { return }
         guard !self.isPresented else { return }
         self.isPresented = true
         let panel = self.panelOrCreate()
@@ -641,6 +647,7 @@ final class MeetingStillRecordingNudgeController: ObservableObject {
             panel.setFrame(Self.frame(abovePill: pillFrame, within: screen), display: false)
         }
         panel.orderFrontRegardless()
+        DebugLogger.shared.log("end-of-meeting-prompt-shown", source: "MeetingAutoDetector")
     }
 
     /// Centered just above the recording pill, pulled back inside the screen when the pill sits
@@ -659,6 +666,9 @@ final class MeetingStillRecordingNudgeController: ObservableObject {
     }
 
     func hide() {
+        if self.isPresented {
+            DebugLogger.shared.log("end-of-meeting-prompt-hidden", source: "MeetingAutoDetector")
+        }
         self.isPresented = false
         self.panel?.orderOut(nil)
     }

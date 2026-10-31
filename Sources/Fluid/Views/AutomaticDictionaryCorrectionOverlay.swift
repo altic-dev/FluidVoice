@@ -588,8 +588,12 @@ struct TransientOverlayCountdownBar: View {
     let duration: TimeInterval
     let reduceMotion: Bool
 
+    /// An animation timeline ticks for as long as the view exists, even in an
+    /// ordered-out panel, so stop it once the countdown has run out.
+    @State private var isElapsed = false
+
     var body: some View {
-        TimelineView(.animation(minimumInterval: self.reduceMotion ? 1 : 1 / 30)) { context in
+        TimelineView(.animation(minimumInterval: self.reduceMotion ? 1 : 1 / 30, paused: self.isElapsed)) { context in
             GeometryReader { proxy in
                 ZStack(alignment: .leading) {
                     Capsule()
@@ -604,6 +608,13 @@ struct TransientOverlayCountdownBar: View {
         .padding(.horizontal, 14)
         .padding(.bottom, 3)
         .allowsHitTesting(false)
+        .task(id: self.startedAt) {
+            self.isElapsed = false
+            let remaining = self.startedAt.timeIntervalSinceNow + self.duration
+            try? await Task.sleep(for: .seconds(max(0, remaining)))
+            guard !Task.isCancelled else { return }
+            self.isElapsed = true
+        }
     }
 
     private func remainingProgress(at date: Date) -> CGFloat {
@@ -635,7 +646,7 @@ extension Notification.Name {
 }
 
 private struct AutomaticDictionaryCorrectionOverlayView: View {
-    @AppStorage("DictionarySharedFeatureMatcherEnabled") private var pronunciationEnabled = false
+    @AppStorage("DictionarySharedFeatureMatcherEnabled") private var pronunciationEnabled = DictionaryMatcherExperiment.defaultEnabled
     @ObservedObject var session: AutomaticDictionaryTrainingSession
     @ObservedObject private var settings = SettingsStore.shared
 

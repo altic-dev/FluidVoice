@@ -1,4 +1,40 @@
+import Combine
 import Foundation
+
+/// Gives the user a visible break between examples. Initial capture is never delayed.
+@MainActor
+final class DictionaryTrainingRestart: ObservableObject {
+    @Published private(set) var isWaiting = false
+    private var task: Task<Void, Never>?
+    private var requestID: UUID?
+
+    func schedule(
+        delay: Duration = .seconds(1),
+        canContinue: @escaping () -> Bool,
+        restart: @escaping () async -> Void
+    ) {
+        self.cancel()
+        let requestID = UUID()
+        self.requestID = requestID
+        self.isWaiting = true
+        self.task = Task { @MainActor [weak self] in
+            do { try await Task.sleep(for: delay) } catch { return }
+            guard let self, self.requestID == requestID, !Task.isCancelled else { return }
+            self.task = nil
+            self.requestID = nil
+            self.isWaiting = false
+            guard canContinue() else { return }
+            await restart()
+        }
+    }
+
+    func cancel() {
+        self.task?.cancel()
+        self.task = nil
+        self.requestID = nil
+        self.isWaiting = false
+    }
+}
 
 struct DictionaryTrainingAudioCursor {
     private(set) var sampleOffset = 0

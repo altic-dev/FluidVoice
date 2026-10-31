@@ -9,31 +9,53 @@ enum PrivateAIProviderPromptFormat {
         self.verifiedModelID(settings: settings) != nil
     }
 
+    /// Immutable settings only. Resolving this may query the model directory, so
+    /// presentation callers resolve it on a worker, never while drawing a view.
+    nonisolated struct VerificationInput: Equatable, Sendable {
+        let providerAvailable: Bool
+        let selectedModelID: String?
+        let providerFingerprint: String?
+        let modelFingerprints: [String: String]
+        let backendPreference: String?
+        let configuredModelSelection: String?
+        let configuredLocalModelPath: String?
+
+        @MainActor
+        init(settings: SettingsStore) {
+            let key = PrivateAIProviderPromptFormat.providerKey(for: PrivateAIProviderFeature.shared.providerID)
+            self.providerAvailable = PrivateAIProviderFeature.shared.isAvailable
+            self.selectedModelID = settings.selectedModelByProvider[key]
+            self.providerFingerprint = settings.verifiedProviderFingerprints[key]
+            self.modelFingerprints = settings.verifiedPrivateAIModelFingerprints
+            self.backendPreference = UserDefaults.standard.string(forKey: SettingsStore.privateAIBackendPreferenceDefaultsKey)
+            self.configuredModelSelection = UserDefaults.standard.string(forKey: PrivateAIProviderFeature.shared.selectedModelDefaultsKey)
+            self.configuredLocalModelPath = UserDefaults.standard.string(forKey: PrivateAIProviderFeature.shared.localModelPathDefaultsKey)
+        }
+
+        func verifiedModelID(recheckInstallation: Bool = false) -> String? {
+            let configured = PrivateAIIntegrationService.configuredModelID
+            let modelID = PrivateAIModelRegistry.canonicalModelID(for: self.selectedModelID ?? configured) ?? configured
+            return self.verifiedModelID(for: modelID, recheckInstallation: recheckInstallation)
+        }
+
+        func verifiedModelID(for selectedModelID: String, recheckInstallation: Bool = false) -> String? {
+            guard self.providerAvailable else { return nil }
+            let modelID = PrivateAIModelRegistry.canonicalModelID(for: selectedModelID) ?? selectedModelID
+            let fingerprint = PrivateAIProviderFeature.verificationFingerprint(for: modelID, backendPreference: self.backendPreference)
+            guard let model = PrivateAIModelRegistry.model(id: modelID),
+                  PrivateAIIntegrationService.isModelInstalled(model, useCache: !recheckInstallation),
+                  self.modelFingerprints[modelID] == fingerprint || self.providerFingerprint == fingerprint
+            else { return nil }
+            return modelID
+        }
+    }
+
     static func verifiedModelID(settings: SettingsStore = .shared) -> String? {
-        let key = self.providerKey(for: PrivateAIProviderFeature.shared.providerID)
-        let configuredModelID = PrivateAIIntegrationService.configuredModelID
-        let modelID = PrivateAIModelRegistry.canonicalModelID(for: settings.selectedModelByProvider[key] ?? configuredModelID) ?? configuredModelID
-        return self.verifiedModelID(for: modelID, settings: settings)
+        VerificationInput(settings: settings).verifiedModelID()
     }
 
     static func verifiedModelID(for selectedModelID: String, settings: SettingsStore = .shared) -> String? {
-        guard PrivateFeatures.privateAIProvider else { return nil }
-        let key = self.providerKey(for: PrivateAIProviderFeature.shared.providerID)
-        let modelID = PrivateAIModelRegistry.canonicalModelID(for: selectedModelID) ?? selectedModelID
-        let expectedFingerprint = PrivateAIProviderFeature.verificationFingerprint(for: modelID)
-        guard let model = PrivateAIModelRegistry.model(id: modelID),
-              PrivateAIIntegrationService.isModelInstalled(model),
-              self.hasStoredVerification(
-                  for: modelID,
-                  providerKey: key,
-                  expectedFingerprint: expectedFingerprint,
-                  settings: settings
-              )
-        else {
-            return nil
-        }
-
-        return modelID
+        VerificationInput(settings: settings).verifiedModelID(for: selectedModelID)
     }
 
     static func hasStoredVerification(

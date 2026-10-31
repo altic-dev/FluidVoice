@@ -31,7 +31,7 @@ int BasicContractTest() {
   if (std::strcmp(fv_aec3_upstream_revision(),
                   "d9bd07ba5f614156021df666ba4052ac73cf7953") != 0 ||
       std::strcmp(fv_aec3_configuration_id(),
-                  "webrtc-aec3-48k-mono-cxx20-no-protobuf-no-log-v1") != 0) {
+                  "webrtc-aec3-48k-mono-speech-protection-v2") != 0) {
     return 10;
   }
   if (fv_aec3_reset(nullptr) != FV_AEC3_INVALID_ARGUMENT) return 11;
@@ -94,10 +94,10 @@ int BasicContractTest() {
   return 0;
 }
 
-int SyntheticEchoAndDoubleTalkTest() {
+int SyntheticEchoAndDoubleTalkTest(bool weak_voice = false) {
   constexpr int kFrames = 1200;
   constexpr int kSamples = kFrames * FV_AEC3_FRAME_SAMPLES;
-  constexpr int kEchoDelaySamples = 240;
+  const int kEchoDelaySamples = weak_voice ? 2346 : 240;
   std::vector<float> render(kSamples), near_end(kSamples), capture(kSamples),
       output(kSamples);
   uint32_t render_state = 0x12345678u;
@@ -116,9 +116,19 @@ int SyntheticEchoAndDoubleTalkTest() {
       near_state = near_state * 1103515245u + 12345u;
       const float near_white =
           (static_cast<float>(static_cast<int32_t>(near_state)) /
-           2147483648.0f) * 0.6f;
+           2147483648.0f) * (weak_voice ? 0.04f : 0.6f);
       filtered_near = 0.82f * filtered_near + 0.18f * near_white;
       near_end[index] = filtered_near;
+      if (weak_voice) {
+        // Deterministic voiced harmonics plus breath noise, independent of render.
+        // The original strong-noise fixture missed quiet speech being suppressed.
+        const double t = static_cast<double>(index) / 48000;
+        const double phase = 2 * M_PI * (170 * t + 4 * std::sin(2 * M_PI * 1.3 * t));
+        const float envelope = .4f + .6f * std::pow(std::sin(2 * M_PI * 2.1 * t), 2);
+        near_end[index] = envelope *
+            (.008f * (std::sin(phase) + .5f * std::sin(3 * phase) +
+                      .25f * std::sin(5 * phase)) + .2f * filtered_near);
+      }
     }
     const float echo = index >= kEchoDelaySamples
                            ? 0.62f * render[index - kEchoDelaySamples]
@@ -155,7 +165,19 @@ int SyntheticEchoAndDoubleTalkTest() {
   const double near_attenuation_db = 20.0 * std::log10(
       Rms(output, double_begin, double_end) /
       Rms(near_end, double_begin, double_end));
-  if (!(echo_reduction_db >= 6.0) || !(near_attenuation_db >= -3.0)) {
+  // Measure the component correlated with the known voice, not the total mix:
+  // residual video echo must never count as preserved microphone speech.
+  double voice_dot = 0.0, voice_power = 0.0;
+  constexpr int kProcessingDelaySamples = 433;
+  for (int index = double_begin + 4800; index < double_end - 4800; ++index) {
+    voice_dot += output[index + kProcessingDelaySamples] * near_end[index];
+    voice_power += near_end[index] * near_end[index];
+  }
+  const double voice_gain_db = 20 * std::log10(std::abs(voice_dot / voice_power));
+  std::cout << "double_talk weak=" << weak_voice << " voice_gain_db=" << voice_gain_db
+            << " echo_reduction_db=" << echo_reduction_db << '\n';
+  if (!(echo_reduction_db >= (weak_voice ? 20.0 : 6.0)) ||
+      !(weak_voice ? voice_gain_db >= -8.0 : near_attenuation_db >= -3.0)) {
     fv_aec3_destroy(engine);
     return 23;
   }
@@ -198,6 +220,8 @@ int SyntheticEchoAndDoubleTalkTest() {
 int main() {
   if (const int result = BasicContractTest(); result != 0) return result;
   if (const int result = SyntheticEchoAndDoubleTalkTest(); result != 0)
+    return result;
+  if (const int result = SyntheticEchoAndDoubleTalkTest(true); result != 0)
     return result;
   std::cout << "phase1_bridge_ok revision=" << fv_aec3_upstream_revision()
             << " configuration=" << fv_aec3_configuration_id() << '\n';

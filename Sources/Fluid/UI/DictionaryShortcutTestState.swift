@@ -73,8 +73,7 @@ struct DictionaryShortcutTestState {
 }
 
 enum DictionaryCaptureAction {
-    static func title(active: Bool, failed: Bool, count: Int) -> String {
-        if active { return "Stop recording" }
+    static func title(failed: Bool, count: Int) -> String {
         if failed { return "Record again" }
         return count < 1 ? "Record" : "Record more"
     }

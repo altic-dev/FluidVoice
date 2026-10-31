@@ -70,6 +70,9 @@ nonisolated struct MeetingStage05AdapterDrain: Equatable, Sendable {
 /// rejection. Overlapping or late blocks are preserved as synchronizer inputs and counted
 /// here as diagnostics; nothing is flattened or invented.
 final class MeetingStage05SCKFrameAdapter: @unchecked Sendable {
+    // Explicitly nonisolated: on macOS 15.4+ the synthesized main-actor deinit can abort until the OS runtime has the fix (swiftlang/swift#88036).
+    nonisolated deinit {}
+
     static let supportedSampleRateHz = 48_000.0
     static let maximumBlocksPerTrack = 2000
     static let maximumFramesPerTrack = 960_000

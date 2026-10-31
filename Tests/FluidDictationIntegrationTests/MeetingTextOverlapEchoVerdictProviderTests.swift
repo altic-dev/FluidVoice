@@ -245,6 +245,62 @@ final class MeetingTextOverlapEchoVerdictProviderTests: XCTestCase {
         XCTAssertEqual(verdicts["mic-local"], .notEcho)
     }
 
+    func testRecoveredApplicationEndingRemainsAnEchoTarget() async throws {
+        let fixture = try self.makeFixture()
+        let epoch = fixture.appEpochs[0]
+        let token = MeetingBackendSpeakerToken(analysisEpochID: epoch.id, label: "slot-0")
+        var units: [MeetingFinalTextUnit] = []
+        for (index, text) in ["quick", "brown", "fox", "jumps"].enumerated() {
+            let start = 0.2 + Double(index) * 0.25
+            units.append(MeetingFinalTextUnit(
+                id: "app-\(index)",
+                trackID: fixture.appTrackID,
+                analysisEpochID: epoch.id,
+                precision: .word,
+                text: text,
+                analysisStart: start,
+                analysisEnd: start + 0.25,
+                speaker: .assigned(token),
+                analysisSpanIDs: epoch.spanIDs
+            ))
+            units.append(self.unit(
+                "mic-\(index)",
+                trackID: fixture.micTrackID,
+                epoch: fixture.micEpoch,
+                text: text,
+                analysisStart: start + 0.05,
+                analysisEnd: start + 0.30
+            ))
+        }
+        let evidence = MeetingFinalTranscriptEvidence(
+            backendID: .parakeetNemotron,
+            attemptID: fixture.plan.attemptID,
+            units: units,
+            speakerActivity: [MeetingBackendSpeakerActivity(token: token, start: 0, end: 0.9)]
+        )
+        let verdicts = try await MeetingTextOverlapEchoVerdictProvider().echoVerdicts(
+            for: evidence, manifest: fixture.manifest, plan: fixture.plan
+        )
+        XCTAssertEqual(verdicts["mic-3"], .echoSuppressed(duplicateOfUnitID: "app-3"))
+        let result = try MeetingTranscriptAssembler().assemble(MeetingAssemblyInput(
+            plan: fixture.plan,
+            manifest: fixture.manifest,
+            evidence: evidence,
+            coverageReceipts: fixture.manifest.allSpans.map {
+                MeetingSpanCoverageReceipt(
+                    id: "receipt:\($0.id)",
+                    spanID: $0.id,
+                    analysisStart: $0.analysisInterval.start,
+                    analysisEnd: $0.analysisInterval.end,
+                    status: .processed
+                )
+            },
+            echoVerdicts: verdicts
+        ))
+        XCTAssertEqual(result.segments.map(\.text), ["quick", "brown", "fox", "jumps"])
+        XCTAssertTrue(result.segments.allSatisfy { $0.sourceTrackID == fixture.appTrackID })
+    }
+
     func testEchoTextWithoutTemporalOverlapIsNotSuppressed() async throws {
         let fixture = try self.makeFixture()
         let echoText = "the quick brown fox jumps over the lazy dog"

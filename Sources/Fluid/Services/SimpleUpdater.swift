@@ -117,6 +117,9 @@ private struct SemanticVersion: Comparable {
 
 @MainActor
 final class SimpleUpdater: ObservableObject {
+    // Explicitly nonisolated: on macOS 15.4+ the synthesized main-actor deinit can abort until the OS runtime has the fix (swiftlang/swift#88036).
+    nonisolated deinit {}
+
     struct ReleaseBuildOption {
         let version: String
         let url: URL
@@ -197,7 +200,7 @@ final class SimpleUpdater: ObservableObject {
         return self.versionString(for: latest)
     }
 
-    func rollbackToLatestBackup() async throws {
+    func rollbackToLatestBackup(expectedVersion: String? = nil) async throws {
         guard self.updateOperationGate.begin() else {
             throw SimpleUpdateError.updateAlreadyInProgress
         }
@@ -218,11 +221,14 @@ final class SimpleUpdater: ObservableObject {
             throw SimpleUpdateError.rollbackUnavailable
         }
 
+        if let expectedVersion, self.versionString(for: rollbackBundleURL) != expectedVersion {
+            throw SimpleUpdateError.releaseChanged
+        }
         do {
             try await self.performSwapAndRelaunch(
                 installedAppURL: Bundle.main.bundleURL,
                 downloadedAppURL: rollbackBundleURL,
-                expectedVersion: nil,
+                expectedVersion: expectedVersion,
                 isRollback: true
             )
             DebugLogger.shared.info(
@@ -235,18 +241,52 @@ final class SimpleUpdater: ObservableObject {
         }
     }
 
+    /// Explicit user-selected downgrade. Re-fetch the tag so a stale picker never installs another release.
+    func installPreviousRelease(version: String) async throws {
+        guard self.updateOperationGate.begin() else { throw SimpleUpdateError.updateAlreadyInProgress }
+        self.isUpdateInProgress = true
+        self.cancelUpdateCheck()
+        self.updatePrompts.dismissUpdateOffers()
+        var installed = false
+        defer {
+            if !installed { self.resetUpdateOperation() }
+        }
+        let releases = try await self.fetchReleases(owner: "altic-dev", repo: "Fluid-oss")
+        guard let release = releases.first(where: { $0.tag_name == version }),
+              let target = self.parseSemanticVersion(version),
+              let current = self.parseSemanticVersion(self.currentAppVersion),
+              target < current
+        else { throw SimpleUpdateError.noSuitableRelease }
+        try Task.checkCancellation()
+        #if DEBUG
+        if let simulationInstallHandler {
+            try await simulationInstallHandler()
+            return
+        }
+        #endif
+        try await self.installReleaseArchive(release, repo: "Fluid-oss")
+        installed = true
+    }
+
     func fetchRecentReleaseBuildOptions(
         owner: String,
         repo: String,
         limit: Int = 3,
-        includePrerelease: Bool = false
+        includePrerelease: Bool = false,
+        olderThanCurrent: Bool = false
     ) async throws -> [ReleaseBuildOption] {
         let releases = try await self.fetchReleases(owner: owner, repo: repo)
         let count = max(1, limit)
         let candidates = self.sortedCandidateReleases(
             releases,
             includePrerelease: includePrerelease
-        ).prefix(count)
+        ).filter { entry in
+            guard olderThanCurrent else { return true }
+            guard let current = self.parseSemanticVersion(self.currentAppVersion),
+                  let target = self.parseSemanticVersion(entry.release.tag_name)
+            else { return false }
+            return target < current && self.releaseArchiveAsset(entry.release, repo: repo)?.name.lowercased().hasSuffix(".zip") == true
+        }.prefix(count)
 
         return candidates.map { entry in
             let release = entry.release
@@ -598,7 +638,6 @@ final class SimpleUpdater: ObservableObject {
             throw SimpleUpdateError.noSuitableRelease
         }
 
-        let currentBundle = Bundle.main
         // up to date
         if !(latestVersion > current) {
             self.availableUpdateVersion = nil
@@ -628,19 +667,27 @@ final class SimpleUpdater: ObservableObject {
         }
         #endif
 
+        try await self.installReleaseArchive(latest, repo: repo)
+        shouldKeepOperationActive = true
+    }
+
+    private func releaseArchiveAsset(_ release: GHRelease, repo: String) -> GHRelease.Asset? {
         // Find asset matching: "{repo-lower}-{version-from-tag}.*" and zip preferred
-        let rawVersion = latestTag.hasPrefix("v") ? String(latestTag.dropFirst()) : latestTag
+        let rawVersion = release.tag_name.hasPrefix("v") ? String(release.tag_name.dropFirst()) : release.tag_name
         let prefix = "\(repo.lowercased())-\(rawVersion)"
-        let asset = latest.assets.first { asset in
+        return release.assets.first { asset in
             let base = (asset.name as NSString).deletingPathExtension.lowercased()
             return (base == prefix) &&
                 (asset.content_type == "application/zip" || asset.content_type == "application/x-zip-compressed")
-        } ?? latest.assets.first { asset in
+        } ?? release.assets.first { asset in
             let base = (asset.name as NSString).deletingPathExtension.lowercased()
             return base == prefix
         }
+    }
 
-        guard let asset = asset else { throw SimpleUpdateError.noAsset }
+    private func installReleaseArchive(_ release: GHRelease, repo: String) async throws {
+        let rawVersion = release.tag_name.hasPrefix("v") ? String(release.tag_name.dropFirst()) : release.tag_name
+        guard let asset = self.releaseArchiveAsset(release, repo: repo) else { throw SimpleUpdateError.noAsset }
 
         self.showUpdateInstallStatus(version: rawVersion)
 
@@ -675,12 +722,11 @@ final class SimpleUpdater: ObservableObject {
         }
 
         try await self.performSwapAndRelaunch(
-            installedAppURL: currentBundle.bundleURL,
+            installedAppURL: Bundle.main.bundleURL,
             downloadedAppURL: extractedBundleURL,
             expectedVersion: rawVersion,
             isRollback: false
         )
-        shouldKeepOperationActive = true
     }
 
     // MARK: - Helpers
@@ -709,9 +755,7 @@ final class SimpleUpdater: ObservableObject {
         content.material = .popover
         content.blendingMode = .behindWindow
         content.state = .active
-        content.wantsLayer = true
-        content.layer?.cornerRadius = 16
-        content.layer?.masksToBounds = true
+        content.maskImage = .roundedRectMask(cornerRadius: 16)
         content.autoresizingMask = [.width, .height]
 
         let icon = NSImageView(frame: NSRect(x: 22, y: 42, width: 52, height: 52))

@@ -411,6 +411,10 @@ struct MeetingSummaryView: View {
                 .help("Copy summary")
             }
             CommandMarkdownContent(text: self.controller.output)
+            Text(self.controller.outputNotice)
+                .font(self.theme.typography.caption)
+                .foregroundStyle(self.theme.palette.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
         }
         .padding(self.theme.metrics.spacing.lg)
         .frame(maxWidth: .infinity, alignment: .leading)

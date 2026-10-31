@@ -169,13 +169,13 @@ final class MeetingVoiceProcessingCaptureTests: XCTestCase {
             isHeadphonesDataSource: false,
             terminalTypes: []
         )
-        XCTAssertEqual(MeetingRawMicrophoneProtection.classify(unknownBluetooth), .unprotected)
+        XCTAssertEqual(MeetingRawMicrophoneProtection.classify(unknownBluetooth), .unfiltered)
 
         var externalWithoutDataSource = unknownBluetooth
         externalWithoutDataSource.isHeadphonesDataSource = true
         XCTAssertEqual(
             MeetingRawMicrophoneProtection.classify(externalWithoutDataSource),
-            .unprotected,
+            .unfiltered,
             "AudioDevice reports missing data-source properties pessimistically; that alone is not closed-route proof"
         )
 

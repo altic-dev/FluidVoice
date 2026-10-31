@@ -20,6 +20,23 @@ private nonisolated struct ManifestFixtureObserver: MeetingChunkAudioObserving {
 final class MeetingAnalysisManifestTests: XCTestCase {
     private let backendID = MeetingBackendID(rawValue: "fixture.analysis-manifest")
 
+    func testUnfilteredSpeechIsAdmittedWithoutClaimingEchoProtection() throws {
+        let audio = self.chunk(sequence: 0, start: 100, end: 110)
+        let mic = self.track(kind: .microphone, chunks: [audio], eras: [self.era(protection: .unfiltered, start: 0)])
+        let plan = self.plan(mode: .onlineCall, tracks: [mic])
+        let manifest = try MeetingAnalysisManifestBuilder(
+            plan: plan, observer: self.observer([(mic.id, audio, self.observed(audio, duration: 10))])
+        ).build()
+        let result = try XCTUnwrap(manifest.track(mic.id))
+        XCTAssertTrue(result.gaps.isEmpty)
+        XCTAssertEqual(result.spans.count, 1)
+        XCTAssertEqual(result.spans.first?.admission.rationale, .onlineMicrophoneUnfiltered)
+        XCTAssertEqual(result.spans.first?.captureEra.echoProtection, .unfiltered)
+        XCTAssertNotNil(MeetingMicrophoneEchoProtection.unfiltered.transcriptWarning)
+        XCTAssertNil(MeetingMicrophoneEchoProtection.softwareEchoCancelled.transcriptWarning)
+        XCTAssertEqual(MeetingCanonicalAdmission.rationale(captureMode: .onlineCall, trackKind: .microphone, echoProtection: .unprotected).decision, .inadmissible)
+    }
+
     func testOptInSavedRecordingManifestWithoutChangingSession() throws {
         guard let path = ProcessInfo.processInfo.environment["FLUIDVOICE_MEETING_MANIFEST_SESSION"] else {
             throw XCTSkip("Set FLUIDVOICE_MEETING_MANIFEST_SESSION for read-only real-recording validation.")

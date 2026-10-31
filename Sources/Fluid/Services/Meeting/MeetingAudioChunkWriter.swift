@@ -61,6 +61,7 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
     private let manifestURL: URL
     private let chunkDuration: TimeInterval
     private let eventHandler: EventHandler
+    private let diagnosticSampleObserver: (@Sendable (CMSampleBuffer, UInt64) -> Void)?
     private let encoder: JSONEncoder
     private let ledger: MeetingAudioChunkLedgerStore
 
@@ -108,7 +109,8 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
         // PCM persistence is intentionally synchronous on the serialized writer queue. Keep the
         // queue bounded, but allow roughly 1.3 seconds of capture jitter at a 48 kHz/10 ms tap
         // cadence while the filesystem drains a burst.
-        pendingSlotLimit: Int = 128
+        pendingSlotLimit: Int = 128,
+        diagnosticSampleObserver: (@Sendable (CMSampleBuffer, UInt64) -> Void)? = nil
     ) throws {
         self.trackID = track.id
         self.track = track
@@ -119,6 +121,7 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
         self.manifestURL = self.trackDirectory.appendingPathComponent("track.json")
         self.chunkDuration = max(60, chunkDuration)
         self.eventHandler = eventHandler
+        self.diagnosticSampleObserver = diagnosticSampleObserver
         self.ledger = MeetingAudioChunkLedgerStore(sessionDirectory: sessionDirectory)
         self.queue = DispatchQueue(
             label: "com.fluidvoice.meeting.writer.\(track.kind.rawValue)",
@@ -144,7 +147,11 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
     }
 
     @discardableResult
-    func enqueue(_ sampleBuffer: CMSampleBuffer, producerEpoch: UInt64 = 0) -> Bool {
+    func enqueue(
+        _ sampleBuffer: CMSampleBuffer,
+        producerEpoch: UInt64 = 0,
+        onConsumed: (@Sendable () -> Void)? = nil
+    ) -> Bool {
         self.stateLock.lock()
         guard self.lifecycle == .accepting else {
             self.stateLock.unlock()
@@ -168,6 +175,7 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
         self.queue.async { [weak self, sampleBox] in
             defer { self?.pendingSlots.signal() }
             self?.consume(sampleBox.sampleBuffer, producerEpoch: sampleBox.producerEpoch)
+            onConsumed?()
         }
         self.stateLock.unlock()
         return true
@@ -375,6 +383,7 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
     }
 
     private func consume(_ sourceSampleBuffer: CMSampleBuffer, producerEpoch: UInt64) {
+        self.diagnosticSampleObserver?(sourceSampleBuffer, producerEpoch)
         guard CMSampleBufferIsValid(sourceSampleBuffer), CMSampleBufferDataIsReady(sourceSampleBuffer) else {
             self.recordDroppedSample(detail: "Capture delivered an invalid audio sample.")
             return

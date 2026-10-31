@@ -3,11 +3,13 @@ import Foundation
 extension AppServices {
     /// Starts the same coordinator used by FluidMeet without posting a navigation request.
     func startMeetingRecordingFromMenuBar() async throws {
+        guard SettingsStore.shared.fluidMeetEnabled else { throw MeetingCoordinatorError.featureDisabled }
         let defaults = SettingsStore.shared.meetingRecordingDefaults
         let target = defaults.mode == .onlineCall ? self.meetingAutomaticTarget : nil
         let preferredInputUID = SettingsStore.shared.preferredInputDeviceUID
         let microphones = await MeetingCaptureSourceCatalog.microphoneSnapshot()
-        let applications = try await target == nil ? [] : MeetingCaptureSourceCatalog.availableApplications()
+        let needsApplications = defaults.mode == .onlineCall && (target != nil || (defaults.isConfigured && defaults.applicationBundleIdentifier != nil))
+        let applications = try await needsApplications ? MeetingCaptureSourceCatalog.availableApplications() : []
         try Task.checkCancellation()
         // Never capture a replacement app when detection changed during source discovery.
         if let target, target != self.meetingAutomaticTarget {
@@ -20,6 +22,7 @@ extension AppServices {
             applications: applications,
             preferredInputUID: preferredInputUID
         )
+        guard SettingsStore.shared.fluidMeetEnabled else { throw MeetingCoordinatorError.featureDisabled }
         _ = try await self.meetingSessionCoordinator.startRecording(configuration: configuration)
     }
 
@@ -52,6 +55,11 @@ extension AppServices {
             }
             match.windowID = target.windowID
             application = match
+        } else if defaults.mode == .onlineCall, defaults.isConfigured, let bundleIdentifier = defaults.applicationBundleIdentifier {
+            guard let saved = defaults.savedApplication(in: applications), let pid = saved.processID, pid > 0 else {
+                throw MeetingCaptureError.applicationUnavailable(bundleIdentifier)
+            }
+            application = saved
         }
         let mode: MeetingCaptureMode = application == nil ? .inRoom : .onlineCall
         return MeetingCaptureConfiguration(

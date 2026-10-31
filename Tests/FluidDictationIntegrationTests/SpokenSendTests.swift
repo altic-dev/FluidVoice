@@ -348,10 +348,12 @@ final class SpokenSendTests: XCTestCase {
         ])
         // Modifier presses are flagsChanged events, exactly like a physical Command key.
         XCTAssertEqual(events.map(\.type), [.flagsChanged, .keyDown, .keyUp, .flagsChanged])
-        XCTAssertTrue(events[0].flags.contains(.maskCommand))
-        XCTAssertTrue(events[1].flags.contains(.maskCommand))
-        XCTAssertTrue(events[2].flags.contains(.maskCommand))
-        XCTAssertFalse(events[3].flags.contains(.maskCommand), "the final event must release Command")
+        // Command has to be the only modifier. A leaked Shift, Option, Control, or Fn
+        // turns Cmd+V into a different shortcut, and a bare V is what inserts "v".
+        XCTAssertEqual(events[0].flags, .maskCommand)
+        XCTAssertEqual(events[1].flags, .maskCommand)
+        XCTAssertEqual(events[2].flags, .maskCommand)
+        XCTAssertEqual(events[3].flags, CGEventFlags(), "the final event must release Command")
     }
 
     func testPasteSequenceIsInvisibleToTheHotkeyTap() throws {

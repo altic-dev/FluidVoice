@@ -8,18 +8,23 @@ final nonisolated class MeetingAECPipeline: @unchecked Sendable {
     private var joiner = MeetingAECStreamJoiner()
     private let processor: any MeetingAECProcessing
     let committer: MeetingAECOutputCommitter
+    private let diagnosticObserver: (@Sendable (MeetingAECJoinedFrame, [Float], MeetingAECBridgeStatistics) -> Void)?
     private(set) var stopped = false
+    /// Retry AEC on a new route, not on every callback while the current route is failing.
+    private var fallbackFailure: MeetingAECFailure?
 
     init(
         processor: any MeetingAECProcessing,
-        committer: MeetingAECOutputCommitter
+        committer: MeetingAECOutputCommitter,
+        diagnosticObserver: (@Sendable (MeetingAECJoinedFrame, [Float], MeetingAECBridgeStatistics) -> Void)? = nil
     ) {
         self.processor = processor
         self.committer = committer
+        self.diagnosticObserver = diagnosticObserver
     }
 
     func consumeRender(_ sampleBuffer: CMSampleBuffer, stream: MeetingAECStreamToken) {
-        guard !self.stopped else { return }
+        guard !self.stopped, self.fallbackFailure == nil else { return }
         switch MeetingAECPCMAdapter.extract(sampleBuffer, kind: .render, stream: stream) {
         case let .success(block):
             self.handle(self.joiner.append(block))
@@ -31,6 +36,10 @@ final nonisolated class MeetingAECPipeline: @unchecked Sendable {
     func consumeCapture(_ sampleBuffer: CMSampleBuffer, stream: MeetingAECStreamToken) {
         guard !self.stopped else {
             self.committer.commitRaw(sampleBuffer, failure: .stopped)
+            return
+        }
+        if self.fallbackFailure != nil {
+            self.committer.commitUnfiltered(sampleBuffer)
             return
         }
         switch MeetingAECPCMAdapter.extract(sampleBuffer, kind: .capture, stream: stream) {
@@ -60,14 +69,14 @@ final nonisolated class MeetingAECPipeline: @unchecked Sendable {
         boundary: MeetingMicrophoneTranscriptGate.InvalidationBoundary?
     ) {
         guard !self.stopped else { return }
-        self.handle(self.joiner.flush(reason: reason))
+        self.handle(self.joiner.flush(reason: reason), allowFallback: false)
         self.committer.invalidateForExternalBoundary(boundary)
     }
 
     func stop(boundary: MeetingMicrophoneTranscriptGate.InvalidationBoundary?) {
         guard !self.stopped else { return }
         self.handle(self.joiner.flush(reason: .stopped))
-        self.committer.invalidateForExternalBoundary(boundary)
+        self.committer.finish()
         self.stopped = true
     }
 
@@ -76,20 +85,21 @@ final nonisolated class MeetingAECPipeline: @unchecked Sendable {
         currentRawCapture: CMSampleBuffer?
     ) {
         self.handle(self.joiner.flush(reason: failure))
+        self.fallbackFailure = failure
         if let currentRawCapture {
-            self.committer.commitRaw(currentRawCapture, failure: failure)
+            self.committer.commitUnfiltered(currentRawCapture)
         }
     }
 
-    private func handle(_ emissions: [MeetingAECJoinerEmission]) {
-        var mayContinueProcessing = true
+    private func handle(_ emissions: [MeetingAECJoinerEmission], allowFallback: Bool = true) {
+        var flushRemainingCapture = false
         for emission in emissions {
             switch emission {
             case let .paired(joined):
-                if mayContinueProcessing {
-                    mayContinueProcessing = self.process(joined)
+                if self.fallbackFailure == nil {
+                    if !self.process(joined, allowFallback: allowFallback) { flushRemainingCapture = true }
                 } else {
-                    self.commitRaw(joined.capture, failure: .bridgeProcessing)
+                    self.commitRaw(joined.capture, failure: self.fallbackFailure ?? .bridgeProcessing, allowFallback: allowFallback)
                 }
             case let .bypass(slice, failure):
                 guard let raw = MeetingAECPCMAdapter.synthesize(
@@ -99,26 +109,34 @@ final nonisolated class MeetingAECPipeline: @unchecked Sendable {
                     self.committer.invalidateForExternalBoundary(nil)
                     continue
                 }
-                self.committer.commitRaw(raw, failure: failure)
-            case .reset:
-                self.resetProcessor()
-                self.committer.invalidateForExternalBoundary(nil)
+                if allowFallback {
+                    self.fallbackFailure = failure
+                    self.committer.commitUnfiltered(raw)
+                } else {
+                    self.committer.commitRaw(raw, failure: failure)
+                }
+            case let .reset(failure):
+                if allowFallback, failure != .stopped { self.fallbackFailure = failure }
             }
+        }
+        if flushRemainingCapture {
+            self.handle(self.joiner.flush(reason: self.fallbackFailure ?? .bridgeProcessing), allowFallback: allowFallback)
         }
     }
 
     @discardableResult
-    private func process(_ joined: MeetingAECJoinedFrame) -> Bool {
+    private func process(_ joined: MeetingAECJoinedFrame, allowFallback: Bool) -> Bool {
         do {
             let result = try self.processor.process(
                 render: joined.render.samples,
                 capture: joined.capture.samples
             )
+            self.diagnosticObserver?(joined, result.samples, result.statistics)
             guard let output = MeetingAECPCMAdapter.synthesize(
                 samples: result.samples,
                 presentationTime: joined.capture.presentationTime
             ) else {
-                self.commitRawAndReset(joined.capture, failure: .outputSynthesis)
+                self.beginFallback(joined.capture, failure: .outputSynthesis, allowFallback: allowFallback)
                 return false
             }
             let mayPromote = joined.clockAttested
@@ -126,37 +144,31 @@ final nonisolated class MeetingAECPipeline: @unchecked Sendable {
             self.committer.commitProcessed(output, mayPromote: mayPromote)
             return true
         } catch let failure as MeetingAECFailure {
-            self.commitRawAndReset(joined.capture, failure: failure)
+            self.beginFallback(joined.capture, failure: failure, allowFallback: allowFallback)
             return false
         } catch {
-            self.commitRawAndReset(joined.capture, failure: .bridgeProcessing)
+            self.beginFallback(joined.capture, failure: .bridgeProcessing, allowFallback: allowFallback)
             return false
         }
     }
 
-    private func commitRawAndReset(_ capture: MeetingAECFrame, failure: MeetingAECFailure) {
-        self.commitRaw(capture, failure: failure)
-        self.joiner = MeetingAECStreamJoiner()
-        self.resetProcessor()
+    private func beginFallback(_ capture: MeetingAECFrame, failure: MeetingAECFailure, allowFallback: Bool) {
+        self.fallbackFailure = failure
+        self.commitRaw(capture, failure: failure, allowFallback: allowFallback)
     }
 
-    private func commitRaw(_ capture: MeetingAECFrame, failure: MeetingAECFailure) {
+    private func commitRaw(_ capture: MeetingAECFrame, failure: MeetingAECFailure, allowFallback: Bool = true) {
         if let raw = MeetingAECPCMAdapter.synthesize(
             samples: capture.samples,
             presentationTime: capture.presentationTime
         ) {
-            self.committer.commitRaw(raw, failure: failure)
+            if allowFallback {
+                self.committer.commitUnfiltered(raw)
+            } else {
+                self.committer.commitRaw(raw, failure: failure)
+            }
         } else {
             self.committer.invalidateForExternalBoundary(nil)
-        }
-    }
-
-    private func resetProcessor() {
-        do {
-            try self.processor.reset()
-        } catch {
-            self.stopped = true
-            self.committer.failTerminal(.bridgeInitialization)
         }
     }
 }

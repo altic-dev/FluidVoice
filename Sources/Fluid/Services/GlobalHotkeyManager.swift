@@ -308,6 +308,8 @@ final class GlobalHotkeyManager: NSObject {
     private var shortcutCaptureHandler: ((NSEvent) -> NSEvent?)?
     private let isSessionLockedProvider: () -> Bool
     private var cancelCallback: (() -> CancelHandlingResult)?
+    private var meetingRecordingCallback: (() -> Void)?
+    private var meetingShortcutPressedKey: UInt16?
     private var pasteLastTranscriptionCallback: (() -> Void)?
     private var hotkeyMode: HotkeyActivationMode = SettingsStore.shared.hotkeyMode
     private let automaticTapThresholdSeconds: TimeInterval = 0.4
@@ -697,14 +699,6 @@ final class GlobalHotkeyManager: NSObject {
         self.promptShortcutAssignments = assignments
         DebugLogger.shared.info("Updated prompt shortcut assignments", source: "GlobalHotkeyManager")
         self.scheduleActiveShortcutLog(reason: "shortcuts updated")
-    }
-
-    func setCancelCallback(_ callback: @escaping () -> CancelHandlingResult) {
-        self.cancelCallback = callback
-    }
-
-    func setPasteLastTranscriptionCallback(_ callback: @escaping () -> Void) {
-        self.pasteLastTranscriptionCallback = callback
     }
 
     private func setupGlobalHotkeyWithRetry() {
@@ -1286,6 +1280,10 @@ final class GlobalHotkeyManager: NSObject {
         let keyCode = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
         let eventModifiers = Self.modifierFlags(from: event.flags)
         let isAutorepeat = event.getIntegerValueField(.keyboardEventAutorepeat) != 0
+
+        if self.handleMeetingRecordingShortcut(type: type, keyCode: keyCode, modifiers: eventModifiers, isAutorepeat: isAutorepeat) {
+            return nil
+        }
 
         switch type {
         case .keyDown:
@@ -1961,6 +1959,7 @@ final class GlobalHotkeyManager: NSObject {
     }
 
     func resetModifierOnlyShortcutTracking(reason: ModifierTrackingResetReason = .shortcutCapture) {
+        self.meetingShortcutPressedKey = nil
         self.invalidateAllRecordingActions()
         self.modifierPressReceivedAt = nil
         self.currentStopPressReceivedAt = nil
@@ -2772,6 +2771,9 @@ extension GlobalHotkeyManager {
         if self.commandModeShortcutEnabled, let shortcut = self.commandModeShortcut {
             shortcuts.append(shortcut)
         }
+        if SettingsStore.shared.fluidMeetEnabled, let shortcut = SettingsStore.shared.meetingRecordingHotkeyShortcut {
+            shortcuts.append(shortcut)
+        }
         if let shortcut = SettingsStore.shared.cancelRecordingHotkeyShortcut {
             shortcuts.append(shortcut)
         }
@@ -2871,5 +2873,36 @@ extension GlobalHotkeyManager {
                 self.reconcileHoldToMute(isPhysicallyDown: CGEventSource.keyState(.hidSystemState, key: 49))
             }
         }
+    }
+}
+
+extension GlobalHotkeyManager {
+    func setCancelCallback(_ callback: @escaping () -> CancelHandlingResult) {
+        self.cancelCallback = callback
+    }
+
+    func setPasteLastTranscriptionCallback(_ callback: @escaping () -> Void) {
+        self.pasteLastTranscriptionCallback = callback
+    }
+
+    func setMeetingRecordingCallback(_ callback: @escaping () -> Void) {
+        self.meetingRecordingCallback = callback
+    }
+
+    private func handleMeetingRecordingShortcut(type: CGEventType, keyCode: UInt16, modifiers: NSEvent.ModifierFlags, isAutorepeat: Bool) -> Bool {
+        if type == .keyUp, self.meetingShortcutPressedKey == keyCode {
+            self.meetingShortcutPressedKey = nil
+            return true
+        }
+        guard type == .keyDown, SettingsStore.shared.fluidMeetEnabled,
+              let shortcut = SettingsStore.shared.meetingRecordingHotkeyShortcut,
+              shortcut.matches(keyCode: keyCode, modifiers: modifiers),
+              !self.isSessionLockedProvider() else { return false }
+        self.markOtherInputDuringModifierOnly()
+        if !isAutorepeat {
+            self.meetingShortcutPressedKey = keyCode
+            self.meetingRecordingCallback?()
+        }
+        return true
     }
 }

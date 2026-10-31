@@ -70,6 +70,19 @@ actor DictionaryMatchPlayground {
     static let shared = DictionaryMatchPlayground()
     private var running = false
 
+    /// Inspect hosted packs on this replay actor, including Pro and retained older installations.
+    nonisolated static func installedModelKeys(
+        cacheDirectory: (ParakeetSpeechModelCatalog.Descriptor) -> URL
+    ) -> Set<String> {
+        var keys: Set<String> = ["parakeet-v2", "parakeet-v3"]
+        for descriptor in ParakeetSpeechModelCatalog.descriptors where descriptor.isHostedPack {
+            if let hash = descriptor.installedArchiveSHA256(at: cacheDirectory(descriptor)) {
+                keys.insert(descriptor.modelID + ":sha256:" + hash)
+            }
+        }
+        return keys
+    }
+
     /// Resolve before loading a model: an older checkpoint's vectors remain saved
     /// but cannot be replayed through a different encoder with the same dimensions.
     nonisolated static func targetProfile(
@@ -79,7 +92,9 @@ actor DictionaryMatchPlayground {
     ) throws -> PronunciationDictionaryProfile {
         let matching = profiles.filter { $0.label.caseInsensitiveCompare(target) == .orderedSame }
         if let current = matching.first(where: {
-            compatibleModelKeys.contains($0.modelKey)
+            (compatibleModelKeys.contains($0.modelKey)
+                || ($0.modelKey == ParakeetSpeechModelCatalog.pro.modelID
+                    && compatibleModelKeys.contains(ParakeetSpeechModelCatalog.pro.pronunciationModelKey)))
                 && ParakeetSpeechModelCatalog.descriptor(forInstalledPronunciationModelKey: $0.modelKey) != nil
         }) {
             return current
@@ -119,12 +134,8 @@ actor DictionaryMatchPlayground {
         let duration = Double(samples.count) / 16_000
         #if arch(arm64)
         let allProfiles = await PronunciationDictionaryStore.shared.allProfiles()
-        var compatibleModelKeys: Set<String> = ["parakeet-v2", "parakeet-v3"]
-        for descriptor in [ParakeetSpeechModelCatalog.mini, ParakeetSpeechModelCatalog.pico] {
-            let directory = AsrModels.defaultCacheDirectory(for: descriptor.asrModelVersion)
-            if let hash = descriptor.installedArchiveSHA256(at: directory) {
-                compatibleModelKeys.insert(descriptor.modelID + ":sha256:" + hash)
-            }
+        let compatibleModelKeys = Self.installedModelKeys { descriptor in
+            AsrModels.defaultCacheDirectory(for: descriptor.asrModelVersion)
         }
         let targetProfile = try Self.targetProfile(from: allProfiles, target: target, compatibleModelKeys: compatibleModelKeys)
         let matching = allProfiles.filter { $0.modelKey == targetProfile.modelKey }.sorted {

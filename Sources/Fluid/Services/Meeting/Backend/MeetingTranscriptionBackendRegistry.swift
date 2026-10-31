@@ -8,6 +8,9 @@ import Foundation
 /// a different backend.
 @MainActor
 final class MeetingTranscriptionBackendRegistry {
+    // Explicitly nonisolated: on macOS 15.4+ the synthesized main-actor deinit can abort until the OS runtime has the fix (swiftlang/swift#88036).
+    nonisolated deinit {}
+
     typealias Factory = @MainActor (MeetingBackendHostContext) -> any MeetingTranscriptionBackend
 
     private var factories: [MeetingBackendID: Factory] = [:]

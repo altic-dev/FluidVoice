@@ -532,6 +532,7 @@ final class MeetingLiveStartupCancellationTests: XCTestCase {
         func prepareModels() async throws { self.didPrepare() }
         func appendAudio(_ buffer: AVAudioPCMBuffer) async throws {}
         func processBufferedAudio() async throws {}
+        func finish() async throws -> String { "" }
         func reset() async {}
     }
 
@@ -600,6 +601,187 @@ final class MeetingLiveStartupCancellationTests: XCTestCase {
         await recognizer.resumeInstallation()
         await starting.value
         await engine.stop()
+    }
+}
+#endif
+
+#if arch(arm64)
+final class MeetingLiveBoundaryTests: XCTestCase {
+    private final class Clock: @unchecked Sendable {
+        private let lock = NSLock()
+        private var value: Double = 0
+        func now() -> Double { self.lock.withLock { self.value } }
+        func set(_ value: Double) { self.lock.withLock { self.value = value } }
+        func advance() { self.set(120) }
+    }
+
+    private actor Recognizer: MeetingLiveRecognizer {
+        private var partial: (@Sendable (String) -> Void)?
+        private var end: (@Sendable (String) -> Void)?
+        private var processing = false
+        private var calls = 0
+        private(set) var resetDuringProcessing = false
+        private(set) var finishes = 0
+        let naturalEnd: Bool
+        let failFinish: Bool
+        init(naturalEnd: Bool = false, failFinish: Bool = false) {
+            self.naturalEnd = naturalEnd
+            self.failFinish = failFinish
+        }
+
+        func prepareModels() async throws {}
+        func appendAudio(_ buffer: AVAudioPCMBuffer) async throws {}
+        func processBufferedAudio() async throws {
+            self.processing = true
+            self.calls += 1
+            if self.calls == 1 {
+                self.partial?("hello")
+                if self.naturalEnd { self.end?("hello") }
+            }
+            for _ in 0..<20 {
+                await Task.yield()
+            }
+            self.processing = false
+        }
+
+        func finish() async throws -> String {
+            self.finishes += 1
+            if self.failFinish { throw NSError(domain: "InjectedFinishFailure", code: 1) }
+            self.partial?("hello final word")
+            self.end?("hello final word")
+            return "hello final word"
+        }
+
+        func reset() async { self.resetDuringProcessing = self.resetDuringProcessing || self.processing }
+        func resumePartial() { self.partial?("hello resumed") }
+        func setEouCallback(_ callback: @escaping @Sendable (String) -> Void) async { self.end = callback }
+        func setPartialTranscriptCallback(_ callback: @escaping @Sendable (String) -> Void) async { self.partial = callback }
+    }
+
+    func testNaturalEndpointWaitsUntilInferenceReturns() async throws {
+        let recognizer = Recognizer(naturalEnd: true)
+        let engine = MeetingLiveTrackEngine(kind: .microphone, recognizer: recognizer)
+        let final = expectation(description: "One completed phrase")
+        final.assertForOverFulfill = true
+        await engine.configure(
+            onPartial: { _, _, _, _, _ in },
+            onUtterance: { _, _, text, _, _ in
+                XCTAssertEqual(text, "hello")
+                final.fulfill()
+            },
+            onDegraded: { _, _ in XCTFail("No degradation expected") },
+            onReady: { _ in }
+        )
+        await engine.diagnosticInstallCallbacks()
+        try await engine.diagnosticConsume(self.sample(at: 0))
+        await fulfillment(of: [final], timeout: 1)
+        let raced = await recognizer.resetDuringProcessing
+        XCTAssertFalse(raced, "An EOU callback must not reset a suspended inference")
+    }
+
+    func testForcedEndpointFlushesTailWithoutDuplicateCallbacks() async throws {
+        try await self.checkForcedEndpoint(failFinish: false)
+    }
+
+    func testTemporaryModelPauseCanResumeWithoutReset() async throws {
+        let recognizer = Recognizer()
+        let clock = Clock()
+        let engine = MeetingLiveTrackEngine(kind: .microphone, recognizer: recognizer, uptime: { clock.now() }, diagnosticsEnabled: true)
+        let resumed = expectation(description: "Partial resumes after a long gap without premature reset")
+        await engine.configure(
+            onPartial: { _, _, text, _, _ in if text == "hello resumed" { resumed.fulfill() } },
+            onUtterance: { _, _, _, _, _ in XCTFail("A temporary pause must not close the phrase") },
+            onDegraded: { _, _ in XCTFail("A temporary pause is not an error") },
+            onReady: { _ in }
+        )
+        await engine.diagnosticInstallCallbacks()
+        try await engine.diagnosticConsume(self.sample(at: 0))
+        clock.set(6)
+        try await engine.diagnosticConsume(self.sample(at: 21))
+        clock.set(119.999)
+        try await engine.diagnosticConsume(self.sample(at: 121))
+        await recognizer.resumePartial()
+        try await engine.diagnosticConsume(self.sample(at: 1.1))
+        await fulfillment(of: [resumed], timeout: 1)
+        let snapshot = await engine.diagnosticSnapshotValue()
+        XCTAssertEqual(snapshot.resetInvocations, 0)
+        XCTAssertEqual(snapshot.textPauses, 1)
+        XCTAssertEqual(snapshot.textResumptions, 1)
+        await engine.stop()
+    }
+
+    func testFailedFlushPreservesPartialAndReportsDegradation() async throws {
+        try await self.checkForcedEndpoint(failFinish: true)
+    }
+
+    func testPauseAndResumeEventsAreSavedWithoutDebugDiagnostics() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let session = MeetingSession(
+            configuration: MeetingCaptureConfiguration(mode: .inRoom, title: "Diagnostic test", microphone: MeetingMicrophoneIdentity(captureDeviceID: "test", displayName: "Test")),
+            timebase: MeetingTimebaseMetadata(startedHostTime: 0, machTimebaseNumerator: 1, machTimebaseDenominator: 1, firstPresentationTime: nil)
+        )
+        let probe = try MeetingAudioComparisonProbe(session: session, directory: root)
+        let clock = Clock()
+        let recognizer = Recognizer()
+        let engine = MeetingLiveTrackEngine(kind: .microphone, recognizer: recognizer, uptime: { clock.now() }, diagnosticsEnabled: false)
+        await engine.attachComparisonProbe(probe)
+        await engine.diagnosticInstallCallbacks()
+        try await engine.diagnosticConsume(self.sample(at: 0))
+        clock.set(6)
+        try await engine.diagnosticConsume(self.sample(at: 6))
+        clock.set(7)
+        await recognizer.resumePartial()
+        try await engine.diagnosticConsume(self.sample(at: 7))
+        clock.set(127)
+        try await engine.diagnosticConsume(self.sample(at: 127))
+        await engine.stop()
+        await probe.stop()
+        let lines = try String(contentsOf: root.appendingPathComponent("events.jsonl"), encoding: .utf8).split(separator: "\n")
+        let events = try lines.map { try XCTUnwrap(JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any]) }
+        XCTAssertTrue(events.contains { $0["step"] as? String == "model-text-pause" })
+        XCTAssertTrue(events.contains { $0["step"] as? String == "model-text-resumed" })
+        XCTAssertTrue(events.contains { $0["step"] as? String == "model-flow" && ($0["detail"] as? String)?.contains("decodeCompletions=") == true })
+        XCTAssertTrue(events.contains { $0["step"] as? String == "recognizer-reset" && $0["detail"] as? String == "noTextTimeout" })
+        XCTAssertTrue(events.contains { $0["step"] as? String == "recognizer-reset" && $0["detail"] as? String == "stopped" })
+    }
+
+    private func checkForcedEndpoint(failFinish: Bool) async throws {
+        let recognizer = Recognizer(failFinish: failFinish)
+        let clock = Clock()
+        let engine = MeetingLiveTrackEngine(kind: .microphone, recognizer: recognizer, uptime: { clock.now() })
+        let final = expectation(description: "One completed phrase")
+        final.assertForOverFulfill = true
+        let degraded = expectation(description: "Flush failure reported")
+        degraded.isInverted = !failFinish
+        await engine.configure(
+            onPartial: { _, _, _, _, _ in },
+            onUtterance: { _, _, text, _, _ in
+                XCTAssertEqual(text, failFinish ? "hello" : "hello final word")
+                final.fulfill()
+            },
+            onDegraded: { _, _ in degraded.fulfill() },
+            onReady: { _ in }
+        )
+        await engine.diagnosticInstallCallbacks()
+        try await engine.diagnosticConsume(self.sample(at: 0))
+        clock.advance()
+        try await engine.diagnosticConsume(self.sample(at: 1))
+        try await engine.diagnosticConsume(self.sample(at: 1.1))
+        await fulfillment(of: [final, degraded], timeout: 0.1)
+        let finishes = await recognizer.finishes
+        XCTAssertEqual(finishes, 1)
+        let raced = await recognizer.resetDuringProcessing
+        XCTAssertFalse(raced)
+        await engine.stop()
+    }
+
+    private func sample(at seconds: Double) throws -> MeetingLiveSampleCopy.Sample {
+        let format = try XCTUnwrap(AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16_000, channels: 1, interleaved: false))
+        let pcm = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 320))
+        pcm.frameLength = 320
+        try XCTUnwrap(pcm.floatChannelData?[0]).update(repeating: 0, count: 320)
+        return .init(buffer: pcm, pts: CMTime(seconds: seconds, preferredTimescale: 16_000), duration: CMTime(value: 320, timescale: 16_000))
     }
 }
 #endif

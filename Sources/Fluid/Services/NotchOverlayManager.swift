@@ -68,6 +68,7 @@ final class NotchOverlayManager {
 
     /// Track if expanded command output is showing
     private(set) var isCommandOutputExpanded: Bool = false
+    var hasCommandOutputToDismiss: Bool { self.isCommandOutputExpanded || self.commandOutputPresentationTask != nil }
 
     /// Track if bottom overlay is visible
     private(set) var isBottomOverlayVisible: Bool = false
@@ -92,6 +93,7 @@ final class NotchOverlayManager {
     private var hideWaiters: [CheckedContinuation<RecordingOverlayHideOutcome, Never>] = []
     private var notchAnimationTask: Task<Void, Never>?
     private var notchPresentationTask: Task<Void, Never>?
+    private var commandOutputPresentationTask: Task<Void, Never>?
 
     // Cancel shortcut monitors for dismissing notch / overlay
     private var globalEscapeMonitor: Any?
@@ -149,6 +151,9 @@ final class NotchOverlayManager {
     }
 
     func show(audioLevelPublisher: AnyPublisher<CGFloat, Never>, mode: OverlayMode) {
+        // A new recording supersedes output that has not appeared yet.
+        self.commandOutputPresentationTask?.cancel()
+        self.commandOutputPresentationTask = nil
         self.refreshNotchPresentationPolicy()
         Self.overlayBench("show_called mode=\(mode.rawValue) state=\(self.state) commandExpanded=\(self.isCommandOutputExpanded)")
         self.cancelInFlightHideForNewPresentation()
@@ -578,19 +583,26 @@ final class NotchOverlayManager {
     func showExpandedCommandOutput() {
         guard self.canShowExpandedCommandOutput else { return }
 
+        self.commandOutputPresentationTask?.cancel()
+
         // Hide regular notch first if visible
         if self.notch != nil {
             self.hide()
         }
 
         // Wait a bit for cleanup
-        Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 100_000_000) // 100ms
-            await self?.showExpandedCommandOutputInternal()
+        self.commandOutputPresentationTask = Task { [weak self] in
+            do {
+                try await Task.sleep(nanoseconds: 100_000_000) // 100ms
+            } catch { return }
+            guard let self, !Task.isCancelled else { return }
+            self.commandOutputPresentationTask = nil
+            await self.showExpandedCommandOutputInternal()
         }
     }
 
     private func showExpandedCommandOutputInternal() async {
+        guard !Task.isCancelled else { return }
         guard self.canShowExpandedCommandOutput else { return }
         guard self.commandOutputState == .idle else { return }
 
@@ -687,6 +699,8 @@ final class NotchOverlayManager {
 
     /// Hide expanded command output notch - force close regardless of hover state
     func hideExpandedCommandOutput() {
+        self.commandOutputPresentationTask?.cancel()
+        self.commandOutputPresentationTask = nil
         self.commandOutputGeneration &+= 1
         let currentGeneration = self.commandOutputGeneration
 
@@ -717,7 +731,7 @@ final class NotchOverlayManager {
 
     /// Toggle expanded command output (for hotkey handling)
     func toggleExpandedCommandOutput() {
-        if self.isCommandOutputExpanded {
+        if self.hasCommandOutputToDismiss {
             self.hideExpandedCommandOutput()
         } else if self.canShowExpandedCommandOutput,
                   NotchContentState.shared.commandConversationHistory.isEmpty == false

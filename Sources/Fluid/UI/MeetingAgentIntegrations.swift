@@ -10,6 +10,9 @@ import SwiftUI
 /// while the user has copied instructions for another agent and not stopped that since.
 @MainActor
 final class FluidServeSettingsModel: ObservableObject {
+    // Explicitly nonisolated: on macOS 15.4+ the synthesized main-actor deinit can abort until the OS runtime has the fix (swiftlang/swift#88036).
+    nonisolated deinit {}
+
     typealias Agent = FluidServeSkillInstaller.Agent
     typealias Status = FluidServeSkillInstaller.Status
 

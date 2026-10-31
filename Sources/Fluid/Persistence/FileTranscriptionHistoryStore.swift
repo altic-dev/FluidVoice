@@ -152,6 +152,9 @@ nonisolated struct FileTranscriptionEntry: Codable, Identifiable, Equatable {
 
 @MainActor
 final class FileTranscriptionHistoryStore: ObservableObject {
+    // Explicitly nonisolated: on macOS 15.4+ the synthesized main-actor deinit can abort until the OS runtime has the fix (swiftlang/swift#88036).
+    nonisolated deinit {}
+
     static let shared = FileTranscriptionHistoryStore()
 
     private let defaults: UserDefaults

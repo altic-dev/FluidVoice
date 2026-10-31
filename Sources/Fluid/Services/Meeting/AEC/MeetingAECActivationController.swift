@@ -12,13 +12,16 @@ nonisolated enum MeetingAECActivationState: Equatable, Sendable {
 }
 
 nonisolated struct MeetingAECActivationController: Equatable, Sendable {
+    static let formatValidationTimeoutSeconds: TimeInterval = 2
     private(set) var generation: UInt64 = 0
     private(set) var state: MeetingAECActivationState = .raw
+    private var armedAtUptime: TimeInterval?
 
     /// Invalidates construction, a ready/armed candidate, or an active engine synchronously.
     mutating func invalidate() {
         self.generation &+= 1
         self.state = .raw
+        self.armedAtUptime = nil
     }
 
     /// Reserves the next generation. A second constructor can never overlap the first one.
@@ -57,10 +60,18 @@ nonisolated struct MeetingAECActivationController: Equatable, Sendable {
 
     /// Called after `startCapture` (or immediately after a route-time candidate commit when the
     /// stream is already running). Actual render and capture callbacks still remain raw.
-    mutating func armReadyCandidate() -> Bool {
+    mutating func armReadyCandidate(now: TimeInterval = ProcessInfo.processInfo.systemUptime) -> Bool {
         guard case let .ready(token) = self.state, token == self.generation else { return false }
         self.state = .armed(token, renderValidated: false, captureValidated: false)
+        self.armedAtUptime = now
         return true
+    }
+
+    /// Checked by incoming callbacks, without another timer. A missing reference stream must not
+    /// keep otherwise valid microphone speech blocked for the entire meeting.
+    func formatValidationTimedOut(now: TimeInterval = ProcessInfo.processInfo.systemUptime) -> Bool {
+        guard case .armed = self.state, let armedAtUptime else { return false }
+        return now - armedAtUptime >= Self.formatValidationTimeoutSeconds
     }
 
     /// Returns true only on the callback that completes both real-format observations. That

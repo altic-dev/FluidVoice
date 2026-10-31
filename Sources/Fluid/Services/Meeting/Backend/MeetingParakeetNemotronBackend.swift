@@ -11,9 +11,12 @@ import Foundation
 
 @MainActor
 final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
+    // Explicitly nonisolated: on macOS 15.4+ the synthesized main-actor deinit can abort until the OS runtime has the fix (swiftlang/swift#88036).
+    nonisolated deinit {}
+
     static let descriptor = MeetingBackendDescriptor(
         id: .parakeetNemotron,
-        version: "5",
+        version: "8",
         execution: .local,
         supportedLanguageCodes: VoiceEngineLanguageCatalog.parakeetV3LanguageIDs,
         supportedTrackKinds: Set(MeetingAudioTrackKind.allCases),
@@ -465,7 +468,6 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
         guard physicalEnd > epochStart else { return [] }
 
         var wordUnits: [MeetingFinalTextUnit] = []
-        var previousAssignedWord: (token: MeetingBackendSpeakerToken, end: TimeInterval)?
         let sortedWords = output.words.enumerated()
             .sorted { ($0.element.start, $0.offset) < ($1.element.start, $1.offset) }
         for (index, word) in sortedWords {
@@ -491,18 +493,11 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
             guard end > start else { continue }
             guard let spanIDs = Self.intersectingSpanIDs(start: start, end: end, spans: work.spans)
             else { continue }
-            let coverageAssignment = Self.assignment(
+            let speaker = Self.assignment(
                 start: start,
                 end: end,
                 activity: activity,
                 allowDominance: true
-            )
-            let speaker = Self.handoffAssignment(
-                coverageAssignment,
-                start: start,
-                end: end,
-                activity: activity,
-                previousAssignedWord: previousAssignedWord
             )
             wordUnits.append(MeetingFinalTextUnit(
                 id: "unit:\(attemptID.uuidString):\(work.epoch.id):\(index)",
@@ -516,14 +511,28 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
                 analysisSpanIDs: spanIDs,
                 confidence: nil
             ))
-            if case let .assigned(token) = speaker {
-                previousAssignedWord = (token, end)
-            } else {
-                // An uncertain word is a hard context break; never chain a later guess through it.
-                previousAssignedWord = nil
+        }
+        if !wordUnits.isEmpty {
+            let recovered = MeetingWordBoundaryRecovery.assignments(
+                units: wordUnits,
+                activityByEpoch: [work.epoch.id: activity]
+            )
+            return wordUnits.map { unit in
+                guard case .unassigned = unit.speaker, let speaker = recovered[unit.id] else { return unit }
+                return MeetingFinalTextUnit(
+                    id: unit.id,
+                    trackID: unit.trackID,
+                    analysisEpochID: unit.analysisEpochID,
+                    precision: unit.precision,
+                    text: unit.text,
+                    analysisStart: unit.analysisStart,
+                    analysisEnd: unit.analysisEnd,
+                    speaker: speaker,
+                    analysisSpanIDs: unit.analysisSpanIDs,
+                    confidence: unit.confidence
+                )
             }
         }
-        if !wordUnits.isEmpty { return wordUnits }
 
         let text = output.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return [] }
@@ -619,8 +628,6 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
     /// Nemotron emits diarization decisions on this cadence (plan §4); a boundary sliver shorter
     /// than one output hop is model noise, not evidence of a second speaker.
     private nonisolated static let nemotronCadenceMaximumFloorSeconds: TimeInterval = 0.08
-    private nonisolated static let handoffMaximumWordDurationSeconds: TimeInterval = 0.8
-    private nonisolated static let handoffMaximumPreviousWordGapSeconds: TimeInterval = 0.8
 
     /// Conservative initial product policy for multi-candidate words, isolated here so the ratios
     /// are named and covered at exact boundaries instead of living as unexplained literals.
@@ -728,61 +735,6 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
         }
     }
 
-    /// Deliberately simple second pass for short turn-boundary words. The user chose the more
-    /// readable handoff behavior despite its known risk for genuine interruption/backchannel
-    /// speech. Coverage remains the first-pass authority; this only resolves an otherwise
-    /// ambiguous two-slot result with immediate assigned-word context.
-    nonisolated static func handoffAssignment(
-        _ coverageAssignment: MeetingBackendSpeakerAssignment,
-        start: TimeInterval,
-        end: TimeInterval,
-        activity: [MeetingBackendSpeakerActivity],
-        previousAssignedWord: (token: MeetingBackendSpeakerToken, end: TimeInterval)?
-    ) -> MeetingBackendSpeakerAssignment {
-        guard case let .ambiguous(candidates) = coverageAssignment,
-              candidates.count == 2,
-              let previousAssignedWord,
-              candidates.contains(previousAssignedWord.token)
-        else { return coverageAssignment }
-
-        let duration = end - start
-        let gap = start - previousAssignedWord.end
-        guard duration.isFinite,
-              duration > 0,
-              duration <= Self.handoffMaximumWordDurationSeconds,
-              gap.isFinite,
-              gap >= -Self.nemotronCadenceMaximumFloorSeconds,
-              gap <= Self.handoffMaximumPreviousWordGapSeconds
-        else { return coverageAssignment }
-
-        guard let other = candidates.first(where: { $0 != previousAssignedWord.token }) else {
-            return coverageAssignment
-        }
-        let otherOnsets = activity.compactMap { entry -> TimeInterval? in
-            guard entry.token == other,
-                  min(entry.end, end) - max(entry.start, start)
-                  > MeetingAnalysisManifestSchema.mappingToleranceSeconds
-            else { return nil }
-            return entry.start
-        }
-        guard let otherOnset = otherOnsets.min() else { return coverageAssignment }
-        let onsetDelta = otherOnset - start
-        let resolved: MeetingBackendSpeakerAssignment = abs(onsetDelta)
-            <= Self.nemotronCadenceMaximumFloorSeconds
-            ? .assigned(other)
-            : .assigned(previousAssignedWord.token)
-
-        #if DEBUG
-        Self.logHandoffDecision(
-            duration: duration,
-            previousWordGap: gap,
-            otherOnsetDelta: onsetDelta,
-            assignedEntrant: abs(onsetDelta) <= Self.nemotronCadenceMaximumFloorSeconds
-        )
-        #endif
-        return resolved
-    }
-
     #if DEBUG
     /// Structured, DEBUG-only measurement of a multi-candidate word decision. Deliberately carries
     /// only durations, coverage seconds and the resulting decision kind — never transcript text,
@@ -813,22 +765,5 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
         )
     }
 
-    private nonisolated static func logHandoffDecision(
-        duration: TimeInterval,
-        previousWordGap: TimeInterval,
-        otherOnsetDelta: TimeInterval,
-        assignedEntrant: Bool
-    ) {
-        DebugLogger.shared.info(
-            String(
-                format: "[speakerHandoff] duration=%.3fs previousGap=%.3fs otherOnsetDelta=%.3fs decision=%@",
-                duration,
-                previousWordGap,
-                otherOnsetDelta,
-                assignedEntrant ? "entrant" : "incumbent"
-            ),
-            source: "MeetingParakeetNemotronBackend"
-        )
-    }
     #endif
 }

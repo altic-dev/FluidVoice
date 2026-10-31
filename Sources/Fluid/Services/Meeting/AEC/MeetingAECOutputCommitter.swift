@@ -14,8 +14,8 @@ final nonisolated class MeetingAECOutputCommitter: @unchecked Sendable {
 
     private enum State: Equatable {
         case unprotected
-        case promotionPending(UInt64)
-        case protected
+        case promotionPending(UInt64, MeetingMicrophoneEchoProtection)
+        case admitted(MeetingMicrophoneEchoProtection)
     }
 
     private let lock = NSLock()
@@ -24,6 +24,7 @@ final nonisolated class MeetingAECOutputCommitter: @unchecked Sendable {
     private let transcriptGate: MeetingMicrophoneTranscriptGate
     private let liveAudioHandler: (@Sendable (MeetingAudioTrackKind, CMSampleBuffer) -> Void)?
     private let terminalFailure: @Sendable (MeetingAECFailure) -> Void
+    private let protectionChanged: @Sendable (MeetingMicrophoneEchoProtection) -> Void
     private let pending = DispatchGroup()
     private var state: State = .unprotected
     private var generation: UInt64 = 0
@@ -41,6 +42,7 @@ final nonisolated class MeetingAECOutputCommitter: @unchecked Sendable {
         producerEpoch: UInt64 = 0,
         transcriptGate: MeetingMicrophoneTranscriptGate,
         liveAudioHandler: (@Sendable (MeetingAudioTrackKind, CMSampleBuffer) -> Void)?,
+        protectionChanged: @escaping @Sendable (MeetingMicrophoneEchoProtection) -> Void = { _ in },
         terminalFailure: @escaping @Sendable (MeetingAECFailure) -> Void
     ) {
         self.writer = writer
@@ -48,101 +50,106 @@ final nonisolated class MeetingAECOutputCommitter: @unchecked Sendable {
         self.transcriptGate = transcriptGate
         self.liveAudioHandler = liveAudioHandler
         self.terminalFailure = terminalFailure
+        self.protectionChanged = protectionChanged
     }
 
     /// Warm-up frames are processed and recorded but remain in the unprotected era. The first
     /// frame *after* the 200-frame attestation performs the atomic durable promotion.
     func commitProcessed(_ sampleBuffer: CMSampleBuffer, mayPromote: Bool) {
+        let hasPromotion = self.lock.withLock { self.state != .unprotected }
+        guard mayPromote || hasPromotion else {
+            guard self.enqueueOrFail(sampleBuffer, startSeconds: Self.seconds(of: sampleBuffer)) else { return }
+            _ = self.transcriptGate.observeAndAdmit(sampleBuffer)
+            return
+        }
+        self.commitAdmitted(sampleBuffer, protection: .softwareEchoCancelled)
+    }
+
+    /// A filtering failure changes processing provenance, not whether captured speech exists.
+    /// Persist the honest fallback state before offering any of its audio to live transcription.
+    func commitUnfiltered(_ sampleBuffer: CMSampleBuffer) {
+        self.commitAdmitted(sampleBuffer, protection: .unfiltered)
+    }
+
+    private func commitAdmitted(_ sampleBuffer: CMSampleBuffer, protection: MeetingMicrophoneEchoProtection) {
         let sampleBox = SampleBox(sampleBuffer)
         let startSeconds = Self.seconds(of: sampleBuffer)
-        let action = self.lock.withLock { () -> (State, UInt64?) in
+        let action = self.lock.withLock { () -> (token: UInt64?, gateEpoch: UInt64) in
             switch self.state {
-            case .protected:
-                return (.protected, nil)
-            case .promotionPending:
-                return (self.state, nil)
-            case .unprotected where mayPromote:
+            case let .admitted(current) where current == protection:
+                return (nil, self.promotionGateEpoch)
+            case let .promotionPending(_, current) where current == protection:
+                return (nil, self.promotionGateEpoch)
+            default:
                 self.generation &+= 1
                 let token = self.generation
                 self.promotionGateEpoch = self.transcriptGate.invalidationEpoch
-                self.state = .promotionPending(token)
-                return (self.state, token)
-            case .unprotected:
-                return (.unprotected, nil)
+                self.state = .promotionPending(token, protection)
+                return (token, self.promotionGateEpoch)
             }
         }
 
-        switch action.0 {
-        case .protected:
-            guard self.enqueueOrFail(sampleBox.sampleBuffer, startSeconds: startSeconds) else { return }
-            if self.transcriptGate.observeAndAdmit(sampleBox.sampleBuffer) {
-                self.liveAudioHandler?(.microphone, sampleBox.sampleBuffer)
+        guard let token = action.token else {
+            // The existing bounded writer queue orders live offers after the era commit and all
+            // earlier samples, including a rapid filtered-to-unfiltered transition.
+            _ = self.enqueueOrFail(sampleBox.sampleBuffer, startSeconds: startSeconds) { [self] in
+                self.offerLive(sampleBox, gateEpoch: action.gateEpoch)
             }
-        case .unprotected:
-            guard self.enqueueOrFail(sampleBox.sampleBuffer, startSeconds: startSeconds) else { return }
-            _ = self.transcriptGate.observeAndAdmit(sampleBox.sampleBuffer)
-        case .promotionPending where action.1 == nil:
-            guard self.enqueueOrFail(sampleBox.sampleBuffer, startSeconds: startSeconds) else { return }
-            _ = self.transcriptGate.observeAndAdmit(sampleBox.sampleBuffer)
-        case let .promotionPending(token):
-            self.beginPendingCommit()
-            self.writer.enqueue(
-                sampleBox.sampleBuffer,
-                producerEpoch: self.producerEpoch,
-                afterPersistingMetadata: { track in
-                    Self.applyEra(
-                        to: &track,
-                        protection: .softwareEchoCancelled,
-                        provenance: MeetingAECConstants.provenance,
-                        startSeconds: startSeconds
-                    )
-                },
-                // Promotion failure must preserve the older conservative in-memory track.
-                failClosed: false
-            ) { [self] result in
-                defer { self.endPendingCommit() }
-                switch result {
-                case .success:
-                    let openAttempt = self.lock.withLock { () -> (Bool, UInt64) in
-                        guard self.generation == token, self.state == .promotionPending(token) else {
-                            return (false, 0)
-                        }
-                        return (true, self.promotionGateEpoch)
+            return
+        }
+        self.beginPendingCommit()
+        self.writer.enqueue(
+            sampleBox.sampleBuffer,
+            producerEpoch: self.producerEpoch,
+            afterPersistingMetadata: { track in
+                Self.applyEra(
+                    to: &track,
+                    protection: protection,
+                    provenance: protection == .softwareEchoCancelled ? MeetingAECConstants.provenance : nil,
+                    startSeconds: startSeconds
+                )
+            },
+            // Promotion failure must preserve the older conservative in-memory track.
+            failClosed: false
+        ) { [self] result in
+            defer { self.endPendingCommit() }
+            switch result {
+            case .success:
+                // A route/lifecycle close racing this completion holds the gate closed; land a
+                // compensating conservative write after the optimistic era just persisted.
+                guard self.transcriptGate.updateIfNotInvalidated(
+                    protection,
+                    since: action.gateEpoch
+                ) else {
+                    let needsSafetyEra = self.lock.withLock { () -> Bool in
+                        guard self.generation == token else { return false }
+                        self.generation &+= 1
+                        self.state = .unprotected
+                        return true
                     }
-                    guard openAttempt.0 else { return }
-                    // A route/lifecycle close racing this completion holds the gate closed; land a
-                    // compensating conservative write after the optimistic era just persisted.
-                    guard self.transcriptGate.updateIfNotInvalidated(
-                        .softwareEchoCancelled,
-                        since: openAttempt.1
-                    ) else {
-                        self.lock.withLock {
-                            self.generation &+= 1
-                            self.state = .unprotected
-                        }
-                        self.persistSafetyEra(startSeconds: startSeconds)
-                        return
-                    }
-                    if self.transcriptGate.observeAndAdmit(sampleBox.sampleBuffer) {
-                        self.liveAudioHandler?(.microphone, sampleBox.sampleBuffer)
-                    }
-                    // Keep the state pending until the first admitted live offer has completed.
-                    // A later callback can therefore never overtake the promotion frame on a
-                    // different queue. An external invalidation wins by changing this state first.
-                    self.lock.withLock {
-                        guard self.generation == token, self.state == .promotionPending(token) else {
-                            return
-                        }
-                        self.state = .protected
-                    }
-                case let .failure(error):
-                    self.lock.withLock {
-                        if self.generation == token { self.state = .unprotected }
-                    }
-                    _ = self.transcriptGate.invalidate()
-                    self.reportTerminalFailure(Self.terminalFailure(for: error))
+                    if needsSafetyEra { self.persistSafetyEra(startSeconds: startSeconds) }
+                    return
                 }
+                self.offerLive(sampleBox, gateEpoch: action.gateEpoch)
+                if self.transcriptGate.invalidationEpoch == action.gateEpoch {
+                    self.protectionChanged(protection)
+                }
+                self.lock.withLock {
+                    if self.generation == token { self.state = .admitted(protection) }
+                }
+            case let .failure(error):
+                self.lock.withLock {
+                    if self.generation == token { self.state = .unprotected }
+                }
+                _ = self.transcriptGate.invalidate()
+                self.reportTerminalFailure(Self.terminalFailure(for: error))
             }
+        }
+    }
+
+    private func offerLive(_ sample: SampleBox, gateEpoch: UInt64) {
+        if self.transcriptGate.observeAndAdmit(sample.sampleBuffer, since: gateEpoch) {
+            self.liveAudioHandler?(.microphone, sample.sampleBuffer)
         }
     }
 
@@ -227,6 +234,17 @@ final nonisolated class MeetingAECOutputCommitter: @unchecked Sendable {
                 continuation.resume()
             }
         }
+        // Live offers share the bounded PCM queue, so also drain samples behind the era commit.
+        _ = await self.writer.snapshot()
+    }
+
+    /// Close live delivery without relabelling successfully filtered audio at Stop.
+    func finish() {
+        self.lock.withLock {
+            self.generation &+= 1
+            self.state = .unprotected
+        }
+        _ = self.transcriptGate.invalidate()
     }
 
     func failTerminal(_ failure: MeetingAECFailure) {
@@ -263,8 +281,12 @@ final nonisolated class MeetingAECOutputCommitter: @unchecked Sendable {
 
     /// The plain enqueue carries no era command, so an overflow must still leave the in-memory
     /// and persisted track unprotected before the terminal stop completes.
-    private func enqueueOrFail(_ sampleBuffer: CMSampleBuffer, startSeconds: Double?) -> Bool {
-        guard self.writer.enqueue(sampleBuffer, producerEpoch: self.producerEpoch) else {
+    private func enqueueOrFail(
+        _ sampleBuffer: CMSampleBuffer,
+        startSeconds: Double?,
+        onConsumed: (@Sendable () -> Void)? = nil
+    ) -> Bool {
+        guard self.writer.enqueue(sampleBuffer, producerEpoch: self.producerEpoch, onConsumed: onConsumed) else {
             self.lock.withLock {
                 self.generation &+= 1
                 self.state = .unprotected

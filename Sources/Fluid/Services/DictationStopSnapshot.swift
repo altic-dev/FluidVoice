@@ -2,6 +2,12 @@ import AppKit
 
 /// One immutable decision for a normal dictation, made before awaiting ASR finalization.
 struct DictationStopSnapshot {
+    /// Command/Edit can reuse the running capture without changing its original field or formatting context.
+    static func captureStartingContext(reusingCapture: Bool, capture: () -> Void) {
+        guard !reusingCapture else { return }
+        capture()
+    }
+
     let target: TypingService.RecordingTargetContext?
     private(set) var appInfo: (name: String, bundleId: String, windowTitle: String)
     let route: DictationProviderRoute
@@ -12,6 +18,8 @@ struct DictationStopSnapshot {
     /// True when the preceding text must be read from the field focused at
     /// stop rather than reused from recording start.
     let readsContextFromFocusedField: Bool
+    /// Read at recording start for a context-trained model; nil otherwise.
+    var typingContext: DictationTypingContext?
 
     /// Fills the fields that need WindowServer or Accessibility round-trips.
     /// Called after the microphone has stopped so they never delay it.

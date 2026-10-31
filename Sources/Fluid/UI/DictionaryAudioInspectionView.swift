@@ -223,6 +223,7 @@ struct DictionaryAudioInspectionView: View {
                     )
                     .padding(.top, self.theme.metrics.spacing.sm)
                 }
+                .disclosureGroupStyle(FluidDisclosureGroupStyle())
             } else {
                 Text(self.loadingReferences && self.enrollments[index].inspectionID != nil ? "Loading audio…" : self.loadErrors.contains(index)
                     ? "Saved audio couldn't be loaded. Its stored embedding is still compared."

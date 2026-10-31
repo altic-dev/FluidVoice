@@ -9,7 +9,14 @@ enum PrivateAIUpcomingModel: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .quad: "Fluid 1 Quad"
-        case .multilingual: "Fluid 1.1 Multilingual"
+        case .multilingual: "Fluid 1.1 Wave"
+        }
+    }
+
+    var note: String {
+        switch self {
+        case .quad: "Not available yet"
+        case .multilingual: "Multilingual. Faster, smarter, smaller Fluid 1"
         }
     }
 }
@@ -22,6 +29,8 @@ struct PrivateAIModelPresentation {
     // Illustrative design-preview values, not measured benchmark scores.
     var intelligence: Int?
     var speed: Int?
+    /// A small label above the name, such as "Research preview".
+    var badge: String?
 
     static func forModel(id: String) -> Self {
         switch id {
@@ -29,8 +38,17 @@ struct PrivateAIModelPresentation {
             Self(summary: "Smallest & fastest", useCase: "Everyday dictation with basic cleanup and formatting.", language: "English only", intelligence: 2, speed: 5)
         case "fluid-1-mini-96k-dflash":
             Self(summary: "More capable", useCase: "Better structure, formatting and corrections.", language: "English only", intelligence: 4, speed: 4)
+        case "fluid-1.1-splash":
+            Self(
+                summary: "Multilingual",
+                useCase: "Our best cleanup model yet",
+                language: "English, German, Spanish, French, Portuguese",
+                intelligence: 5,
+                speed: 4,
+                badge: "Research preview"
+            )
         case "fluid-1":
-            Self(summary: "The original Fluid model", useCase: "Cleanup and formatting across languages.", language: "Multilingual", intelligence: 4, speed: 2)
+            Self(summary: "The original Fluid model", useCase: "Will be deprecated soon. Cleanup and formatting across languages.", language: "Multilingual", intelligence: 4, speed: 2)
         default:
             Self(summary: "On-device cleanup", useCase: "Polish your words privately on your Mac.")
         }

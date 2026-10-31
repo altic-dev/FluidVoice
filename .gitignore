@@ -214,6 +214,8 @@ scratch/
 .local-dependencies/
 
 assets/
+!Sources/Fluid/AppIcon.icon/Assets/
+!Sources/Fluid/AppIcon.icon/Assets/*.svg
 .swiftpm/
 scripts/
 
@@ -232,3 +234,6 @@ builds/
 !README.md
 !CONTRIBUTING.md
 !.github/pull_request_template.md
+
+# Local Claude Code settings and worktrees
+.claude/

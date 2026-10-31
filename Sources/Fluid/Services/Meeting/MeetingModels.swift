@@ -56,6 +56,8 @@ nonisolated enum MeetingInterruptionKind: String, Codable, Sendable {
     case voiceProcessingOverload
     /// Final processing completed with typed gaps or quarantined evidence.
     case transcriptCoverageIncomplete
+    case echoFilteringUnavailable
+    case echoFilteringRestored
 }
 
 nonisolated enum MeetingFailureDomain: String, Codable, Sendable {
@@ -481,6 +483,9 @@ nonisolated enum MeetingMicrophoneEchoProtection: String, Codable, Sendable {
     /// Microphone PCM processed by the pinned WebRTC AEC3 bridge after clock attestation and
     /// warm-up. This is software provenance, not a claim that the physical route is closed.
     case softwareEchoCancelled
+    /// Valid captured microphone audio retained for transcription when echo filtering cannot run.
+    /// This explicitly reports possible playback leakage; it never claims echo was removed.
+    case unfiltered
     /// Pre-v9 audio that was historically transcribed without route evidence. It remains eligible
     /// for backward compatibility, but must never be rewritten as positively verified protection.
     case legacyUnclassified
@@ -488,6 +493,10 @@ nonisolated enum MeetingMicrophoneEchoProtection: String, Codable, Sendable {
 
     var admitsTranscript: Bool {
         self != .unprotected
+    }
+
+    var transcriptWarning: String? {
+        self == .unfiltered ? "Echo filtering is unavailable. Your microphone is still transcribed, but may include speaker audio." : nil
     }
 }
 
@@ -863,6 +872,35 @@ nonisolated enum MeetingAudioRetentionPolicy: String, Codable, CaseIterable, Sen
     }
 }
 
+/// A speaker editor draft. Nothing is persisted until names and merges are saved together.
+nonisolated struct MeetingSpeakerEdits: Equatable, Sendable {
+    var names: [SessionSpeakerID: String]
+    var merges: [SessionSpeakerID: SessionSpeakerID] = [:]
+
+    mutating func setMerge(source: SessionSpeakerID, into target: SessionSpeakerID?) {
+        self.merges[source] = target
+        guard let target else { return }
+        // Keep selections direct when the destination itself is subsequently merged.
+        for id in self.merges.keys where self.merges[id] == source {
+            self.merges[id] = target
+        }
+    }
+
+    func resolvedMerges() throws -> [SessionSpeakerID: SessionSpeakerID] {
+        var resolved: [SessionSpeakerID: SessionSpeakerID] = [:]
+        for source in self.merges.keys {
+            var visited: Set<SessionSpeakerID> = [source]
+            var target = source
+            while let next = self.merges[target] {
+                guard visited.insert(next).inserted else { throw MeetingDomainError.cannotMergeSpeakers }
+                target = next
+            }
+            resolved[source] = target
+        }
+        return resolved
+    }
+}
+
 nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
     static let currentSchemaVersion = 1
 
@@ -947,6 +985,19 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
         (self.endedAt ?? Date()).timeIntervalSince(self.startedAt)
     }
 
+    var microphoneEchoWarning: String? {
+        guard self.mode == .onlineCall else { return nil }
+        switch self.state {
+        case .preparing, .recording, .recordingDegraded, .stopping:
+            guard self.events.last(where: { $0.kind == .echoFilteringUnavailable || $0.kind == .echoFilteringRestored })?.kind == .echoFilteringUnavailable else { return nil }
+        default:
+            // A short raw tail at Stop is kept too, but is not a failed AEC attempt. The explicit
+            // status event distinguishes an actual filtering fallback from that final partial frame.
+            guard self.events.contains(where: { $0.kind == .echoFilteringUnavailable }) else { return nil }
+        }
+        return MeetingMicrophoneEchoProtection.unfiltered.transcriptWarning
+    }
+
     /// Speakers not merged away into another speaker — the set the UI should render.
     var activeSpeakers: [MeetingSessionSpeaker] {
         self.speakers.filter { $0.mergedIntoSpeakerID == nil }
@@ -980,6 +1031,47 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
         self.transcriptSegments[segmentIndex].overlap = .none
         self.transcriptSegments[segmentIndex].revision += 1
         self.updatedAt = Date()
+    }
+
+    /// Merge only the immediate matching neighbors of a manually tagged Unknown. Keep the
+    /// selected ID so correction/undo targets remain stable, and never combine audio tracks.
+    mutating func mergeTaggedSegmentWithNeighbors(id: MeetingTranscriptSegmentID) -> Set<MeetingTranscriptSegmentID> {
+        let ordered = self.transcriptSegments.enumerated().sorted {
+            ($0.element.start, $0.element.end, $0.offset) < ($1.element.start, $1.element.end, $1.offset)
+        }.map(\.element)
+        guard let position = ordered.firstIndex(where: { $0.id == id }),
+              let speakerID = ordered[position].speakerID,
+              !ordered[position].isEcho
+        else { return [id] }
+        let target = ordered[position]
+        func matches(_ candidate: MeetingTranscriptSegment) -> Bool {
+            candidate.speakerID == speakerID && candidate.sourceTrackID == target.sourceTrackID
+                && !candidate.isEcho && candidate.overlap == .none
+                && (candidate.attributionState == nil || candidate.attributionState == .assigned)
+                && candidate.status == target.status && candidate.completeness == target.completeness
+        }
+        var pieces = [target]
+        if position > 0, matches(ordered[position - 1]) { pieces.insert(ordered[position - 1], at: 0) }
+        if position + 1 < ordered.count, matches(ordered[position + 1]) { pieces.append(ordered[position + 1]) }
+        let ids = Set(pieces.map(\.id))
+        guard pieces.count > 1, let index = self.transcriptSegments.firstIndex(where: { $0.id == id }) else { return ids }
+        func joined(_ values: [String]) -> String {
+            values.reduce("") { left, right in
+                guard !left.isEmpty else { return right }
+                guard let first = right.unicodeScalars.first else { return left }
+                return left + (CharacterSet.punctuationCharacters.contains(first) ? "" : " ") + right
+            }
+        }
+        var merged = target
+        merged.start = pieces.map(\.start).min() ?? target.start
+        merged.end = pieces.map(\.end).max() ?? target.end
+        merged.text = joined(pieces.map(\.text))
+        if pieces.contains(where: { $0.originalText != nil }) {
+            merged.originalText = joined(pieces.map { $0.originalText ?? $0.text })
+        }
+        self.transcriptSegments[index] = merged
+        self.transcriptSegments.removeAll { $0.id != id && ids.contains($0.id) }
+        return ids
     }
 
     /// Gives one unresolved segment its own manual speaker identity. The identity is intentionally
@@ -1302,7 +1394,11 @@ final nonisolated class MeetingCaptureMethodChangeAck: @unchecked Sendable {
 }
 
 nonisolated enum MeetingCaptureEvent: Sendable {
+    /// Explicit local investigation only; never persisted as a session interruption.
+    case audioComparisonProbeStarted(MeetingAudioComparisonProbe)
     case trackHealth(trackID: MeetingAudioTrackID, health: MeetingTrackHealth)
+    /// Presentation-only status. The writer owns persisted capture eras; this cannot restart capture.
+    case microphoneEchoProtectionChanged(MeetingMicrophoneEchoProtection)
     case chunkFinalized(trackID: MeetingAudioTrackID, chunk: MeetingAudioChunk, format: MeetingAudioFormat)
     case interrupted(kind: MeetingInterruptionKind, trackID: MeetingAudioTrackID?, detail: String?)
     /// `ack` is `nil` for downgrades — the mic is already dead, no race to gate on.

@@ -1,6 +1,13 @@
 #if DICTIONARY_EXPERIMENT_STANDALONE
 import Foundation
 
+// The real catalog is used for model identity; model files are absent from this fixture.
+enum HuggingFaceModelDownloader {
+    static func artifactIsComplete(at _: URL, isDirectory _: Bool) -> Bool {
+        false
+    }
+}
+
 // Minimal surrounding types; the matcher, resolver and persistence implementations under test are production sources.
 struct ASRWordTiming: Sendable { let text: String; let start: Double; let end: Double }
 struct PronunciationEnrollmentCapture { let inspectionID: UUID?; let originalAudioID: UUID?; let values: [Float] }

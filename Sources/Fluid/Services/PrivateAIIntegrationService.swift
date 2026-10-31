@@ -29,6 +29,11 @@ actor PrivateAIIntegrationService {
         let bundleID: String
         let windowTitle: String
         let appVersion: String?
+        /// Raw text for models trained to read it; others ignore both.
+        var textBeforeCursor: String? = nil
+        // Absence means no screen context was read.
+        // swiftlint:disable:next discouraged_optional_collection
+        var screenText: [String]? = nil
     }
 
     struct EnhancementResult: Sendable, Equatable {
@@ -126,7 +131,10 @@ actor PrivateAIIntegrationService {
     private nonisolated(unsafe) static var installedModelCache: [String: (installed: Bool, checkedAt: TimeInterval)] = [:]
     private nonisolated static let installedModelCacheLifetime: TimeInterval = 2
 
-    nonisolated static func isModelInstalled(_ model: PrivateAIRegisteredModel) -> Bool {
+    nonisolated static func isModelInstalled(_ model: PrivateAIRegisteredModel, useCache: Bool = true) -> Bool {
+        // Event-driven presentation refreshes must see removals even when an
+        // older, concurrent check populated the short-lived runtime cache.
+        if !useCache { return self.provider.isModelInstalled(model) }
         let now = ProcessInfo.processInfo.systemUptime
         self.installedModelCacheLock.lock()
         let cached = self.installedModelCache[model.id]
@@ -142,10 +150,13 @@ actor PrivateAIIntegrationService {
         return installed
     }
 
+    nonisolated static let installedModelsDidChangeNotification = Notification.Name("PrivateAIInstalledModelsDidChange")
+
     nonisolated static func invalidateInstalledModelCache() {
         self.installedModelCacheLock.lock()
         self.installedModelCache.removeAll()
         self.installedModelCacheLock.unlock()
+        NotificationCenter.default.post(name: self.installedModelsDidChangeNotification, object: nil)
     }
 
     nonisolated static func canRemoveInstalledModel(_ model: PrivateAIRegisteredModel) -> Bool {
@@ -252,12 +263,14 @@ actor PrivateAIIntegrationService {
     @MainActor private static var updateAdmissions: [UUID: UUID] = [:]
 
     nonisolated static func commitModelUpdate(_ token: PrivateAIModelUpdateToken) async {
+        defer { self.invalidateInstalledModelCache() }
         guard let admission = await MainActor.run(body: { Self.updateAdmissions.removeValue(forKey: token.id) }) else { return }
         await self.provider.commitModelUpdate(token)
         await MeetingModelResidencyCoordinator.shared.endOperation(admission)
     }
 
     nonisolated static func rollbackModelUpdate(_ token: PrivateAIModelUpdateToken) async {
+        defer { self.invalidateInstalledModelCache() }
         guard let admission = await MainActor.run(body: { Self.updateAdmissions.removeValue(forKey: token.id) }) else { return }
         await self.provider.rollbackModelUpdate(token)
         await MeetingModelResidencyCoordinator.shared.endOperation(admission)
@@ -269,6 +282,10 @@ actor PrivateAIIntegrationService {
 
     nonisolated static func shouldHandleDictation(model: String) -> Bool {
         self.provider.shouldHandleDictation(model: model)
+    }
+
+    nonisolated static func readsDictationContext(model: String) -> Bool {
+        self.provider.readsDictationContext(model: model)
     }
 
     func status(for runtime: RuntimeConfiguration) async -> PrivateAIStatus {

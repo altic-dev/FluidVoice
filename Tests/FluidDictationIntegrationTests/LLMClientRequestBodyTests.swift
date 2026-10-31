@@ -709,3 +709,44 @@ private class Issue445StreamURLProtocol: URLProtocol {
 
     override func stopLoading() {}
 }
+
+extension LLMClientRequestBodyTests {
+    func testModeSwitchesPreserveStartingFieldAndFormattingUntilANewCapture() {
+        let first = TypingService.RecordingTargetContext(id: UUID(), pid: 1, bundleIdentifier: "first", window: nil, element: nil)
+        let second = TypingService.RecordingTargetContext(id: UUID(), pid: 2, bundleIdentifier: "second", window: nil, element: nil)
+        var original: TypingService.RecordingTargetContext?
+        var preceding = ""
+        var captures = 0
+        DictationStopSnapshot.captureStartingContext(reusingCapture: false) {
+            original = first
+            preceding = "First field "
+            captures += 1
+        }
+        // Command, Edit and returning to Dictation share the same original capture.
+        for _ in 0..<3 {
+            DictationStopSnapshot.captureStartingContext(reusingCapture: true) {
+                original = second
+                preceding = "Second field "
+                captures += 1
+            }
+        }
+        XCTAssertEqual(captures, 1)
+        XCTAssertEqual(preceding, "First field ")
+        XCTAssertEqual(
+            DictationStopSnapshot.selectTarget(current: second, original: original, returnToStartingField: true, ownOverlayFocused: false)?.id,
+            first.id
+        )
+        XCTAssertEqual(
+            DictationStopSnapshot.selectTarget(current: second, original: original, returnToStartingField: false, ownOverlayFocused: false)?.id,
+            second.id
+        )
+        DictationStopSnapshot.captureStartingContext(reusingCapture: false) {
+            original = second
+            preceding = "Second field "
+            captures += 1
+        }
+        XCTAssertEqual(captures, 2)
+        XCTAssertEqual(original?.id, second.id)
+        XCTAssertEqual(preceding, "Second field ")
+    }
+}

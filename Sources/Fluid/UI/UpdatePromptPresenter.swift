@@ -125,9 +125,7 @@ final class UpdatePromptPresenter {
         content.material = .popover
         content.blendingMode = .behindWindow
         content.state = .active
-        content.wantsLayer = true
-        content.layer?.cornerRadius = 16
-        content.layer?.masksToBounds = true
+        content.maskImage = .roundedRectMask(cornerRadius: 16)
         content.autoresizingMask = [.width, .height]
 
         let icon = NSImageView(frame: NSRect(x: margin, y: panelHeight - margin - 52, width: 52, height: 52))
@@ -238,5 +236,22 @@ private final class FloatingPromptButton: NSButton {
     @objc private func handleClick() {
         let onClick = self.onClick
         onClick()
+    }
+}
+
+extension NSImage {
+    static func roundedRectMask(cornerRadius: CGFloat) -> NSImage {
+        let stretchableCenter: CGFloat = 1
+        let maskSize = NSSize(
+            width: cornerRadius + stretchableCenter + cornerRadius,
+            height: cornerRadius + stretchableCenter + cornerRadius
+        )
+        let image = NSImage(size: maskSize, flipped: false) { rect in
+            NSColor.black.setFill()
+            NSBezierPath(roundedRect: rect, xRadius: cornerRadius, yRadius: cornerRadius).fill()
+            return true
+        }
+        image.capInsets = NSEdgeInsets(top: cornerRadius, left: cornerRadius, bottom: cornerRadius, right: cornerRadius)
+        return image
     }
 }

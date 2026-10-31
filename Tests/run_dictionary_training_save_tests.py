@@ -21,6 +21,7 @@ source = (repo / 'Sources/Fluid/UI/CustomDictionaryView.swift').read_text()
 method = source[source.index('    private func addTrainedReplacement() async {'):source.index('    private func removeTrainingVariant(')].replace('private func addTrainedReplacement', 'func addTrainedReplacement')
 progress = source[source.index('struct DictionaryTrainingProgress {'):source.index('enum CustomDictionaryTrainingMerge {')]
 readiness = source[source.index('    private var trainingProgress:'):source.index('    private var trainingAlreadyCorrectWithoutReplacement:')]
+already_correct = source[source.index('    private var trainingAlreadyCorrectWithoutReplacement:'):source.index('    private var trainingReadinessProgress:')]
 can_save = source[source.index('    private var canAddTrainedReplacement:'):source.index('    private var shouldPulseTrainedReplacementButton:')]
 merge = source[source.index('enum CustomDictionaryTrainingMerge {'):source.index('private struct ReplacementConfirmation:')]
 settings = (repo / 'Sources/Fluid/Persistence/SettingsStore.swift').read_text()
@@ -42,13 +43,11 @@ struct VoiceTrainingAliasFilter {
     struct Result {
         let accepted: [String]
         let rejected: [String] = []
-        let lookupAvailable: Bool
-        init(accepted: [String], lookupAvailable: Bool = true) {
-            self.accepted = accepted; self.lookupAvailable = lookupAvailable
-        }
+        var rejectionMessage: String { "Replacement found these words: “the”. These single words are too broad to replace automatically. Add a manual replacement if intended." }
+        init(accepted: [String]) { self.accepted = accepted }
     }
     static var response: Result?
-    static func filter(_ values: [String]) async -> Result { response ?? Result(accepted: values) }
+    static func filter(_ values: [String], manuallyConfirmed: Set<String> = []) async -> Result { response ?? Result(accepted: values) }
 }
 final class DebugLogger {
     static let shared = DebugLogger()
@@ -84,6 +83,7 @@ PROGRESS
 MERGE
 @MainActor final class SaveHarness {
     READINESS
+    ALREADY_CORRECT
     CAN_SAVE
     var trainingSampleCount = 3
     var isTrainingRecording = false
@@ -93,12 +93,14 @@ MERGE
     var trainingPronunciationEnrollments = Array(repeating: PronunciationEnrollmentCapture(), count: 3)
     var activePronunciationMatching = true
     var trainingVariants = ["fluid boys"]
+    var manualTrainingSpellings = Set<String>()
+    var lastTrainingOutput = "fluid boys"
     var pronunciationEnabled = true
     var trainingHasError = false
     var trainingStatusMessage = ""
     var entries: [SettingsStore.CustomDictionaryEntry] = []
     var wizardSavedWord = ""
-    enum Step { case recording, saved }
+    enum Step { case recording, review, saved }
     var wizardStep = Step.recording
     var writes = 0
     func saveEntries() { writes += 1; SettingsStore.shared.customDictionaryEntries = entries }
@@ -242,19 +244,88 @@ func check(_ condition: @autoclosure () -> Bool, _ message: String) {
             passes += 1
         }
         // Filtering cannot create a text rule when no safe aliases and no ready voice exist.
-        for available in [true, false] {
+        do {
             let original = baseline()
             let view = reset(original)
             view.trainingPronunciationEnrollments = []
-            VoiceTrainingAliasFilter.response = .init(accepted: [], lookupAvailable: available)
+            VoiceTrainingAliasFilter.response = .init(accepted: [])
             await PronunciationDictionaryStore.shared.configure(gate: nil)
             await view.addTrainedReplacement()
             let calls = await PronunciationDictionaryStore.shared.calls
             check(view.writes == 0 && calls == 0, "Rejected aliases must not write text rules or profiles")
             check(SettingsStore.shared.customDictionaryEntries == original, "Rejected aliases preserve the dictionary")
-            check(view.trainingHasError && view.wizardStep == .recording, "Rejected or unavailable aliases leave a visible retry")
-            check(view.trainingStatusMessage.contains(available ? "everyday words" : "Couldn't check"), "Alias failure explains its actual cause")
+            check(view.trainingHasError && view.wizardStep == .recording, "Rejected aliases leave a visible manual fallback")
+            check(view.trainingStatusMessage.contains("manual replacement"), "Alias failure explains its actual cause")
             check(!view.trainingVariants.isEmpty && !view.isTrainingProcessing && view.trainingSaveID == nil, "Alias failure retains recordings and releases busy state")
+            passes += 1
+        }
+        // Repeating an existing text correction keeps captures without claiming a new save.
+        do {
+            let original = baseline()
+            let view = reset(original)
+            view.activePronunciationMatching = false
+            view.trainingPronunciationEnrollments = []
+            view.trainingVariants = ["fluid voice"]
+            view.wizardStep = .review
+            await PronunciationDictionaryStore.shared.configure(gate: nil)
+            await view.addTrainedReplacement()
+            let calls = await PronunciationDictionaryStore.shared.calls
+            check(view.writes == 0 && calls == 0, "Unchanged spelling must not write text rules or voice profiles")
+            check(SettingsStore.shared.customDictionaryEntries == original, "Unchanged save must preserve all entries and IDs")
+            check(view.wizardStep == .review && view.trainingHasError, "Unchanged spelling must stay in review with feedback")
+            check(view.trainingStatusMessage.contains("Nothing new was saved"), "Unchanged spelling must explain the result")
+            check(view.trainingVariants == ["fluid voice"], "Unchanged save must retain recordings for retry")
+            check(!view.isTrainingProcessing && view.trainingSaveID == nil, "Unchanged save must release its busy state")
+            passes += 1
+        }
+        // Already-correct captures must explain that no new correction was saved.
+        do {
+            let original = baseline()
+            let view = reset(original)
+            view.activePronunciationMatching = false
+            view.trainingPronunciationEnrollments = []
+            view.normalizedTrainingReplacement = "Palermo"
+            view.trainingVariants = []
+            view.lastTrainingOutput = "palermo"
+            view.wizardStep = .review
+            await PronunciationDictionaryStore.shared.configure(gate: nil)
+            await view.addTrainedReplacement()
+            let calls = await PronunciationDictionaryStore.shared.calls
+            check(view.writes == 0 && calls == 0, "Already-recognized words must not save text rules or voice profiles")
+            check(SettingsStore.shared.customDictionaryEntries == original, "Already-recognized words must preserve the dictionary")
+            check(view.wizardStep == .review && view.trainingHasError, "Already-recognized words must stay in review with feedback")
+            check(view.trainingStatusMessage.contains("Nothing new was saved"), "Already-recognized words must explain the result")
+            check(view.trainingSampleCount == 3 && view.lastTrainingOutput == "palermo", "Already-correct feedback must retain captures")
+            check(!view.isTrainingProcessing && view.trainingSaveID == nil, "Already-correct feedback must leave the editor idle")
+            passes += 1
+        }
+        // Existing correct captures must not make Save available during a new recording or save.
+        for recording in [true, false] {
+            let original = baseline()
+            let view = reset(original)
+            view.activePronunciationMatching = false
+            view.trainingPronunciationEnrollments = []
+            view.trainingVariants = []
+            view.lastTrainingOutput = "FluidVoice"
+            view.isTrainingRecording = recording
+            view.isTrainingProcessing = !recording
+            await view.addTrainedReplacement()
+            check(view.writes == 0 && !view.trainingHasError, "Busy captures must not save or replace their status with no-change feedback")
+            check(SettingsStore.shared.customDictionaryEntries == original, "Busy captures must preserve saved entries")
+            check(view.isTrainingRecording == recording && view.isTrainingProcessing == !recording, "Busy Save must leave the current recording or save alone")
+            passes += 1
+        }
+        // New voice samples are a real save even when the spelling rules are unchanged.
+        do {
+            let original = baseline()
+            let view = reset(original)
+            view.trainingVariants = ["fluid voice"]
+            await PronunciationDictionaryStore.shared.configure(gate: nil)
+            await view.addTrainedReplacement()
+            let profiles = await PronunciationDictionaryStore.shared.writes
+            check(profiles == [original[0].id], "Pronunciation-only retraining must still save its profile")
+            check(SettingsStore.shared.customDictionaryEntries == original, "Voice-only retraining must preserve text rules")
+            check(view.wizardStep == .saved && !view.trainingHasError, "New voice samples must still complete successfully")
             passes += 1
         }
         // Insufficient spellings use the production save gate, even with enough voice examples.
@@ -321,7 +392,7 @@ func check(_ condition: @autoclosure () -> Bool, _ message: String) {
         print("PASS \(passes) dictionary save scenarios using the production save method, readiness and merge code")
     }
 }
-'''.replace('ENTRY', entry).replace('PROGRESS', progress).replace('MERGE', merge).replace('READINESS', readiness).replace('CAN_SAVE', can_save).replace('METHOD', method)
+'''.replace('ENTRY', entry).replace('PROGRESS', progress).replace('MERGE', merge).replace('READINESS', readiness).replace('ALREADY_CORRECT', already_correct).replace('CAN_SAVE', can_save).replace('METHOD', method)
 swift = swift.replace('check(await PronunciationDictionaryStore.shared.writes.isEmpty,', 'let textOnlyWrites = await PronunciationDictionaryStore.shared.writes\n            check(textOnlyWrites.isEmpty,')
 isolation_swift = r'''
 import Foundation

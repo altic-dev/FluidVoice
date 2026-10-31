@@ -7,7 +7,9 @@ import SwiftUI
 /// main-window heuristics (level == .normal, styleMask.contains(.titled), canBecomeKey) never treat
 /// it as the app's main window — see MenuBarManager.isFluidMainWindow.
 final class MeetingFloatingCaptionsPanel: NSPanel {
-    override var canBecomeKey: Bool { false }
+    override var canBecomeKey: Bool {
+        false
+    }
 }
 
 /// Swallows first-mouse so clicks and drags work while FluidVoice is inactive — this panel's
@@ -15,7 +17,9 @@ final class MeetingFloatingCaptionsPanel: NSPanel {
 final class MeetingFloatingHostingView: NSHostingView<AnyView> {
     var overlayHitPadding: MeetingOverlayPadding?
 
-    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        true
+    }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
         if let padding = self.overlayHitPadding {
@@ -99,7 +103,9 @@ final class MeetingFloatingCaptionsController: ObservableObject {
 
     /// Opens the captions window, growing out of `sourceFrame` (the pill) when motion is allowed.
     func show(from sourceFrame: NSRect?) {
+        guard SettingsStore.shared.fluidMeetEnabled else { return }
         let coordinator = AppServices.shared.meetingSessionCoordinator
+        guard MeetingOverlayVisibility.isVisible(for: coordinator.state) else { return }
         let panel = self.panelOrCreate(coordinator: coordinator)
         self.subscribeIfNeeded(coordinator: coordinator)
 
@@ -120,6 +126,17 @@ final class MeetingFloatingCaptionsController: ObservableObject {
 
     func hide() {
         self.panel?.orderOut(nil)
+    }
+
+    func deactivate() {
+        self.hide()
+        self.stateSubscription?.cancel()
+        self.stateSubscription = nil
+        if let observer = self.screenParametersObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        self.screenParametersObserver = nil
+        self.panel = nil
     }
 
     private func panelOrCreate(coordinator: MeetingSessionCoordinator) -> MeetingFloatingCaptionsPanel {
@@ -252,16 +269,24 @@ struct MeetingFloatingCaptionsContent: View {
 
     private var header: some View {
         HStack(spacing: 8) {
-            Image(nsImage: Self.fluidVoiceIcon)
-                .resizable()
-                .aspectRatio(contentMode: .fit)
-                .frame(width: 18, height: 18)
-                .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
-                .accessibilityHidden(true)
-            Text("FluidMeet")
-                .font(self.theme.typography.captionStrong)
-                .foregroundStyle(self.theme.palette.primaryText)
-            Spacer(minLength: 8)
+            HStack(spacing: 8) {
+                Image(nsImage: Self.fluidVoiceIcon)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(width: 18, height: 18)
+                    .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+                    .accessibilityHidden(true)
+                Text("FluidMeet")
+                    .font(self.theme.typography.captionStrong)
+                    .foregroundStyle(self.theme.palette.primaryText)
+                Spacer(minLength: 8)
+            }
+            .frame(maxWidth: .infinity, minHeight: 24, alignment: .leading)
+            .contentShape(Rectangle())
+            // Keep window dragging on the flexible header area, separate from its controls.
+            .gesture(WindowDragGesture())
+            .allowsWindowActivationEvents()
+
             Button {
                 self.stopRecording()
             } label: {

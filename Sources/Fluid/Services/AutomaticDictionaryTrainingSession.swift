@@ -244,9 +244,7 @@ final class AutomaticDictionaryTrainingSession: ObservableObject {
                   pronunciationGeneration == DictionaryMatcherExperiment.generation, !self.isCancelled else { return }
             guard !filtered.accepted.isEmpty else {
                 self.hasError = true
-                self.statusMessage = filtered.lookupAvailable
-                    ? "These recordings contain everyday words. Try again, or add the correction manually."
-                    : "Couldn't check these words. Try saving again, or add the correction manually."
+                self.statusMessage = filtered.rejectionMessage
                 return
             }
             self.persist(triggers: filtered.accepted)
@@ -492,7 +490,8 @@ final class AutomaticDictionaryTrainingSession: ObservableObject {
             )
         }
         guard mergedEntries != currentEntries else {
-            self.completeSave(title: "Already in Dictionary")
+            self.hasError = true
+            self.statusMessage = "These spellings are already covered. No new spelling corrections were saved."
             return
         }
 

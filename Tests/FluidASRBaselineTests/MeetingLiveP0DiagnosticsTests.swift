@@ -21,6 +21,7 @@ final class MeetingLiveP0DiagnosticsTests: XCTestCase {
         func prepareModels() async throws { XCTFail("P0 deterministic tests must not load models") }
         func appendAudio(_ buffer: AVAudioPCMBuffer) async throws {}
         func processBufferedAudio() async throws { self.processed += 1; try self.process() }
+        func finish() async throws -> String { "" }
         func reset() async { self.resets += 1 }
         func setEouCallback(_ callback: @escaping @Sendable (String) -> Void) async {}
         func setPartialTranscriptCallback(_ callback: @escaping @Sendable (String) -> Void) async {}
@@ -32,8 +33,8 @@ final class MeetingLiveP0DiagnosticsTests: XCTestCase {
             sampleRate: 16_000,
             channels: 1,
             interleaved: false
-        // Fixed test fixture: missing required audio storage or evidence is a setup failure.
-        // swiftlint:disable:next force_unwrapping
+            // Fixed test fixture: missing required audio storage or evidence is a setup failure.
+            // swiftlint:disable:next force_unwrapping
         )!
         // Fixed test fixture: missing required audio storage or evidence is a setup failure.
         // swiftlint:disable:next force_unwrapping
@@ -71,7 +72,7 @@ final class MeetingLiveP0DiagnosticsTests: XCTestCase {
         XCTAssertEqual(resets, 0)
     }
 
-    func testForcedBoundaryThen38SecondsWithoutPartialDoesNotRecover() async {
+    func testLongPhraseDoesNotResetWhileTextGapIsBelowTwoMinutes() async {
         let clock = Clock()
         let recognizer = Recognizer()
         let engine = MeetingLiveTrackEngine(
@@ -82,24 +83,23 @@ final class MeetingLiveP0DiagnosticsTests: XCTestCase {
         )
         await engine.diagnosticConsume(self.sample(at: 0))
         await engine.diagnosticPartial("synthetic fixture")
-        // Advance audio time while keeping wall-clock partial stall below its threshold, so
-        // the hard duration boundary (not a quiet timeout) initiates the reset.
+        // Advancing audio time alone must not reset an active phrase.
         clock.set(1)
         await engine.diagnosticConsume(self.sample(at: 21))
         var snapshot = await engine.diagnosticSnapshotValue()
-        XCTAssertEqual(snapshot.resetInvocations, 1)
+        XCTAssertEqual(snapshot.resetInvocations, 0)
         for index in 1...380 {
             clock.set(1 + Double(index) / 10)
             await engine.diagnosticConsume(self.sample(at: 21 + Double(index) / 10))
         }
         snapshot = await engine.diagnosticSnapshotValue()
         XCTAssertEqual(snapshot.processCompletions, 382)
-        XCTAssertEqual(snapshot.resetInvocations, 1, "Continued decode completion does not restart the watchdog")
+        XCTAssertEqual(snapshot.resetInvocations, 0, "The text gap is still below the recovery timeout")
         XCTAssertNil(snapshot.firstPartialAfterResetSeconds)
         await engine.diagnosticPartial("synthetic resumed fixture")
         snapshot = await engine.diagnosticSnapshotValue()
-        XCTAssertEqual(snapshot.firstPartialAfterResetSeconds ?? -1, 38, accuracy: 0.0001)
-        XCTAssertEqual(snapshot.wrapperGeneration, 1)
+        XCTAssertNil(snapshot.firstPartialAfterResetSeconds)
+        XCTAssertEqual(snapshot.wrapperGeneration, 0)
     }
 
     func testDiagnosticsCanBeExplicitlyDisabled() async {

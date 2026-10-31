@@ -8,6 +8,9 @@ import Foundation
 /// Every ambiguity resolves to no prompt: a false negative here is free, a false positive is not.
 @MainActor
 final class MeetingAutoDetector {
+    // Explicitly nonisolated: on macOS 15.4+ the synthesized main-actor deinit can abort until the OS runtime has the fix (swiftlang/swift#88036).
+    nonisolated deinit {}
+
     // MARK: - Tunables (Phase A plan v2)
 
     static let coincidenceWindowSeconds: TimeInterval = 30
@@ -18,6 +21,8 @@ final class MeetingAutoDetector {
     /// How long the meeting app must have let go of its audio, or been gone, before we ask whether
     /// the meeting ended. Short blips (a device switch, a crash and relaunch) stay under it.
     static let endSignalGraceSeconds: TimeInterval = 20
+    /// A positive post-call page does not need the reconnect grace used for ambiguous audio loss.
+    static let browserPostCallGraceSeconds: TimeInterval = 2
     /// People still talking means the meeting is not over for them, whatever the app did. The
     /// question waits until nobody has said anything for this long.
     static let speechQuietSeconds: TimeInterval = 45
@@ -109,6 +114,7 @@ final class MeetingAutoDetector {
     /// The meeting app behind our own live recording. Kept apart from the episode, which is
     /// retired by rules written for the next start prompt and can go while we still record.
     private struct WatchedRecording {
+        var sessionID: MeetingSessionID? = nil
         var pid: Int32
         var bundleIdentifier: String
         var tier: MeetingDetectionTier
@@ -119,6 +125,8 @@ final class MeetingAutoDetector {
         /// Browser meetings only: when the browser was first seen without the microphone.
         var browserMicReleasedAt: Date?
         var browserMicUnknown = false
+        var browserCallEvidenceKey: String?
+        var browserCallEndedAt: Date?
         var asked = false
         /// The user waved the question away. It stays away for the rest of this recording.
         var silenced = false
@@ -158,6 +166,7 @@ final class MeetingAutoDetector {
     private var titleEnrichmentInFlight: Set<Int32> = []
     private var lastHealth: Health?
     private var audioQueryUnknown = false
+    private var lastEndWatchStatus: String?
 
     init(
         workspaceEvents: any WorkspaceEventsProviding,
@@ -222,21 +231,22 @@ final class MeetingAutoDetector {
         self.lastLoggedRejectionByPID.removeAll()
     }
 
-    private func pollTick(runGeneration: UInt64) async {
+    func pollTick(runGeneration: UInt64? = nil) async {
+        let runGeneration = runGeneration ?? self.runGeneration
         guard self.isCurrentRun(runGeneration) else { return }
         let now = self.clock.now()
-        if self.isNativeDetectionEnabled() {
+        if self.shouldPollAudio {
             await self.pollAudioProcessActivity(at: now, expectedRunGeneration: runGeneration)
             guard self.isCurrentRun(runGeneration) else { return }
         }
         if self.shouldCollectEvidence(at: now) {
-            if self.isNativeDetectionEnabled() {
-                let nativePIDs = Set(self.records.filter { $0.value.tier == .nativeTier1 }.keys)
+            if self.isNativeDetectionEnabled() || self.watchedRecording?.tier == .nativeTier1 {
+                let nativePIDs = Set(self.records.filter { $0.value.tier == .nativeTier1 && self.shouldObserve($0.value) }.keys)
                 if !nativePIDs.isEmpty {
                     self.handleWindowSnapshot(self.windowSnapshotProvider.snapshot(interestPIDs: nativePIDs), at: now)
                 }
             }
-            if self.isBrowserDetectionEnabled() {
+            if self.isBrowserDetectionEnabled() || self.watchedRecording?.tier == .browserTier2 {
                 await self.pollBrowserTabsIfDue(at: now, runGeneration: runGeneration)
                 guard self.isCurrentRun(runGeneration) else { return }
             }
@@ -249,11 +259,17 @@ final class MeetingAutoDetector {
         !Task.isCancelled && self.runGeneration == generation && self.pollTask != nil
     }
 
+    private var shouldPollAudio: Bool { self.isNativeDetectionEnabled() || self.watchedRecording != nil }
+
+    private func shouldObserve(_ record: CandidateRecord) -> Bool {
+        if record.tier == .nativeTier1 ? self.isNativeDetectionEnabled() : self.isBrowserDetectionEnabled() { return true }
+        guard let watched = self.watchedRecording else { return false }
+        return watched.pid == record.pid && watched.bundleIdentifier == record.bundleIdentifier && watched.incarnation == record.incarnation
+    }
+
     private func shouldCollectEvidence(at now: Date) -> Bool {
+        if self.watchedRecording != nil { return true }
         if !self.episodesByKey.isEmpty { return true }
-        // A browser we were recording is gone. Keep reading tabs so a relaunched one that is back
-        // on the meeting can be recognised.
-        if let watched = self.watchedRecording, watched.tier == .browserTier2, !self.isStillRunning(watched) { return true }
         return self.records.values.contains { record in
             record.hasLiveWindow || record.windowLostAt != nil
                 || record.audioEvidenceAt.map { now.timeIntervalSince($0) <= Self.confirmDeadlineSeconds } == true
@@ -262,11 +278,12 @@ final class MeetingAutoDetector {
 
     private func pollBrowserTabsIfDue(at now: Date, runGeneration: UInt64) async {
         for (pid, record) in self.records where record.tier == .browserTier2 {
-            guard self.isCurrentRun(runGeneration), self.isBrowserDetectionEnabled() else { return }
+            guard self.isCurrentRun(runGeneration) else { return }
+            guard self.shouldObserve(record) else { continue }
             let lastPoll = self.lastBrowserPollAt[pid]
             guard lastPoll.map { now.timeIntervalSince($0) >= 2 } ?? true else { continue }
             let url = await self.browserTabReader.frontmostTabURL(bundleIdentifier: record.bundleIdentifier, processID: pid)
-            guard self.isCurrentRun(runGeneration), self.isBrowserDetectionEnabled(),
+            guard self.isCurrentRun(runGeneration), self.shouldObserve(record),
                   self.records[pid]?.incarnation == record.incarnation
             else { continue }
             self.lastBrowserPollAt[pid] = now
@@ -278,7 +295,8 @@ final class MeetingAutoDetector {
 
     func handleWorkspaceEvent(_ event: WorkspaceEvent, at now: Date) {
         guard let tier = MeetingAppRegistry.tier(forBundleIdentifier: event.bundleIdentifier) else { return }
-        guard tier == .nativeTier1 ? self.isNativeDetectionEnabled() : self.isBrowserDetectionEnabled() else { return }
+        let watchesProcess = self.watchedRecording.map { $0.pid == event.processID && $0.bundleIdentifier == event.bundleIdentifier } == true
+        guard watchesProcess || (tier == .nativeTier1 ? self.isNativeDetectionEnabled() : self.isBrowserDetectionEnabled()) else { return }
 
         switch event.kind {
         case .launched:
@@ -357,12 +375,12 @@ final class MeetingAutoDetector {
 
     private func pollAudioProcessActivity(at now: Date, expectedRunGeneration: UInt64?) async {
         guard !Task.isCancelled,
-              expectedRunGeneration.map({ self.runGeneration == $0 && self.pollTask != nil && self.isNativeDetectionEnabled() }) ?? true
+              expectedRunGeneration.map({ self.isCurrentRun($0) && self.shouldPollAudio }) ?? true
         else { return }
-        let candidates = self.records.filter { $0.value.tier == .nativeTier1 }
+        let candidates = self.records.filter { $0.value.tier == .nativeTier1 && self.shouldObserve($0.value) }
         let snapshot = await self.audioProcessActivity.snapshot()
         guard !Task.isCancelled,
-              expectedRunGeneration.map({ self.runGeneration == $0 && self.pollTask != nil && self.isNativeDetectionEnabled() }) ?? true
+              expectedRunGeneration.map({ self.isCurrentRun($0) && self.shouldPollAudio }) ?? true
         else { return }
         self.noteWatchedBrowserMicrophone(snapshot, at: now)
         guard let activeInputByPID = MeetingAudioProcessResolver.activeOwnerInputByPID(snapshot: snapshot) else {
@@ -381,7 +399,7 @@ final class MeetingAutoDetector {
         self.audioQueryUnknown = false
         for (pid, record) in candidates {
             guard !Task.isCancelled,
-                  expectedRunGeneration.map({ self.runGeneration == $0 && self.pollTask != nil && self.isNativeDetectionEnabled() }) ?? true,
+                  expectedRunGeneration.map({ self.isCurrentRun($0) && self.shouldObserve(record) }) ?? true,
                   self.records[pid]?.incarnation == record.incarnation
             else { continue }
             let isActive = activeInputByPID[pid] != nil
@@ -606,7 +624,16 @@ final class MeetingAutoDetector {
     // MARK: - Browser evidence (Tier 2)
 
     func handleBrowserTabURL(_ url: BrowserTabURL?, pid: Int32, bundleIdentifier: String, at now: Date) {
-        guard let url, MeetingInCallURLMatcher.isInCallURL(host: url.host, path: url.path) else {
+        if let url { self.noteBrowserCallState(url, pid: pid, bundleIdentifier: bundleIdentifier, at: now) }
+        if let url, url.callState == .ended, MeetingBrowserCallEvidence.supports(url) {
+            self.records[pid]?.windowEvidenceAt = nil
+            let key = "pid:\(pid)|url:\(url.host)\(url.path)"
+            if let episode = self.episodesByKey[key], !episode.consumed {
+                self.episodesByKey[key] = nil
+                self.onEpisodeInvalidated?(episode.id)
+            }
+        }
+        guard let url, url.callState != .ended, MeetingInCallURLMatcher.isInCallURL(host: url.host, path: url.path) else {
             // Unreadable AXURL (nil) or the tab navigated off an in-call URL: fail closed and,
             // if this record had live evidence, start the loss clock so the episode can end.
             if self.records[pid]?.hasLiveWindow == true {
@@ -627,6 +654,28 @@ final class MeetingAutoDetector {
             DebugLogger.shared.log("window-evidence-found bundle=\(bundleIdentifier)", source: "MeetingAutoDetector")
         }
         self.attemptConfirm(pid: pid, at: now)
+    }
+
+    private func noteBrowserCallState(_ url: BrowserTabURL, pid: Int32, bundleIdentifier: String, at now: Date) {
+        guard MeetingBrowserCallEvidence.supports(url),
+              var watched = self.watchedRecording, watched.tier == .browserTier2,
+              watched.pid == pid, watched.bundleIdentifier == bundleIdentifier, self.isStillRunning(watched)
+        else { return }
+        let key = "url:\(url.host)\(url.path)"
+        if watched.browserCallEvidenceKey == nil, url.callState == .inCall { watched.browserCallEvidenceKey = key }
+        guard watched.browserCallEvidenceKey == key else { return }
+        switch url.callState {
+        case .ended:
+            if watched.browserCallEndedAt == nil {
+                watched.browserCallEndedAt = now
+                DebugLogger.shared.log("browser-call-state=ended evidence=post-call-page bundle=\(bundleIdentifier)", source: "MeetingAutoDetector")
+            }
+        case .inCall:
+            watched.browserCallEndedAt = nil
+        case .unknown:
+            break // A failed read or a tab switch cannot undo a positive post-call observation.
+        }
+        self.watchedRecording = watched
     }
 
     // MARK: - Confirm + episode lifecycle
@@ -744,29 +793,90 @@ final class MeetingAutoDetector {
     func adoptStartedEpisode(episodeID: UUID) {
         guard let key = self.episodesByKey.first(where: { $0.value.id == episodeID })?.key,
               var episode = self.episodesByKey[key]
-        else { return }
+        else {
+            DebugLogger.shared.log("end-of-meeting-watch-not-attached reason=episode-retired", source: "MeetingAutoDetector")
+            return
+        }
         episode.consumed = true
         self.episodesByKey[key] = episode
         self.activeConsumedEpisodeKey = key
         self.dismissalTimestamps.removeAll()
         let record = self.records[episode.pid]
+        // The shared recording-state observer may already have attached this session.
+        // Consuming its start prompt must not reset a pending or dismissed end question.
+        if let watched = self.watchedRecording,
+           watched.pid == episode.pid, watched.bundleIdentifier == episode.bundleIdentifier,
+           watched.incarnation == record?.incarnation
+        { return }
         self.watchedRecording = WatchedRecording(
             pid: episode.pid,
             bundleIdentifier: episode.bundleIdentifier,
             tier: episode.tier,
             incarnation: record?.incarnation,
-            sawProcessAudio: record?.processAudioWasActive == true
+            sawProcessAudio: record?.processAudioWasActive == true,
+            browserCallEvidenceKey: record?.windowEvidenceKey
         )
+        self.lastEndWatchStatus = nil
+        DebugLogger.shared.log("end-of-meeting-watch-started path=prompt bundle=\(episode.bundleIdentifier)", source: "MeetingAutoDetector")
+    }
+
+    /// Called for every real recording, including manual and menu-bar starts. This observes
+    /// the explicitly captured app; it never confirms an episode or changes capture/source state.
+    func recordingStarted(sessionID: MeetingSessionID, application: MeetingApplicationIdentity?) {
+        guard self.watchedRecording?.sessionID != sessionID else { return }
+        guard let application, let pid = application.processID, pid > 0,
+              let tier = MeetingAppRegistry.tier(forBundleIdentifier: application.bundleIdentifier)
+        else {
+            self.recordingStopped()
+            return
+        }
+        self.armIfNeeded(pid: pid, bundleIdentifier: application.bundleIdentifier, tier: tier)
+        guard let record = self.records[pid], record.bundleIdentifier == application.bundleIdentifier else {
+            self.recordingStopped()
+            return
+        }
+        if var watched = self.watchedRecording,
+           watched.sessionID == nil, watched.pid == pid,
+           watched.bundleIdentifier == application.bundleIdentifier, watched.incarnation == record.incarnation
+        {
+            watched.sessionID = sessionID
+            self.watchedRecording = watched
+        } else {
+            self.watchedRecording = WatchedRecording(
+                sessionID: sessionID,
+                pid: pid,
+                bundleIdentifier: application.bundleIdentifier,
+                tier: tier,
+                incarnation: record.incarnation,
+                sawProcessAudio: record.processAudioWasActive,
+                browserCallEvidenceKey: record.windowEvidenceKey
+            )
+            self.lastEndWatchStatus = nil
+        }
+        DebugLogger.shared.log("end-of-meeting-watch-started bundle=\(application.bundleIdentifier)", source: "MeetingAutoDetector")
     }
 
     /// Our recording is over, however it ended. Nothing is left to ask about.
-    func recordingStopped() {
+    func recordingStopped(reason: String = "recording-stopped") {
+        if let watched = self.watchedRecording {
+            DebugLogger.shared.log("end-of-meeting-watch-stopped reason=\(reason) bundle=\(watched.bundleIdentifier)", source: "MeetingAutoDetector")
+        }
         self.watchedRecording = nil
+        self.lastEndWatchStatus = nil
     }
 
     /// The user closed the "Meeting ended?" question without stopping.
     func stillRecordingNudgeDismissed() {
         self.watchedRecording?.silenced = true
+        if let watched = self.watchedRecording {
+            self.logEndWatchStatus("dismissed-by-user", bundleIdentifier: watched.bundleIdentifier)
+        }
+    }
+
+    private func logEndWatchStatus(_ status: String, bundleIdentifier: String) {
+        guard self.lastEndWatchStatus != status else { return }
+        self.lastEndWatchStatus = status
+        DebugLogger.shared.log("end-of-meeting-watch state=\(status) bundle=\(bundleIdentifier)", source: "MeetingAutoDetector")
     }
 
     /// Atomic gate re-check + single-shot consume. Returns false if the episode is unknown,
@@ -898,6 +1008,9 @@ final class MeetingAutoDetector {
                 if let releasedAt = watched.browserMicReleasedAt {
                     moments.append(releasedAt.addingTimeInterval(Self.endSignalGraceSeconds))
                 }
+                if let endedAt = watched.browserCallEndedAt {
+                    moments.append(endedAt.addingTimeInterval(Self.browserPostCallGraceSeconds))
+                }
             } else {
                 audioUnknown = self.audioQueryUnknown
                 if record.windowEvidenceAt == nil, let windowLostAt = record.windowLostAt {
@@ -916,8 +1029,10 @@ final class MeetingAutoDetector {
             watched.appGoneAt = goneAt
             askAt = goneAt.addingTimeInterval(Self.endSignalGraceSeconds)
         }
-        // Without live captions there is no speech to wait for, and the app's own signal decides.
-        let stillTalking = self.lastSpeechAt().map { now.timeIntervalSince($0) < Self.speechQuietSeconds } == true
+        // Speech can explain an ambiguous disconnect. A positive post-call page is already an
+        // explicit end; its question still leaves capture running until the user chooses Stop.
+        let hasExplicitBrowserEnd = watched.tier == .browserTier2 && watched.browserCallEndedAt != nil
+        let stillTalking = !hasExplicitBrowserEnd && self.lastSpeechAt().map { now.timeIntervalSince($0) < Self.speechQuietSeconds } == true
         let shouldAsk = askAt.map { now >= $0 } == true && !stillTalking && !watched.asked
         // Every sign of the end is gone again: the call resumed. An audio query we cannot read is
         // not that, so it changes nothing. The question can then come back at the next real end.
@@ -925,6 +1040,17 @@ final class MeetingAutoDetector {
         if shouldAsk { watched.asked = true }
         if shouldWithdraw { watched.asked = false }
         self.watchedRecording = watched
+        let status: String
+        if watched.asked {
+            status = "question-requested"
+        } else if askAt != nil {
+            status = stillTalking ? "waiting-for-caption-quiet" : "waiting-for-end-grace"
+        } else if audioUnknown {
+            status = "audio-query-unknown"
+        } else {
+            status = watched.sawProcessAudio ? "no-end-signal" : "waiting-for-app-audio"
+        }
+        self.logEndWatchStatus(status, bundleIdentifier: watched.bundleIdentifier)
         if shouldAsk {
             DebugLogger.shared.log("end-of-meeting-asked", source: "MeetingAutoDetector")
             self.onStillRecordingNudge?()
@@ -950,7 +1076,7 @@ final class MeetingAutoDetector {
         self.activeConsumedEpisodeKey = nil
         // With the records gone the app would look like it quit. Stop watching instead of guessing.
         // A question already on screen stays there for the user to answer.
-        self.watchedRecording = nil
+        self.recordingStopped(reason: "lock-sleep-or-session-switch")
         self.lastBrowserPollAt = [:]
         for episodeID in unconsumedIDs {
             self.onEpisodeInvalidated?(episodeID)

@@ -764,27 +764,13 @@ extension DictationE2ETests {
         XCTAssertEqual(SettingsStore.shared.customDictionaryEntries, entries)
     }
 
-    func testDictionaryRingAudioResponseIsBoundedAndGeometryStaysInsideItsFrame() {
-        XCTAssertEqual(DictionaryRingResponse.energy(for: 0), 0)
-        XCTAssertEqual(DictionaryRingResponse.energy(for: -1), 0)
-        XCTAssertEqual(DictionaryRingResponse.energy(for: .nan), 0)
-        XCTAssertEqual(DictionaryRingResponse.energy(for: .infinity), 0)
-        XCTAssertEqual(DictionaryRingResponse.energy(for: 2), 1)
-        XCTAssertGreaterThan(DictionaryRingResponse.energy(for: 0.7), DictionaryRingResponse.energy(for: 0.1))
-        for size in [176.0, 240.0] {
-            let frame = CGRect(x: 0, y: 0, width: size, height: size)
-            for tick in 0..<32 {
-                let phase = Double(tick) / 32 * .pi * 2
-                for sheet in 0..<DictionaryRibbon.sheets {
-                    for strand in -4...4 {
-                        let quiet = DictionaryRibbon(phase: phase, strand: Double(strand), energy: 0, sheet: sheet).path(in: frame)
-                        let speech = DictionaryRibbon(phase: phase, strand: Double(strand), energy: 1, sheet: sheet).path(in: frame)
-                        XCTAssertNotEqual(quiet, speech)
-                        XCTAssertTrue(frame.contains(speech.boundingRect), "Speech motion must not clip")
-                    }
-                }
-            }
-        }
+    func testDictionaryGlowAudioResponseIsBoundedAndHandlesInvalidLevels() {
+        XCTAssertEqual(DictionaryGlowResponse.energy(for: 0), 0)
+        XCTAssertEqual(DictionaryGlowResponse.energy(for: -1), 0)
+        XCTAssertEqual(DictionaryGlowResponse.energy(for: .nan), 0)
+        XCTAssertEqual(DictionaryGlowResponse.energy(for: .infinity), 0)
+        XCTAssertEqual(DictionaryGlowResponse.energy(for: 2), 1)
+        XCTAssertGreaterThan(DictionaryGlowResponse.energy(for: 0.7), DictionaryGlowResponse.energy(for: 0.1))
     }
 
     func testDictionaryPlaygroundMatchesWholeWordsWithoutTreatingSimilarWordsAsSuccess() {
@@ -1034,6 +1020,48 @@ extension DictationE2ETests {
             ),
             "Hi,  Barath! How are you?"
         )
+    }
+
+    func testFinalLeadInPadsShortDictationOnly() {
+        let lead = FluidAudioProvider.finalLeadInSamples
+        XCTAssertTrue(FluidAudioProvider.usesFinalLeadIn(sampleCount: 16_000, hasPronunciationProfiles: false))
+        XCTAssertTrue(FluidAudioProvider.usesFinalLeadIn(sampleCount: 240_000 - lead, hasPronunciationProfiles: false))
+        XCTAssertFalse(FluidAudioProvider.usesFinalLeadIn(sampleCount: 240_000 - lead + 1, hasPronunciationProfiles: false))
+        XCTAssertFalse(FluidAudioProvider.usesFinalLeadIn(sampleCount: 16_000, hasPronunciationProfiles: true))
+
+        let samples: [Float] = [0.5, -0.25]
+        let padded = FluidAudioProvider.withLeadIn(samples)
+        XCTAssertEqual(padded.count, lead + samples.count)
+        XCTAssertTrue(padded.prefix(lead).allSatisfy { $0 == 0 })
+        XCTAssertEqual(Array(padded.suffix(samples.count)), samples)
+    }
+
+    func testFinalLeadInTimingsReturnToTheRecordingClock() throws {
+        let result = ASRResult(
+            text: "hi there",
+            confidence: 0.9,
+            duration: 1.25,
+            processingTime: 0.1,
+            tokenTimings: [
+                TokenTiming(token: "▁hi", tokenId: 7, startTime: 0.1, endTime: 0.4, confidence: 0.9),
+                TokenTiming(token: "▁there", tokenId: 8, startTime: 0.48, endTime: 0.8, confidence: 0.8),
+            ]
+        )
+
+        let restored = FluidAudioProvider.removingLeadIn(from: result)
+        let timings = try XCTUnwrap(restored.tokenTimings)
+
+        XCTAssertEqual(restored.text, result.text)
+        XCTAssertEqual(restored.confidence, result.confidence)
+        XCTAssertEqual(restored.processingTime, result.processingTime)
+        XCTAssertEqual(restored.duration, 1.0, accuracy: 1e-9)
+        XCTAssertEqual(timings.map(\.tokenId), [7, 8])
+        XCTAssertEqual(timings.map(\.confidence), [0.9, 0.8])
+        XCTAssertEqual(timings[0].startTime, 0, accuracy: 1e-9)
+        XCTAssertEqual(timings[0].endTime, 0.15, accuracy: 1e-9)
+        XCTAssertEqual(timings[1].startTime, 0.23, accuracy: 1e-9)
+        XCTAssertEqual(timings[1].endTime, 0.55, accuracy: 1e-9)
+        XCTAssertNil(FluidAudioProvider.removingLeadIn(from: ASRResult(text: "", confidence: 0, duration: 0, processingTime: 0)).tokenTimings)
     }
 
     func testPronunciationStoreRejectsInconsistentEnrollments() async {
@@ -4010,7 +4038,8 @@ extension DictationE2ETests {
                     onNewWord: { actions += 1 },
                     onManual: { actions += 1 },
                     onPracticeMore: { actions += 1 },
-                    onRedo: { actions += 1 }
+                    onRedo: { actions += 1 },
+                    attempts: Array(["boot tea", "Booptie", "FluidVoice"].prefix(state.0))
                 )
                 .padding(24)
                 .frame(width: width, height: 950, alignment: .top)
@@ -4282,3 +4311,501 @@ extension DictationE2ETests {
     }
     #endif
 }
+
+extension DictationE2ETests {
+    private func stampFrames(_ rows: [Int], hidden: Int = 8) -> DictionaryMatchFrames {
+        var values: [Float] = []
+        for row in rows {
+            var frame = [Float](repeating: 0.05, count: hidden)
+            frame[row] = 1
+            values += frame
+        }
+        return DictionaryMatchFrames(hiddenSize: hidden, values: values)
+    }
+
+    func testStampMatcherFindsWordSaidSlowerInsideSentence() {
+        let word = self.stampFrames([0, 1, 2, 3, 4, 5])
+        let sentence = self.stampFrames([6, 7, 6, 7, 6] + [0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5] + [7, 6, 7, 6, 7])
+        let hits = DictionaryStampMatcher.hits(references: [word], in: sentence)
+        XCTAssertEqual(hits.count, 1)
+        // Either copy of a repeated frame is an equally exact match at the edges.
+        XCTAssertTrue((5...6).contains(hits.first?.frames.lowerBound ?? -1))
+        XCTAssertTrue((16...17).contains(hits.first?.frames.upperBound ?? -1))
+        XCTAssertLessThan(hits.first?.distance ?? 1, 0.05)
+    }
+
+    func testStampMatcherIgnoresSentenceWithoutTheWord() {
+        let word = self.stampFrames([0, 1, 2, 3, 4, 5])
+        let sentence = self.stampFrames([6, 7, 6, 7, 6, 7, 6, 7, 6, 7])
+        XCTAssertTrue(DictionaryStampMatcher.hits(references: [word], in: sentence).isEmpty)
+    }
+
+    func testStampMatcherFindsEachOccurrenceOnce() {
+        let word = self.stampFrames([0, 1, 2, 3])
+        let sentence = self.stampFrames([6, 0, 1, 2, 3, 7, 6, 7, 0, 1, 2, 3, 6])
+        let hits = DictionaryStampMatcher.hits(references: [word], in: sentence)
+        XCTAssertEqual(hits.map(\.frames).sorted { $0.lowerBound < $1.lowerBound }, [1..<5, 8..<12])
+    }
+
+    func testStampMatcherRejectsMismatchedOrInvalidInput() {
+        let word = self.stampFrames([0, 1, 2, 3])
+        XCTAssertTrue(DictionaryStampMatcher.hits(references: [word], in: self.stampFrames([0, 1, 2, 3], hidden: 9)).isEmpty)
+        XCTAssertTrue(DictionaryStampMatcher.hits(references: [], in: self.stampFrames([0, 1, 2, 3])).isEmpty)
+        XCTAssertTrue(DictionaryStampMatcher.hits(references: [word], in: DictionaryMatchFrames(hiddenSize: 8, values: [])).isEmpty)
+    }
+
+    func testWordRangeDropsSilenceAndKeepsFinalPop() {
+        let rate = 16_000
+        var samples = [Float](repeating: 0.0005, count: rate / 2)
+        samples += (0..<(rate * 6 / 10)).map { Float(sin(Double($0) * 0.2) * 0.3) }
+        samples += [Float](repeating: 0.0005, count: rate * 8 / 100)
+        samples += (0..<(rate * 3 / 100)).map { Float(sin(Double($0) * 1.3) * 0.05) }
+        samples += [Float](repeating: 0.0005, count: rate / 2)
+        // Recognizer word times are loose: they start early and end before the final pop.
+        let words = [DictionaryAudioInspection.Word(text: "Grasel", start: 0.40, end: 0.80), .init(text: "Wump", start: 0.80, end: 1.0)]
+        let range = DictionaryPronunciationExperiment.wordRange(samples, words: words)
+        XCTAssertNotNil(range)
+        let start = Double(range?.lowerBound ?? 0) / Double(rate)
+        let end = Double(range?.upperBound ?? 0) / Double(rate)
+        XCTAssertEqual(start, 0.47, accuracy: 0.02, "Leading silence is dropped")
+        XCTAssertGreaterThanOrEqual(end, 1.21, "The final pop after a short gap is kept")
+        XCTAssertLessThan(end, 1.30, "Trailing silence is dropped")
+        XCTAssertNil(DictionaryPronunciationExperiment.wordRange(samples, words: []))
+    }
+}
+
+extension DictationE2ETests {
+    func testSpokenFramesDropPausesInsideASlowlySpokenWord() {
+        let loud = (0..<1280).map { Float(sin(Double($0) * 0.3) * 0.2) }
+        let quiet = [Float](repeating: 0.0005, count: 1280)
+        let samples = loud + loud + quiet + quiet + loud + loud
+        XCTAssertEqual(DictionaryPronunciationExperiment.spokenFrames(samples, frames: 0..<6), [0, 1, 4, 5])
+        // Too little speech to trust: keep every frame rather than an almost empty reference.
+        XCTAssertEqual(DictionaryPronunciationExperiment.spokenFrames(loud + quiet + quiet, frames: 0..<3), [0, 1, 2])
+    }
+}
+
+extension DictationE2ETests {
+    func testTextClaimedCoversSavedSpellingsAndCorrectWords() {
+        let entry = SettingsStore.CustomDictionaryEntry(triggers: ["sneak them"], replacement: "Snigdham")
+        let words = ["What", "is", "sneak", "them?", "Snigdham", "said"]
+        XCTAssertEqual(DictionaryAudioSpan.textClaimed(words: words, entries: [entry]), [2, 3, 4])
+        XCTAssertTrue(DictionaryAudioSpan.textClaimed(words: words, entries: []).isEmpty)
+    }
+
+    func testAudioSpanReplacesWholeMishearingButNotNeighbours() {
+        let targets = ["Snigdham", "snick them"]
+        // The match touched only "them"; the run grows to the whole mishearing.
+        XCTAssertEqual(DictionaryAudioSpan.span(words: ["What", "do", "you", "mean", "by", "sneak", "them"], touched: [6], claimed: [], targets: targets), 5...6)
+        // The match spilled onto "is"; the run drops it and takes "Snick" instead.
+        XCTAssertEqual(DictionaryAudioSpan.span(words: ["Snick", "them", "is", "a", "weird", "name"], touched: [1, 2], claimed: [], targets: targets), 0...1)
+        // A new single-word spelling stays a single word.
+        XCTAssertEqual(DictionaryAudioSpan.span(words: ["Who", "the", "fuck", "is", "Nickdom?"], touched: [4], claimed: [], targets: targets), 4...4)
+    }
+
+    func testAudioSpanNeverTouchesWordsTheTextLayerOwns() {
+        let words = ["Snick", "them", "met", "Snick", "them"]
+        XCTAssertNil(DictionaryAudioSpan.span(words: words, touched: [3, 4], claimed: [3, 4], targets: ["Snigdham"]))
+        // The same word said twice: the text layer owns one, the audio match may still take the other.
+        XCTAssertEqual(DictionaryAudioSpan.span(words: words, touched: [0, 1], claimed: [3, 4], targets: ["Snigdham"]), 0...1)
+        XCTAssertNil(DictionaryAudioSpan.span(words: words, touched: [], claimed: [], targets: ["Snigdham"]))
+    }
+
+    #if arch(arm64)
+    func testRecordedWordMatchLeavesSavedSpellingsToTheTextLayer() {
+        let id = UUID()
+        let profile = PronunciationDictionaryProfile(dictionaryEntryID: id, label: "Snigdham", modelKey: "v3", hiddenSize: 1, enrollments: [])
+        let result = ASRResult(text: "what do you mean by sneak them", confidence: 1, duration: 3, processingTime: 0, tokenTimings: [
+            TokenTiming(token: "▁what", tokenId: 1, startTime: 0.16, endTime: 0.40, confidence: 1),
+            TokenTiming(token: "▁do", tokenId: 2, startTime: 0.40, endTime: 0.56, confidence: 1),
+            TokenTiming(token: "▁you", tokenId: 3, startTime: 0.56, endTime: 0.64, confidence: 1),
+            TokenTiming(token: "▁mean", tokenId: 4, startTime: 0.64, endTime: 0.80, confidence: 1),
+            TokenTiming(token: "▁by", tokenId: 5, startTime: 0.80, endTime: 0.96, confidence: 1),
+            TokenTiming(token: "▁sneak", tokenId: 6, startTime: 0.96, endTime: 1.44, confidence: 1),
+            TokenTiming(token: "▁them", tokenId: 7, startTime: 1.44, endTime: 1.60, confidence: 1),
+        ])
+        // The stamp match covers only the end of the word, as recorded in the app (frames 15-20).
+        let hit = PronunciationWindowMatch(prototypeIndex: 0, score: 0.94, frameRange: 15..<20)
+        let temporal: Set<FluidAudioProvider.TemporalMatchKey> = [.init(prototypeIndex: 0, frameRange: 15..<20)]
+        let unknownSpelling = SettingsStore.CustomDictionaryEntry(id: id, triggers: ["snick them"], replacement: "Snigdham")
+        XCTAssertEqual(
+            FluidAudioProvider.applyPronunciationMatches(result: result, matches: [hit], profiles: [profile], labels: [id: "Snigdham"], temporalMatches: temporal, entries: [unknownSpelling]),
+            "what do you mean by Snigdham"
+        )
+        // A saved spelling already covers it: the audio layer leaves the text for the text layer.
+        let knownSpelling = SettingsStore.CustomDictionaryEntry(id: id, triggers: ["sneak them"], replacement: "Snigdham")
+        XCTAssertEqual(
+            FluidAudioProvider.applyPronunciationMatches(result: result, matches: [hit], profiles: [profile], labels: [id: "Snigdham"], temporalMatches: temporal, entries: [knownSpelling]),
+            result.text
+        )
+    }
+    #endif
+}
+
+extension DictationE2ETests {
+    private func voiceLearner(
+        entries: [SettingsStore.CustomDictionaryEntry],
+        saved: @escaping ([SettingsStore.CustomDictionaryEntry]) -> Void,
+        canWrite: @escaping () -> Bool = { true }
+    ) -> DictionaryVoiceSpellingLearner {
+        DictionaryVoiceSpellingLearner(window: .milliseconds(50), isEnabled: { true }, canWrite: canWrite, load: { entries }, save: saved)
+    }
+
+    func testVoiceSpellingIsSavedWhenTheUserKeepsTheReplacement() async throws {
+        let entry = SettingsStore.CustomDictionaryEntry(triggers: ["snick them"], replacement: "Snigdham")
+        var saves: [[SettingsStore.CustomDictionaryEntry]] = []
+        let learner = self.voiceLearner(entries: [entry]) { saves.append($0) }
+        learner.propose([DictionaryVoiceSpelling(entryID: entry.id, label: "Snigdham", spelling: "Nickdom?")])
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertEqual(saves.first?.first?.triggers, ["snick them", "nickdom"])
+        XCTAssertEqual(saves.first?.first?.id, entry.id, "The same dictionary word gains the spelling")
+        XCTAssertEqual(learner.pendingCount, 0)
+    }
+
+    func testVoiceSpellingIsDroppedWhenTheUserEditsTheWord() async throws {
+        let entry = SettingsStore.CustomDictionaryEntry(triggers: [], replacement: "Snigdham")
+        var saves: [[SettingsStore.CustomDictionaryEntry]] = []
+        let learner = self.voiceLearner(entries: [entry]) { saves.append($0) }
+        learner.propose([DictionaryVoiceSpelling(entryID: entry.id, label: "Snigdham", spelling: "Nickdom")])
+        learner.reject(editedText: "Snigdham")
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertTrue(saves.isEmpty)
+        XCTAssertEqual(learner.pendingCount, 0)
+    }
+
+    func testVoiceSpellingNeverLearnsCommonWordsTheWordItselfOrForAChangedEntry() async throws {
+        let entry = SettingsStore.CustomDictionaryEntry(triggers: [], replacement: "Snigdham")
+        XCTAssertFalse(DictionaryVoiceSpellingLearner.isLearnable(.init(entryID: entry.id, label: "Snigdham", spelling: "the")))
+        XCTAssertFalse(DictionaryVoiceSpellingLearner.isLearnable(.init(entryID: entry.id, label: "Snigdham", spelling: "snigdham.")))
+        var saves: [[SettingsStore.CustomDictionaryEntry]] = []
+        let renamed = SettingsStore.CustomDictionaryEntry(id: entry.id, triggers: [], replacement: "Snigdha")
+        let learner = self.voiceLearner(entries: [renamed]) { saves.append($0) }
+        learner.propose([DictionaryVoiceSpelling(entryID: entry.id, label: "Snigdham", spelling: "Nickdom")])
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertTrue(saves.isEmpty, "A renamed word must not inherit a spelling learned for its old name")
+    }
+}
+
+#if arch(arm64)
+extension DictationE2ETests {
+    func testGreyZoneVoiceMatchNeedsTheWordsToLookLikeTheWord() {
+        let id = UUID()
+        let profile = PronunciationDictionaryProfile(dictionaryEntryID: id, label: "Snigdham", modelKey: "v3", hiddenSize: 1, enrollments: [])
+        let entry = SettingsStore.CustomDictionaryEntry(id: id, triggers: ["snick them"], replacement: "Snigdham")
+        func result(_ a: String, _ b: String) -> ASRResult {
+            ASRResult(text: "what do you mean by \(a) \(b)", confidence: 1, duration: 3, processingTime: 0, tokenTimings: [
+                TokenTiming(token: "▁what", tokenId: 1, startTime: 0.16, endTime: 0.40, confidence: 1),
+                TokenTiming(token: "▁do", tokenId: 2, startTime: 0.40, endTime: 0.56, confidence: 1),
+                TokenTiming(token: "▁you", tokenId: 3, startTime: 0.56, endTime: 0.64, confidence: 1),
+                TokenTiming(token: "▁mean", tokenId: 4, startTime: 0.64, endTime: 0.80, confidence: 1),
+                TokenTiming(token: "▁by", tokenId: 5, startTime: 0.80, endTime: 0.96, confidence: 1),
+                TokenTiming(token: "▁\(a)", tokenId: 6, startTime: 0.96, endTime: 1.44, confidence: 1),
+                TokenTiming(token: "▁\(b)", tokenId: 7, startTime: 1.44, endTime: 1.60, confidence: 1),
+            ])
+        }
+        let temporal: Set<FluidAudioProvider.TemporalMatchKey> = [.init(prototypeIndex: 0, frameRange: 15..<20)]
+        // Distance 0.17: past the sure cutoff, inside the grey zone.
+        let grey = PronunciationWindowMatch(prototypeIndex: 0, score: 0.83, frameRange: 15..<20)
+        let lookalike = result("sneak", "them")
+        XCTAssertEqual(
+            FluidAudioProvider.applyPronunciationMatches(result: lookalike, matches: [grey], profiles: [profile], labels: [id: "Snigdham"], temporalMatches: temporal, entries: [entry]),
+            "what do you mean by Snigdham"
+        )
+        let unrelated = result("banana", "bread")
+        XCTAssertEqual(
+            FluidAudioProvider.applyPronunciationMatches(result: unrelated, matches: [grey], profiles: [profile], labels: [id: "Snigdham"], temporalMatches: temporal, entries: [entry]),
+            unrelated.text,
+            "A grey-zone sound match must not replace words that look nothing like the word"
+        )
+        // Distance 0.10: sure enough on sound alone.
+        let sure = PronunciationWindowMatch(prototypeIndex: 0, score: 0.90, frameRange: 15..<20)
+        XCTAssertEqual(
+            FluidAudioProvider.applyPronunciationMatches(result: unrelated, matches: [sure], profiles: [profile], labels: [id: "Snigdham"], temporalMatches: temporal, entries: [entry]),
+            "what do you mean by Snigdham"
+        )
+    }
+}
+#endif
+
+extension DictationE2ETests {
+    func testBuiltInDictionaryAppliesWithoutUserEntriesAndUserSpellingsWin() {
+        defer { ASRService.invalidateDictionaryCache() }
+        self.withRestoredDefaults(keys: [self.customDictionaryEntriesKey]) {
+            SettingsStore.shared.customDictionaryEntries = []
+            ASRService.invalidateDictionaryCache()
+            XCTAssertEqual(
+                ASRService.applyCustomDictionary("Ask claud to log it in post hoc for fluid voice."),
+                "Ask Claude to log it in PostHog for FluidVoice."
+            )
+
+            // A user mapping for the same spelling replaces the built-in one.
+            SettingsStore.shared.customDictionaryEntries = [SettingsStore.CustomDictionaryEntry(triggers: ["post hoc"], replacement: "post hoc")]
+            ASRService.invalidateDictionaryCache()
+            XCTAssertEqual(ASRService.applyCustomDictionary("an analysis done post hoc"), "an analysis done post hoc")
+            XCTAssertEqual(ASRService.applyCustomDictionary("ask claud"), "ask Claude", "Other built-ins still apply")
+        }
+    }
+}
+
+extension DictationE2ETests {
+    func testUserPhraseOverridesOnlyTheBuiltInOccurrencesItCovers() {
+        defer { ASRService.invalidateDictionaryCache() }
+        self.withRestoredDefaults(keys: [self.customDictionaryEntriesKey]) {
+            SettingsStore.shared.customDictionaryEntries = [.init(triggers: ["post hoc analysis"], replacement: "post hoc analysis")]
+            ASRService.invalidateDictionaryCache()
+            XCTAssertEqual(
+                ASRService.applyCustomDictionary("🙂 post hoc analysis; log it in post hoc for fluid voice."),
+                "🙂 post hoc analysis; log it in PostHog for FluidVoice."
+            )
+        }
+    }
+
+    func testUserReplacementAndCanonicalSpellingWinOverBuiltIns() {
+        defer { ASRService.invalidateDictionaryCache() }
+        self.withRestoredDefaults(keys: [self.customDictionaryEntriesKey]) {
+            SettingsStore.shared.customDictionaryEntries = [.init(triggers: ["my spelling"], replacement: "clawed")]
+            ASRService.invalidateDictionaryCache()
+            XCTAssertEqual(ASRService.applyCustomDictionary("my spelling; clawed; claud"), "clawed; clawed; Claude")
+
+            SettingsStore.shared.customDictionaryEntries = [.init(triggers: ["hoc"], replacement: "HOC")]
+            ASRService.invalidateDictionaryCache()
+            XCTAssertEqual(ASRService.applyCustomDictionary("post hoc; claud"), "post HOC; Claude")
+        }
+    }
+
+    func testUserRulesCanOverrideTheResultOfABuiltInCorrection() {
+        defer { ASRService.invalidateDictionaryCache() }
+        self.withRestoredDefaults(keys: [self.customDictionaryEntriesKey]) {
+            SettingsStore.shared.customDictionaryEntries = [.init(triggers: ["Claude Code"], replacement: "My Assistant")]
+            ASRService.invalidateDictionaryCache()
+            XCTAssertEqual(ASRService.applyCustomDictionary("open claud code and fluid voice"), "open My Assistant and FluidVoice")
+        }
+    }
+
+    func testOverlappingUserPhrasesBothStayProtectedFromBuiltIns() {
+        defer { ASRService.invalidateDictionaryCache() }
+        self.withRestoredDefaults(keys: [self.customDictionaryEntriesKey]) {
+            SettingsStore.shared.customDictionaryEntries = [
+                .init(triggers: ["first phrase"], replacement: "post hoc analysis"),
+                .init(triggers: ["second phrase"], replacement: "analysis claud"),
+            ]
+            ASRService.invalidateDictionaryCache()
+            XCTAssertEqual(ASRService.applyCustomDictionary("post hoc analysis claud; claud"), "post hoc analysis claud; Claude")
+        }
+    }
+
+    func testRemovingUserRulesRestoresBuiltInDefaultsAfterCacheInvalidation() {
+        defer { ASRService.invalidateDictionaryCache() }
+        self.withRestoredDefaults(keys: [self.customDictionaryEntriesKey]) {
+            SettingsStore.shared.customDictionaryEntries = [.init(triggers: ["post hoc analysis"], replacement: "post hoc analysis")]
+            ASRService.invalidateDictionaryCache()
+            XCTAssertEqual(ASRService.applyCustomDictionary("post hoc analysis"), "post hoc analysis")
+            SettingsStore.shared.customDictionaryEntries = []
+            ASRService.invalidateDictionaryCache()
+            XCTAssertEqual(ASRService.applyCustomDictionary("post hoc analysis"), "PostHog analysis")
+        }
+    }
+
+    func testPendingVoiceLearningYieldsToANewerManualRule() async throws {
+        let target = SettingsStore.CustomDictionaryEntry(triggers: [], replacement: "Snigdham")
+        var entries = [target]
+        var saves: [[SettingsStore.CustomDictionaryEntry]] = []
+        let learner = DictionaryVoiceSpellingLearner(
+            window: .milliseconds(50),
+            isEnabled: { true },
+            canWrite: { true },
+            load: { entries },
+            save: { saves.append($0) }
+        )
+        defer { learner.cancelAll() }
+        learner.propose([.init(entryID: target.id, label: "Snigdham", spelling: "Nickdom?")])
+        entries.append(.init(triggers: ["NICKDOM"], replacement: "Nick Dom"))
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertTrue(saves.isEmpty)
+        XCTAssertEqual(learner.pendingCount, 0)
+    }
+
+    func testVoiceLearningDoesNotClaimAnotherUsersCanonicalWordOrPhrase() async throws {
+        let target = SettingsStore.CustomDictionaryEntry(triggers: [], replacement: "Snigdham")
+        let manual = SettingsStore.CustomDictionaryEntry(triggers: ["nick dome"], replacement: "Nickdom")
+        var saves: [[SettingsStore.CustomDictionaryEntry]] = []
+        let learner = self.voiceLearner(entries: [target, manual]) { saves.append($0) }
+        defer { learner.cancelAll() }
+        learner.propose([
+            .init(entryID: target.id, label: "Snigdham", spelling: "Nickdom"),
+            .init(entryID: target.id, label: "Snigdham", spelling: "nick dome now"),
+        ])
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertTrue(saves.isEmpty)
+        XCTAssertEqual(learner.pendingCount, 0)
+    }
+
+    func testVoiceLearningCanStillSaveAnUnclaimedSpellingWithOtherUserRules() async throws {
+        let target = SettingsStore.CustomDictionaryEntry(triggers: [], replacement: "Snigdham")
+        let other = SettingsStore.CustomDictionaryEntry(triggers: ["cloud"], replacement: "Claude")
+        var saves: [[SettingsStore.CustomDictionaryEntry]] = []
+        let learner = self.voiceLearner(entries: [target, other]) { saves.append($0) }
+        defer { learner.cancelAll() }
+        learner.propose([.init(entryID: target.id, label: "Snigdham", spelling: "Nickdom")])
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertEqual(saves.count, 1)
+        XCTAssertEqual(saves.first?.first?.triggers, ["nickdom"])
+        XCTAssertEqual(saves.first?.last, other)
+    }
+}
+
+#if arch(arm64)
+extension DictationE2ETests {
+    func testExpandedTemporalMatchKeepsItsCorrectionEvidence() {
+        let id = UUID()
+        let profile = PronunciationDictionaryProfile(dictionaryEntryID: id, label: "Snigdham", modelKey: "v3", hiddenSize: 1, enrollments: [])
+        let result = ASRResult(text: "what do you mean by sneak them", confidence: 1, duration: 3, processingTime: 0, tokenTimings: [
+            TokenTiming(token: "▁what", tokenId: 1, startTime: 0.16, endTime: 0.40, confidence: 1),
+            TokenTiming(token: "▁do", tokenId: 2, startTime: 0.40, endTime: 0.56, confidence: 1),
+            TokenTiming(token: "▁you", tokenId: 3, startTime: 0.56, endTime: 0.64, confidence: 1),
+            TokenTiming(token: "▁mean", tokenId: 4, startTime: 0.64, endTime: 0.80, confidence: 1),
+            TokenTiming(token: "▁by", tokenId: 5, startTime: 0.80, endTime: 0.96, confidence: 1),
+            TokenTiming(token: "▁sneak", tokenId: 6, startTime: 0.96, endTime: 1.44, confidence: 1),
+            TokenTiming(token: "▁them", tokenId: 7, startTime: 1.44, endTime: 1.60, confidence: 1),
+        ])
+        let hit = PronunciationWindowMatch(prototypeIndex: 0, score: 0.94, frameRange: 18..<20)
+        let evidence = DictionaryAcousticEvidence(
+            id: UUID(),
+            entryID: id,
+            label: "Snigdham",
+            profileKey: "fixture",
+            modelKey: "v3",
+            sourceWordRange: 6..<7,
+            frames: .init(hiddenSize: 1, values: [1, 2]),
+            matchFrameRange: hit.frameRange
+        )
+        var accepted: [DictionaryAcousticEvidence] = []
+        let text = FluidAudioProvider.applyPronunciationMatches(
+            result: result,
+            matches: [hit],
+            profiles: [profile],
+            labels: [id: "Snigdham"],
+            temporalMatches: [.init(prototypeIndex: 0, frameRange: hit.frameRange)],
+            entries: [.init(id: id, triggers: ["snick them"], replacement: "Snigdham")],
+            onAccepted: { entryID, label, range, frames in
+                accepted += FluidAudioProvider.acceptedAcousticEvidence(
+                    [evidence],
+                    entryID: entryID,
+                    label: label,
+                    wordRange: range,
+                    frameRange: frames
+                )
+            }
+        )
+        XCTAssertEqual(text, "what do you mean by Snigdham")
+        XCTAssertEqual(accepted.count, 1)
+        XCTAssertEqual(accepted.first?.sourceWordRange, 5..<7)
+    }
+}
+#endif
+
+extension DictationE2ETests {
+    func testVoiceSpellingObservationCoversConfirmationAndEditDebounce() {
+        XCTAssertGreaterThan(
+            AutomaticDictionaryCorrectionTracker.observationDuration(hasVoiceSpellings: true),
+            DictionaryVoiceSpellingLearner.confirmationWindow
+        )
+        XCTAssertEqual(AutomaticDictionaryCorrectionTracker.observationDuration(hasVoiceSpellings: false), .seconds(30))
+    }
+
+    func testEndingObservationCancelsOnlyThatRecordingsUnconfirmedSpellings() async throws {
+        let first = SettingsStore.CustomDictionaryEntry(triggers: [], replacement: "Snigdham")
+        let second = SettingsStore.CustomDictionaryEntry(triggers: [], replacement: "Velora")
+        let firstRecording = UUID()
+        let secondRecording = UUID()
+        var entries = [first, second]
+        var saves = 0
+        let learner = DictionaryVoiceSpellingLearner(
+            window: .milliseconds(50),
+            isEnabled: { true },
+            canWrite: { true },
+            load: { entries },
+            save: { entries = $0; saves += 1 }
+        )
+        defer { learner.cancelAll() }
+        learner.propose([.init(entryID: first.id, label: first.replacement, spelling: "Nickdom")], recordingID: firstRecording)
+        learner.propose([.init(entryID: second.id, label: second.replacement, spelling: "velorra")], recordingID: secondRecording)
+        learner.cancel(recordingID: firstRecording)
+        learner.cancel(recordingID: firstRecording)
+        XCTAssertEqual(learner.pendingCount, 1)
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertEqual(saves, 1)
+        XCTAssertTrue(entries[0].triggers.isEmpty)
+        XCTAssertEqual(entries[1].triggers, ["velorra"])
+        XCTAssertEqual(learner.pendingCount, 0)
+    }
+
+    func testEndingObservationCannotSaveARuleWhileWaitingForCaptureToFinish() async throws {
+        let entry = SettingsStore.CustomDictionaryEntry(triggers: [], replacement: "Snigdham")
+        let recordingID = UUID()
+        var canWrite = false
+        var saves = 0
+        let learner = self.voiceLearner(entries: [entry], saved: { _ in saves += 1 }, canWrite: { canWrite })
+        defer { learner.cancelAll() }
+        learner.propose([.init(entryID: entry.id, label: entry.replacement, spelling: "Nickdom")], recordingID: recordingID)
+        try await Task.sleep(for: .milliseconds(100))
+        learner.cancel(recordingID: recordingID)
+        canWrite = true
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(learner.pendingCount, 0)
+        XCTAssertEqual(saves, 0)
+    }
+}
+
+#if arch(arm64)
+extension DictationE2ETests {
+    func testCorrectionEvidenceAlignsBothGrowingAndShrinkingWordRangesWithoutMixingHits() {
+        let id = UUID()
+        let chosen = DictionaryAcousticEvidence(
+            id: UUID(),
+            entryID: id,
+            label: "Name",
+            profileKey: "profile",
+            modelKey: "v3",
+            sourceWordRange: 1..<3,
+            frames: .init(hiddenSize: 1, values: [1, 2]),
+            matchFrameRange: 4..<6
+        )
+        let otherHit = DictionaryAcousticEvidence(
+            id: UUID(),
+            entryID: id,
+            label: "Name",
+            profileKey: "profile",
+            modelKey: "v3",
+            sourceWordRange: 1..<3,
+            frames: .init(hiddenSize: 1, values: [3, 4]),
+            matchFrameRange: 8..<10
+        )
+        let otherWord = DictionaryAcousticEvidence(
+            id: UUID(),
+            entryID: UUID(),
+            label: "Other",
+            profileKey: "other",
+            modelKey: "v3",
+            sourceWordRange: 1..<3,
+            frames: .init(hiddenSize: 1, values: [5, 6]),
+            matchFrameRange: 4..<6
+        )
+        for finalRange in [1..<2, 0..<4] {
+            let result = FluidAudioProvider.acceptedAcousticEvidence(
+                [chosen, otherHit, otherWord],
+                entryID: id,
+                label: "Name's",
+                wordRange: finalRange,
+                frameRange: 4..<6
+            )
+            XCTAssertEqual(result.count, 1)
+            XCTAssertEqual(result.first?.id, chosen.id)
+            XCTAssertEqual(result.first?.sourceWordRange, finalRange)
+            XCTAssertEqual(result.first?.label, "Name's")
+            XCTAssertEqual(result.first?.frames.values, chosen.frames.values)
+            XCTAssertEqual(result.first?.profileKey, chosen.profileKey)
+        }
+    }
+}
+#endif

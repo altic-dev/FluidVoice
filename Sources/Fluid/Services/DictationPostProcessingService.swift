@@ -18,46 +18,82 @@ struct DictationProviderRoute: Equatable {
         dictationSlot: SettingsStore.DictationShortcutSlot? = nil,
         appBundleID: String? = nil
     ) -> Self {
-        let selectedProviderID: String
-        let configuredModel: String?
-
-        if let dictationSlot {
-            let selection = settings.resolvedDictationPromptSelection(for: dictationSlot, appBundleID: appBundleID)
-            if selection == .off {
-                return Self(providerID: "", providerKey: "", baseURL: "", model: "", apiKey: "")
-            }
-            if selection == .privateAI {
-                return self.privateAIRoute(settings: settings)
-            }
-
-            let configuration = settings.dictationPromptConfiguration(for: selection)
-            let providerID = configuration.providerID.trimmingCharacters(in: .whitespacesAndNewlines)
-            let model = configuration.modelName.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !providerID.isEmpty, !model.isEmpty {
-                selectedProviderID = providerID
-                configuredModel = model
-            } else {
-                let hasAppBinding = settings.appPromptBinding(for: .dictate, appBundleID: appBundleID) != nil
-                if selection == .default, !hasAppBinding, self.shouldUseLegacyPrivateAIRoute(
-                    selectedProviderID: settings.selectedProviderID,
-                    configuredProviderID: providerID,
-                    configuredModel: model
-                ) {
-                    return self.privateAIRoute(settings: settings)
-                }
-                selectedProviderID = self.externalFallbackProviderID(from: settings.selectedProviderID)
-                configuredModel = nil
-            }
-        } else {
-            selectedProviderID = settings.selectedProviderID
-            configuredModel = nil
+        guard let dictationSlot else {
+            return self.build(settings: settings, selectedProviderID: settings.selectedProviderID, configuredModel: nil)
         }
+        let selection = settings.resolvedDictationPromptSelection(for: dictationSlot, appBundleID: appBundleID)
+        switch self.modelChoice(settings: settings, selection: selection, appBundleID: appBundleID) {
+        case .none:
+            return Self(providerID: "", providerKey: "", baseURL: "", model: "", apiKey: "")
+        case .privateAI:
+            return self.privateAIRoute(settings: settings)
+        case let .provider(providerID, model):
+            return self.build(settings: settings, selectedProviderID: providerID, configuredModel: model)
+        }
+    }
 
-        return self.build(settings: settings, selectedProviderID: selectedProviderID, configuredModel: configuredModel)
+    /// Model routing without credentials or private-model installation checks.
+    /// The overlay can snapshot this on main and resolve its display name off main.
+    enum ModelChoice: Equatable, Sendable {
+        case none
+        case privateAI
+        case provider(String, String?)
+    }
+
+    /// Capture only the intended route here. Installation verification belongs
+    /// on the warmup worker, never in the microphone's started callback.
+    static func privateAIWarmupVerification(
+        settings: SettingsStore,
+        slot: SettingsStore.DictationShortcutSlot,
+        appBundleID: String?
+    ) -> PrivateAIProviderPromptFormat.VerificationInput? {
+        let selection = settings.resolvedDictationPromptSelection(for: slot, appBundleID: appBundleID, privateAIAvailable: true)
+        switch self.modelChoice(settings: settings, selection: selection, appBundleID: appBundleID) {
+        case .none: return nil
+        case .privateAI: break
+        case let .provider(providerID, _):
+            let privateID = PrivateAIProviderFeature.shared.providerID
+            guard providerID == privateID || providerID == "custom:\(privateID)" else { return nil }
+        }
+        return .init(settings: settings)
+    }
+
+    static func modelChoice(
+        settings: SettingsStore,
+        selection: SettingsStore.DictationPromptSelection,
+        appBundleID: String?
+    ) -> ModelChoice {
+        if selection == .off { return .none }
+        if selection == .privateAI { return .privateAI }
+        let configuration = settings.dictationPromptConfiguration(for: selection)
+        let providerID = configuration.providerID.trimmingCharacters(in: .whitespacesAndNewlines)
+        let model = configuration.modelName.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !providerID.isEmpty, !model.isEmpty { return .provider(providerID, model) }
+        let hasAppBinding = settings.appPromptBinding(for: .dictate, appBundleID: appBundleID) != nil
+        if selection == .default, !hasAppBinding, self.shouldUseLegacyPrivateAIRoute(
+            selectedProviderID: settings.selectedProviderID,
+            configuredProviderID: providerID,
+            configuredModel: model
+        ) {
+            return .privateAI
+        }
+        return .provider(self.externalFallbackProviderID(from: settings.selectedProviderID), nil)
+    }
+
+    static func modelID(settings: SettingsStore, providerID: String, configuredModel: String?) -> String {
+        if let configuredModel { return configuredModel }
+        let selectedModels = settings.selectedModelByProvider
+        if let saved = settings.savedProviders.first(where: { $0.id == providerID }) {
+            return selectedModels["custom:\(saved.id)"] ?? saved.models.first ?? ""
+        }
+        if ModelRepository.shared.isBuiltIn(providerID) {
+            return selectedModels[providerID] ?? ModelRepository.shared.defaultModels(for: providerID).first ?? ""
+        }
+        return selectedModels[providerID] ?? ""
     }
 
     private static func build(settings: SettingsStore, selectedProviderID: String, configuredModel: String?) -> Self {
-        let selectedModels = settings.selectedModelByProvider
+        let model = self.modelID(settings: settings, providerID: selectedProviderID, configuredModel: configuredModel)
         let providerKeys = settings.providerAPIKeys
 
         if let saved = settings.savedProviders.first(where: { $0.id == selectedProviderID }) {
@@ -66,7 +102,7 @@ struct DictationProviderRoute: Equatable {
                 providerID: selectedProviderID,
                 providerKey: key,
                 baseURL: saved.baseURL,
-                model: configuredModel ?? selectedModels[key] ?? saved.models.first ?? "",
+                model: model,
                 apiKey: providerKeys[key] ?? providerKeys[selectedProviderID] ?? ""
             )
         }
@@ -76,7 +112,7 @@ struct DictationProviderRoute: Equatable {
                 providerID: selectedProviderID,
                 providerKey: selectedProviderID,
                 baseURL: ModelRepository.shared.defaultBaseURL(for: selectedProviderID),
-                model: configuredModel ?? selectedModels[selectedProviderID] ?? ModelRepository.shared.defaultModels(for: selectedProviderID).first ?? "",
+                model: model,
                 apiKey: providerKeys[selectedProviderID] ?? ""
             )
         }
@@ -85,7 +121,7 @@ struct DictationProviderRoute: Equatable {
             providerID: selectedProviderID,
             providerKey: selectedProviderID,
             baseURL: "",
-            model: configuredModel ?? selectedModels[selectedProviderID] ?? "",
+            model: model,
             apiKey: providerKeys[selectedProviderID] ?? ""
         )
     }

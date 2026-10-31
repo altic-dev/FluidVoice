@@ -16,7 +16,7 @@
     "third_party/protobuf": "4c56f21bb6d7e9cb8856ba0f6ca26f7e95e546f5"
   },
   "bridge": {
-    "configurationID": "webrtc-aec3-48k-mono-cxx20-no-protobuf-no-log-v1",
+    "configurationID": "webrtc-aec3-48k-mono-speech-protection-v2",
     "sampleRateHz": 48000,
     "frameSamples": 480,
     "languageStandard": "c++20",
@@ -28,7 +28,31 @@
     "usesAppleSystemLibcxx": true,
     "aecDumpFactory": "null",
     "protobufRuntimeLinked": false,
-    "perfettoRuntimeLinked": false
+    "perfettoRuntimeLinked": false,
+    "speechProtection": {
+      "dominantNearendEchoToSpeechThreshold": 1,
+      "dominantNearendSignalToNoiseThreshold": 10,
+      "dominantNearendTriggerBlocks": 3,
+      "nearendMaskingLowAndHigh": [
+        4,
+        8,
+        0.3
+      ],
+      "normalSuppressionUnchanged": true
+    },
+    "bridgeOnlyRebuild": {
+      "script": "BridgeSources/rebuild_bridge.sh",
+      "compiler": "Apple clang via xcrun",
+      "flags": [
+        "-O2",
+        "-std=c++20",
+        "-fno-exceptions",
+        "-fno-rtti",
+        "-fvisibility=hidden",
+        "-mmacosx-version-min=15.0"
+      ],
+      "preservesPinnedUpstreamArchiveMembers": true
+    }
   },
   "gnArgs": {
     "common": {

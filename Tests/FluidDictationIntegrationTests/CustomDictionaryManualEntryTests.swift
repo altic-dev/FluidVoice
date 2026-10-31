@@ -9,7 +9,7 @@ import FluidAudio
 
 @MainActor
 final class CustomDictionaryManualEntryTests: XCTestCase {
-    // Pronunciation features are opt-in in the app; these tests exercise the enabled paths.
+    // Keep these tests independent of a saved pronunciation preference.
     private var priorSharedFeaturesFlag: Any?
 
     override func setUp() {
@@ -23,51 +23,211 @@ final class CustomDictionaryManualEntryTests: XCTestCase {
         super.tearDown()
     }
 
-    func testIncompletePronunciationNoticeRendersWithoutRecordingOrSaving() async throws {
+    func testPronunciationDefaultsOnWithoutEnablingDiagnosticsAndPreservesOff() {
+        let defaults = UserDefaults.standard
+        let keys = [
+            "DictionarySharedFeatureMatcherEnabled", "DictionaryPronunciationGeneration",
+            "DictionaryPronunciationDebugCapture", "DictionaryNegativeLearningEnabled", "DictionaryNegativeComparisonEnabled",
+        ]
+        let savedPreferences = keys.map { defaults.object(forKey: $0) }
+        defer {
+            for (key, value) in zip(keys, savedPreferences) {
+                defaults.set(value, forKey: key)
+            }
+        }
+        for key in keys {
+            defaults.removeObject(forKey: key)
+        }
+
+        XCTAssertTrue(DictionaryMatcherExperiment.sharedFeaturesEnabled)
+        XCTAssertTrue(DictionaryMatcherExperiment.positiveEnabled)
+        XCTAssertTrue(DictionaryMatcherExperiment.needsFrames)
+        XCTAssertFalse(DictionaryPronunciationExperiment.captureEnabled)
+        XCTAssertFalse(DictionaryMatcherExperiment.collectNegatives)
+        XCTAssertFalse(DictionaryMatcherExperiment.compareNegatives)
+
+        let defaultGeneration = DictionaryMatcherExperiment.generation
+        DictionaryMatcherExperiment.setEnabled(true)
+        XCTAssertEqual(DictionaryMatcherExperiment.generation, defaultGeneration)
+
+        DictionaryMatcherExperiment.setEnabled(false)
+        XCTAssertEqual(defaults.object(forKey: keys[0]) as? Bool, false)
+        XCTAssertFalse(DictionaryMatcherExperiment.sharedFeaturesEnabled)
+        XCTAssertFalse(DictionaryMatcherExperiment.needsFrames)
+        let disabledGeneration = DictionaryMatcherExperiment.generation
+        XCTAssertNotEqual(disabledGeneration, defaultGeneration)
+        DictionaryMatcherExperiment.setEnabled(false)
+        XCTAssertEqual(DictionaryMatcherExperiment.generation, disabledGeneration)
+
+        DictionaryMatcherExperiment.setEnabled(true)
+        XCTAssertEqual(defaults.object(forKey: keys[0]) as? Bool, true)
+        XCTAssertTrue(DictionaryMatcherExperiment.sharedFeaturesEnabled)
+        XCTAssertNotEqual(DictionaryMatcherExperiment.generation, disabledGeneration)
+        XCTAssertFalse(DictionaryPronunciationExperiment.captureEnabled)
+        XCTAssertFalse(DictionaryMatcherExperiment.collectNegatives)
+        XCTAssertFalse(DictionaryMatcherExperiment.compareNegatives)
+    }
+
+    func testTrainingRestartWaitsBeforeStartingAndClearsWaitingState() async {
+        let restart = DictionaryTrainingRestart()
+        let started = expectation(description: "Next example starts after the break")
+        var calls = 0
+        let notBefore = ContinuousClock.now.advanced(by: .milliseconds(80))
+        restart.schedule(delay: .milliseconds(80), canContinue: { true }) {
+            XCTAssertGreaterThanOrEqual(ContinuousClock.now, notBefore)
+            calls += 1
+            started.fulfill()
+        }
+        XCTAssertTrue(restart.isWaiting)
+        XCTAssertEqual(calls, 0)
+        await fulfillment(of: [started], timeout: 1)
+        XCTAssertEqual(calls, 1)
+        XCTAssertFalse(restart.isWaiting)
+    }
+
+    func testCancelledAndSupersededTrainingRestartsCannotStartCapture() async {
+        let restart = DictionaryTrainingRestart()
+        let stale = expectation(description: "Cancelled examples cannot restart")
+        stale.isInverted = true
+        for _ in 0..<10 {
+            restart.schedule(delay: .milliseconds(30), canContinue: { true }) { stale.fulfill() }
+        }
+        restart.cancel()
+        XCTAssertFalse(restart.isWaiting)
+        let current = expectation(description: "Only the current example starts")
+        restart.schedule(delay: .milliseconds(20), canContinue: { true }) { current.fulfill() }
+        await fulfillment(of: [current, stale], timeout: 0.15)
+        XCTAssertFalse(restart.isWaiting)
+    }
+
+    func testTrainingRestartRechecksWhetherThePageStillWantsCapture() async {
+        let restart = DictionaryTrainingRestart()
+        var canContinue = true
+        let stopped = expectation(description: "Changed word cannot restart the old capture")
+        stopped.isInverted = true
+        restart.schedule(delay: .milliseconds(20), canContinue: { canContinue }) { stopped.fulfill() }
+        canContinue = false
+        await fulfillment(of: [stopped], timeout: 0.1)
+        XCTAssertFalse(restart.isWaiting)
+    }
+
+    func testSplitWordsRemainValidVoiceTrainingCorrections() async {
+        let result = await VoiceTrainingAliasFilter.filter(["fluid voice", "john turner", "there", "the"])
+        XCTAssertEqual(result.accepted, ["fluid voice", "john turner"])
+        XCTAssertEqual(result.rejected, ["there", "the"])
+    }
+
+    func testOnlyExplicitManualSpellingsBypassTheBasicWordGuard() async {
+        let result = await VoiceTrainingAliasFilter.filter(["the", "and", "fluid voice"], manuallyConfirmed: ["the", "absent"])
+        XCTAssertEqual(result.accepted, ["the", "fluid voice"])
+        XCTAssertEqual(result.rejected, ["and"])
+        let invalid = await VoiceTrainingAliasFilter.filter(["", String(repeating: "x", count: 161)], manuallyConfirmed: ["", String(repeating: "x", count: 161)])
+        XCTAssertTrue(invalid.accepted.isEmpty)
+    }
+
+    func testTrainingPauseAndVisibleSpellingsRenderWithoutInvokingActions() async throws {
+        let entries = SettingsStore.shared.customDictionaryEntries
         var actions = 0
-        for width in [420.0, 760.0] {
-            for scheme in [ColorScheme.light, .dark] {
-                let progress = DictionaryTrainingProgress(spellingCount: 3, pronunciationCount: 1, pronunciationEnabled: true)
-                let view = DictionaryWordWizard(
-                    word: .constant("Palermo"),
-                    step: .review,
-                    count: 3,
-                    heard: "pal ermo",
-                    variants: ["pal ermo"],
-                    busy: false,
-                    recording: false,
-                    processing: false,
-                    starting: false,
-                    error: nil,
-                    voiceSupported: true,
-                    alreadyCorrect: false,
-                    savedWord: "",
-                    onContinue: { actions += 1 },
-                    onRecord: { actions += 1 },
-                    onSave: { actions += 1 },
-                    onBack: { actions += 1 },
-                    onNewWord: { actions += 1 },
-                    onManual: { actions += 1 },
-                    onPracticeMore: { actions += 1 },
-                    pronunciationNotice: progress.pronunciationNotice,
-                    pronunciationIncomplete: true
-                )
-                .padding(20).frame(width: width)
-                .background(scheme == .dark ? Color(white: 0.12) : Color(white: 0.96))
-                .appTheme(.adaptive(accent: FluidBrandColors.blue, colorScheme: scheme))
-                .environment(\.colorScheme, scheme)
-                let host = NSHostingView(rootView: view)
-                let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: width, height: 1050), styleMask: [.titled], backing: .buffered, defer: false)
-                window.contentView = host
-                window.appearance = NSAppearance(named: scheme == .dark ? .darkAqua : .aqua)
-                window.orderFrontRegardless()
-                try await Task.sleep(for: .milliseconds(150))
-                host.layoutSubtreeIfNeeded()
-                let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
-                host.cacheDisplay(in: host.bounds, to: bitmap)
-                let png = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
-                try png.write(to: URL(fileURLWithPath: "/tmp/dictionary-wizard-review-\(Int(width))-\(scheme).png"))
-                window.orderOut(nil)
+        for phase in ["starting", "listening", "processing", "waiting"] {
+            for width in [420.0, 900.0] {
+                for scheme in [ColorScheme.light, .dark] {
+                    let view = DictionaryWordWizard(
+                        word: .constant(width < 500 ? "Supercalifragilisticexpialidocious" : "FluidVoice"),
+                        step: .recording,
+                        count: 1,
+                        heard: "fluid voice",
+                        variants: ["fluid voice", "fluid boys"],
+                        busy: phase != "listening",
+                        recording: phase == "listening" || phase == "starting",
+                        processing: phase == "processing",
+                        starting: phase == "starting",
+                        error: nil,
+                        voiceSupported: true,
+                        alreadyCorrect: false,
+                        savedWord: "",
+                        onContinue: { actions += 1 },
+                        onRecord: { actions += 1 },
+                        onSave: { actions += 1 },
+                        onBack: { actions += 1 },
+                        onNewWord: { actions += 1 },
+                        onManual: { actions += 1 },
+                        onPracticeMore: { actions += 1 },
+                        automaticCaptureActive: true,
+                        waiting: phase == "waiting",
+                        onPauseRecording: { actions += 1 },
+                        onAddSpelling: { _ in actions += 1; return nil },
+                        onRemoveSpelling: { _ in actions += 1 }
+                    )
+                    .padding(20).frame(width: width)
+                    .background(scheme == .dark ? Color(white: 0.12) : Color(white: 0.96))
+                    .appTheme(.adaptive(accent: FluidBrandColors.blue, colorScheme: scheme))
+                    .environment(\.colorScheme, scheme)
+                    let host = NSHostingView(rootView: view)
+                    let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: width, height: 1100), styleMask: [.titled], backing: .buffered, defer: false)
+                    window.contentView = host
+                    window.appearance = NSAppearance(named: scheme == .dark ? .darkAqua : .aqua)
+                    window.orderFrontRegardless()
+                    try await Task.sleep(for: .milliseconds(100))
+                    host.layoutSubtreeIfNeeded()
+                    let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+                    host.cacheDisplay(in: host.bounds, to: bitmap)
+                    let png = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+                    try png.write(to: URL(fileURLWithPath: "/tmp/dictionary-recording-\(phase)-\(Int(width))-\(scheme).png"))
+                    window.orderOut(nil)
+                }
+            }
+        }
+        XCTAssertEqual(actions, 0)
+        XCTAssertEqual(SettingsStore.shared.customDictionaryEntries, entries)
+    }
+
+    func testReviewStatesRenderWithoutRecordingOrSaving() async throws {
+        var actions = 0
+        for pronunciationCount in [1, 3] {
+            for width in [420.0, 760.0] {
+                for scheme in [ColorScheme.light, .dark] {
+                    let progress = DictionaryTrainingProgress(spellingCount: 3, pronunciationCount: pronunciationCount, pronunciationEnabled: true)
+                    let view = DictionaryWordWizard(
+                        word: .constant("Palermo"),
+                        step: .review,
+                        count: 3,
+                        heard: "pal ermo",
+                        variants: ["pal ermo"],
+                        busy: false,
+                        recording: false,
+                        processing: false,
+                        starting: false,
+                        error: nil,
+                        voiceSupported: true,
+                        alreadyCorrect: false,
+                        savedWord: "",
+                        onContinue: { actions += 1 },
+                        onRecord: { actions += 1 },
+                        onSave: { actions += 1 },
+                        onBack: { actions += 1 },
+                        onNewWord: { actions += 1 },
+                        onManual: { actions += 1 },
+                        onPracticeMore: { actions += 1 },
+                        pronunciationNotice: progress.pronunciationNotice,
+                        pronunciationIncomplete: !progress.pronunciationReady
+                    )
+                    .padding(20).frame(width: width)
+                    .background(scheme == .dark ? Color(white: 0.12) : Color(white: 0.96))
+                    .appTheme(.adaptive(accent: FluidBrandColors.blue, colorScheme: scheme))
+                    .environment(\.colorScheme, scheme)
+                    let host = NSHostingView(rootView: view)
+                    let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: width, height: 1050), styleMask: [.titled], backing: .buffered, defer: false)
+                    window.contentView = host
+                    window.appearance = NSAppearance(named: scheme == .dark ? .darkAqua : .aqua)
+                    window.orderFrontRegardless()
+                    try await Task.sleep(for: .milliseconds(150))
+                    host.layoutSubtreeIfNeeded()
+                    let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+                    host.cacheDisplay(in: host.bounds, to: bitmap)
+                    let png = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+                    try png.write(to: URL(fileURLWithPath: "/tmp/dictionary-wizard-review-\(pronunciationCount)-\(Int(width))-\(scheme).png"))
+                    window.orderOut(nil)
+                }
             }
         }
         XCTAssertEqual(actions, 0)
@@ -133,6 +293,8 @@ final class CustomDictionaryManualEntryTests: XCTestCase {
         for toggleDuringCapture in [false, true] {
             DictionaryMatcherExperiment.setEnabled(toggleDuringCapture)
             let monitor = DictionaryTrainingEndpointMonitor()
+            // Measure speech-end handling after the model is ready, as the word wizard does.
+            await monitor.prepare()
             let stopped = expectation(description: "Speech ends independently of pronunciation")
             var callbacks = 0
             monitor.start(
@@ -177,6 +339,98 @@ final class CustomDictionaryManualEntryTests: XCTestCase {
     #endif
 
     #if arch(arm64)
+    func testPronunciationRoutingRequiresEligibleProfiles() async throws {
+        UserDefaults.standard.removeObject(forKey: "DictionarySharedFeatureMatcherEnabled")
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = PronunciationDictionaryStore(fileURL: directory.appendingPathComponent("profiles.json"))
+        let entry = SettingsStore.CustomDictionaryEntry(triggers: ["fluid"], replacement: "FluidVoice")
+        let provider = FluidAudioProvider(
+            enhancementOptions: .init(experimentalUnifiedFinalEnabled: false, pronunciationMatchingEnabled: true, customDictionaryEntries: [entry]),
+            pronunciationStore: store
+        )
+        let empty = try await provider.refreshPronunciationRoutingForTesting(modelKey: "parakeet-v2")
+        XCTAssertFalse(empty, "Default-on must preserve ordinary dictation for text-only dictionaries")
+
+        let capture = PronunciationEnrollmentCapture(values: [1, 0], sourceFrameCount: 6, modelKey: "parakeet-v2")
+        try await store.upsert(dictionaryEntryID: entry.id, label: entry.replacement, modelKey: capture.modelKey, enrollments: [capture, capture])
+        provider.resetStreamingPreviewCache()
+        let incomplete = try await provider.refreshPronunciationRoutingForTesting(modelKey: capture.modelKey)
+        XCTAssertFalse(incomplete, "Two recordings are not an eligible pronunciation profile")
+
+        try await store.upsert(dictionaryEntryID: entry.id, label: entry.replacement, modelKey: capture.modelKey, enrollments: [capture])
+        provider.resetStreamingPreviewCache()
+        let enrolled = try await provider.refreshPronunciationRoutingForTesting(modelKey: capture.modelKey)
+        XCTAssertTrue(enrolled, "A trained word still enables long-dictation matching")
+
+        UserDefaults.standard.set(false, forKey: "DictionarySharedFeatureMatcherEnabled")
+        let disabled = try await provider.refreshPronunciationRoutingForTesting(modelKey: capture.modelKey)
+        XCTAssertFalse(disabled, "Saved Off must override loaded profiles")
+        UserDefaults.standard.removeObject(forKey: "DictionarySharedFeatureMatcherEnabled")
+        let reenabled = try await provider.refreshPronunciationRoutingForTesting(modelKey: capture.modelKey)
+        XCTAssertTrue(reenabled, "Re-enabling must reload profiles even before the next recording")
+
+        provider.resetStreamingPreviewCache()
+        let incompatible = try await provider.refreshPronunciationRoutingForTesting(modelKey: "unrelated-model")
+        XCTAssertFalse(incompatible, "Another model's profile must not change dictation routing")
+
+        try await store.delete(dictionaryEntryID: entry.id)
+        provider.resetStreamingPreviewCache()
+        let deleted = try await provider.refreshPronunciationRoutingForTesting(modelKey: capture.modelKey)
+        XCTAssertFalse(deleted, "Deleting the last voice word restores ordinary dictation")
+    }
+
+    func testProfileFreeRoutingPreservesExplicitUnifiedFinalAndMeetingPolicy() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = PronunciationDictionaryStore(fileURL: directory.appendingPathComponent("profiles.json"))
+        for unified in [false, true] {
+            let provider = FluidAudioProvider(
+                enhancementOptions: .init(experimentalUnifiedFinalEnabled: unified, pronunciationMatchingEnabled: true, customDictionaryEntries: []),
+                pronunciationStore: store
+            )
+            let incremental = try await provider.refreshPronunciationRoutingForTesting(modelKey: "parakeet-v2")
+            XCTAssertEqual(incremental, unified, "The separate unified-final opt-in must keep its existing behavior")
+        }
+        let meeting = try FluidAudioProvider(meetingConfiguration: MeetingFinalProcessingConfiguration())
+        let incremental = try await meeting.refreshPronunciationRoutingForTesting(modelKey: "parakeet-v2")
+        XCTAssertFalse(incremental, "Meeting transcription must remain independent of dictation pronunciation")
+    }
+
+    func testProfileFreeLongDictationPreservesTextAndWordTimings() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let provider = FluidAudioProvider(
+            modelOverride: .parakeetTDTv2,
+            configureWordBoosting: false,
+            enhancementOptions: .init(experimentalUnifiedFinalEnabled: false, pronunciationMatchingEnabled: true, customDictionaryEntries: []),
+            pronunciationStore: PronunciationDictionaryStore(fileURL: directory.appendingPathComponent("profiles.json"))
+        )
+        try await provider.prepare()
+        let fixture = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .appendingPathComponent("Resources/dictation_fixture.wav")
+        let clip = try AudioConverter().resampleAudioFile(path: fixture.path)
+        XCTAssertFalse(clip.isEmpty)
+        let samples = Array(repeating: clip, count: 240_000 / max(1, clip.count) + 1).flatMap { $0 }
+        XCTAssertGreaterThan(samples.count, 240_000)
+
+        UserDefaults.standard.set(false, forKey: "DictionarySharedFeatureMatcherEnabled")
+        provider.resetStreamingPreviewCache()
+        let baseline = try await provider.transcribeWithWordTimings(samples)
+        UserDefaults.standard.removeObject(forKey: "DictionarySharedFeatureMatcherEnabled")
+        provider.resetStreamingPreviewCache()
+        let preview = try await provider.transcribeStreaming(samples)
+        XCTAssertFalse(preview.text.isEmpty)
+        XCTAssertNil(provider.incrementalPreviewDeltaStart(totalSampleCount: samples.count + 16_000), "No unnecessary incremental session may start")
+        let defaultOn = try await provider.transcribeWithWordTimings(samples)
+        XCTAssertFalse(baseline.result.text.isEmpty)
+        XCTAssertFalse(baseline.words.isEmpty)
+        XCTAssertEqual(defaultOn.result.text, baseline.result.text)
+        XCTAssertEqual(defaultOn.words.map(\.text), baseline.words.map(\.text))
+        let final = try await provider.transcribeFinal(samples)
+        XCTAssertEqual(final.text, baseline.result.text)
+    }
+
     func testTrainingTranscribesSpellingsAcrossPronunciationToggle() async throws {
         let provider = FluidAudioProvider(modelOverride: .parakeetTDTv2, configureWordBoosting: false)
         try await provider.prepare()
@@ -285,8 +539,8 @@ final class CustomDictionaryManualEntryTests: XCTestCase {
         } catch {}
     }
 
-    func testVoiceTrainingKeepsPronunciationWithoutEverydayTextAliases() async {
-        let filtered = await VoiceTrainingAliasFilter.filter(["but", "now", "right now"]) { _ in .checked([]) }
+    func testVoiceTrainingKeepsPronunciationWithoutBasicTextAliases() async {
+        let filtered = await VoiceTrainingAliasFilter.filter(["a", "the", "and"])
         let entries = CustomDictionaryTrainingMerge.mergedEntries(
             current: [], replacement: "Lyft", triggers: filtered.accepted, savePronunciation: true
         )
@@ -298,7 +552,7 @@ final class CustomDictionaryManualEntryTests: XCTestCase {
     func testVoiceTrainingFilterPreservesExistingManualRules() async {
         let manual = SettingsStore.CustomDictionaryEntry(triggers: ["now"], replacement: "Lyft")
         let unrelated = SettingsStore.CustomDictionaryEntry(triggers: ["but"], replacement: "ManualChoice")
-        let filtered = await VoiceTrainingAliasFilter.filter(["now", "hello"]) { _ in .checked([]) }
+        let filtered = await VoiceTrainingAliasFilter.filter(["an", "the"])
         let entries = CustomDictionaryTrainingMerge.mergedEntries(
             current: [manual, unrelated], replacement: "Lyft", triggers: filtered.accepted, savePronunciation: true
         )
@@ -306,12 +560,63 @@ final class CustomDictionaryManualEntryTests: XCTestCase {
         XCTAssertEqual(CustomDictionaryManualEntry.normalizedTriggers(["but", "now", "right now"]), ["but", "now", "right now"])
     }
 
-    func testUnavailableVocabularyCannotCreateTextOnlyTrainingRules() async {
-        let filtered = await VoiceTrainingAliasFilter.filter(["now"]) { _ in .unavailable }
+    func testBasicWordsCannotCreateTextOnlyTrainingRules() async {
+        let filtered = await VoiceTrainingAliasFilter.filter(["the"])
         let entries = CustomDictionaryTrainingMerge.mergedEntries(
             current: [], replacement: "Lyft", triggers: filtered.accepted
         )
         XCTAssertTrue(entries.isEmpty)
+    }
+
+    func testVoiceTrainingCanSaveCorrectlySpelledWordsAndPhrasesWithoutPronunciation() async {
+        let filtered = await VoiceTrainingAliasFilter.filter(["hello", "right now", "fluid voice"])
+        let entries = CustomDictionaryTrainingMerge.mergedEntries(
+            current: [], replacement: "FluidVoice", triggers: filtered.accepted
+        )
+        XCTAssertEqual(entries.count, 1)
+        XCTAssertEqual(Set(entries.first?.triggers ?? []), Set(["hello", "right now", "fluid voice"]))
+    }
+
+    func testRepeatedCorrectionKeepsTheReviewOpenWithoutReportingSuccess() {
+        let entry = SettingsStore.CustomDictionaryEntry(triggers: ["super base"], replacement: "Supabase")
+        let unrelated = SettingsStore.CustomDictionaryEntry(triggers: ["other"], replacement: "Other")
+        self.withRestoredDictionary([entry, unrelated]) {
+            let session = AutomaticDictionaryTrainingSession(
+                candidate: .init(heardText: "Super base", correctedText: "Supabase"),
+                asr: AppServices.shared.asr
+            )
+            var successes = 0
+            session.onSuccess = { successes += 1 }
+
+            session.addOnlyCorrection()
+
+            XCTAssertEqual(SettingsStore.shared.customDictionaryEntries, [entry, unrelated])
+            XCTAssertEqual(session.screen, .choice)
+            XCTAssertEqual(successes, 0)
+            XCTAssertTrue(session.hasError)
+            XCTAssertTrue(session.statusMessage.contains("No new spelling corrections were saved"))
+        }
+    }
+
+    func testANewCorrectionStillSavesAndReportsSuccess() {
+        let unrelated = SettingsStore.CustomDictionaryEntry(triggers: ["other"], replacement: "Other")
+        self.withRestoredDictionary([unrelated]) {
+            let session = AutomaticDictionaryTrainingSession(
+                candidate: .init(heardText: "Super base", correctedText: "Supabase"),
+                asr: AppServices.shared.asr
+            )
+            var successes = 0
+            session.onSuccess = { successes += 1 }
+
+            session.addOnlyCorrection()
+
+            let entries = SettingsStore.shared.customDictionaryEntries
+            XCTAssertTrue(entries.contains(unrelated))
+            XCTAssertEqual(entries.first(where: { $0.replacement == "Supabase" })?.triggers, ["super base"])
+            XCTAssertEqual(session.screen, .success)
+            XCTAssertEqual(successes, 1)
+            XCTAssertFalse(session.hasError)
+        }
     }
 
     func testKeepsWhitespaceOnlyReplacements() {
@@ -836,3 +1141,45 @@ extension CustomDictionaryManualEntryTests {
         XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: root.path).count, 1)
     }
 }
+
+#if arch(arm64)
+extension CustomDictionaryManualEntryTests {
+    /// Opt-in local replay uses saved audio read-only; never changes the user's dictionary.
+    func testParakeetFamilySavedAudioReplay() async throws {
+        guard ProcessInfo.processInfo.environment["FV_DICTIONARY_FAMILY_REPLAY"] == "1" else {
+            throw XCTSkip("Set FV_DICTIONARY_FAMILY_REPLAY=1 to replay local dictionary audio")
+        }
+        let profiles = await PronunciationDictionaryStore.shared.allProfiles()
+        let source = try XCTUnwrap(profiles.first {
+            $0.modelKey == "parakeet-v2" && $0.hasTemporalRecordings && $0.enrollments.count >= 3
+        })
+        let audioID = try XCTUnwrap(source.enrollments.last?.inspectionID)
+        let audio = try await PronunciationDictionaryStore.shared.inspection(for: audioID)
+        let samples = Array(audio.samples.prefix(audio.recordedSampleCount))
+        var entryIDs = Set<UUID>()
+        let entries = profiles.filter { entryIDs.insert($0.dictionaryEntryID).inserted }.map {
+            SettingsStore.CustomDictionaryEntry(id: $0.dictionaryEntryID, triggers: [], replacement: $0.label)
+        }
+        let provider = FluidAudioProvider(
+            modelOverride: .fluidParakeetMini,
+            configureWordBoosting: false,
+            enhancementOptions: FluidAudioProviderEnhancementOptions(experimentalUnifiedFinalEnabled: false, pronunciationMatchingEnabled: true, customDictionaryEntries: entries)
+        )
+        try await provider.prepare()
+        await provider.pronunciationReferencePreparationTask?.value
+        let fixture = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("Resources/dictation_fixture.wav")
+        let negativeSamples = try AudioConverter().resampleAudioFile(path: fixture.path)
+        DictionaryMatcherExperiment.setEnabled(false)
+        let baselinePositive = try await provider.transcribeFinal(samples)
+        let baselineNegative = try await provider.transcribeFinal(negativeSamples)
+        DictionaryMatcherExperiment.setEnabled(true)
+        provider.resetStreamingPreviewCache()
+        let positive = try await provider.transcribeFinal(samples)
+        print("FAMILY_REPLAY source=\(source.modelKey) target=\(provider.pronunciationModelKeyForTesting) expected=\(source.label) baseline=\(baselinePositive.text) output=\(positive.text)")
+        XCTAssertTrue(positive.text.localizedCaseInsensitiveContains(source.label))
+        let negative = try await provider.transcribeFinal(negativeSamples)
+        print("FAMILY_REPLAY negative=\(negative.text)")
+        XCTAssertEqual(negative.text, baselineNegative.text, "The complete saved dictionary must leave unrelated speech unchanged")
+    }
+}
+#endif

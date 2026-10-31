@@ -374,6 +374,39 @@ final class MeetingOverlayPresentationReducerTests: XCTestCase {
 
 @MainActor
 final class MeetingMenuBarStartTests: XCTestCase {
+    func testDisabledFluidMeetCannotReopenOverlaysOrCreateMeetingServices() {
+        let original = UserDefaults.standard.object(forKey: "FluidMeetEnabled")
+        defer { UserDefaults.standard.set(original, forKey: "FluidMeetEnabled") }
+        let services = AppServices.shared
+        SettingsStore.shared.fluidMeetEnabled = false
+        let hadCoordinator = services.isMeetingSessionCoordinatorMaterialized
+        let windows = NSApp.windows.count
+        MeetingFloatingCaptionsController.shared.show(from: nil)
+        MeetingRecordingPillController.shared.expand()
+        MeetingStillRecordingNudgeController.shared.present()
+        MeetingDetectionPromptController.shared.present(.init(
+            episodeID: UUID(), bundleIdentifier: "us.zoom.xos", pid: 42, tier: .nativeTier1
+        ))
+        XCTAssertEqual(services.isMeetingSessionCoordinatorMaterialized, hadCoordinator)
+        XCTAssertEqual(NSApp.windows.count, windows)
+        XCTAssertNil(MeetingRecordingPillController.shared.currentOverlayFrame)
+        XCTAssertFalse(MeetingStillRecordingNudgeController.shared.isPresented)
+        XCTAssertNil(MeetingDetectionPromptController.shared.request)
+    }
+
+    func testDisabledFluidMeetIgnoresMenuStartWithoutNavigationOrError() async {
+        let original = UserDefaults.standard.object(forKey: "FluidMeetEnabled")
+        defer { UserDefaults.standard.set(original, forKey: "FluidMeetEnabled") }
+        SettingsStore.shared.fluidMeetEnabled = false
+        let manager = MenuBarManager()
+        var called = false
+        await manager.startMeetingRecordingInBackground { called = true }
+        XCTAssertFalse(called)
+        XCTAssertFalse(manager.meetingStartRequested)
+        XCTAssertNil(manager.meetingStartError)
+        XCTAssertNil(manager.requestedNavigationDestination)
+    }
+
     func testRepeatedStartIsIgnoredAndNeverNavigates() async {
         let manager = MenuBarManager()
         var calls = 0
@@ -457,6 +490,69 @@ final class MeetingHistorySnapshotTests: XCTestCase {
         )
     }
 
+    func testSavedCorrectionUpdatesOnlyItsMeetingWithoutDiskReload() async {
+        let loader = HistorySnapshotLoader()
+        let snapshot = MeetingHistorySnapshot { try await loader.load() }
+        let original = self.session()
+        let other = self.session()
+        let initial = Task { await snapshot.refresh() }
+        await loader.waitForCall(1)
+        loader.finish(.success([original, other]))
+        await initial.value
+        var corrected = original
+        corrected.title = "Corrected"
+        snapshot.applySavedSession(corrected)
+        XCTAssertEqual(snapshot.sessions, [corrected, other])
+        XCTAssertEqual(loader.calls, 1, "publishing a saved correction performs no history read")
+        snapshot.applySavedSession(original) // Undo uses the same publication path.
+        XCTAssertEqual(snapshot.sessions, [original, other])
+        XCTAssertEqual(loader.calls, 1)
+    }
+
+    func testRapidCorrectionsCannotBeOverwrittenByAnOlderHistoryRead() async {
+        let loader = HistorySnapshotLoader()
+        let snapshot = MeetingHistorySnapshot { try await loader.load() }
+        let original = self.session()
+        let initial = Task { await snapshot.refresh() }
+        await loader.waitForCall(1)
+        loader.finish(.success([original]))
+        await initial.value
+        let refresh = Task { await snapshot.refresh() }
+        await loader.waitForCall(2)
+        var first = original
+        first.title = "First correction"
+        snapshot.applySavedSession(first)
+        var second = first
+        second.title = "Second correction"
+        snapshot.applySavedSession(second)
+        XCTAssertEqual(snapshot.sessions, [second])
+        loader.finish(.success([original]))
+        await loader.waitForCall(3)
+        XCTAssertEqual(snapshot.sessions, [second], "stale rows never replace the saved result")
+        loader.finish(.failure(NSError(domain: "test", code: 1)))
+        await refresh.value
+        XCTAssertEqual(snapshot.sessions, [second], "refresh failure keeps the saved correction")
+        XCTAssertEqual(loader.calls, 3, "rapid corrections coalesce into one follow-up read")
+    }
+
+    func testSavedSessionDuringInitialLoadIsNotLostOrDuplicated() async {
+        let loader = HistorySnapshotLoader()
+        let snapshot = MeetingHistorySnapshot { try await loader.load() }
+        let saved = self.session()
+        let initial = Task { await snapshot.refresh() }
+        await loader.waitForCall(1)
+        snapshot.applySavedSession(saved)
+        snapshot.applySavedSession(saved)
+        XCTAssertEqual(snapshot.sessions, [saved])
+        loader.finish(.success([]))
+        await loader.waitForCall(2)
+        XCTAssertEqual(snapshot.sessions, [saved])
+        loader.finish(.success([saved]))
+        await initial.value
+        XCTAssertEqual(snapshot.sessions, [saved])
+        XCTAssertTrue(snapshot.hasLoaded)
+    }
+
     func testSnapshotKeepsRowsDuringRefreshAndFailureThenRecovers() async {
         let loader = HistorySnapshotLoader()
         let snapshot = MeetingHistorySnapshot { try await loader.load() }
@@ -513,6 +609,105 @@ final class MeetingHistorySnapshotTests: XCTestCase {
 }
 
 @MainActor
+final class MeetingCorrectionUndoRegistrationTests: XCTestCase {
+    func testNativeUndoWalksCorrectionsAndStopsWithoutCreatingRedo() async {
+        let manager = UndoManager()
+        manager.groupsByEvent = false
+        let registration = MeetingCorrectionUndoRegistration()
+        defer { registration.detach() }
+        var count = 0
+        let calls = (0..<3).map { self.expectation(description: "Undo \($0)") }
+        registration.refresh(manager: manager, sessionID: UUID(), isEnabled: true) {
+            calls[count].fulfill()
+            count += 1
+            return count < 3
+        }
+        XCTAssertEqual(manager.undoActionName, "Meeting Correction")
+        for call in calls {
+            XCTAssertTrue(manager.canUndo)
+            manager.undo()
+            await self.fulfillment(of: [call], timeout: 2)
+        }
+        XCTAssertEqual(count, 3)
+        XCTAssertFalse(manager.canUndo)
+        XCTAssertFalse(manager.canRedo)
+    }
+
+    func testEditingAndLeavingOnlyRemoveMeetingUndoNotOtherTextUndo() {
+        let manager = UndoManager()
+        manager.groupsByEvent = false
+        let registration = MeetingCorrectionUndoRegistration()
+        let other = NativeUndoCounter()
+        manager.beginUndoGrouping()
+        manager.registerUndo(withTarget: other) { $0.calls += 1 }
+        manager.endUndoGrouping()
+        let sessionID = UUID()
+        var corrections = 0
+        let action: @MainActor () async -> Bool = { corrections += 1; return false }
+        registration.refresh(manager: manager, sessionID: sessionID, isEnabled: true, action: action)
+        registration.refresh(manager: manager, sessionID: sessionID, isEnabled: false, action: action)
+        manager.undo()
+        XCTAssertEqual(other.calls, 1, "native text undo remains available while editing")
+        XCTAssertEqual(corrections, 0)
+        registration.refresh(manager: manager, sessionID: sessionID, isEnabled: true, action: action)
+        registration.detach()
+        XCTAssertFalse(manager.canUndo, "leaving the transcript cannot undo an invisible meeting")
+    }
+
+    func testFailedSaveKeepsNativeUndoAvailableForRetry() async {
+        let manager = UndoManager()
+        manager.groupsByEvent = false
+        let registration = MeetingCorrectionUndoRegistration()
+        defer { registration.detach() }
+        let failed = self.expectation(description: "Failed save")
+        let retried = self.expectation(description: "Retried save")
+        var calls = 0
+        registration.refresh(manager: manager, sessionID: UUID(), isEnabled: true) {
+            calls += 1
+            if calls == 1 { failed.fulfill(); return true }
+            retried.fulfill()
+            return false
+        }
+        manager.undo()
+        await self.fulfillment(of: [failed], timeout: 2)
+        XCTAssertTrue(manager.canUndo)
+        manager.undo()
+        await self.fulfillment(of: [retried], timeout: 2)
+        XCTAssertEqual(calls, 2)
+        XCTAssertFalse(manager.canUndo)
+    }
+
+    func testPendingSaveCannotRegisterUndoInAnotherMeeting() async {
+        let manager = UndoManager()
+        manager.groupsByEvent = false
+        let registration = MeetingCorrectionUndoRegistration()
+        defer { registration.detach() }
+        let started = self.expectation(description: "First save started")
+        let finished = self.expectation(description: "First save finished")
+        let next = self.expectation(description: "Next meeting undone")
+        var continuation: CheckedContinuation<Bool, Never>?
+        registration.refresh(manager: manager, sessionID: UUID(), isEnabled: true) {
+            let result = await withCheckedContinuation { continuation = $0; started.fulfill() }
+            finished.fulfill()
+            return result
+        }
+        manager.undo()
+        await self.fulfillment(of: [started], timeout: 2)
+        registration.refresh(manager: manager, sessionID: UUID(), isEnabled: true) { next.fulfill(); return false }
+        continuation?.resume(returning: true)
+        await self.fulfillment(of: [finished], timeout: 2)
+        manager.undo()
+        await self.fulfillment(of: [next], timeout: 2)
+        XCTAssertFalse(manager.canUndo)
+    }
+}
+
+@MainActor
+private final class NativeUndoCounter {
+    var calls = 0
+}
+
+@MainActor
 private final class HistorySnapshotLoader {
     private(set) var calls = 0
     private var pending: CheckedContinuation<[MeetingSession], Error>?
@@ -538,5 +733,144 @@ private final class HistorySnapshotLoader {
         let pending = self.pending
         self.pending = nil
         pending?.resume(with: result)
+    }
+}
+
+@MainActor
+extension MeetingMenuBarStartTests {
+    func testMeetingShortcutIgnoresBusyStatesAndDuplicateStops() async throws {
+        let previous = UserDefaults.standard.object(forKey: "FluidMeetEnabled")
+        defer { UserDefaults.standard.set(previous, forKey: "FluidMeetEnabled") }
+        SettingsStore.shared.fluidMeetEnabled = true
+        let manager = MenuBarManager()
+        let id = UUID()
+        var starts = 0
+        var stops = 0
+        for state in [MeetingCoordinatorState.preparing(id), .stopping(id), .processing(id, .transcribing)] {
+            manager.configureMeetingShortcutForTesting(state: state) { stops += 1 }
+            await manager.toggleMeetingRecordingFromShortcut { starts += 1 }
+        }
+        XCTAssertEqual(starts, 0)
+        XCTAssertEqual(stops, 0)
+        manager.configureMeetingShortcutForTesting(state: .recording(id)) { stops += 1 }
+        await manager.toggleMeetingRecordingFromShortcut { starts += 1 }
+        await manager.toggleMeetingRecordingFromShortcut { starts += 1 }
+        XCTAssertEqual(stops, 1)
+        XCTAssertEqual(starts, 0)
+        manager.configureMeetingShortcutForTesting(state: .completed(id)) { stops += 1 }
+        await manager.toggleMeetingRecordingFromShortcut {
+            starts += 1
+            await manager.toggleMeetingRecordingFromShortcut { starts += 1 }
+        }
+        XCTAssertEqual(starts, 1)
+        XCTAssertFalse(manager.meetingStartRequested)
+        XCTAssertNil(manager.requestedNavigationDestination)
+    }
+
+    func testMeetingShortcutCannotInterruptDictationAndFailureAllowsRetry() async throws {
+        let previous = UserDefaults.standard.object(forKey: "FluidMeetEnabled")
+        defer { UserDefaults.standard.set(previous, forKey: "FluidMeetEnabled") }
+        SettingsStore.shared.fluidMeetEnabled = true
+        let asr = ASRService()
+        let manager = MenuBarManager()
+        manager.configure(asrService: asr)
+        let lease = try asr.acquireExclusiveActivity(.dictation)
+        var starts = 0
+        await manager.toggleMeetingRecordingFromShortcut { starts += 1 }
+        XCTAssertEqual(starts, 0)
+        XCTAssertEqual(asr.activeExclusiveActivity, .dictation)
+        asr.releaseExclusiveActivity(lease)
+        await manager.toggleMeetingRecordingFromShortcut { throw MeetingCaptureError.microphoneUnavailable }
+        XCTAssertFalse(manager.meetingStartRequested)
+        XCTAssertNotNil(manager.meetingStartError)
+        await manager.toggleMeetingRecordingFromShortcut { starts += 1 }
+        XCTAssertEqual(starts, 1)
+        XCTAssertNil(manager.meetingStartError)
+        XCTAssertNil(manager.requestedNavigationDestination)
+    }
+}
+
+@MainActor
+final class MeetingPageActionAvailabilityTests: XCTestCase {
+    private func session() -> MeetingSession {
+        MeetingSession(
+            configuration: MeetingCaptureConfiguration(mode: .inRoom, title: "Meeting", microphone: MeetingMicrophoneIdentity(captureDeviceID: "mic", displayName: "Mic")),
+            timebase: MeetingTimebaseMetadata(startedHostTime: 0, machTimebaseNumerator: 1, machTimebaseDenominator: 1, firstPresentationTime: nil)
+        )
+    }
+
+    func testCompletedAndFailedMeetingsKeepNewMeetingVisibleWhileSummaryBlocksItsAction() {
+        for state in [MeetingTranscriptionCanvasState.result(self.session()), .failed(session: nil, message: "Failed")] {
+            for summaryRunning in [false, true] {
+                let actions = MeetingPageActionAvailability(state: state, isSummaryRunning: summaryRunning)
+                XCTAssertTrue(actions.showsNewMeeting)
+                XCTAssertEqual(actions.canStartNewMeeting, !summaryRunning)
+                XCTAssertTrue(actions.canEditSetup)
+            }
+        }
+    }
+
+    func testSetupAndActiveCaptureNeverOfferAnotherMeeting() {
+        let session = self.session()
+        let states: [MeetingTranscriptionCanvasState] = [
+            .setup(isStarting: false, recentSession: nil),
+            .setup(isStarting: true, recentSession: session),
+            .recording(session: session, trackHealth: [:], liveTranscript: .empty),
+            .stopping(session: session, trackHealth: [:], liveTranscript: .empty),
+            .processing(session: session, stage: .transcribing),
+        ]
+        for (index, state) in states.enumerated() {
+            let actions = MeetingPageActionAvailability(state: state, isSummaryRunning: false)
+            XCTAssertFalse(actions.showsNewMeeting)
+            XCTAssertFalse(actions.canStartNewMeeting)
+            XCTAssertEqual(actions.canEditSetup, index == 0)
+        }
+    }
+}
+
+@MainActor
+extension MeetingMenuBarStartTests {
+    func testSavedOnlineApplicationIsUsedWithoutAutomaticDetection() throws {
+        var defaults = MeetingRecordingDefaults.unconfigured
+        defaults.isConfigured = true
+        defaults.applicationBundleIdentifier = "us.zoom.xos"
+        let app = MeetingApplicationIdentity(bundleIdentifier: "us.zoom.xos", processID: 42, displayName: "Zoom")
+        let config = try self.savedSourceConfiguration(defaults: defaults, applications: [app])
+        XCTAssertEqual(config.mode, .onlineCall)
+        XCTAssertEqual(config.application, app)
+        XCTAssertEqual(config.platform?.identifier, app.bundleIdentifier)
+    }
+
+    func testUnavailableSavedApplicationCannotSilentlyBecomeMicrophoneOnly() {
+        var defaults = MeetingRecordingDefaults.unconfigured
+        defaults.isConfigured = true
+        defaults.applicationBundleIdentifier = "us.zoom.xos"
+        XCTAssertThrowsError(try self.savedSourceConfiguration(defaults: defaults, applications: [
+            MeetingApplicationIdentity(bundleIdentifier: "com.microsoft.teams2", processID: 43, displayName: "Teams"),
+        ]))
+    }
+
+    func testSavedInRoomModeDoesNotCaptureASavedApplication() throws {
+        var defaults = MeetingRecordingDefaults.unconfigured
+        defaults.isConfigured = true
+        defaults.mode = .inRoom
+        defaults.applicationBundleIdentifier = "us.zoom.xos"
+        let app = MeetingApplicationIdentity(bundleIdentifier: "us.zoom.xos", processID: 42, displayName: "Zoom")
+        let config = try self.savedSourceConfiguration(defaults: defaults, applications: [app])
+        XCTAssertEqual(config.mode, .inRoom)
+        XCTAssertNil(config.application)
+    }
+
+    private func savedSourceConfiguration(
+        defaults: MeetingRecordingDefaults,
+        applications: [MeetingApplicationIdentity]
+    ) throws -> MeetingCaptureConfiguration {
+        try AppServices.menuBarMeetingConfiguration(
+            defaults: defaults,
+            target: nil,
+            microphones: .init(identities: [.init(captureDeviceID: "mic", displayName: "Mic")], defaultCoreAudioUID: nil),
+            applications: applications,
+            preferredInputUID: nil
+        )
     }
 }

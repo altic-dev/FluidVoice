@@ -244,7 +244,7 @@ extension SettingsStore.SpeechModel {
 
     var supportsCustomVocabulary: Bool {
         switch self {
-        case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico:
+        case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico, .fluidParakeetPro:
             return true
         default:
             return false

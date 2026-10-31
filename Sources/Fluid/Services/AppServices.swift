@@ -41,7 +41,7 @@ final class AppServices: ObservableObject {
             DebugLogger.shared.info("🚦 UI Ready signal received - services can now initialize", source: "AppServices")
             self.isUIReady = true
         }
-        _ = self.meetingAutoDetector
+        self.refreshFluidMeetAvailability()
     }
 
     // MARK: - Lazy Services
@@ -132,24 +132,26 @@ final class AppServices: ObservableObject {
         )
         self._meetingSessionCoordinator = coordinator
         self.setupMeetingCoordinatorForwarding()
-        // The auto-detected episode itself stays consumed until the meeting's own evidence ends
-        // (window/URL gone ≥60s) — not merely because our recording stopped — so only the nudge
-        // and the end-of-meeting watch are dropped here.
+        // Attach end monitoring to every captured call, including manual and menu-bar starts.
+        // Start-prompt episodes remain consumed until the meeting's own evidence ends.
         coordinator.$state
             .receive(on: DispatchQueue.main)
             .sink { [weak self, weak coordinator] state in
                 // Deliveries are queued, so read the state as it is now before calling a recording over.
-                switch coordinator?.state {
-                case .preparing, .recording, .recordingDegraded: break
-                default: self?._meetingAutoDetector?.recordingStopped()
-                }
+                Self.synchronizeMeetingEndWatch(
+                    state: coordinator?.state,
+                    session: coordinator?.activeSession,
+                    detector: self?._meetingAutoDetector
+                )
                 guard !MeetingOverlayVisibility.isVisible(for: state) else { return }
                 MeetingStillRecordingNudgeController.shared.hide()
             }
             .store(in: &self.cancellables)
         Task { @MainActor in
+            guard SettingsStore.shared.fluidMeetEnabled else { return }
             MeetingRecordingPillController.shared.activate(coordinator: coordinator)
             await coordinator.ensureRestored()
+            guard SettingsStore.shared.fluidMeetEnabled else { return }
             await coordinator.sweepExpiredAudio()
         }
         return coordinator
@@ -169,20 +171,26 @@ final class AppServices: ObservableObject {
             browserTabReader: AXBrowserTabReader(),
             activityGate: LiveDetectionActivityGate(),
             clock: SystemClock(),
-            isNativeDetectionEnabled: { SettingsStore.shared.meetingAutoDetectEnabled },
+            isNativeDetectionEnabled: { SettingsStore.shared.fluidMeetEnabled && SettingsStore.shared.meetingAutoDetectEnabled },
             isBrowserDetectionEnabled: {
-                SettingsStore.shared.meetingAutoDetectEnabled && SettingsStore.shared.meetingAutoDetectBrowserEnabled
+                SettingsStore.shared.fluidMeetEnabled && SettingsStore.shared.meetingAutoDetectEnabled && SettingsStore.shared.meetingAutoDetectBrowserEnabled
             },
             lastSpeechAt: { [weak self] in self?._meetingSessionCoordinator?.lastLiveSpeechAt }
         )
         self._meetingAutoDetector = detector
         self.wireMeetingAutoDetector(detector)
-        detector.start()
+        if SettingsStore.shared.fluidMeetEnabled { detector.start() }
         DebugLogger.shared.info("detector-started", source: "MeetingAutoDetector")
         return detector
     }
 
     private func wireMeetingAutoDetector(_ detector: MeetingAutoDetector) {
+        // The detector is lazy; a manual recording may already be running when it is created.
+        Self.synchronizeMeetingEndWatch(
+            state: self._meetingSessionCoordinator?.state,
+            session: self._meetingSessionCoordinator?.activeSession,
+            detector: detector
+        )
         detector.onAutomaticTargetChanged = { [weak self] target in
             self?.meetingAutomaticTarget = target
         }
@@ -228,8 +236,33 @@ final class AppServices: ObservableObject {
         }
     }
 
+    /// Inputs must be the coordinator's current snapshot, not a queued state notification.
+    static func synchronizeMeetingEndWatch(
+        state: MeetingCoordinatorState?,
+        session: MeetingSession?,
+        detector: MeetingAutoDetector?
+    ) {
+        guard let detector else { return }
+        switch state {
+        case .preparing:
+            break
+        case let .recording(id), let .recordingDegraded(id):
+            guard let session, session.id == id else {
+                detector.recordingStopped()
+                return
+            }
+            detector.recordingStarted(
+                sessionID: id,
+                application: session.mode == .onlineCall ? session.capturedApplication : nil
+            )
+        default:
+            detector.recordingStopped()
+        }
+    }
+
     private func startAutoDetectedRecording(episodeID: UUID) async throws {
-        guard let detector = self._meetingAutoDetector,
+        guard SettingsStore.shared.fluidMeetEnabled,
+              let detector = self._meetingAutoDetector,
               let target = detector.resolvedTarget(for: episodeID),
               detector.canStart(episodeID: episodeID)
         else {
@@ -280,11 +313,40 @@ final class AppServices: ObservableObject {
     private var cancellables = Set<AnyCancellable>()
 
     private init() {
+        NotificationCenter.default.publisher(for: .fluidMeetEnabledChanged)
+            .sink { [weak self] _ in
+                MainActor.assumeIsolated { self?.refreshFluidMeetAvailability() }
+            }
+            .store(in: &self.cancellables)
         // CRITICAL: Services are NOT created here.
         // They are created lazily on first access, which happens AFTER the UI is ready.
         // This ensures SwiftUI's AttributeGraph has finished processing before
         // any heavy audio system work begins.
         DebugLogger.shared.info("📦 AppServices singleton created (services not yet initialized)", source: "AppServices")
+    }
+
+    /// Do not abandon an active recording or processing job when changing availability.
+    func setFluidMeetEnabled(_ enabled: Bool) {
+        guard enabled || !self.hasActiveMeetingSessionActivity else { return }
+        SettingsStore.shared.fluidMeetEnabled = enabled
+    }
+
+    private func refreshFluidMeetAvailability() {
+        guard SettingsStore.shared.fluidMeetEnabled else {
+            self._meetingAutoDetector?.stop()
+            self._meetingAutoDetector = nil
+            self.meetingAutomaticTarget = nil
+            self.meetingAutoDetectHealth = nil
+            MeetingDetectionPromptController.shared.cancelForFeatureDisable()
+            MeetingStillRecordingNudgeController.shared.hide()
+            MeetingRecordingPillController.shared.deactivate()
+            return
+        }
+        guard self.isUIReady else { return }
+        if let coordinator = self._meetingSessionCoordinator {
+            MeetingRecordingPillController.shared.activate(coordinator: coordinator)
+        }
+        _ = self.meetingAutoDetector
     }
 
     // MARK: - Change Forwarding
@@ -329,7 +391,7 @@ final class AppServices: ObservableObject {
         // Access the properties to trigger lazy initialization
         _ = self.audioObserver
         _ = self.asr
-        _ = self.meetingAutoDetector
+        self.refreshFluidMeetAvailability()
 
         DebugLogger.shared.info("✅ All services initialized", source: "AppServices")
     }

@@ -62,13 +62,23 @@ private final class FakeAudioProcessActivity: AudioProcessActivityProviding {
 @MainActor
 private final class FakeWindowSnapshotProvider: WindowSnapshotProviding {
     var axTitles: [String] = []
-    func snapshot(interestPIDs: Set<Int32>) -> [WindowSnapshot] { [] }
+    var lastInterestPIDs: Set<Int32> = []
+    func snapshot(interestPIDs: Set<Int32>) -> [WindowSnapshot] {
+        self.lastInterestPIDs = interestPIDs
+        return []
+    }
+
     func titles(processID: Int32) async -> [String] { self.axTitles }
 }
 
 @MainActor
 private final class FakeBrowserTabReader: BrowserTabReading {
-    func frontmostTabURL(bundleIdentifier: String, processID: Int32) async -> BrowserTabURL? { nil }
+    var result: BrowserTabURL?
+    var readPIDs: [Int32] = []
+    func frontmostTabURL(bundleIdentifier: String, processID: Int32) async -> BrowserTabURL? {
+        self.readPIDs.append(processID)
+        return self.result
+    }
 }
 
 @MainActor
@@ -95,6 +105,7 @@ private final class DetectorHarness {
     let audioProcessActivity = FakeAudioProcessActivity()
     let windowProvider = FakeWindowSnapshotProvider()
     let workspace = FakeWorkspaceEvents()
+    let browserReader = FakeBrowserTabReader()
     var prompts: [MeetingAutoDetector.PromptRequest] = []
     var nudges = 0
     var withdrawals = 0
@@ -118,7 +129,7 @@ private final class DetectorHarness {
             micActivity: FakeMicActivity(),
             audioProcessActivity: self.audioProcessActivity,
             windowSnapshotProvider: self.windowProvider,
-            browserTabReader: FakeBrowserTabReader(),
+            browserTabReader: self.browserReader,
             activityGate: self.gate,
             clock: self.clock,
             isNativeDetectionEnabled: { flags.nativeEnabled },
@@ -414,6 +425,54 @@ final class MeetingAutoDetectorTests: XCTestCase {
         h.detector.handleBrowserTabURL(.init(host: "meet.google.com", path: "/abc-defg-hij"), pid: 8, bundleIdentifier: "com.google.Chrome", at: h.clock.now())
         XCTAssertEqual(h.prompts.count, 1)
         XCTAssertEqual(h.prompts.first?.tier, .browserTier2)
+    }
+
+    func testProcessOwnerLookupDoesNotBlockMainAndPreservesSnapshot() async {
+        let entered = expectation(description: "owner lookup on worker")
+        let release = DispatchSemaphore(value: 0)
+        let owners = [MeetingProcessOwner(processID: 42, bundleIdentifier: "us.zoom.xos", bundlePath: "/Applications/zoom.us.app")]
+        let provider = CoreAudioProcessActivityProvider(
+            readOwners: {
+                XCTAssertFalse(Thread.isMainThread)
+                entered.fulfill()
+                XCTAssertEqual(release.wait(timeout: .now() + 2), .success)
+                return owners
+            },
+            readActivity: { snapshotOwners in
+                XCTAssertFalse(Thread.isMainThread)
+                return .init(processes: [], owners: snapshotOwners, queryState: .valid)
+            }
+        )
+        let task = Task { await provider.snapshot() }
+        await fulfillment(of: [entered], timeout: 1)
+        // This main-actor continuation must run while the owner lookup is blocked.
+        release.signal()
+        let snapshot = await task.value
+        XCTAssertEqual(snapshot.owners, owners)
+        XCTAssertEqual(snapshot.queryState, .valid)
+    }
+
+    func testCancelledProcessOwnerLookupSkipsAudioQuery() async {
+        let entered = expectation(description: "owner lookup on worker")
+        let release = DispatchSemaphore(value: 0)
+        let provider = CoreAudioProcessActivityProvider(
+            readOwners: {
+                entered.fulfill()
+                _ = release.wait(timeout: .now() + 2)
+                return []
+            },
+            readActivity: { _ in
+                XCTFail("A cancelled meeting poll must not start an audio query")
+                return .init(processes: [], owners: [], queryState: .valid)
+            }
+        )
+        let task = Task { await provider.snapshot() }
+        await fulfillment(of: [entered], timeout: 1)
+        task.cancel()
+        release.signal()
+        let snapshot = await task.value
+        XCTAssertEqual(snapshot.queryState, .unknown)
+        XCTAssertTrue(snapshot.owners.isEmpty)
     }
 
     func testLiveAudioProcessOwnershipProbe() async throws {
@@ -1950,5 +2009,483 @@ final class MeetingAutoDetectorTests: XCTestCase {
         ]
         let selected = MeetingWindowSelector.selectWindow(from: candidates, preferredWindowID: 999)
         XCTAssertEqual(selected?.windowID, 1)
+    }
+}
+
+@MainActor
+final class MeetingManualRecordingEndTests: XCTestCase {
+    private func session(bundle: String? = "us.zoom.xos", pid: Int32? = 100) -> MeetingSession {
+        var session = MeetingSession(
+            configuration: MeetingCaptureConfiguration(
+                mode: bundle == nil ? .inRoom : .onlineCall,
+                title: "End detection fixture",
+                application: bundle.map { MeetingApplicationIdentity(bundleIdentifier: $0, processID: pid, displayName: "Call") },
+                microphone: MeetingMicrophoneIdentity(captureDeviceID: "fixture-mic", displayName: "Microphone")
+            ),
+            timebase: MeetingTimebaseMetadata(startedHostTime: 0, machTimebaseNumerator: 1, machTimebaseDenominator: 1)
+        )
+        session.state = .recording
+        return session
+    }
+
+    private func synchronize(_ h: DetectorHarness, _ session: MeetingSession, state: MeetingCoordinatorState? = nil) {
+        AppServices.synchronizeMeetingEndWatch(state: state ?? .recording(session.id), session: session, detector: h.detector)
+    }
+
+    func testManualNativeRecordingAsksWithoutAnyStartPromptOrWindowEvidence() {
+        for bundle in ["us.zoom.xos", "com.microsoft.teams2", "com.cisco.webexmeetingsapp"] {
+            let h = DetectorHarness()
+            let session = self.session(bundle: bundle)
+            h.gate.isIdle = false
+            self.synchronize(h, session)
+            h.detector.handleAudioProcessActivity(true, pid: 100, at: h.clock.now())
+            h.detector.handleAudioProcessActivity(false, pid: 100, at: h.clock.now())
+            h.advance(MeetingAutoDetector.endSignalGraceSeconds + 1)
+            h.detector.tick(at: h.clock.now())
+            XCTAssertEqual(h.nudges, 1, bundle)
+            XCTAssertTrue(h.prompts.isEmpty, "observing a manually selected app must not create a start prompt")
+            XCTAssertNil(h.detector.automaticTarget, "end monitoring must not select a source")
+            XCTAssertFalse(h.gate.isIdle, "observing an end must not stop capture")
+            XCTAssertEqual(session.state, .recording)
+        }
+    }
+
+    func testManualBrowserRecordingAsksAfterObservedMicrophoneRelease() async {
+        let h = DetectorHarness()
+        let session = self.session(bundle: "com.google.Chrome", pid: 8)
+        h.gate.isIdle = false
+        self.synchronize(h, session)
+        await h.pollChrome(microphoneInUse: true)
+        await h.pollChrome(microphoneInUse: false)
+        h.advance(MeetingAutoDetector.endSignalGraceSeconds + 1)
+        h.detector.tick(at: h.clock.now())
+        XCTAssertEqual(h.nudges, 1)
+        XCTAssertTrue(h.prompts.isEmpty)
+        XCTAssertNil(h.detector.automaticTarget)
+        XCTAssertFalse(h.gate.isIdle)
+    }
+
+    func testManualRecordingAsksAfterCapturedAppQuits() {
+        let h = DetectorHarness()
+        let session = self.session()
+        self.synchronize(h, session)
+        h.detector.handleWorkspaceEvent(.init(kind: .terminated, bundleIdentifier: "us.zoom.xos", processID: 100), at: h.clock.now())
+        h.detector.tick(at: h.clock.now())
+        h.advance(MeetingAutoDetector.endSignalGraceSeconds + 1)
+        h.detector.tick(at: h.clock.now())
+        XCTAssertEqual(h.nudges, 1)
+    }
+
+    func testRepeatedHealthStatesPreserveAudioEvidenceQuestionAndDismissal() {
+        let h = DetectorHarness()
+        let session = self.session()
+        self.synchronize(h, session)
+        h.detector.handleAudioProcessActivity(true, pid: 100, at: h.clock.now())
+        h.detector.handleAudioProcessActivity(false, pid: 100, at: h.clock.now())
+        h.advance(10)
+        self.synchronize(h, session, state: .recordingDegraded(session.id))
+        h.advance(11)
+        h.detector.tick(at: h.clock.now())
+        XCTAssertEqual(h.nudges, 1)
+        self.synchronize(h, session)
+        h.detector.tick(at: h.clock.now())
+        XCTAssertEqual(h.nudges, 1, "a health-state notification must not repeat the question")
+        h.detector.stillRecordingNudgeDismissed()
+        self.synchronize(h, session, state: .recordingDegraded(session.id))
+        h.detector.handleAudioProcessActivity(true, pid: 100, at: h.clock.now())
+        h.detector.handleAudioProcessActivity(false, pid: 100, at: h.clock.now())
+        h.advance(120)
+        h.detector.tick(at: h.clock.now())
+        XCTAssertEqual(h.nudges, 1, "the user's dismissal survives subsequent health states")
+    }
+
+    func testCommonObserverDoesNotResetAnAdoptedAutomaticRecording() throws {
+        let h = DetectorHarness()
+        let episode = try XCTUnwrap(h.confirmZoom())
+        XCTAssertTrue(h.detector.startTapped(episodeID: episode))
+        h.detector.handleAudioProcessActivity(true, pid: 100, at: h.clock.now())
+        h.detector.handleAudioProcessActivity(false, pid: 100, at: h.clock.now())
+        let session = self.session()
+        self.synchronize(h, session)
+        h.advance(MeetingAutoDetector.endSignalGraceSeconds + 1)
+        h.detector.tick(at: h.clock.now())
+        XCTAssertEqual(h.nudges, 1, "binding the real session preserves previously observed audio")
+        h.detector.stillRecordingNudgeDismissed()
+        h.detector.adoptStartedEpisode(episodeID: episode)
+        self.synchronize(h, session, state: .recordingDegraded(session.id))
+        h.detector.tick(at: h.clock.now())
+        XCTAssertEqual(h.nudges, 1)
+    }
+
+    func testManualObserverBeforeAutomaticAdoptionKeepsItsSessionIdentity() throws {
+        let h = DetectorHarness()
+        let episode = try XCTUnwrap(h.confirmZoom())
+        let session = self.session()
+        self.synchronize(h, session)
+        h.detector.handleAudioProcessActivity(true, pid: 100, at: h.clock.now())
+        h.detector.adoptStartedEpisode(episodeID: episode)
+        h.detector.handleAudioProcessActivity(false, pid: 100, at: h.clock.now())
+        self.synchronize(h, session, state: .recordingDegraded(session.id))
+        h.advance(MeetingAutoDetector.endSignalGraceSeconds + 1)
+        h.detector.tick(at: h.clock.now())
+        XCTAssertEqual(h.nudges, 1)
+        XCTAssertEqual(h.prompts.count, 1)
+    }
+
+    func testPreparingAndMismatchedSnapshotsNeverArmAnEndWatch() {
+        for state in [MeetingCoordinatorState.preparing(UUID()), .recording(UUID())] {
+            let h = DetectorHarness()
+            self.synchronize(h, self.session(), state: state)
+            h.detector.handleAudioProcessActivity(true, pid: 100, at: h.clock.now())
+            h.detector.handleAudioProcessActivity(false, pid: 100, at: h.clock.now())
+            h.advance(120)
+            h.detector.tick(at: h.clock.now())
+            XCTAssertEqual(h.nudges, 0)
+            XCTAssertTrue(h.prompts.isEmpty)
+        }
+    }
+
+    func testInRoomUnsupportedAndMissingProcessRecordingsNeverGuessAnApp() {
+        let sessions = [self.session(bundle: nil), self.session(bundle: "com.example.recorder"), self.session(pid: nil)]
+        for session in sessions {
+            let h = DetectorHarness()
+            self.synchronize(h, session)
+            h.detector.handleWorkspaceEvent(.init(kind: .terminated, bundleIdentifier: "us.zoom.xos", processID: 100), at: h.clock.now())
+            h.detector.tick(at: h.clock.now())
+            h.advance(120)
+            h.detector.tick(at: h.clock.now())
+            XCTAssertEqual(h.nudges, 0)
+            XCTAssertNil(h.detector.automaticTarget)
+            XCTAssertTrue(h.prompts.isEmpty)
+        }
+    }
+
+    func testStoppingOrFinishingRecordingClearsItsWatch() {
+        let session = self.session()
+        let failure = MeetingSessionFailure(id: UUID(), occurredAt: Date(), domain: .capture, code: "fixture", message: "fixture", recoverable: true)
+        for state in [MeetingCoordinatorState.stopping(session.id), .processing(session.id, .transcribing), .completed(session.id), .interrupted(session.id), .failed(session.id, failure), .idle] {
+            let h = DetectorHarness()
+            self.synchronize(h, session)
+            self.synchronize(h, session, state: state)
+            h.detector.handleAudioProcessActivity(true, pid: 100, at: h.clock.now())
+            h.detector.handleAudioProcessActivity(false, pid: 100, at: h.clock.now())
+            h.advance(120)
+            h.detector.tick(at: h.clock.now())
+            XCTAssertEqual(h.nudges, 0)
+        }
+    }
+
+    func testEndWatchRejectsAProcessIDThatNowBelongsToAnotherApp() {
+        let h = DetectorHarness()
+        h.detector.handleBackfill([.init(kind: .launched, bundleIdentifier: "com.microsoft.teams2", processID: 100)])
+        self.synchronize(h, self.session())
+        h.detector.handleAudioProcessActivity(true, pid: 100, at: h.clock.now())
+        h.detector.handleAudioProcessActivity(false, pid: 100, at: h.clock.now())
+        h.advance(120)
+        h.detector.tick(at: h.clock.now())
+        XCTAssertEqual(h.nudges, 0)
+        XCTAssertTrue(h.prompts.isEmpty)
+    }
+
+    func testNewRecordingGetsItsOwnQuestionAfterEarlierDismissal() {
+        let h = DetectorHarness()
+        let first = self.session()
+        self.synchronize(h, first)
+        h.detector.stillRecordingNudgeDismissed()
+        self.synchronize(h, first, state: .stopping(first.id))
+        let second = self.session()
+        self.synchronize(h, second)
+        h.detector.handleAudioProcessActivity(true, pid: 100, at: h.clock.now())
+        h.detector.handleAudioProcessActivity(false, pid: 100, at: h.clock.now())
+        h.advance(MeetingAutoDetector.endSignalGraceSeconds + 1)
+        h.detector.tick(at: h.clock.now())
+        XCTAssertEqual(h.nudges, 1)
+    }
+
+    func testNeverObservedOrUnreadableBrowserMicrophoneDoesNotInventAnEnd() async {
+        let h = DetectorHarness()
+        self.synchronize(h, self.session(bundle: "com.google.Chrome", pid: 8))
+        await h.pollChrome(microphoneInUse: false)
+        h.advance(120)
+        h.detector.tick(at: h.clock.now())
+        XCTAssertEqual(h.nudges, 0)
+        await h.pollChrome(microphoneInUse: true)
+        await h.pollChrome(microphoneInUse: false, readable: false)
+        h.advance(120)
+        h.detector.tick(at: h.clock.now())
+        XCTAssertEqual(h.nudges, 0)
+    }
+}
+
+@MainActor
+final class MeetingBrowserPostCallTests: XCTestCase {
+    private let safariPID: Int32 = 42
+    private let room = "/abc-defg-hij"
+
+    private func report(_ h: DetectorHarness, state: MeetingBrowserCallState = .unknown, path: String? = nil) {
+        h.detector.handleBrowserTabURL(
+            BrowserTabURL(host: "meet.google.com", path: path ?? self.room, callState: state),
+            pid: self.safariPID,
+            bundleIdentifier: "com.apple.Safari",
+            at: h.clock.now()
+        )
+    }
+
+    private func safariRecording() throws -> DetectorHarness {
+        let h = DetectorHarness()
+        h.workspace.frontmostProcessID = self.safariPID
+        h.detector.handleWorkspaceEvent(.init(kind: .activated, bundleIdentifier: "com.apple.Safari", processID: self.safariPID), at: h.clock.now())
+        self.report(h)
+        h.detector.handleMicEdge(.init(isActive: true), at: h.clock.now())
+        let episode = try XCTUnwrap(h.prompts.last?.episodeID)
+        XCTAssertTrue(h.detector.startTapped(episodeID: episode))
+        h.gate.isIdle = false
+        return h
+    }
+
+    func testPostCallPageAsksWhenSafarisMicrophoneBelongsToASystemHelper() async throws {
+        let h = try self.safariRecording()
+        let safari = MeetingProcessOwner(processID: self.safariPID, bundleIdentifier: "com.apple.Safari", bundlePath: "/Applications/Safari.app")
+        h.audioProcessActivity.snapshotOverride = .init(
+            processes: [.init(
+                processID: 4242,
+                bundleIdentifier: "com.apple.WebKit.GPU",
+                executablePath: "/System/Library/Frameworks/WebKit.framework/Versions/A/XPCServices/com.apple.WebKit.GPU.xpc/Contents/MacOS/com.apple.WebKit.GPU",
+                isInputRunning: true,
+                isOutputRunning: true
+            )],
+            owners: [safari],
+            queryState: .valid
+        )
+        await h.detector.pollAudioProcessActivity(at: h.clock.now())
+        h.advance(120)
+        h.detector.tick(at: h.clock.now())
+        XCTAssertEqual(h.nudges, 0)
+        self.report(h, state: .ended)
+        h.advance(1)
+        h.detector.tick(at: h.clock.now())
+        XCTAssertEqual(h.nudges, 0, "one brief rejoin opportunity remains")
+        h.advance(1.1)
+        h.detector.tick(at: h.clock.now())
+        XCTAssertEqual(h.nudges, 1, "an explicit post-call page is evidence independent of WebKit microphone ownership")
+        XCTAssertFalse(h.gate.isIdle, "the end question must not stop or trim capture")
+        XCTAssertEqual(h.prompts.count, 1)
+    }
+
+    func testPostCallPageNeverOffersAStartAndInvalidatesAnUnacceptedStart() throws {
+        let h = DetectorHarness()
+        h.workspace.frontmostProcessID = self.safariPID
+        h.detector.handleWorkspaceEvent(.init(kind: .activated, bundleIdentifier: "com.apple.Safari", processID: self.safariPID), at: h.clock.now())
+        self.report(h, state: .ended)
+        h.detector.handleMicEdge(.init(isActive: true), at: h.clock.now())
+        XCTAssertTrue(h.prompts.isEmpty)
+        self.report(h, state: .inCall)
+        let episode = try XCTUnwrap(h.prompts.last?.episodeID)
+        self.report(h, state: .ended)
+        XCTAssertEqual(h.invalidated, [episode])
+        XCTAssertFalse(h.detector.canStart(episodeID: episode))
+        h.detector.handleMicEdge(.init(isActive: true), at: h.clock.now())
+        XCTAssertEqual(h.prompts.count, 1)
+    }
+
+    func testTabSwitchAndMuteAloneDoNotCountAsAnEnd() throws {
+        let h = try self.safariRecording()
+        self.report(h, state: .inCall)
+        h.detector.handleBrowserTabURL(.init(host: "docs.google.com", path: "/document"), pid: self.safariPID, bundleIdentifier: "com.apple.Safari", at: h.clock.now())
+        h.advance(300)
+        h.detector.tick(at: h.clock.now())
+        XCTAssertEqual(h.nudges, 0)
+        self.report(h, state: .inCall)
+        h.detector.handleMicEdge(.init(isActive: false), at: h.clock.now())
+        h.advance(120)
+        h.detector.tick(at: h.clock.now())
+        XCTAssertEqual(h.nudges, 0)
+    }
+
+    func testDifferentRoomAndDifferentProcessCannotEndOurCall() throws {
+        let h = try self.safariRecording()
+        self.report(h, state: .ended, path: "/xyz-abcd-uvw")
+        h.detector.handleBrowserTabURL(.init(host: "meet.google.com", path: self.room, callState: .ended), pid: 99, bundleIdentifier: "com.apple.Safari", at: h.clock.now())
+        h.advance(120)
+        h.detector.tick(at: h.clock.now())
+        XCTAssertEqual(h.nudges, 0)
+    }
+
+    func testUnknownReadsAndTabChangesPreserveAPositiveEndWithoutRestartingItsTimer() throws {
+        let h = try self.safariRecording()
+        self.report(h, state: .ended)
+        h.advance(1)
+        self.report(h, state: .ended)
+        self.report(h)
+        h.detector.handleBrowserTabURL(nil, pid: self.safariPID, bundleIdentifier: "com.apple.Safari", at: h.clock.now())
+        self.report(h, state: .inCall, path: "/xyz-abcd-uvw")
+        h.advance(1.1)
+        h.detector.tick(at: h.clock.now())
+        XCTAssertEqual(h.nudges, 1)
+    }
+
+    func testExplicitRejoinCancelsThePendingEndAndWithdrawsAnAskedQuestion() throws {
+        let h = try self.safariRecording()
+        self.report(h, state: .ended)
+        h.advance(1)
+        self.report(h, state: .inCall)
+        h.advance(5)
+        h.detector.tick(at: h.clock.now())
+        XCTAssertEqual(h.nudges, 0)
+        self.report(h, state: .ended)
+        h.advance(2.1)
+        h.detector.tick(at: h.clock.now())
+        XCTAssertEqual(h.nudges, 1)
+        self.report(h, state: .inCall)
+        h.detector.tick(at: h.clock.now())
+        XCTAssertEqual(h.withdrawals, 1)
+    }
+
+    func testPostCallPageDoesNotWaitForCaptionQuietAndStillHonorsDismissal() throws {
+        let h = try self.safariRecording()
+        self.report(h, state: .ended)
+        h.flags.lastSpeechAt = h.clock.now()
+        h.advance(2.1)
+        h.detector.tick(at: h.clock.now())
+        XCTAssertEqual(h.nudges, 1)
+        h.detector.stillRecordingNudgeDismissed()
+        self.report(h, state: .inCall)
+        self.report(h, state: .ended)
+        h.advance(120)
+        h.detector.tick(at: h.clock.now())
+        XCTAssertEqual(h.nudges, 1)
+    }
+
+    func testMicrophoneReleaseWithoutPostCallProofKeepsTheGraceAndSpeechQuietRules() async throws {
+        let h = DetectorHarness()
+        let episode = try XCTUnwrap(h.confirmChromeMeet())
+        XCTAssertTrue(h.detector.startTapped(episodeID: episode))
+        await h.pollChrome(microphoneInUse: true)
+        await h.pollChrome(microphoneInUse: false)
+        h.advance(3)
+        h.detector.tick(at: h.clock.now())
+        XCTAssertEqual(h.nudges, 0, "the short post-call grace must not apply to microphone release")
+        h.flags.lastSpeechAt = h.clock.now()
+        h.advance(MeetingAutoDetector.endSignalGraceSeconds)
+        h.detector.tick(at: h.clock.now())
+        XCTAssertEqual(h.nudges, 0, "fresh speech still defers an ambiguous disconnect")
+        h.advance(MeetingAutoDetector.speechQuietSeconds)
+        h.detector.tick(at: h.clock.now())
+        XCTAssertEqual(h.nudges, 1)
+    }
+
+    func testMeetEvidenceRequiresMatchingControlsAndIgnoresOrdinaryPageText() {
+        var evidence = MeetingBrowserCallEvidence()
+        evidence.observe(role: "AXStaticText", label: "You left the meeting")
+        evidence.observe(role: "AXStaticText", label: "Rejoin")
+        XCTAssertEqual(evidence.state, .unknown)
+        evidence.observe(role: "AXHeading", label: "You left the meeting")
+        XCTAssertEqual(evidence.state, .unknown)
+        evidence.observe(role: "AXButton", label: " Rejoin ")
+        XCTAssertEqual(evidence.state, .ended)
+        evidence.observe(role: "AXButton", label: "Leave call")
+        XCTAssertEqual(evidence.state, .unknown, "contradictory transitional controls are not proof")
+        XCTAssertTrue(MeetingBrowserCallEvidence.supports(.init(host: "meet.google.com", path: self.room)))
+        XCTAssertFalse(MeetingBrowserCallEvidence.supports(.init(host: "meet.google.com", path: "/home")))
+        XCTAssertFalse(MeetingBrowserCallEvidence.supports(.init(host: "example.com", path: self.room)))
+        var unknownLanguage = MeetingBrowserCallEvidence()
+        unknownLanguage.observe(role: "AXHeading", label: "Unrecognised post-call copy")
+        unknownLanguage.observe(role: "AXButton", label: "Unrecognised action")
+        XCTAssertEqual(unknownLanguage.state, .unknown)
+    }
+}
+
+@MainActor
+extension MeetingManualRecordingEndTests {
+    func testCapturedAppQuitIsObservedWithAutomaticDetectionDisabled() {
+        let h = DetectorHarness()
+        h.nativeEnabled = false
+        h.browserEnabled = false
+        h.gate.isIdle = false
+        self.synchronize(h, self.session())
+        h.detector.handleWorkspaceEvent(.init(kind: .terminated, bundleIdentifier: "us.zoom.xos", processID: 100), at: h.clock.now())
+        h.detector.tick(at: h.clock.now())
+        h.advance(MeetingAutoDetector.endSignalGraceSeconds + 1)
+        h.detector.tick(at: h.clock.now())
+        XCTAssertEqual(h.nudges, 1)
+        XCTAssertTrue(h.prompts.isEmpty)
+        XCTAssertNil(h.detector.automaticTarget)
+    }
+
+    func testPollingWatchesOnlyTheCapturedNativeAppWhenStartDetectionIsOff() async {
+        let h = DetectorHarness()
+        h.nativeEnabled = false
+        h.browserEnabled = false
+        h.gate.isIdle = false
+        h.detector.start()
+        defer { h.detector.stop() }
+        await h.detector.pollTick()
+        XCTAssertEqual(h.audioProcessActivity.snapshotCount, 0)
+        self.synchronize(h, self.session())
+        h.detector.handleBackfill([.init(kind: .launched, bundleIdentifier: "com.microsoft.teams2", processID: 300)])
+        let owner = MeetingProcessOwner(processID: 100, bundleIdentifier: "us.zoom.xos", bundlePath: "/Applications/zoom.us.app")
+        h.audioProcessActivity.snapshotOverride = .init(
+            processes: [.init(processID: 100, bundleIdentifier: "us.zoom.xos", executablePath: "/Applications/zoom.us.app/Contents/MacOS/zoom.us", isInputRunning: true, isOutputRunning: true)],
+            owners: [owner],
+            queryState: .valid
+        )
+        await h.detector.pollTick()
+        XCTAssertEqual(h.audioProcessActivity.snapshotCount, 1)
+        XCTAssertEqual(h.windowProvider.lastInterestPIDs, [100])
+        h.audioProcessActivity.snapshotOverride = .init(processes: [], owners: [owner], queryState: .valid)
+        await h.detector.pollTick()
+        h.advance(MeetingAutoDetector.endSignalGraceSeconds + 1)
+        h.detector.tick(at: h.clock.now())
+        XCTAssertEqual(h.nudges, 1)
+        XCTAssertTrue(h.prompts.isEmpty)
+        XCTAssertNil(h.detector.automaticTarget)
+        h.detector.recordingStopped()
+        let count = h.audioProcessActivity.snapshotCount
+        await h.detector.pollTick()
+        XCTAssertEqual(h.audioProcessActivity.snapshotCount, count)
+    }
+
+    func testManualBrowserPostCallIsPolledWithBothStartDetectionOptionsOff() async {
+        let h = DetectorHarness()
+        h.nativeEnabled = false
+        h.browserEnabled = false
+        h.gate.isIdle = false
+        h.detector.start()
+        defer { h.detector.stop() }
+        self.synchronize(h, self.session(bundle: "com.apple.Safari", pid: 42))
+        h.detector.handleBackfill([.init(kind: .launched, bundleIdentifier: "com.google.Chrome", processID: 8)])
+        h.browserReader.result = .init(host: "meet.google.com", path: "/abc-defg-hij", callState: .inCall)
+        await h.detector.pollTick()
+        h.advance(2)
+        h.browserReader.result?.callState = .ended
+        await h.detector.pollTick()
+        h.advance(2.1)
+        h.detector.tick(at: h.clock.now())
+        XCTAssertEqual(h.browserReader.readPIDs, [42, 42])
+        XCTAssertEqual(h.nudges, 1)
+        XCTAssertTrue(h.prompts.isEmpty)
+        XCTAssertNil(h.detector.automaticTarget)
+    }
+}
+
+@MainActor
+extension MeetingManualRecordingEndTests {
+    func testStoppedManualWatchIgnoresAnAudioSnapshotAlreadyInFlight() async {
+        let h = DetectorHarness()
+        h.nativeEnabled = false
+        h.browserEnabled = false
+        h.gate.isIdle = false
+        h.detector.start()
+        defer { h.detector.stop() }
+        self.synchronize(h, self.session())
+        h.audioProcessActivity.beforeSnapshot = { h.detector.recordingStopped() }
+        await h.detector.pollTick()
+        h.audioProcessActivity.beforeSnapshot = nil
+        self.synchronize(h, self.session())
+        h.advance(120)
+        h.detector.tick(at: h.clock.now())
+        XCTAssertEqual(h.nudges, 0)
+        XCTAssertTrue(h.prompts.isEmpty)
+        XCTAssertNil(h.detector.automaticTarget)
     }
 }

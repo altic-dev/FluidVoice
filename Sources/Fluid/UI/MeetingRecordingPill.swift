@@ -29,6 +29,7 @@ final class MeetingRecordingPillController: ObservableObject {
     private init() {}
 
     func activate(coordinator: MeetingSessionCoordinator) {
+        guard SettingsStore.shared.fluidMeetEnabled else { return }
         guard self.stateSubscription == nil else { return }
         self.stateSubscription = coordinator.$state
             .receive(on: DispatchQueue.main)
@@ -36,6 +37,21 @@ final class MeetingRecordingPillController: ObservableObject {
                 guard let self, let coordinator else { return }
                 self.handleCoordinatorState(state, coordinator: coordinator)
             }
+    }
+
+    /// Stop observing recording state and release the meeting overlay while disabled.
+    func deactivate() {
+        self.stateSubscription?.cancel()
+        self.stateSubscription = nil
+        self.hideOverlay()
+        for observer in [self.screenParametersObserver, self.windowMoveObserver].compactMap({ $0 }) {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        self.screenParametersObserver = nil
+        self.windowMoveObserver = nil
+        self.panel = nil
+        self.visibleAnchor = nil
+        MeetingFloatingCaptionsController.shared.deactivate()
     }
 
     /// Collapses back to the smallest pill.
@@ -59,6 +75,12 @@ final class MeetingRecordingPillController: ObservableObject {
     }
 
     private func handleCoordinatorState(_ state: MeetingCoordinatorState, coordinator: MeetingSessionCoordinator) {
+        guard SettingsStore.shared.fluidMeetEnabled else {
+            self.hideOverlay()
+            return
+        }
+        // State deliveries are queued; a stale recording event must not reopen the overlay.
+        guard state == coordinator.state else { return }
         switch state {
         case let .recording(sessionID), let .recordingDegraded(sessionID):
             if self.reducer.sessionID != sessionID {
@@ -106,6 +128,7 @@ final class MeetingRecordingPillController: ObservableObject {
     }
 
     private func setPresentation(_ presentation: MeetingOverlayPresentation) {
+        guard SettingsStore.shared.fluidMeetEnabled else { return }
         guard self.presentation != presentation, let panel else {
             self.presentation = presentation
             return

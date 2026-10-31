@@ -42,6 +42,7 @@ struct TranscriptionHistoryView: View {
     @State private var copyFeedbackTask: Task<Void, Never>?
     @State private var availableAudioFiles: Set<String> = []
     @State private var audioAvailabilityRevision = UUID()
+    @FocusState private var listFocused: Bool
 
     private struct AudioAvailabilityRequest: Equatable {
         let fileNames: [String]
@@ -236,6 +237,15 @@ struct TranscriptionHistoryView: View {
                 .padding(.horizontal, 8)
                 .padding(.vertical, 6)
             }
+            .focusable()
+            .focusEffectDisabled()
+            .focused(self.$listFocused)
+            .onMoveCommand { direction in
+                self.moveSelection(direction, proxy: proxy)
+            }
+            .onCopyCommand {
+                self.copyCommandProviders()
+            }
             .onAppear { self.reveal(self.selectedEntryID, with: proxy) }
             .onChange(of: self.historyStore.selectedEntryID) { _, id in self.reveal(id, with: proxy) }
             .task(id: self.pinRevealRequest) {
@@ -281,6 +291,7 @@ struct TranscriptionHistoryView: View {
             ZStack(alignment: .bottomTrailing) {
                 Button {
                     self.selectedEntryID = entry.id
+                    self.listFocused = true
                 } label: {
                     VStack(alignment: .leading, spacing: 7) {
                         HStack(spacing: 8) {
@@ -329,6 +340,7 @@ struct TranscriptionHistoryView: View {
                 .buttonStyle(.plain)
                 .simultaneousGesture(TapGesture(count: 2).onEnded {
                     self.selectedEntryID = entry.id
+                    self.listFocused = true
                     self.copyFinalText(entry)
                 })
                 .help("Double-click to copy final text")
@@ -691,12 +703,38 @@ struct TranscriptionHistoryView: View {
     private func copyFinalText(_ entry: TranscriptionHistoryEntry) {
         guard let text = entry.clipboardText else { return }
         self.copyToClipboard(text)
+        self.showCopiedFeedback(for: entry)
+    }
+
+    private func showCopiedFeedback(for entry: TranscriptionHistoryEntry) {
         self.copyFeedbackTask?.cancel()
         self.copiedEntryID = entry.id
         self.copyFeedbackTask = Task { @MainActor in
             do { try await Task.sleep(for: .seconds(1.5)) } catch { return }
             self.copiedEntryID = nil
         }
+    }
+
+    private func moveSelection(_ direction: MoveCommandDirection, proxy: ScrollViewProxy) {
+        let entries = self.filteredEntries
+        guard !entries.isEmpty else { return }
+        let current = self.selectedEntryID.flatMap { id in entries.firstIndex(where: { $0.id == id }) }
+        let next: Int
+        switch direction {
+        case .up: next = max((current ?? 0) - 1, 0)
+        case .down: next = current.map { min($0 + 1, entries.count - 1) } ?? 0
+        default: return
+        }
+        let id = entries[next].id
+        self.selectedEntryID = id
+        proxy.scrollTo(id)
+    }
+
+    private func copyCommandProviders() -> [NSItemProvider] {
+        guard let entry = self.selectedEntry, let text = entry.clipboardText else { return [] }
+        ClipboardAudit.record("ui_copy_command")
+        self.showCopiedFeedback(for: entry)
+        return [NSItemProvider(object: text as NSString)]
     }
 
     private func copyToClipboard(_ text: String) {

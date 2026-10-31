@@ -31,3 +31,21 @@ an exact gclient checkout plus depot_tools. The refresh script rejects any revis
 below 10 ms, bounded RSS variation, and no monotonic RSS growth.
 
 Licenses and required attribution for WebRTC and linked third-party source are in `Notices`.
+
+## Meeting speech protection
+
+The v2 bridge keeps the pinned WebRTC revision and default echo-only suppression.
+It enters local-speech protection sooner and relaxes the low/high-band residual-echo
+mask only during detected local speech. It adds no capture delay, gain, noise
+suppression, extra model, or realtime statistics lock. This improves quiet speech
+under loud speaker playback; some residual echo during overlapping speech remains
+possible. It does not guarantee separation of every speaker mixture.
+
+`BridgeSources/rebuild_bridge.sh` recompiles the bridge for both architectures using the
+vendored headers and system libc++, replacing only `fluid_aec3_bridge.o` in each
+verified archive slice. It preserves all pinned upstream objects, runs the contract,
+strong-voice and weak-voice overlap probes, and updates the two integrity manifests.
+It refuses modified upstream inputs. This is a bridge-only rebuild, not a new GN
+build of upstream WebRTC; the manifest records that distinction. The weak-voice
+regression correlates output with an independent known voice so leaked playback
+cannot count as preserved speech. XCTest repeats that check through the app wrapper.

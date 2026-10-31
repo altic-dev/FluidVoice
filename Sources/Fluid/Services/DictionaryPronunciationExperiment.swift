@@ -1,6 +1,6 @@
 import Foundation
 
-/// Local opt-in. Both switches default off in a fresh installation.
+/// Pronunciation follows the master switch; diagnostic audio capture remains opt-in.
 nonisolated enum DictionaryPronunciationExperiment {
     static var enabled: Bool { DictionaryMatcherExperiment.sharedFeaturesEnabled }
     static var captureEnabled: Bool { enabled && UserDefaults.standard.bool(forKey: "DictionaryPronunciationDebugCapture") }
@@ -21,6 +21,52 @@ nonisolated enum DictionaryPronunciationExperiment {
         }
         guard let first else { return nil }
         return max(range.lowerBound, first - 1920)..<min(range.upperBound, last + 1920)
+    }
+
+    /// Cuts a single-word recording to the word itself. The recognizer's word times locate it;
+    /// the word's own loudness tightens the edges, and a final p/t/k pop after a short gap is kept.
+    /// Absolute loudness alone keeps room noise and silence, so it is only the fallback.
+    static func wordRange(_ samples: [Float], words: [DictionaryAudioInspection.Word]) -> Range<Int>? {
+        guard let first = words.first, let last = words.last, !samples.isEmpty else { return nil }
+        let rate = 16_000.0, block = 160
+        func rms(_ range: Range<Int>) -> Float {
+            let slice = samples[range]
+            return sqrt(slice.reduce(Float(0)) { $0 + $1 * $1 } / Float(max(1, slice.count)))
+        }
+        let lower = max(0, Int((first.start - 0.16) * rate))
+        let upper = min(samples.count, Int((last.end + 0.16) * rate))
+        guard upper - lower >= block * 3 else { return nil }
+        let levels = stride(from: lower, to: upper - block + 1, by: block).map { rms($0..<($0 + block)) }
+        let leadingNoise = stride(from: 0, to: min(samples.count, 4800) - block + 1, by: block)
+            .map { rms($0..<($0 + block)) }.sorted()
+        let noise = leadingNoise.isEmpty ? 0 : leadingNoise[leadingNoise.count / 2]
+        let gate = max((levels.max() ?? 0) * 0.08, noise * 3)
+        guard let firstLoud = levels.firstIndex(where: { $0 > gate }),
+              let lastLoud = levels.lastIndex(where: { $0 > gate }) else { return nil }
+        var end = lower + (lastLoud + 1) * block
+        let burstLimit = min(samples.count, end + 4000)
+        var position = end
+        while position + block <= burstLimit {
+            if rms(position..<(position + block)) > max(noise * 4, 0.003) { end = position + block }
+            position += block
+        }
+        let pad = 480
+        let start = max(0, lower + firstLoud * block - pad)
+        end = min(samples.count, end + pad)
+        return start < end ? start..<end : nil
+    }
+
+    /// Encoder frames (1280 samples each) that contain speech. Words recorded slowly, such as
+    /// "Slides… A… I", carry pauses that vanish when the same word is said quickly in a sentence.
+    static func spokenFrames(_ samples: [Float], frames: Range<Int>) -> [Int] {
+        let levels = frames.map { frame -> Float in
+            let lower = min(samples.count, frame * 1280), upper = min(samples.count, lower + 1280)
+            guard upper > lower else { return 0 }
+            return sqrt(samples[lower..<upper].reduce(Float(0)) { $0 + $1 * $1 } / Float(upper - lower))
+        }
+        let gate = max((levels.max() ?? 0) * 0.08, 1e-4)
+        let spoken = zip(frames, levels).filter { $0.1 > gate }.map(\.0)
+        return spoken.count >= 3 ? spoken : Array(frames)
     }
 
     // swiftlint:disable:next discouraged_optional_collection

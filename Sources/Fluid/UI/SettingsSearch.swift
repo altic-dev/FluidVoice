@@ -12,6 +12,7 @@ import SwiftUI
 
 enum SettingsSearchTarget: Hashable {
     case general
+    case fluidMeet
     case launchAtStartup
     case showWindowAtLogin
     case dockVisibility
@@ -29,6 +30,7 @@ enum SettingsSearchTarget: Hashable {
     case editModeShortcut
     case cancelRecordingShortcut
     case pasteLastTranscriptionShortcut
+    case meetingRecordingShortcut
     case activationMode
     case holdSpaceToMute
     case copyToClipboard
@@ -71,9 +73,13 @@ enum SettingsSearchTarget: Hashable {
     case fasterLongDictation
     case dictionaryMatcherExperiments
     case historyPerformance
+    case dictationScreenContext
 
     var section: SettingsSection {
         switch self {
+        case .fluidMeet:
+            return .fluidMeet
+
         case .general,
              .launchAtStartup,
              .showWindowAtLogin,
@@ -106,7 +112,7 @@ enum SettingsSearchTarget: Hashable {
 
         case .shortcuts, .globalHotkey, .primaryDictationShortcuts,
              .commandModeShortcut, .editModeShortcut, .cancelRecordingShortcut,
-             .pasteLastTranscriptionShortcut:
+             .pasteLastTranscriptionShortcut, .meetingRecordingShortcut:
             return .shortcuts
 
         case .notifications, .aiEnhancementFailures, .microphoneChanges, .pasteCheck:
@@ -127,7 +133,7 @@ enum SettingsSearchTarget: Hashable {
         case .dataAndDiagnostics, .backupAndRestore, .debugLogs:
             return .dataAndDiagnostics
 
-        case .experimental, .returnToStartingField, .fasterLongDictation, .dictionaryMatcherExperiments, .historyPerformance:
+        case .experimental, .returnToStartingField, .fasterLongDictation, .dictionaryMatcherExperiments, .historyPerformance, .dictationScreenContext:
             return .experimental
         }
     }
@@ -137,6 +143,7 @@ extension SettingsSection {
     var searchTarget: SettingsSearchTarget {
         switch self {
         case .general: return .general
+        case .fluidMeet: return .fluidMeet
         case .dictation: return .dictation
         case .dictationFormatting: return .textFormatting
         case .shortcuts: return .shortcuts
@@ -168,6 +175,7 @@ struct SettingsSearchAvailability {
     let savesTranscriptionHistory: Bool
     let savesAudioWithTranscriptionHistory: Bool
     let overlayAtBottom: Bool
+    let privateAIAvailable: Bool
 
     static var current: Self {
         let settings = SettingsStore.shared
@@ -176,7 +184,8 @@ struct SettingsSearchAvailability {
             accessibilityEnabled: AXIsProcessTrusted(),
             savesTranscriptionHistory: settings.saveTranscriptionHistory,
             savesAudioWithTranscriptionHistory: settings.saveAudioWithTranscriptionHistory,
-            overlayAtBottom: settings.overlayPosition == .bottom
+            overlayAtBottom: settings.overlayPosition == .bottom,
+            privateAIAvailable: PrivateAIProviderFeature.shared.isAvailable
         )
     }
 
@@ -191,6 +200,7 @@ struct SettingsSearchAvailability {
              .editModeShortcut,
              .cancelRecordingShortcut,
              .pasteLastTranscriptionShortcut,
+             .meetingRecordingShortcut,
              .activationMode,
              .copyToClipboard,
              .textInsertionMode,
@@ -209,6 +219,8 @@ struct SettingsSearchAvailability {
                 self.savesAudioWithTranscriptionHistory
         case .bottomOffset:
             return self.overlayAtBottom
+        case .dictationScreenContext:
+            return self.privateAIAvailable
         default:
             return true
         }
@@ -230,6 +242,7 @@ enum SettingsSearchIndex {
     }
 
     private static let entries: [Entry] = [
+        .init(target: .fluidMeet, title: "Enable FluidMeet", terms: ["meetings recording disable turn off enable"]),
         .init(target: .general, title: "General", terms: ["app settings preferences"]),
         .init(
             target: .launchAtStartup,
@@ -288,6 +301,7 @@ enum SettingsSearchIndex {
             title: "Paste Last Transcription",
             terms: ["reinsert recent text hotkey shortcut clipboard"]
         ),
+        .init(target: .meetingRecordingShortcut, title: "Meeting Recording Shortcut", terms: ["FluidMeet start stop toggle recording keyboard hotkey"]),
         .init(target: .activationMode, title: "Activation Mode", terms: ["hold toggle hotkey behavior"]),
         .init(target: .holdSpaceToMute, title: "Hold Space to Mute", terms: ["pause microphone spacebar resume silence"]),
         .init(
@@ -452,6 +466,11 @@ enum SettingsSearchIndex {
             target: .historyPerformance,
             title: "Show Performance in History",
             terms: ["timing speed tokens per second ASR cleanup Fluid Intelligence"]
+        ),
+        .init(
+            target: .dictationScreenContext,
+            title: "Use my active screen to improve dictation accuracy",
+            terms: ["experimental Fluid Intelligence context OCR screen words window capture recording permission accessibility cursor names spelling"]
         ),
     ]
 

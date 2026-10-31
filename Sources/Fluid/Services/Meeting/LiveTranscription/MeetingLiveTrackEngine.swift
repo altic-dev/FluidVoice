@@ -12,6 +12,7 @@ nonisolated protocol MeetingLiveRecognizer: Sendable {
     func prepareModels() async throws
     func appendAudio(_ buffer: AVAudioPCMBuffer) async throws
     func processBufferedAudio() async throws
+    func finish() async throws -> String
     func reset() async
     func setEouCallback(_ callback: @escaping @Sendable (String) -> Void) async
     func setPartialTranscriptCallback(_ callback: @escaping @Sendable (String) -> Void) async
@@ -39,6 +40,9 @@ nonisolated struct MeetingLiveDiagnosticSnapshot: Sendable {
     var maxProcessSeconds: Double = 0
     var firstPartialAfterResetSeconds: Double?
     var feedSeconds: Double = 0
+    var textPauses = 0
+    var textResumptions = 0
+    var lastResetReason: String?
 }
 
 /// Drives one `StreamingEouAsrManager` for one capture track. Two instances are required — the
@@ -55,17 +59,30 @@ actor MeetingLiveTrackEngine {
     typealias ReadyHandler = @Sendable (MeetingAudioTrackKind) -> Void
 
     private let kind: MeetingAudioTrackKind
+    private var comparisonProbe: MeetingAudioComparisonProbe?
+
+    func attachComparisonProbe(_ probe: MeetingAudioComparisonProbe) {
+        self.comparisonProbe = probe
+        probe.recordEvent("recognizer-probe-attached", track: self.kind)
+    }
+
     /// Sized to ride out first-inference CoreML warmup without dropping audio: at the ~10.7ms
     /// microphone buffers observed in practice this holds ~5.5s, and app-audio buffers twice that.
     /// A 24-slot queue held only ~0.25s and shed 5s of meeting-opening audio during warmup.
     nonisolated let queue = MeetingLiveBoundedQueue<MeetingLiveSampleCopy.Sample>(capacity: 512)
     private static let chunkSize: StreamingChunkSize = .ms160
-    private static let maxOpenUtteranceSeconds: Double = 20
-    private static let partialStallSeconds: Double = 2.5
+    private static let partialStallSeconds: Double = 120
+    private static let pauseObservationSeconds: Double = 5
     /// The recognizer buffers a full chunk before it can decode it, so the speech behind the first
     /// token started at least one chunk before the audio we were feeding when that token arrived.
     private static let decoderLookback = CMTime(value: CMTimeValue(chunkSize.durationMs), timescale: 1000)
     private let manager: any MeetingLiveRecognizer
+    private enum RecognizerCallback: Sendable {
+        case partial(String)
+        case end(String)
+    }
+
+    private let recognizerCallbacks = MeetingLiveBoundedQueue<RecognizerCallback>(capacity: 64)
     private let uptime: @Sendable () -> Double
     private let diagnosticsEnabled: Bool
     private var diagnosticSnapshot = MeetingLiveDiagnosticSnapshot()
@@ -100,6 +117,19 @@ actor MeetingLiveTrackEngine {
     private var diagUtterances = 0
     private var diagLastFlowLog: Double = 0
     private var diagLastEouUptime: Double?
+    private var firstFeedUptime: Double?
+    private var lastTextUpdateUptime: Double?
+    private var textPauseReported = false
+    private var lastInputRMS: Double = 0
+    private var inputEnergySinceFlow: Double = 0
+    private var inputSamplesSinceFlow = 0
+    private var peakInputRMSSinceFlow: Double = 0
+    private var modelProcessCompletions = 0
+
+    private enum ResetReason: String {
+        case startupWarmup, stopped, modelEndOfUtterance, noTextTimeout
+        case processingError, audioQueueOverflow, callbackQueueOverflow
+    }
 
     private var diagLabel: String { self.kind == .microphone ? "MIC" : "APP" }
 
@@ -173,6 +203,7 @@ actor MeetingLiveTrackEngine {
     }
 
     func stop() async {
+        self.comparisonProbe?.recordEvent("recognizer-stop", track: self.kind)
         self.isStopped = true
         self.onPartial = nil
         self.onUtterance = nil
@@ -185,7 +216,7 @@ actor MeetingLiveTrackEngine {
         self.isModelReady = false
         await self.drainTask?.value
         self.drainTask = nil
-        await self.resetRecognizer()
+        await self.resetRecognizer(reason: .stopped)
     }
 
     /// Fast, synchronous, non-blocking hand-off from the capture tee. On saturation the queue drops
@@ -198,11 +229,33 @@ actor MeetingLiveTrackEngine {
     }
 
     private func installCallbacks() async {
-        await self.manager.setEouCallback { [weak self] transcript in
-            Task { await self?.handleEOU(transcript) }
+        let callbacks = self.recognizerCallbacks
+        await self.manager.setEouCallback { transcript in
+            callbacks.enqueue(.end(transcript))
         }
-        await self.manager.setPartialTranscriptCallback { [weak self] transcript in
-            Task { await self?.handlePartial(transcript) }
+        await self.manager.setPartialTranscriptCallback { transcript in
+            callbacks.enqueue(.partial(transcript))
+        }
+    }
+
+    /// Model callbacks can arrive while inference is suspended. Apply them only after the
+    /// decode call returns, so an endpoint cannot reset the decoder during that same inference.
+    private func applyRecognizerCallbacks() async {
+        let dropped = self.recognizerCallbacks.takeDroppedCount()
+        if dropped > 0 {
+            self.comparisonProbe?.recordEvent("recognizer-callbacks-dropped", track: self.kind, detail: String(dropped))
+            await self.resetUtterance(reason: .callbackQueueOverflow)
+            self.onDegraded?(self.kind, "Live captions missed model updates and resynced.")
+            return
+        }
+        for callback in self.recognizerCallbacks.drainAll() {
+            guard !self.isStopped else { return }
+            switch callback {
+            case let .partial(text): self.handlePartial(text)
+            case let .end(text):
+                await self.handleEOU(text)
+                return
+            }
         }
     }
 
@@ -223,7 +276,7 @@ actor MeetingLiveTrackEngine {
         } catch {
             DebugLogger.shared.warning("Live captions warmup failed (continuing): \(error)", source: "MeetingLive")
         }
-        await self.resetRecognizer()
+        await self.resetRecognizer(reason: .startupWarmup)
         self.diag(String(format: "warmup complete in %.2fs", self.uptime() - started))
     }
 
@@ -260,11 +313,28 @@ actor MeetingLiveTrackEngine {
 
     private func consume(_ sample: MeetingLiveSampleCopy.Sample) async {
         guard let converted = self.convert(sample.buffer) else {
+            self.comparisonProbe?.recordEvent("recognizer-conversion-failed", track: self.kind, pts: sample.pts.seconds)
             if self.diagnosticsEnabled { self.diagnosticSnapshot.conversionFailures += 1 }
             self.diag("convert FAILED (sr=\(sample.buffer.format.sampleRate) ch=\(sample.buffer.format.channelCount))")
             return
         }
+        if let comparisonProbe, comparisonProbe.isRecordingDiagnostics,
+           let input = meetingMicrophoneSynthesizeSampleBuffer(from: converted, presentationTime: sample.pts)
+        {
+            comparisonProbe.offer(input, stage: self.kind == .microphone ? .microphoneRecognizerInput : .browserRecognizerInput)
+        }
         self.currentFeedPTS = sample.pts
+        if self.firstFeedUptime == nil { self.firstFeedUptime = self.uptime() }
+        if self.comparisonProbe?.isRecordingDiagnostics == true || self.diagnosticsEnabled,
+           let channel = converted.floatChannelData?[0], converted.frameLength > 0
+        {
+            let samples = UnsafeBufferPointer(start: channel, count: Int(converted.frameLength))
+            let energy = samples.reduce(0.0) { $0 + Double($1) * Double($1) }
+            self.lastInputRMS = sqrt(energy / Double(samples.count))
+            self.inputEnergySinceFlow += energy
+            self.inputSamplesSinceFlow += samples.count
+            self.peakInputRMSSinceFlow = max(self.peakInputRMSSinceFlow, self.lastInputRMS)
+        }
         self.lastConsumedPTS = sample.pts + sample.duration
         self.diagSamplesConsumed += 1
         self.diagSecondsConsumed += sample.duration.seconds
@@ -272,16 +342,22 @@ actor MeetingLiveTrackEngine {
             self.diagnosticSnapshot.convertedBuffers += 1
             self.diagnosticSnapshot.feedSeconds += sample.duration.seconds
         }
-        self.logFlowIfDue()
         do {
             if self.diagnosticsEnabled { self.diagnosticSnapshot.appendStarts += 1 }
+            self.comparisonProbe?.recordEvent("recognizer-append-start", track: self.kind, pts: sample.pts.seconds)
             try await self.manager.appendAudio(converted)
+            self.comparisonProbe?.recordEvent("recognizer-append-complete", track: self.kind, pts: sample.pts.seconds)
             if self.diagnosticsEnabled {
                 self.diagnosticSnapshot.appendCompletions += 1
                 self.diagnosticSnapshot.processStarts += 1
             }
             let processStarted = self.diagnosticsEnabled ? self.uptime() : 0
+            self.comparisonProbe?.recordEvent("recognizer-decode-start", track: self.kind, pts: sample.pts.seconds)
             try await self.manager.processBufferedAudio()
+            self.modelProcessCompletions += 1
+            self.comparisonProbe?.recordEvent("recognizer-decode-complete", track: self.kind, pts: sample.pts.seconds)
+            await self.applyRecognizerCallbacks()
+            self.logFlowIfDue()
             if self.diagnosticsEnabled {
                 self.diagnosticSnapshot.processCompletions += 1
                 self.diagnosticSnapshot.maxProcessSeconds = max(
@@ -291,39 +367,44 @@ actor MeetingLiveTrackEngine {
             await self.rotateLongUtteranceIfNeeded()
         } catch {
             if self.diagnosticsEnabled { self.diagnosticSnapshot.appendOrProcessErrors += 1 }
+            self.comparisonProbe?.recordEvent("recognizer-processing-failed", track: self.kind, pts: sample.pts.seconds, detail: error.localizedDescription)
             DebugLogger.shared.warning("Live captions audio processing failed: \(error)", source: "MeetingLive")
             self.onDegraded?(self.kind, "Live captions hit an error and resynced.")
-            await self.resetUtterance()
+            await self.resetUtterance(reason: .processingError)
         }
     }
 
-    /// The decoder's own endpointing is unreliable in the field: it can stop emitting partials
-    /// mid-utterance (observed after as little as 10s / ~120 chars) and never fire EOU, freezing
-    /// captions on stale text. Two fallbacks close the turn: the decoder has gone quiet for a few
-    /// seconds (a pause or a stall — either way the turn is over), or the utterance hit the hard
-    /// duration ceiling. Both finalize the current partial and reset for a fresh turn.
+    /// A gap in text is not proof the model is stuck. Let the model finish phrases naturally;
+    /// recover only after two minutes without a partial, never merely because a phrase is long.
     private func rotateLongUtteranceIfNeeded() async {
         guard let start = self.utteranceStartPTS,
               let end = self.lastConsumedPTS,
               let turnID = self.utteranceTurnID
         else { return }
-        let openSeconds = end.seconds - start.seconds
         let quietSeconds = self.lastPartialUptime.map { self.uptime() - $0 }
-        let hitCeiling = openSeconds > Self.maxOpenUtteranceSeconds
-        let decoderQuiet = (quietSeconds ?? 0) > Self.partialStallSeconds && !self.lastPartialText.isEmpty
-        guard hitCeiling || decoderQuiet else { return }
-        let text = self.lastPartialText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard (quietSeconds ?? 0) >= Self.partialStallSeconds, !self.lastPartialText.isEmpty else { return }
+        self.comparisonProbe?.recordEvent("forced-recognizer-endpoint", track: self.kind, pts: end.seconds, detail: "no partial update for \(Self.partialStallSeconds) seconds")
+        var text = self.lastPartialText.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.comparisonProbe?.recordEvent("recognizer-flush-start", track: self.kind, pts: end.seconds)
+        do {
+            let finished = try await self.manager.finish().trimmingCharacters(in: .whitespacesAndNewlines)
+            if !finished.isEmpty { text = finished }
+            self.comparisonProbe?.recordEvent("recognizer-flush-complete", track: self.kind, pts: end.seconds, text: text)
+        } catch {
+            self.comparisonProbe?.recordEvent("recognizer-flush-failed", track: self.kind, detail: error.localizedDescription)
+            self.onDegraded?(self.kind, "Live captions could not finish a phrase and resynced.")
+        }
         self.utteranceStartPTS = nil
         self.utteranceTurnID = nil
         self.lastPartialText = ""
         self.lastPartialUptime = nil
-        await self.resetRecognizer()
+        await self.resetRecognizer(reason: .noTextTimeout)
         guard !self.isStopped, !text.isEmpty else { return }
         self.lastUtteranceEndPTS = end
         self.diagUtterances += 1
         self.diag(String(
             format: "forced EOU (%@) span=[%.2f–%.2f] chars=%d",
-            hitCeiling ? "open>\(Int(Self.maxOpenUtteranceSeconds))s" : String(format: "quiet %.1fs", quietSeconds ?? 0),
+            String(format: "quiet %.1fs", quietSeconds ?? 0),
             start.seconds,
             end.seconds,
             text.count
@@ -334,10 +415,29 @@ actor MeetingLiveTrackEngine {
     /// Once every 5s of wall clock: proves audio is still reaching the recognizer, and how long the
     /// current utterance has been open without an endpoint.
     private func logFlowIfDue() {
-        guard self.diagnosticsEnabled else { return }
+        guard self.diagnosticsEnabled || self.comparisonProbe?.isRecordingDiagnostics == true else { return }
         let now = self.uptime()
         guard now - self.diagLastFlowLog >= 5 else { return }
         self.diagLastFlowLog = now
+        let textGap = now - (self.lastTextUpdateUptime ?? self.firstFeedUptime ?? now)
+        let windowRMS = sqrt(self.inputEnergySinceFlow / Double(max(1, self.inputSamplesSinceFlow)))
+        let detail = "feedBuffers=\(self.diagSamplesConsumed) audioSeconds=\(self.diagSecondsConsumed) "
+            + "decodeCompletions=\(self.modelProcessCompletions) textGapSeconds=\(textGap) "
+            + "partialUpdates=\(self.diagPartials) queueDepth=\(self.queue.count) "
+            + "inputRMS=\(self.lastInputRMS) windowRMS=\(windowRMS) peakBufferRMS=\(self.peakInputRMSSinceFlow) "
+            + "everProducedText=\(self.lastTextUpdateUptime != nil)"
+        self.inputEnergySinceFlow = 0
+        self.inputSamplesSinceFlow = 0
+        self.peakInputRMSSinceFlow = 0
+        self.comparisonProbe?.recordEvent("model-flow", track: self.kind, pts: self.lastConsumedPTS?.seconds, detail: detail)
+        if textGap >= Self.pauseObservationSeconds, !self.textPauseReported {
+            self.textPauseReported = true
+            let producedText = self.lastTextUpdateUptime != nil
+            if self.diagnosticsEnabled, producedText { self.diagnosticSnapshot.textPauses += 1 }
+            let step = producedText ? "model-text-pause" : "model-waiting-for-first-text"
+            self.comparisonProbe?.recordEvent(step, track: self.kind, pts: self.lastConsumedPTS?.seconds, detail: detail)
+            self.diag("\(step); not a stuck-model verdict: \(detail)")
+        }
         let openFor = self.utteranceStartPTS.map { start in
             (self.lastConsumedPTS ?? start).seconds - start.seconds
         } ?? 0
@@ -367,6 +467,17 @@ actor MeetingLiveTrackEngine {
     /// swallowed every second of preceding silence into the utterance's span.
     private func handlePartial(_ text: String) {
         guard !self.isStopped else { return }
+        let now = self.uptime()
+        let firstText = self.lastTextUpdateUptime == nil
+        if self.textPauseReported || firstText {
+            let gap = now - (self.lastTextUpdateUptime ?? self.firstFeedUptime ?? now)
+            let step = firstText ? "model-first-text" : "model-text-resumed"
+            self.comparisonProbe?.recordEvent(step, track: self.kind, pts: self.currentFeedPTS?.seconds, detail: "textGapSeconds=\(gap) decodeCompletions=\(self.modelProcessCompletions)")
+            self.diag("\(step) after \(gap)s; decodeCompletions=\(self.modelProcessCompletions)")
+            if self.diagnosticsEnabled, !firstText { self.diagnosticSnapshot.textResumptions += 1 }
+        }
+        self.textPauseReported = false
+        self.lastTextUpdateUptime = now
         if self.diagnosticsEnabled {
             self.diagnosticSnapshot.partialCallbacks += 1
             if self.diagnosticSnapshot.firstPartialAfterResetSeconds == nil,
@@ -407,7 +518,7 @@ actor MeetingLiveTrackEngine {
         self.utteranceTurnID = nil
         self.lastPartialText = ""
         self.lastPartialUptime = nil
-        await self.resetRecognizer()
+        await self.resetRecognizer(reason: .modelEndOfUtterance)
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !self.isStopped, !trimmed.isEmpty else { return }
         guard let start, let end, let turnID else {
@@ -432,6 +543,7 @@ actor MeetingLiveTrackEngine {
     /// resetting per sample keeps a 250-sample burst from issuing 250 decoder resets and 250
     /// degraded notifications; the drain loop performs exactly one resync before it next consumes.
     private func noteDrop() {
+        self.comparisonProbe?.recordEvent("recognizer-queue-dropped-buffer", track: self.kind)
         self.diagDrops += 1
         self.pendingResync = true
     }
@@ -440,27 +552,31 @@ actor MeetingLiveTrackEngine {
         guard self.pendingResync else { return }
         self.pendingResync = false
         self.diag("queue saturated — resyncing after \(self.diagDrops) dropped samples")
-        await self.resetUtterance()
+        await self.resetUtterance(reason: .audioQueueOverflow)
         self.onDegraded?(self.kind, "Live captions dropped audio and resynced.")
     }
 
-    private func resetUtterance() async {
+    private func resetUtterance(reason: ResetReason) async {
         self.utteranceStartPTS = nil
         self.utteranceTurnID = nil
         self.lastPartialText = ""
         self.lastPartialUptime = nil
         self.lastConsumedPTS = nil
-        await self.resetRecognizer()
+        await self.resetRecognizer(reason: reason)
     }
 
-    private func resetRecognizer() async {
+    private func resetRecognizer(reason: ResetReason) async {
+        self.comparisonProbe?.recordEvent("recognizer-reset", track: self.kind, detail: reason.rawValue)
+        self.diag("reset reason=\(reason.rawValue)")
         if self.diagnosticsEnabled {
             self.diagnosticSnapshot.resetInvocations += 1
+            self.diagnosticSnapshot.lastResetReason = reason.rawValue
             self.diagnosticSnapshot.wrapperGeneration += 1
             self.diagnosticSnapshot.firstPartialAfterResetSeconds = nil
             self.diagnosticResetUptime = nil
         }
         await self.manager.reset()
+        _ = self.recognizerCallbacks.drainAll()
         if self.diagnosticsEnabled {
             self.diagnosticSnapshot.recognizerResetReturned += 1
             self.diagnosticResetUptime = self.uptime()
@@ -471,6 +587,7 @@ actor MeetingLiveTrackEngine {
     /// Deterministic P0 seam: bypasses capture/model loading, but exercises production conversion,
     /// append/process and existing rotation policy. It deliberately does not add recovery policy.
     func diagnosticConsume(_ sample: MeetingLiveSampleCopy.Sample) async { await self.consume(sample) }
+    func diagnosticInstallCallbacks() async { await self.installCallbacks() }
     func diagnosticPartial(_ text: String) { self.handlePartial(text) }
     func diagnosticSnapshotValue() -> MeetingLiveDiagnosticSnapshot { self.diagnosticSnapshot }
     #endif

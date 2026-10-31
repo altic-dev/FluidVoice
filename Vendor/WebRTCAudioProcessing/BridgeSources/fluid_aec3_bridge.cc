@@ -17,7 +17,7 @@ namespace {
 constexpr char kUpstreamRevision[] =
     "d9bd07ba5f614156021df666ba4052ac73cf7953";
 constexpr char kConfigurationID[] =
-    "webrtc-aec3-48k-mono-cxx20-no-protobuf-no-log-v1";
+    "webrtc-aec3-48k-mono-speech-protection-v2";
 
 webrtc::scoped_refptr<webrtc::AudioProcessing> BuildAudioProcessing() {
   webrtc::AudioProcessing::Config config;
@@ -36,6 +36,19 @@ webrtc::scoped_refptr<webrtc::AudioProcessing> BuildAudioProcessing() {
   config.pipeline.multi_channel_capture = false;
 
   webrtc::BuiltinAudioProcessingBuilder builder(config);
+  webrtc::EchoCanceller3Config echo;
+  // Meetings can contain quiet local speech beneath loud speaker playback. The
+  // default call profile waits for a dominant near-end voice and aggressively
+  // masks speech bands in that overlap. Enter near-end protection sooner and
+  // tolerate more estimated residual echo only while that voice is detected.
+  // Keep normal (echo-only) suppression, adaptive timing, and gain unchanged.
+  echo.suppressor.dominant_nearend_detection.enr_threshold = 1.f;
+  echo.suppressor.dominant_nearend_detection.snr_threshold = 10.f;
+  echo.suppressor.dominant_nearend_detection.trigger_threshold = 3;
+  echo.suppressor.nearend_tuning.mask_lf = {4.f, 8.f, .3f};
+  echo.suppressor.nearend_tuning.mask_hf = {4.f, 8.f, .3f};
+  if (!webrtc::EchoCanceller3Config::Validate(&echo)) return nullptr;
+  builder.SetEchoCancellerConfig(echo, std::nullopt);
   return builder.Build(webrtc::CreateEnvironment());
 }
 

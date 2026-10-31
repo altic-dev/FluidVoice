@@ -91,9 +91,9 @@ final class VoiceModelDeletionTests: XCTestCase {
         try await body(XCTUnwrap(ready, "SwiftUI must install the real ContentView state"))
     }
 
-    private func replayPrimaryTap(_ manager: GlobalHotkeyManager) throws {
+    private func replayPrimaryTap(_ manager: GlobalHotkeyManager, keyCode: CGKeyCode = 2) throws {
         for type in [CGEventType.keyDown, .keyUp] {
-            let event = try XCTUnwrap(CGEvent(keyboardEventSource: nil, virtualKey: 2, keyDown: type == .keyDown))
+            let event = try XCTUnwrap(CGEvent(keyboardEventSource: nil, virtualKey: keyCode, keyDown: type == .keyDown))
             event.type = type
             event.flags = [.maskControl, .maskCommand]
             _ = manager.handleKeyEvent(type: type, event: event)
@@ -110,17 +110,27 @@ final class VoiceModelDeletionTests: XCTestCase {
             asrService: asr,
             primaryShortcuts: [HotkeyShortcut(keyCode: 2, modifierFlags: [.control, .command])],
             promptModeShortcut: HotkeyShortcut(keyCode: 60, modifierFlags: []),
-            commandModeShortcut: nil,
-            rewriteModeShortcut: HotkeyShortcut(keyCode: 58, modifierFlags: []),
+            commandModeShortcut: HotkeyShortcut(keyCode: 14, modifierFlags: [.control, .command]),
+            rewriteModeShortcut: HotkeyShortcut(keyCode: 15, modifierFlags: [.control, .command]),
             promptModeShortcutEnabled: false,
-            commandModeShortcutEnabled: false,
-            rewriteModeShortcutEnabled: false,
+            commandModeShortcutEnabled: true,
+            rewriteModeShortcutEnabled: true,
             dictationModeCallback: {
                 onSwitch()
                 await view.beginDictationModeSwitchForTesting()?.value
             },
             stopAndProcessCallback: { _ in onStop() },
+            commandModeCallback: {
+                onSwitch()
+                await view.beginCommandModeSwitchForTesting()
+            },
+            rewriteModeCallback: {
+                onSwitch()
+                await view.beginRewriteModeSwitchForTesting()
+            },
             isDictateRecordingProvider: { view.dictationModeSwitchStateForTesting.mode == "dictate" },
+            isCommandRecordingProvider: { view.dictationModeSwitchStateForTesting.mode == "command" },
+            isRewriteRecordingProvider: { view.dictationModeSwitchStateForTesting.mode == "edit" },
             isSessionLockedProvider: { false }
         )
         manager.setHotkeyMode(.toggle)
@@ -192,6 +202,84 @@ final class VoiceModelDeletionTests: XCTestCase {
         asr.releaseExclusiveActivity(lease)
     }
 
+    func testDictationEditAndCommandSwitchesKeepTheSameCapture() async throws {
+        let asr = ASRService()
+        let provider = DeletionFixtureProvider()
+        asr.modelProvidersForTesting[SettingsStore.shared.selectedSpeechModel] = provider
+        asr.isAsrReady = true
+        asr.finalText = "retained transcript"
+        let samples: [Float] = [0.12, -0.24, 0.31]
+        asr.configureAudioRouteRecoveryForTesting(controller: self.makeNoHardwareController(for: asr), devices: [], initialSamples: samples)
+        let lease = try asr.acquireExclusiveActivity(.dictation)
+        asr.configureDictationModeSwitchForTesting(ownedLease: lease)
+        try await self.withDictationModeSwitchFixture(asr: asr) { view in
+            let generation = view.dictationModeSwitchStateForTesting.generation
+            for target in ["dictate", "command", "edit", "command", "dictate", "edit", "edit"] {
+                asr.errorTitle = "Dictation Unavailable"
+                asr.errorMessage = "Wait for the active dictation to finish."
+                asr.showError = true
+                switch target {
+                case "command": await view.beginCommandModeSwitchForTesting()
+                case "edit": await view.beginRewriteModeSwitchForTesting()
+                default: XCTAssertNil(view.beginDictationModeSwitchForTesting())
+                }
+                XCTAssertEqual(view.dictationModeSwitchStateForTesting.mode, target)
+                XCTAssertEqual(NotchContentState.shared.mode, target == "dictate" ? .dictation : target == "command" ? .command : .edit)
+                XCTAssertEqual(view.dictationModeSwitchStateForTesting.generation, generation)
+                XCTAssertTrue(asr.isRunning)
+                XCTAssertTrue(asr.canSwitchOwnedDictationCaptureMode)
+                XCTAssertFalse(asr.showError)
+                XCTAssertEqual(asr.activeExclusiveActivity, .dictation)
+                XCTAssertEqual(asr.audioRouteRecoveryStateForTesting.samples, samples)
+                XCTAssertTrue(asr.audioRouteRecoveryStateForTesting.acceptingPCM)
+                XCTAssertEqual(asr.finalText, "retained transcript")
+                XCTAssertTrue((asr.fileTranscriptionProvider as? DeletionFixtureProvider) === provider)
+                XCTAssertEqual(provider.prepareCalls + provider.clearCalls, 0)
+            }
+            asr.errorTitle = "Different error"
+            asr.errorMessage = "Keep this error"
+            asr.showError = true
+            await view.beginCommandModeSwitchForTesting()
+            XCTAssertTrue(asr.showError, "Mode switching must preserve unrelated errors")
+            XCTAssertEqual(asr.errorMessage, "Keep this error")
+        }
+        asr.configureDictationModeSwitchForTesting(ownedLease: nil)
+        await asr.finishAudioRouteRecoveryTest()
+        asr.releaseExclusiveActivity(lease)
+    }
+
+    func testCommandAndEditShortcutSwitchThenRapidSecondTapStops() async throws {
+        for (keyCode, mode) in [(CGKeyCode(14), "command"), (CGKeyCode(15), "edit")] {
+            let asr = ASRService()
+            asr.configureAudioRouteRecoveryForTesting(controller: self.makeNoHardwareController(for: asr), devices: [], initialSamples: [0.5])
+            let lease = try asr.acquireExclusiveActivity(.dictation)
+            asr.configureDictationModeSwitchForTesting(ownedLease: lease)
+            try await self.withDictationModeSwitchFixture(asr: asr) { view in
+                XCTAssertNil(view.beginDictationModeSwitchForTesting())
+                var switches = 0
+                var stops = 0
+                let manager = self.makeModeSwitchHotkeyManager(asr: asr, view: view, onSwitch: { switches += 1 }, onStop: {
+                    stops += 1
+                    asr.isRunning = false
+                    asr.releaseExclusiveActivity(lease)
+                })
+                try self.replayPrimaryTap(manager, keyCode: keyCode)
+                try self.replayPrimaryTap(manager, keyCode: keyCode)
+                for _ in 0..<30 {
+                    await Task.yield()
+                }
+                XCTAssertEqual(switches, 1, mode)
+                XCTAssertEqual(stops, 1, mode)
+                XCTAssertEqual(view.dictationModeSwitchStateForTesting.mode, mode)
+                XCTAssertFalse(asr.showError, mode)
+                XCTAssertEqual(asr.audioRouteRecoveryStateForTesting.samples, [0.5])
+            }
+            asr.configureDictationModeSwitchForTesting(ownedLease: nil)
+            await asr.finishAudioRouteRecoveryTest()
+            asr.releaseExclusiveActivity(lease)
+        }
+    }
+
     func testRapidRewriteToDictateDoubleTapSwitchesThenStopsOnce() async throws {
         let asr = ASRService()
         asr.configureAudioRouteRecoveryForTesting(controller: self.makeNoHardwareController(for: asr), devices: [], initialSamples: [0.5])
@@ -248,6 +336,8 @@ final class VoiceModelDeletionTests: XCTestCase {
                 view.blockDictationModeSwitchForTesting(savingCancellation: name == "cancel save", processing: name == "processing")
                 let before = view.dictationModeSwitchStateForTesting
                 XCTAssertNil(view.beginDictationModeSwitchForTesting(selection: attempted), name)
+                await view.beginCommandModeSwitchForTesting()
+                await view.beginRewriteModeSwitchForTesting()
                 XCTAssertEqual(view.dictationModeSwitchStateForTesting.mode, before.mode, name)
                 XCTAssertEqual(view.dictationModeSwitchStateForTesting.slot, before.slot, name)
                 XCTAssertEqual(view.dictationModeSwitchStateForTesting.generation, before.generation, name)

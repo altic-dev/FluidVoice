@@ -39,6 +39,12 @@ struct PronunciationDictionaryProfile: Codable, Equatable, Identifiable, Sendabl
         }
     }
 
+    var hasTemporalRecordings: Bool {
+        self.enrollments.count >= 3 && self.enrollments.prefix(3).allSatisfy {
+            $0.inspectionID != nil || $0.originalAudioID != nil
+        }
+    }
+
     var id: String { "\(self.dictionaryEntryID.uuidString):\(self.modelKey)" }
 }
 
@@ -97,6 +103,29 @@ actor PronunciationDictionaryStore {
     func profiles(modelKey: String) -> [PronunciationDictionaryProfile] {
         self.loadIfNeeded()
         return self.document?.profiles.filter { $0.modelKey == modelKey } ?? []
+    }
+
+    /// Read-only family fallback. Keep checkpoint identities and stored recordings intact.
+    /// One profile per word prevents another model's version competing with its own word.
+    func sharedProfiles(modelKey: String, hiddenSize: Int?) -> [PronunciationDictionaryProfile] {
+        self.loadIfNeeded()
+        return Self.selectSharedProfiles(self.document?.profiles ?? [], modelKey: modelKey, hiddenSize: hiddenSize)
+    }
+
+    nonisolated static func selectSharedProfiles(
+        _ profiles: [PronunciationDictionaryProfile], modelKey: String, hiddenSize: Int?
+    ) -> [PronunciationDictionaryProfile] {
+        let eligible = profiles.filter {
+            $0.isEligibleForMatching && (hiddenSize == nil || $0.hiddenSize == hiddenSize) &&
+                ($0.modelKey == modelKey || ParakeetSpeechModelCatalog.sharesPronunciationFamily($0.modelKey, with: modelKey))
+        }.sorted {
+            let leftExact = $0.modelKey == modelKey, rightExact = $1.modelKey == modelKey
+            if leftExact != rightExact { return leftExact }
+            if $0.enrollments.count != $1.enrollments.count { return $0.enrollments.count > $1.enrollments.count }
+            return $0.id < $1.id
+        }
+        var seen = Set<UUID>()
+        return eligible.filter { seen.insert($0.dictionaryEntryID).inserted }
     }
 
     func enrollmentCount(

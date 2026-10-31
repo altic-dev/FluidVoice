@@ -93,6 +93,7 @@ struct DictionaryMatchDiagnosticsView: View {
                             .padding(.top, self.theme.metrics.spacing.sm)
                     }
                 }
+                .disclosureGroupStyle(FluidDisclosureGroupStyle())
             }
             Divider()
             DisclosureGroup("History", isExpanded: self.$historyExpanded) {
@@ -119,6 +120,7 @@ struct DictionaryMatchDiagnosticsView: View {
                 }
                 .padding(.top, self.theme.metrics.spacing.sm)
             }
+            .disclosureGroupStyle(FluidDisclosureGroupStyle())
         }
         .task(id: self.word) {
             self.report = nil

@@ -594,6 +594,68 @@ extension MeetingSessionModelTests {
         }
     }
 
+    func testMarkdownExportIncludesTitleAndChronologicalSpeakerTurns() {
+        var session = MeetingModelFixture.makeSession()
+        session.title = "Planning"
+        var later = session.transcriptSegments[0]
+        later.id = UUID()
+        later.start = MeetingModelFixture.mediaTime(65)
+        later.end = MeetingModelFixture.mediaTime(70)
+        later.speakerID = nil
+        later.text = "Next steps"
+        session.transcriptSegments.insert(later, at: 0)
+
+        XCTAssertEqual(MeetingTranscriptExporter.markdown(for: session), """
+        # Planning
+
+        ## Transcript
+
+        ### [00:04] Speaker 1
+
+        Initial provisional text
+
+        ### [01:05] Unknown speaker
+
+        Next steps
+
+        """)
+        XCTAssertEqual(MeetingTranscriptExportFormat.markdown.fileExtension, "md")
+        XCTAssertEqual(MeetingTranscriptExportFormat.text.fileExtension, "txt")
+        XCTAssertEqual(MeetingTranscriptExportFormat.json.fileExtension, "json")
+    }
+
+    func testMarkdownExportEscapesContentAndKeepsOtherFormatsUnchanged() throws {
+        var session = MeetingModelFixture.makeSession()
+        session.title = "Planning *notes*\n# next"
+        try session.renameSpeaker(id: MeetingModelFixture.speakerID, to: "[Alex]")
+        session.transcriptSegments[0].text = "Use **bold** & <tags>\n# literal heading"
+        let plainText = MeetingTranscriptExporter.text(for: session)
+        let json = try MeetingTranscriptExporter.json(for: session)
+
+        let markdown = MeetingTranscriptExporter.markdown(for: session)
+
+        XCTAssertTrue(markdown.hasPrefix(##"# Planning \*notes\* \# next"## + "\n"))
+        XCTAssertTrue(markdown.contains(#"### [00:04] \[Alex\]"#))
+        XCTAssertTrue(markdown.contains(#"Use \*\*bold\*\* & \<tags\>"# + "\n" + ##"\# literal heading"##))
+        XCTAssertEqual(MeetingTranscriptExporter.text(for: session), plainText)
+        XCTAssertEqual(try MeetingTranscriptExporter.json(for: session), json)
+    }
+
+    func testMarkdownExportHonorsEchoVisibilityAndEmptyTranscript() {
+        var session = MeetingModelFixture.makeSession()
+        var echo = session.transcriptSegments[0]
+        echo.id = UUID()
+        echo.text = "Echoed remote text"
+        echo.isLikelyEcho = true
+        session.transcriptSegments.append(echo)
+
+        XCTAssertFalse(MeetingTranscriptExporter.markdown(for: session).contains(echo.text))
+        XCTAssertTrue(MeetingTranscriptExporter.markdown(for: session, includeEchoes: true).contains(echo.text))
+        session.title = "Empty meeting"
+        session.transcriptSegments = []
+        XCTAssertEqual(MeetingTranscriptExporter.markdown(for: session), "# Empty meeting\n\n## Transcript\n")
+    }
+
     func testTextFormatMatchesTimestampFormatAndLegacyUnassignedSpeaker() {
         var session = MeetingModelFixture.makeSession()
         var unknownSpeakerSegment = session.transcriptSegments[0]

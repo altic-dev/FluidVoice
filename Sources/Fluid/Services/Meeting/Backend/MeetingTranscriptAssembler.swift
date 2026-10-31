@@ -5,14 +5,96 @@ nonisolated enum MeetingSpeakerActivityCoverage {
     static func isOutside(
         _ unit: MeetingFinalTextUnit,
         activityByEpoch: [MeetingAnalysisEpochID: [MeetingBackendSpeakerActivity]],
-        tolerance: TimeInterval = MeetingAnalysisManifestSchema.mappingToleranceSeconds
+        tolerance: TimeInterval = MeetingAnalysisManifestSchema.mappingToleranceSeconds,
+        boundaryAssignments: [String: MeetingBackendSpeakerAssignment] = [:]
     ) -> Bool {
+        if boundaryAssignments[unit.id] != nil { return false }
         guard let activity = activityByEpoch[unit.analysisEpochID], !activity.isEmpty else {
             return false
         }
         return !activity.contains {
             min($0.end, unit.analysisEnd) - max($0.start, unit.analysisStart) > tolerance
         }
+    }
+}
+
+/// Word times from TDT and 80ms diarizer frames are estimates, not sample-aligned bounds.
+/// Recover one adjacent boundary word, never an arbitrary run of text in silence. This shared
+/// policy keeps backend attribution, assembly visibility and echo-target visibility consistent.
+nonisolated enum MeetingWordBoundaryRecovery {
+    private static let hop: TimeInterval = 0.08
+    private static let maximumWordDuration: TimeInterval = 1.2
+    private static let epsilon = MeetingAnalysisManifestSchema.mappingToleranceSeconds
+
+    static func assignments(
+        units: [MeetingFinalTextUnit],
+        activityByEpoch: [MeetingAnalysisEpochID: [MeetingBackendSpeakerActivity]]
+    ) -> [String: MeetingBackendSpeakerAssignment] {
+        var result: [String: MeetingBackendSpeakerAssignment] = [:]
+        for (epoch, epochUnits) in Dictionary(grouping: units, by: \.analysisEpochID) {
+            let activity = activityByEpoch[epoch] ?? []
+            guard !activity.isEmpty else { continue }
+            let ordered = epochUnits.enumerated().sorted {
+                ($0.element.analysisStart, $0.offset) < ($1.element.analysisStart, $1.offset)
+            }.map(\.element)
+            for index in ordered.indices.dropFirst() {
+                let word = ordered[index]
+                let previous = ordered[index - 1]
+                if result[previous.id] == nil,
+                   let assignment = Self.assignment(for: word, previous: previous, activity: activity)
+                {
+                    result[word.id] = assignment
+                }
+            }
+        }
+        return result
+    }
+
+    private static func assignment(
+        for word: MeetingFinalTextUnit,
+        previous: MeetingFinalTextUnit,
+        activity: [MeetingBackendSpeakerActivity]
+    ) -> MeetingBackendSpeakerAssignment? {
+        guard word.precision == .word, previous.precision == .word,
+              word.trackID == previous.trackID,
+              word.analysisEpochID == previous.analysisEpochID,
+              MeetingEvidenceInterval.isValid(start: word.analysisStart, end: word.analysisEnd),
+              MeetingEvidenceInterval.isValid(start: previous.analysisStart, end: previous.analysisEnd),
+              word.analysisEnd - word.analysisStart <= self.maximumWordDuration + self.epsilon,
+              abs(word.analysisStart - previous.analysisEnd) <= self.hop + self.epsilon,
+              !Set(word.analysisSpanIDs).isDisjoint(with: previous.analysisSpanIDs),
+              case let .assigned(token) = previous.speaker
+        else { return nil }
+        switch word.speaker {
+        case .unassigned: break
+        case let .assigned(current) where current == token:
+            // A directly supported word needs no repair and can still anchor its own ending.
+            guard !activity.contains(where: {
+                min($0.end, word.analysisEnd) - max($0.start, word.analysisStart) > Self.epsilon
+            }) else { return nil }
+        default: return nil // Never override another speaker or genuine ambiguity.
+        }
+        // Nemotron endpoints are Float32. One fixed microsecond is too small even at 19s;
+        // allow two ULPs, bounded to 2ms, rather than extending the 80ms speech-boundary policy.
+        let roundingAllowance = min(0.002, max(Self.epsilon, 2 * Double(Float(word.analysisStart).ulp)))
+        let previousDuration = previous.analysisEnd - previous.analysisStart
+        // The anchor itself needs substantial measured coverage. Recovered tails cannot become
+        // anchors and recursively admit an ASR hallucination continuing into silence.
+        let anchored = activity.contains {
+            $0.token == token
+                && min($0.end, previous.analysisEnd) - max($0.start, previous.analysisStart)
+                >= 0.5 * previousDuration - min(roundingAllowance, 0.01 * previousDuration)
+                && abs($0.end - word.analysisStart) <= Self.hop + roundingAllowance
+        }
+        guard anchored else { return nil }
+        // Even a short competing onset vetoes inherited identity. Keep the word, but keep its
+        // speaker unknown rather than pretending timing proximity proves who said it.
+        let competing = activity.contains {
+            $0.token != token
+                && min($0.end, word.analysisEnd + Self.hop) - max($0.start, previous.analysisStart)
+                > Self.epsilon
+        }
+        return competing ? .unassigned : .assigned(token)
     }
 }
 
@@ -177,6 +259,10 @@ nonisolated struct MeetingTranscriptAssembler {
         )
         let receiptsBySpanID = Dictionary(grouping: receipts, by: \.spanID)
         let activityByEpoch = Dictionary(grouping: evidence.speakerActivity) { $0.token.analysisEpochID }
+        let boundaryAssignments = MeetingWordBoundaryRecovery.assignments(
+            units: evidence.units.filter { $0.quarantineReason(in: manifest) == nil },
+            activityByEpoch: activityByEpoch
+        )
         let inadmissibleGapsByTrack = Dictionary(grouping: manifest.allGaps.filter {
             $0.reason == .inadmissibleCaptureEra && $0.recordedInterval != nil
         }) { $0.trackID }
@@ -254,7 +340,8 @@ nonisolated struct MeetingTranscriptAssembler {
                         guard duplicate.quarantineReason(in: manifest) == nil,
                               !MeetingSpeakerActivityCoverage.isOutside(
                                   duplicate,
-                                  activityByEpoch: activityByEpoch
+                                  activityByEpoch: activityByEpoch,
+                                  boundaryAssignments: boundaryAssignments
                               )
                         else {
                             throw MeetingAssemblyError.echoDuplicateTargetNotVisible(
@@ -272,7 +359,9 @@ nonisolated struct MeetingTranscriptAssembler {
                 }
             }
 
-            if MeetingSpeakerActivityCoverage.isOutside(unit, activityByEpoch: activityByEpoch) {
+            if MeetingSpeakerActivityCoverage.isOutside(
+                unit, activityByEpoch: activityByEpoch, boundaryAssignments: boundaryAssignments
+            ) {
                 dispositions.append(MeetingTextUnitDispositionRecord(
                     unitID: unit.id,
                     disposition: .outsideActivity,

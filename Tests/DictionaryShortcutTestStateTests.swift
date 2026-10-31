@@ -7,11 +7,10 @@ enum DictionaryShortcutTestStateTests {
             precondition(condition(), message)
         }
         for count in [0, 1, 2, 3] {
-            expect(DictionaryCaptureAction.title(active: false, failed: true, count: count) == "Record again", "Every failed capture offers retry")
-            expect(DictionaryCaptureAction.title(active: true, failed: true, count: count) == "Stop recording", "Active capture retains Stop")
+            expect(DictionaryCaptureAction.title(failed: true, count: count) == "Record again", "Every failed capture offers retry")
         }
-        expect(DictionaryCaptureAction.title(active: false, failed: false, count: 0) == "Record", "First capture")
-        expect(DictionaryCaptureAction.title(active: false, failed: false, count: 1) == "Record more", "Additional successful capture")
+        expect(DictionaryCaptureAction.title(failed: false, count: 0) == "Record", "First capture")
+        expect(DictionaryCaptureAction.title(failed: false, count: 1) == "Record more", "Additional successful capture")
 
         var test = DictionaryShortcutTestState()
         test.receive("ModelOpt", word: "ModelOpt")

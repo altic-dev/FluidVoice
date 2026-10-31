@@ -1,52 +1,35 @@
-import AppKit
+import Foundation
 
 @main
 struct VoiceTrainingAliasFilterTests {
     @MainActor
     static func main() async {
-        let ordinary = ["but", "NOW", "okay", "hello", "right now", "let’s do that"]
-        let native = await VoiceTrainingAliasFilter.filter(ordinary + ["fluwidvois"])
-        FileHandle.standardOutput.write(Data("native accepted=\(native.accepted) rejected=\(native.rejected) available=\(native.lookupAvailable)\n".utf8))
-        precondition(native.lookupAvailable, "Native English word lookup must be available for this smoke test")
-        precondition(native.accepted == ["fluwidvois"])
-        precondition(native.rejected == ordinary)
+        let ordinary = ["NOW", "okay", "hello", "right now", "let’s do that", "fluid voice", "Apple", "May", "résumé", "こんにちは", "but", "you", "is"]
+        let result = await VoiceTrainingAliasFilter.filter(ordinary + ["fluwidvois"])
+        precondition(result.accepted == ordinary + ["fluwidvois"], "Normal words and phrases must remain teachable")
+        precondition(result.rejected.isEmpty)
 
-        // Deterministic policy coverage, independent of the installed dictionary version.
-        let aliases = ["now", "right now", "fluid zqxword", "🙂 zqxword", "123", "", String(repeating: "x", count: 161)]
-        let filtered = await VoiceTrainingAliasFilter.filter(aliases) { text in
-            guard let regex = try? NSRegularExpression(pattern: "zqxword") else { preconditionFailure("Invalid fixture pattern") }
-            return .checked(regex.matches(in: text, range: NSRange(text.startIndex..., in: text)).map(\.range))
+        let basic = ["the", "AND", "  a  ", "an.", "there!", "or"]
+        let guarded = await VoiceTrainingAliasFilter.filter(basic + ["the voice", "and now", "now"])
+        precondition(guarded.accepted == ["the voice", "and now", "now"])
+        precondition(guarded.rejected == basic, "Only standalone basic words need a manual rule")
+        precondition(guarded.rejectionMessage.contains("Replacement found these words:"))
+        precondition(guarded.rejectionMessage.contains("“there”"))
+        precondition(guarded.rejectionMessage.contains("single words"))
+        let phrase = await VoiceTrainingAliasFilter.filter(["a an the", "the and", "there or"])
+        precondition(phrase.accepted == ["a an the", "the and", "there or"], "Multiple basic words form a valid phrase")
+
+        let invalid = ["123", "", "🙂", String(repeating: "x", count: 161)]
+        let bounded = await VoiceTrainingAliasFilter.filter(invalid + Array(repeating: "hello", count: 25))
+        precondition(bounded.accepted.count == 16, "Inspect at most twenty input samples")
+        precondition(bounded.rejected == invalid)
+
+        let task = Task { @MainActor in
+            await VoiceTrainingAliasFilter.filter(["hello"])
         }
-        precondition(filtered.accepted == ["fluid zqxword", "🙂 zqxword"])
-        precondition(filtered.rejected == ["now", "right now", "123", "", String(repeating: "x", count: 161)])
-
-        let unavailable = await VoiceTrainingAliasFilter.filter(["now", "zqxword"]) { _ in .unavailable }
-        precondition(!unavailable.lookupAvailable && unavailable.accepted.isEmpty)
-
-        let cancelled = Task { @MainActor in
-            await VoiceTrainingAliasFilter.filter(["zqxword"]) { text in
-                try? await Task.sleep(for: .milliseconds(30))
-                return .checked([NSRange(text.startIndex..., in: text)])
-            }
-        }
-        cancelled.cancel()
-        let cancelledResult = await cancelled.value
-        precondition(cancelledResult.accepted.isEmpty)
-
-        let results = await withTaskGroup(of: Bool.self) { group in
-            for _ in 0..<3 {
-                group.addTask {
-                    let result = await VoiceTrainingAliasFilter.filter(["now", "fluwidvois"])
-                    return result.accepted == ["fluwidvois"]
-                }
-            }
-            var values: [Bool] = []
-            for await result in group {
-                values.append(result)
-            }
-            return values
-        }
-        precondition(results.count == 3 && results.allSatisfy { $0 })
-        print("PASS: native vocabulary, common phrases, rare aliases, UTF-16 ranges, invalid input, unavailable lookup, cancellation, concurrent requests")
+        task.cancel()
+        let cancelled = await task.value
+        precondition(cancelled.accepted.isEmpty)
+        print("PASS: ordinary words, phrases, names, multilingual terms, basic-word guard, punctuation, invalid input, bounds, cancellation")
     }
 }

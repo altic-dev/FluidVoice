@@ -570,3 +570,145 @@ final class MeetingAudioChunkSinkTests: XCTestCase {
         return sampleBuffer
     }
 }
+
+extension MeetingAudioChunkSinkTests {
+    func testNativeIntegerMicrophonesConvertWithoutChangingFramesChannelsOrTiming() throws {
+        let normalizer = MeetingMicrophonePCMNormalizer()
+        // One producer changes between USB/Bluetooth-style rates, widths and channel layouts.
+        for rate in [16_000.0, 44_100.0, 48_000.0, 96_000.0] {
+            for bits in [16, 24, 32] {
+                for channels in [1, 2, 3] {
+                    for planar in [false, true] {
+                        let (source, expected) = try self.integerMicrophoneSample(bits: bits, channels: channels, rate: rate, planar: planar)
+                        XCTAssertThrowsError(try MeetingPCMFormatContract(formatDescription: XCTUnwrap(CMSampleBufferGetFormatDescription(source))))
+                        let normalized = normalizer.normalize(source)
+                        XCTAssertFalse(normalized === source)
+                        let description = try XCTUnwrap(CMSampleBufferGetFormatDescription(normalized))
+                        let contract = try MeetingPCMFormatContract(formatDescription: description)
+                        XCTAssertEqual(contract.sampleRate, rate)
+                        XCTAssertEqual(contract.channelCount, channels)
+                        XCTAssertEqual(MeetingPCMFormatContract.layoutData(description), try MeetingPCMFormatContract.layoutData(XCTUnwrap(CMSampleBufferGetFormatDescription(source))))
+                        XCTAssertEqual(CMSampleBufferGetNumSamples(normalized), CMSampleBufferGetNumSamples(source))
+                        XCTAssertEqual(CMSampleBufferGetPresentationTimeStamp(normalized), CMSampleBufferGetPresentationTimeStamp(source))
+                        XCTAssertEqual(CMSampleBufferGetDuration(normalized), CMSampleBufferGetDuration(source))
+                        XCTAssertEqual(CMSampleBufferGetDecodeTimeStamp(normalized), CMSampleBufferGetDecodeTimeStamp(source))
+                        let format = try MeetingPCMFormatResolver.resolve(description)
+                        let pcm = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 12))
+                        pcm.frameLength = 12
+                        XCTAssertEqual(CMSampleBufferCopyPCMDataIntoAudioBufferList(normalized, at: 0, frameCount: 12, into: pcm.mutableAudioBufferList), noErr)
+                        let samples = try XCTUnwrap(pcm.floatChannelData?[0])
+                        for index in expected.indices {
+                            XCTAssertEqual(samples[index], expected[index], accuracy: 0.000_001)
+                        }
+                        // The callback's storage and integer format must remain untouched.
+                        XCTAssertThrowsError(try MeetingPCMFormatContract(formatDescription: XCTUnwrap(CMSampleBufferGetFormatDescription(source))))
+                    }
+                }
+            }
+        }
+    }
+
+    func testFloat32MicrophonePassesThroughWithoutCopyingOrChangingEchoAdmission() throws {
+        let source = try self.makeRawSampleBuffer(channelCount: 3, layoutTag: nil, frameCount: 480, pts: 1)
+        let normalizer = MeetingMicrophonePCMNormalizer()
+        XCTAssertTrue(normalizer.normalize(source) === source)
+        let gate = MeetingMicrophoneTranscriptGate(.unprotected)
+        XCTAssertFalse(gate.observeAndAdmit(normalizer.normalize(source)))
+        XCTAssertFalse(gate.admitsTranscript(), "Format conversion must not bless unprotected speaker echo")
+        let (integer, _) = try self.integerMicrophoneSample(bits: 16, channels: 1, rate: 48_000, planar: false)
+        XCTAssertFalse(gate.observeAndAdmit(normalizer.normalize(integer)))
+    }
+
+    func testNormalizedIntegerMicrophoneReachesWriterAndLiveCopyWithNoLostOpeningFrames() async throws {
+        let root = try self.makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let track = MeetingAudioTrack(
+            id: UUID(),
+            kind: .microphone,
+            sourceIdentifier: "integer-mic",
+            sourceDisplayName: "Integer microphone",
+            format: nil,
+            timebase: MeetingTimebaseMetadata(
+                startedHostTime: 0,
+                machTimebaseNumerator: 1,
+                machTimebaseDenominator: 1,
+                firstPresentationTime: nil
+            ),
+            health: .waiting,
+            chunks: []
+        )
+        let events = MeetingWriterEventRecorder()
+        let writer = try MeetingAudioChunkWriter(track: track, sessionDirectory: root, chunkDuration: 60) { events.record($0) }
+        let normalizer = MeetingMicrophonePCMNormalizer()
+        for index in 0..<100 {
+            let (source, _) = try self.integerMicrophoneSample(bits: index.isMultiple(of: 2) ? 16 : 24, channels: 1, rate: 48_000, planar: false, pts: Double(index * 12) / 48_000)
+            let normalized = normalizer.normalize(source)
+            let live = try XCTUnwrap(MeetingLiveSampleCopy.copy(normalized))
+            XCTAssertEqual(live.buffer.frameLength, 12)
+            XCTAssertEqual(try XCTUnwrap(live.buffer.floatChannelData?[0])[0], -0.5, accuracy: 0.000_001)
+            XCTAssertTrue(writer.enqueue(normalized))
+            _ = await writer.snapshot()
+        }
+        let saved = await writer.stop()
+        XCTAssertEqual(saved.chunks.count, 1, "Changing native bit width must not split the normalized capture")
+        let chunk = try XCTUnwrap(saved.chunks.first)
+        XCTAssertEqual(chunk.finalizationState, .finalized)
+        XCTAssertEqual(chunk.captureAnalysisAsset?.frameCount, 1200)
+        let file = try AVAudioFile(forReading: root.appendingPathComponent(chunk.relativeFilePath), commonFormat: .pcmFormatFloat32, interleaved: true)
+        let recorded = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: 1200))
+        try file.read(into: recorded)
+        XCTAssertEqual(recorded.frameLength, 1200)
+        let values = try XCTUnwrap(recorded.floatChannelData?[0])
+        for index in 0..<1200 {
+            XCTAssertEqual(values[index], Float((index % 3) - 1) * 0.5, accuracy: 0.000_001)
+        }
+        XCTAssertFalse(events.snapshot().contains { if case .interrupted(.writerFailure, _, _) = $0 { return true }; return false })
+    }
+
+    func testUnsupportedAndMalformedBuffersRemainReportableAndDoNotPoisonLaterConversion() throws {
+        let normalizer = MeetingMicrophonePCMNormalizer()
+        let integerFormat = try XCTUnwrap(AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: 48_000, channels: 1, interleaved: true))
+        let shortPayload = try self.makeSampleBuffer(format: integerFormat, bytes: Data([0]), frameCount: 12, pts: 0)
+        XCTAssertTrue(normalizer.normalize(shortPayload) === shortPayload)
+        let oversized = try self.makeSampleBuffer(format: integerFormat, bytes: Data([0]), frameCount: 1_048_577, pts: 0)
+        XCTAssertTrue(normalizer.normalize(oversized) === oversized)
+        let doubleFormat = try XCTUnwrap(AVAudioFormat(commonFormat: .pcmFormatFloat64, sampleRate: 48_000, channels: 1, interleaved: true))
+        let unsupported = try self.makeSampleBuffer(format: doubleFormat, bytes: Data(repeating: 0, count: 96), frameCount: 12, pts: 0)
+        XCTAssertTrue(normalizer.normalize(unsupported) === unsupported)
+        let (valid, _) = try self.integerMicrophoneSample(bits: 16, channels: 1, rate: 48_000, planar: false)
+        let first = normalizer.normalize(valid)
+        XCTAssertNoThrow(try MeetingPCMFormatContract(formatDescription: XCTUnwrap(CMSampleBufferGetFormatDescription(first))))
+        let (invalid, _) = try self.integerMicrophoneSample(bits: 16, channels: 1, rate: 48_000, planar: false)
+        CMSampleBufferInvalidate(invalid)
+        XCTAssertTrue(normalizer.normalize(invalid) === invalid)
+        let second = normalizer.normalize(valid)
+        XCTAssertFalse(first === second, "Each asynchronously retained callback must own its output bytes")
+        XCTAssertNoThrow(try MeetingPCMFormatContract(formatDescription: XCTUnwrap(CMSampleBufferGetFormatDescription(second))))
+    }
+
+    private func integerMicrophoneSample(bits: Int, channels: Int, rate: Double, planar: Bool, pts: Double = 1.25) throws -> (CMSampleBuffer, [Float]) {
+        var asbd = AudioStreamBasicDescription(
+            mSampleRate: rate,
+            mFormatID: kAudioFormatLinearPCM,
+            mFormatFlags: kAudioFormatFlagIsSignedInteger | kAudioFormatFlagIsPacked | (planar ? kAudioFormatFlagIsNonInterleaved : 0),
+            mBytesPerPacket: UInt32(bits / 8 * (planar ? 1 : channels)),
+            mFramesPerPacket: 1,
+            mBytesPerFrame: UInt32(bits / 8 * (planar ? 1 : channels)),
+            mChannelsPerFrame: UInt32(channels),
+            mBitsPerChannel: UInt32(bits),
+            mReserved: 0
+        )
+        let layout = try XCTUnwrap(AVAudioChannelLayout(layoutTag: kAudioChannelLayoutTag_DiscreteInOrder | UInt32(channels)))
+        let format = try XCTUnwrap(AVAudioFormat(streamDescription: &asbd, channelLayout: layout))
+        let expected: [Float] = (0..<(12 * channels)).map { Float(($0 % 3) - 1) * 0.5 }
+        var bytes = Data()
+        for offset in expected.indices {
+            let index = planar ? (offset % 12) * channels + offset / 12 : offset
+            let value = Int64(Double(expected[index]) * pow(2, Double(bits - 1)))
+            for byte in 0..<(bits / 8) {
+                bytes.append(UInt8(truncatingIfNeeded: value >> (byte * 8)))
+            }
+        }
+        return try (self.makeSampleBuffer(format: format, bytes: bytes, frameCount: 12, pts: pts), expected)
+    }
+}

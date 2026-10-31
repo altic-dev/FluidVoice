@@ -40,6 +40,7 @@ struct MeetingModelSettingsSection: View {
                     Text("Model details")
                         .meetingHoverFeedback(cornerRadius: self.theme.metrics.corners.sm)
                 }
+                .disclosureGroupStyle(FluidDisclosureGroupStyle())
                 .font(self.theme.typography.captionStrong)
                 .foregroundStyle(self.theme.palette.secondaryText)
             }

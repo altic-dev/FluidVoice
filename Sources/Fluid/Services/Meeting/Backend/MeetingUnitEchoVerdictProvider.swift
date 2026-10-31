@@ -63,6 +63,10 @@ nonisolated struct MeetingTextOverlapEchoVerdictProvider: MeetingUnitEchoVerdict
         var microphoneUnits: [PositionedUnit] = []
         var applicationUnits: [PositionedUnit] = []
         let activityByEpoch = Dictionary(grouping: evidence.speakerActivity) { $0.token.analysisEpochID }
+        let boundaryAssignments = MeetingWordBoundaryRecovery.assignments(
+            units: evidence.units.filter { $0.quarantineReason(in: manifest) == nil },
+            activityByEpoch: activityByEpoch
+        )
 
         for unit in evidence.units {
             try Task.checkCancellation()
@@ -85,7 +89,8 @@ nonisolated struct MeetingTextOverlapEchoVerdictProvider: MeetingUnitEchoVerdict
                 // duplicate target, so it is not echo evidence either (the assembler proves this).
                 guard !MeetingSpeakerActivityCoverage.isOutside(
                     unit,
-                    activityByEpoch: activityByEpoch
+                    activityByEpoch: activityByEpoch,
+                    boundaryAssignments: boundaryAssignments
                 ) else { continue }
                 applicationUnits.append(positioned)
             case .microphone:

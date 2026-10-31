@@ -3,6 +3,9 @@ import CoreMedia
 @testable import FluidVoice_Debug
 import Foundation
 import XCTest
+#if arch(arm64)
+import FluidAudio
+#endif
 
 /// Opt-in replay harness: drives the REAL `MeetingLiveTranscriptionCoordinator` with a real,
 /// previously-recorded Zoom meeting's decoded microphone/application-audio WAVs, to see what the
@@ -15,6 +18,16 @@ final class MeetingLiveReplayTests: XCTestCase {
     private static let chunkFrames = 320 // 20ms @ 16kHz
     private static let sampleRate: Double = 16_000
     private static let trailingSilenceSeconds: Double = 3
+
+    func testReplayBufferUsesPerFrameTiming() throws {
+        let format = try XCTUnwrap(AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: Self.sampleRate, channels: 1, interleaved: false))
+        let pcm = try XCTUnwrap(Self.makeBuffer(format: format, samples: [Float](repeating: 0, count: Self.chunkFrames)[...]))
+        let description = try XCTUnwrap(Self.makeFormatDescription(format: format))
+        let sample = try XCTUnwrap(Self.makeSampleBuffer(pcm: pcm, formatDescription: description, pts: CMTime(seconds: 7, preferredTimescale: 16_000)))
+        XCTAssertEqual(CMSampleBufferGetDuration(sample).seconds, 0.02, accuracy: 0.000_001)
+        XCTAssertEqual(CMSampleBufferGetPresentationTimeStamp(sample).seconds, 7, accuracy: 0.000_001)
+        XCTAssertEqual(CMSampleBufferGetNumSamples(sample), Self.chunkFrames)
+    }
 
     func testReplayRealMeetingThroughLiveCoordinator() async throws {
         guard let replayFlag = ProcessInfo.processInfo.environment["FLUIDVOICE_LIVE_REPLAY"], !replayFlag.isEmpty else {
@@ -100,12 +113,9 @@ final class MeetingLiveReplayTests: XCTestCase {
         // window since the snapshot only reports "available" on the FIRST track's readiness.
         try await Task.sleep(nanoseconds: 5_000_000_000)
 
-        // The bounded queue holds only ~480ms per track (capacity 24 * 20ms). Blasting all ~19.5k
-        // chunks in a tight loop (sub-second) overwhelms it before the drain loop can ever get
-        // scheduled, which would test harness timing, not the pipeline. Cap the feed rate at
-        // `accelerationFactor`x real time instead — still far from a real 192s sleep, but paced
-        // enough for the actor's drain loop to keep up with genuine ASR inference.
-        let accelerationFactor = 1.5
+        // Feed at real time: accelerated input can manufacture queue pressure that never occurred
+        // in the recording, confusing a caption-quality investigation with harness overload.
+        let accelerationFactor = 1.0
         let feedStart = Date()
         var bufferFailures = 0
         var sampleBufferFailures = 0
@@ -194,6 +204,73 @@ final class MeetingLiveReplayTests: XCTestCase {
     }
 
     // MARK: - Helpers
+
+    #if arch(arm64)
+    func testCompareBeforeAndAfterCancellationWithFinalASR() async throws {
+        let env = ProcessInfo.processInfo.environment
+        guard let directory = env["FLUIDVOICE_COMPARISON_CLIPS"],
+              let modelPath = env["FLUIDVOICE_COMPARISON_TDT_MODELS"]
+        else {
+            throw XCTSkip("Set local comparison clips and cached TDT models for this experiment.")
+        }
+        let models = try await AsrModels.loadLocalOnly(from: URL(fileURLWithPath: modelPath), version: .v2)
+        let manager = AsrManager(config: .default)
+        try await manager.initialize(models: models)
+        for clip in ["voice-alone", "voice-with-video", "short-comment"] {
+            for stage in ["microphone-before-aec", "microphone-after-aec"] {
+                let path = URL(fileURLWithPath: directory).appendingPathComponent("\(clip)-\(stage).wav").path
+                let samples = try Self.load16kMonoFloatSamples(path: path)
+                try await manager.resetDecoderState()
+                let result = try await manager.transcribe(samples, source: .microphone)
+                print("[comparison-asr] \(clip) \(stage): \(result.text)")
+            }
+        }
+    }
+
+    /// Isolates the model from the app's callbacks, text filter and forced-reset policy.
+    func testReplayDirectRecognizerWithoutForcedResets() async throws {
+        let env = ProcessInfo.processInfo.environment
+        guard env["FLUIDVOICE_DIRECT_LIVE_REPLAY"] == "1",
+              let path = env["FLUIDVOICE_LIVE_REPLAY_APP_WAV"]
+        else {
+            throw XCTSkip("Set FLUIDVOICE_DIRECT_LIVE_REPLAY and an audio path for this experiment.")
+        }
+        let samples = try Self.load16kMonoFloatSamples(path: path)
+        let format = try XCTUnwrap(AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: Self.sampleRate, channels: 1, interleaved: false))
+        let manager = StreamingEouAsrManager(chunkSize: .ms160)
+        try await manager.loadModelsFromHuggingFace()
+        let silence = try XCTUnwrap(Self.makeBuffer(format: format, samples: [Float](repeating: 0, count: 16_000)[...]))
+        try await manager.appendAudio(silence)
+        try await manager.processBufferedAudio()
+        await manager.reset()
+        final class Transcript: @unchecked Sendable {
+            let lock = NSLock()
+            var latest = ""
+            func record(_ text: String) { self.lock.withLock { self.latest = text } }
+            func read() -> String { self.lock.withLock { self.latest } }
+        }
+        let transcript = Transcript()
+        await manager.setPartialTranscriptCallback { transcript.record($0) }
+        let seconds = min(30, max(1, Double(env["FLUIDVOICE_DIRECT_LIVE_SECONDS"] ?? "25") ?? 25))
+        let limit = min(samples.count, Int(seconds * 16_000))
+        for offset in stride(from: 0, to: limit, by: Self.chunkFrames) {
+            let end = min(offset + Self.chunkFrames, limit)
+            let pcm = try XCTUnwrap(Self.makeBuffer(format: format, samples: samples[offset..<end]))
+            try await manager.appendAudio(pcm)
+            try await manager.processBufferedAudio()
+            if end % 16_000 == 0 { print("[direct] audioSecond=\(end / 16_000) text=\(transcript.read())") }
+        }
+        print("[direct] before-finish=\(transcript.read())")
+        if env["FLUIDVOICE_DIRECT_PAD_FINISH"] == "1" {
+            await manager.injectSilence(1.28)
+            try await manager.processBufferedAudio()
+            print("[direct] after-padding=\(transcript.read())")
+        }
+        let finished = try await manager.finish()
+        print("[direct] finish=\(finished)")
+        await manager.reset()
+    }
+    #endif
 
     private static func appendChunks(
         _ events: inout [(kind: MeetingAudioTrackKind, samples: ArraySlice<Float>, ptsSamples: Int)],
@@ -321,7 +398,7 @@ final class MeetingLiveReplayTests: XCTestCase {
         guard copyStatus == kCMBlockBufferNoErr else { return nil }
 
         var timing = CMSampleTimingInfo(
-            duration: CMTime(value: CMTimeValue(frameCount), timescale: CMTimeScale(self.sampleRate)),
+            duration: CMTime(value: 1, timescale: CMTimeScale(self.sampleRate)),
             presentationTimeStamp: pts,
             decodeTimeStamp: .invalid
         )

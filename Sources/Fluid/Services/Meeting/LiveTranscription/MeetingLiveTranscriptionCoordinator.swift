@@ -32,6 +32,7 @@ final nonisolated class MeetingLiveTranscriptionCoordinator: @unchecked Sendable
         DebugLogger.shared.info(message(), source: "MeetingLive")
     }
 
+    private var comparisonProbe: MeetingAudioComparisonProbe?
     private var snapshot: MeetingLiveTranscriptSnapshot = .empty
     private var recentThemUtterances: [MeetingLiveUtterance] = []
     private var offerCounts: [MeetingAudioTrackKind: Int] = [:]
@@ -49,6 +50,26 @@ final nonisolated class MeetingLiveTranscriptionCoordinator: @unchecked Sendable
         self.onUpdate = onUpdate
     }
 
+    func attachComparisonProbe(_ probe: MeetingAudioComparisonProbe) {
+        self.stateLock.withLock { self.comparisonProbe = probe }
+        #if arch(arm64)
+        let engines = self.stateLock.withLock { [self.microphoneEngine, self.applicationEngine].compactMap { $0 } }
+        for engine in engines {
+            Task { await engine.attachComparisonProbe(probe) }
+        }
+        #endif
+        probe.recordEvent("live-probe-attached")
+    }
+
+    func recordComparisonCaptureEvent(_ event: MeetingCaptureEvent) {
+        guard let probe = self.stateLock.withLock({ self.comparisonProbe }), probe.isRecordingDiagnostics else { return }
+        probe.recordEvent("capture-event", detail: String(describing: event))
+    }
+
+    private func recordProbe(_ step: String, kind: MeetingAudioTrackKind? = nil, pts: Double? = nil, text: String? = nil, detail: String? = nil) {
+        self.stateLock.withLock { self.comparisonProbe }?.recordEvent(step, track: kind, pts: pts, text: text, detail: detail)
+    }
+
     /// Clears any in-progress microphone partial at a capture-side splice, so it can't straddle eras.
     func resetMicrophoneUtterance() {
         self.publish { $0.settingPartial(nil, for: .you) }
@@ -56,6 +77,7 @@ final nonisolated class MeetingLiveTranscriptionCoordinator: @unchecked Sendable
 
     func setMicrophoneCaptureMethod(_ method: MeetingAudioTrackCaptureMethod?) {
         self.stateLock.withLock { self.microphoneCaptureMethod = method }
+        self.recordProbe("microphone-capture-method", detail: method?.rawValue ?? "unknown")
         self.diag(
             "[live/ECHO] setter-armed captureMethod=\(method.map(String.init(describing:)) ?? "nil")"
         )
@@ -98,11 +120,13 @@ final nonisolated class MeetingLiveTranscriptionCoordinator: @unchecked Sendable
     func offer(kind: MeetingAudioTrackKind, sampleBuffer: CMSampleBuffer) {
         #if arch(arm64)
         let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+        self.recordProbe("live-audio-offered", kind: kind, pts: pts.seconds)
         guard pts.isNumeric else { return }
         // Keep the shared capture clock even when this track has no caption engine.
         self.originBox.establish(pts)
         guard self.stateLock.withLock({ kind == .microphone ? self.microphoneEngine != nil : self.applicationEngine != nil }) else { return }
         guard let sample = MeetingLiveSampleCopy.copy(sampleBuffer) else {
+            self.recordProbe("live-sample-copy-failed", kind: kind, pts: pts.seconds)
             self.diag("[live/tee] sample copy FAILED kind=\(kind)")
             return
         }
@@ -170,6 +194,7 @@ final nonisolated class MeetingLiveTranscriptionCoordinator: @unchecked Sendable
         guard let origin = self.originBox.current else { return }
         let startSeconds = MeetingLiveTimeConversion.sessionSeconds(pts: start, origin: origin)
         let speaker = Self.speaker(for: kind)
+        self.recordProbe("partial-before-display", kind: kind, pts: startSeconds, text: text)
         let partial = MeetingLivePartial(id: id, text: text, start: startSeconds)
         self.publish { $0.settingPartial(partial, for: speaker) }
     }
@@ -181,6 +206,7 @@ final nonisolated class MeetingLiveTranscriptionCoordinator: @unchecked Sendable
         let endSeconds = MeetingLiveTimeConversion.sessionSeconds(pts: end, origin: origin)
         let speaker = Self.speaker(for: kind)
 
+        self.recordProbe("utterance-before-filter", kind: kind, pts: startSeconds, text: text)
         let updated: MeetingLiveTranscriptSnapshot = self.stateLock.withLock {
             self.snapshot.revision &+= 1
             if speaker == .you {
@@ -191,6 +217,7 @@ final nonisolated class MeetingLiveTranscriptionCoordinator: @unchecked Sendable
                         windowSeconds: Self.echoWindowSeconds
                     )
                     if MeetingLiveEchoFilter.shouldSuppress(micText: text, recentThemText: recentThem) {
+                        self.comparisonProbe?.recordEvent("utterance-echo-suppressed", track: kind, pts: startSeconds, text: text, detail: recentThem)
                         self.snapshot = self.snapshot.settingPartial(nil, for: .you).markingFinalized(id)
                         return self.snapshot
                     }
@@ -200,6 +227,7 @@ final nonisolated class MeetingLiveTranscriptionCoordinator: @unchecked Sendable
                 self.recentThemUtterances.append(record)
                 self.recentThemUtterances.removeAll { $0.end < startSeconds - Self.echoWindowSeconds }
             }
+            self.comparisonProbe?.recordEvent("utterance-displayed", track: kind, pts: startSeconds, text: text)
             let utterance = MeetingLiveUtterance(id: id, speaker: speaker, text: text, start: startSeconds, end: endSeconds)
             self.snapshot = self.snapshot.inserting(utterance).settingPartial(nil, for: speaker)
             return self.snapshot
@@ -208,6 +236,7 @@ final nonisolated class MeetingLiveTranscriptionCoordinator: @unchecked Sendable
     }
 
     private func handleDegraded(kind: MeetingAudioTrackKind, reason: String) {
+        self.recordProbe("live-degraded", kind: kind, detail: reason)
         DebugLogger.shared.warning("Live captions degraded: \(reason)", source: "MeetingLive")
         self.publish { $0.settingAvailability(.degraded(reason: reason)) }
     }

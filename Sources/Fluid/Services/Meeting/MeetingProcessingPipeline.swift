@@ -644,8 +644,8 @@ private final class MeetingProviderLanguagePin {
 final class MeetingProcessingPipeline: MeetingProcessingControlling {
     /// Bump whenever classification rules change so a resumed run can't mix rules mid-session.
     /// Era-awareness did NOT bump this: the mic pass re-runs every time, and multi-era tracks cannot predate this build.
-    /// Version 13: short ambiguous words receive the opted-in turn-handoff second pass.
-    static let pipelineVersion = 13
+    /// Version 15: retain unfiltered microphone speech when echo filtering is unavailable.
+    nonisolated static let pipelineVersion = 15
     /// Per-turn engines starve on short turns, and an all-empty chunk collapses to unlabeled.
     static let perTurnTurnMergeGapSeconds = 5.0
 
@@ -1699,8 +1699,39 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
             status: segment.status.rawValue,
             completeness: segment.completeness.rawValue,
             isLikelyEcho: segment.isLikelyEcho,
-            attributionState: segment.attributionState?.rawValue
+            attributionState: (segment.attributionState ?? (segment.speakerID != nil ? .assigned : .unassigned)).rawValue
         )
+    }
+
+    /// Product policy: unresolved text belongs to the preceding visible speaker. Keep the
+    /// original word evidence in the sidecar; only the published transcript inherits a label.
+    /// An opening Unknown stays unresolved until there is a preceding speaker to inherit.
+    nonisolated static func inheritPreviousSpeaker(
+        _ segments: [MeetingTranscriptSegment]
+    ) -> [MeetingTranscriptSegment] {
+        let ordered = segments.enumerated().sorted {
+            ($0.element.start, $0.element.end, $0.element.sourceTrackID.uuidString, $0.offset)
+                < ($1.element.start, $1.element.end, $1.element.sourceTrackID.uuidString, $1.offset)
+        }.map(\.element)
+        var previousSpeakerID: SessionSpeakerID?
+        return ordered.map { segment in
+            guard !segment.isEcho else { return segment }
+            var updated = segment
+            let unresolved = segment.speakerID == nil
+                || segment.attributionState == .unassigned
+                || segment.attributionState == .overlappingSpeakers
+                || segment.attributionState == .timingUncertain
+            if unresolved {
+                if let previousSpeakerID {
+                    updated.speakerID = previousSpeakerID
+                    updated.attributionState = .assigned
+                    updated.overlap = .none
+                }
+            } else {
+                previousSpeakerID = segment.speakerID
+            }
+            return updated
+        }
     }
 
     /// Canonical evidence remains word-granular in the sidecar, but product session JSON and UI
@@ -1714,7 +1745,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         maximumGapSeconds: TimeInterval = MeetingProcessingPipeline.canonicalTurnMergeGapSeconds,
         maximumDurationSeconds: TimeInterval = MeetingProcessingPipeline.canonicalTurnMaximumDurationSeconds
     ) -> [MeetingTranscriptSegment] {
-        let byTrack = Dictionary(grouping: segments, by: \.sourceTrackID)
+        let byTrack = Dictionary(grouping: Self.inheritPreviousSpeaker(segments), by: \.sourceTrackID)
         var merged: [MeetingTranscriptSegment] = []
         for (_, members) in byTrack {
             let ordered = members.enumerated().sorted {

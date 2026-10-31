@@ -23,9 +23,8 @@ nonisolated enum MeetingConfigFingerprintEncoding {
 nonisolated struct MeetingFinalProcessingConfiguration: Equatable, Sendable {
     static let defaultASRModel = "parakeet-tdt-v2"
     static let defaultLanguageCode = "en"
-    /// Mirrors `MeetingProcessingPipeline.pipelineVersion`; that class is `@MainActor`, so a
-    /// MainActor test guards this literal against drift instead of referencing it here.
-    static let defaultPipelineVersion = 13
+    /// One shared immutable version keeps frozen requests and saved attempts consistent.
+    static let defaultPipelineVersion = MeetingProcessingPipeline.pipelineVersion
 
     let asrModel: String
     let languageCode: String

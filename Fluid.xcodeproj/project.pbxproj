@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		AD1130000000000000000004 /* OverlayCaptionPresentationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD1130000000000000000003 /* OverlayCaptionPresentationTests.swift */; };
 		AD1030000000000000000004 /* HoldToMutePresentationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD1030000000000000000003 /* HoldToMutePresentationTests.swift */; };
 		AD1030000000000000000002 /* HoldToMuteTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD1030000000000000000001 /* HoldToMuteTests.swift */; };
 		D63B0F8456B440F1A123B987 /* PronunciationModelRevisionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AFA73C8D5E7647C4AB125DEE /* PronunciationModelRevisionTests.swift */; };
@@ -91,6 +92,7 @@
 		E5EC00000000000000000092 /* ClockRegressionHelper.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5EC00000000000000000091 /* ClockRegressionHelper.swift */; };
 		A6E2246FA3744C7B3E2DB91C /* MeetingLiveTranscriptionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 355C1248D5386D1F815EB7D7 /* MeetingLiveTranscriptionTests.swift */; };
 		2952403C87FFDE41C1BC85D5 /* MeetingLiveReplayTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7BE63EB94BB280F38F5CB028 /* MeetingLiveReplayTests.swift */; };
+		F68E1D074EF74EBAB9C61702 /* MeetingAudioComparisonProbeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F68E1D074EF74EBAB9C61701 /* MeetingAudioComparisonProbeTests.swift */; };
 		C0DE63600000000000000002 /* AudioEngineRetirementDrainTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE63600000000000000001 /* AudioEngineRetirementDrainTests.swift */; };
 		DA7100020000000000000002 /* DirectAudioReliabilityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA7100010000000000000001 /* DirectAudioReliabilityTests.swift */; };
 		DA7200020000000000000002 /* AudioHardwareRecoveryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA7200010000000000000001 /* AudioHardwareRecoveryTests.swift */; };
@@ -138,6 +140,7 @@
 		C093F64545C6FDD2D79BF559 /* ParakeetArchiveInstallerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5F06B51CF3F45AF989D0CA7F /* ParakeetArchiveInstallerTests.swift */; };
 		640AB09C7781553DF72D1156 /* CompactSpeechModelArchiveTransportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01DEEE85A263FAED9ED5DEF8 /* CompactSpeechModelArchiveTransportTests.swift */; };
 		F5E000000000000000000014 /* fv-serve in Embed Helpers */ = {isa = PBXBuildFile; fileRef = F5E000000000000000000005 /* fv-serve */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
+		C0DE123A0000000000000002 /* DictationContextCaptureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE123A0000000000000001 /* DictationContextCaptureTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -201,6 +204,7 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		AD1130000000000000000003 /* OverlayCaptionPresentationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OverlayCaptionPresentationTests.swift; sourceTree = "<group>"; };
 		AD1030000000000000000003 /* HoldToMutePresentationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HoldToMutePresentationTests.swift; sourceTree = "<group>"; };
 		AD1030000000000000000001 /* HoldToMuteTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HoldToMuteTests.swift; sourceTree = "<group>"; };
 		AFA73C8D5E7647C4AB125DEE /* PronunciationModelRevisionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PronunciationModelRevisionTests.swift; sourceTree = "<group>"; };
@@ -267,6 +271,7 @@
 		E5EC00000000000000000091 /* ClockRegressionHelper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClockRegressionHelper.swift; sourceTree = "<group>"; };
 		355C1248D5386D1F815EB7D7 /* MeetingLiveTranscriptionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingLiveTranscriptionTests.swift; sourceTree = "<group>"; };
 		7BE63EB94BB280F38F5CB028 /* MeetingLiveReplayTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingLiveReplayTests.swift; sourceTree = "<group>"; };
+		F68E1D074EF74EBAB9C61701 /* MeetingAudioComparisonProbeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingAudioComparisonProbeTests.swift; sourceTree = "<group>"; };
 		C0DE63600000000000000001 /* AudioEngineRetirementDrainTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioEngineRetirementDrainTests.swift; sourceTree = "<group>"; };
 		DA7100010000000000000001 /* DirectAudioReliabilityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DirectAudioReliabilityTests.swift; sourceTree = "<group>"; };
 		DA7200010000000000000001 /* AudioHardwareRecoveryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioHardwareRecoveryTests.swift; sourceTree = "<group>"; };
@@ -321,6 +326,7 @@
 		5F06B51CF3F45AF989D0CA7F /* ParakeetArchiveInstallerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ParakeetArchiveInstallerTests.swift; sourceTree = "<group>"; };
 		01DEEE85A263FAED9ED5DEF8 /* CompactSpeechModelArchiveTransportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompactSpeechModelArchiveTransportTests.swift; sourceTree = "<group>"; };
 		F5E000000000000000000005 /* fv-serve */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = "fv-serve"; sourceTree = BUILT_PRODUCTS_DIR; };
+		C0DE123A0000000000000001 /* DictationContextCaptureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DictationContextCaptureTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -474,6 +480,7 @@
 				7CDB0A292F3C4D5600FB7CAD /* DictationE2ETests.swift */,
 				CD1C7A0000000000000000B1 /* CustomDictionaryManualEntryTests.swift */,
 				7C91B0022F42AA0100C0DEF0 /* HotkeyShortcutTests.swift */,
+				AD1130000000000000000003 /* OverlayCaptionPresentationTests.swift */,
 				AD1030000000000000000003 /* HoldToMutePresentationTests.swift */,
 				AD1030000000000000000001 /* HoldToMuteTests.swift */,
 				DAB600000000000000000002 /* DashboardLayoutTests.swift */,
@@ -532,6 +539,7 @@
 				E5EC00000000000000000091 /* ClockRegressionHelper.swift */,
 				355C1248D5386D1F815EB7D7 /* MeetingLiveTranscriptionTests.swift */,
 				7BE63EB94BB280F38F5CB028 /* MeetingLiveReplayTests.swift */,
+				F68E1D074EF74EBAB9C61701 /* MeetingAudioComparisonProbeTests.swift */,
 				C0DE63600000000000000001 /* AudioEngineRetirementDrainTests.swift */,
 				DA7100010000000000000001 /* DirectAudioReliabilityTests.swift */,
 				DA7200010000000000000001 /* AudioHardwareRecoveryTests.swift */,
@@ -540,6 +548,7 @@
 				B51800000000000000000001 /* SpokenSendTests.swift */,
 				B51900000000000000000001 /* PrivateAIProviderPromptFormatTests.swift */,
 				B52000000000000000000001 /* PrivateAIDictationTokenBudgetTests.swift */,
+				C0DE123A0000000000000001 /* DictationContextCaptureTests.swift */,
 				C0DE63700000000000000001 /* WhisperLanguageSelectionTests.swift */,
 				CACEC0010000000000000001 /* KeychainServiceCacheTests.swift */,
 				0B05F11E000000000000A001 /* SupportedFileExtensionsTests.swift */,
@@ -879,6 +888,7 @@
 				B52000000000000000000002 /* PrivateAIDictationTokenBudgetTests.swift in Sources */,
 				CD1C7A0000000000000000B2 /* CustomDictionaryManualEntryTests.swift in Sources */,
 				7C91B0012F42AA0100C0DEF0 /* HotkeyShortcutTests.swift in Sources */,
+				AD1130000000000000000004 /* OverlayCaptionPresentationTests.swift in Sources */,
 				AD1030000000000000000004 /* HoldToMutePresentationTests.swift in Sources */,
 				AD1030000000000000000002 /* HoldToMuteTests.swift in Sources */,
 				DAB600000000000000000001 /* DashboardLayoutTests.swift in Sources */,
@@ -937,6 +947,7 @@
 				E5EC00000000000000000092 /* ClockRegressionHelper.swift in Sources */,
 				A6E2246FA3744C7B3E2DB91C /* MeetingLiveTranscriptionTests.swift in Sources */,
 				2952403C87FFDE41C1BC85D5 /* MeetingLiveReplayTests.swift in Sources */,
+				F68E1D074EF74EBAB9C61702 /* MeetingAudioComparisonProbeTests.swift in Sources */,
 				C0DE63600000000000000002 /* AudioEngineRetirementDrainTests.swift in Sources */,
 				DA7100020000000000000002 /* DirectAudioReliabilityTests.swift in Sources */,
 				DA7200020000000000000002 /* AudioHardwareRecoveryTests.swift in Sources */,
@@ -944,6 +955,7 @@
 				803000000000000000000002 /* MediaPlaybackServiceTests.swift in Sources */,
 				B51800000000000000000002 /* SpokenSendTests.swift in Sources */,
 				B51900000000000000000002 /* PrivateAIProviderPromptFormatTests.swift in Sources */,
+				C0DE123A0000000000000002 /* DictationContextCaptureTests.swift in Sources */,
 				C0DE63700000000000000002 /* WhisperLanguageSelectionTests.swift in Sources */,
 				CACEC0010000000000000002 /* KeychainServiceCacheTests.swift in Sources */,
 				0B05F11E000000000000A002 /* SupportedFileExtensionsTests.swift in Sources */,
@@ -1149,7 +1161,7 @@
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 29;
+				CURRENT_PROJECT_VERSION = 31;
 				DEVELOPMENT_TEAM = V4J43B279J;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_CODE_COVERAGE = NO;
@@ -1177,7 +1189,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 15.0;
-				MARKETING_VERSION = "1.6.12-beta.1";
+				MARKETING_VERSION = "1.6.13-beta.1";
 				PRODUCT_BUNDLE_IDENTIFIER = com.FluidApp.app.debug;
 				PRODUCT_NAME = "FluidVoice Debug";
 				PROVISIONING_PROFILE_SPECIFIER = "";
@@ -1204,7 +1216,7 @@
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 29;
+				CURRENT_PROJECT_VERSION = 31;
 				DEVELOPMENT_TEAM = V4J43B279J;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_CODE_COVERAGE = NO;
@@ -1232,7 +1244,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 15.0;
-				MARKETING_VERSION = "1.6.12-beta.1";
+				MARKETING_VERSION = "1.6.13-beta.1";
 				PRODUCT_BUNDLE_IDENTIFIER = com.FluidApp.app;
 				PRODUCT_NAME = FluidVoice;
 				PROVISIONING_PROFILE_SPECIFIER = "";
@@ -1538,7 +1550,7 @@
 			repositoryURL = "https://github.com/altic-dev/FluidAudio.git";
 			requirement = {
 				kind = revision;
-				revision = eb1e6628998e47022799d305b52c2680d3576801;
+				revision = 386f7195670b77f2954c7ee143ec63fcb50b6c3b;
 			};
 		};
 

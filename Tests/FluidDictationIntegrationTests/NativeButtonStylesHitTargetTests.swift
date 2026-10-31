@@ -141,6 +141,69 @@ final class NativeButtonStylesHitTargetTests: XCTestCase {
         },
     ]
 
+    func testDisclosureHeadersAcceptClicksAcrossTheirWholeRow() throws {
+        for x: CGFloat in [7, 90, 200, 316] {
+            var expanded = false
+            var writes = 0
+            let view = DisclosureGroup("Previous versions", isExpanded: Binding(
+                get: { expanded },
+                set: { expanded = $0; writes += 1 }
+            )) { Text("Details") }
+                .disclosureGroupStyle(FluidDisclosureGroupStyle())
+                .appTheme(.dark)
+                .frame(width: 320)
+            let harness = self.makeHarness(view)
+            defer { harness.tearDown() }
+            try self.simulateClick(in: harness.window, at: harness.hostPoint(x, harness.targetSize.height / 2), in: harness.hostingView)
+            XCTAssertTrue(expanded, "The chevron, text, blank middle, and trailing edge must all toggle")
+            XCTAssertEqual(writes, 1, "One click must toggle exactly once")
+        }
+    }
+
+    func testDisabledDisclosureDoesNotToggle() throws {
+        var expanded = false
+        var writes = 0
+        let view = DisclosureGroup("Previous versions", isExpanded: Binding(
+            get: { expanded },
+            set: { expanded = $0; writes += 1 }
+        )) { Text("Details") }
+            .disclosureGroupStyle(FluidDisclosureGroupStyle())
+            .appTheme(.dark)
+            .disabled(true)
+            .frame(width: 320)
+        let harness = self.makeHarness(view)
+        defer { harness.tearDown() }
+        for x: CGFloat in [7, 90, 200, 316] {
+            try self.simulateClick(in: harness.window, at: harness.hostPoint(x, harness.targetSize.height / 2), in: harness.hostingView)
+        }
+        XCTAssertFalse(expanded)
+        XCTAssertEqual(writes, 0)
+    }
+
+    func testExpandedContentActionDoesNotToggleItsHeader() throws {
+        var expanded = true
+        var toggles = 0
+        var actions = 0
+        let view = DisclosureGroup("Previous versions", isExpanded: Binding(
+            get: { expanded },
+            set: { expanded = $0; toggles += 1 }
+        )) {
+            Button { actions += 1 } label: {
+                Text("Content action").frame(width: 300, height: 32).contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        }
+        .disclosureGroupStyle(FluidDisclosureGroupStyle())
+        .appTheme(.dark)
+        .frame(width: 320)
+        let harness = self.makeHarness(view)
+        defer { harness.tearDown() }
+        try self.simulateClick(in: harness.window, at: harness.hostPoint(160, harness.targetSize.height - 16), in: harness.hostingView)
+        XCTAssertTrue(expanded)
+        XCTAssertEqual(toggles, 0)
+        XCTAssertEqual(actions, 1)
+    }
+
     func testButtonStylesAcceptClicksAcrossTheirShape() throws {
         for style in self.styleCases {
             var clicks = 0

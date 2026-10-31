@@ -6,6 +6,14 @@ nonisolated struct DictionaryLearningAlignment: Sendable {
     let words: [ASRWordTiming]
     var acousticOutput: String? = nil
     var acousticEvidence: [DictionaryAcousticEvidence] = []
+    /// New spellings that voice matching replaced in this dictation, learned unless the user undoes them.
+    var voiceSpellings: [DictionaryVoiceSpelling] = []
+}
+
+nonisolated struct DictionaryVoiceSpelling: Equatable, Sendable {
+    let entryID: UUID
+    let label: String
+    let spelling: String
 }
 
 /// Short-lived ownership of original PCM, independent from the consume-once history snapshot.

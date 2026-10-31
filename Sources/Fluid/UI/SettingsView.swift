@@ -67,6 +67,11 @@ struct SettingsView: View {
     @State private var showDetailedAnalyticsConfirmation: Bool = false
     @State private var rollbackVersion: String = ""
     @State private var isRollingBack: Bool = false
+    @State private var rollbackOptions: [SimpleUpdater.ReleaseBuildOption] = []
+    @State private var selectedRollbackVersion = ""
+    @State private var isLoadingRollbackVersions = false
+    @State private var rollbackVersionsLoaded = false
+    @State private var rollbackVersionsError: String?
     @State private var audioHistoryBudgetText: String = Self.audioBudgetText(for: SettingsStore.shared.audioHistoryBudgetGB)
     @State private var audioHistoryUsageBytes: Int64 = 0
     @State private var draggedMicrophoneUID: String?
@@ -221,6 +226,29 @@ struct SettingsView: View {
             searchScrollRequest: self.searchScrollRequest
         ) {
             VStack(spacing: 16) {
+                if self.selectedSection == .fluidMeet {
+                    ThemedCard(style: .standard) {
+                        VStack(alignment: .leading, spacing: 14) {
+                            Label("FluidMeet Settings", systemImage: "person.2")
+                                .font(.fluidSystem(.headline))
+                                .foregroundStyle(.primary)
+                            self.settingsToggleRow(
+                                title: "Enable FluidMeet",
+                                description: "Record and transcribe meetings. Turning this off hides FluidMeet and stops meeting detection. Your saved meetings are kept.",
+                                footnote: self.appServices.hasActiveMeetingSessionActivity
+                                    ? "Finish the current meeting recording or processing before turning FluidMeet off." : nil,
+                                isOn: Binding(
+                                    get: { self.settings.fluidMeetEnabled },
+                                    set: { self.appServices.setFluidMeetEnabled($0) }
+                                )
+                            )
+                            .disabled(self.appServices.hasActiveMeetingSessionActivity)
+                        }
+                        .padding(16)
+                    }
+                    .settingsSearchTarget(.fluidMeet)
+                }
+
                 // App Settings Card
                 ThemedCard(style: .standard) {
                     VStack(alignment: .leading, spacing: 14) {
@@ -377,204 +405,14 @@ struct SettingsView: View {
                                     .frame(width: 150)
                                 }
                             }
-
-                            Divider().opacity(0.2)
-
-                            // Automatic Updates
-                            VStack(alignment: .leading, spacing: 6) {
-                                HStack(alignment: .center) {
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text("Automatic Updates")
-                                            .font(self.theme.typography.bodyStrong)
-                                            .foregroundStyle(self.settingsTitleText)
-                                        Text("Check for updates automatically once per hour")
-                                            .font(self.theme.typography.bodySmall)
-                                            .foregroundStyle(self.settingsSecondaryText)
-                                    }
-
-                                    Spacer()
-
-                                    Toggle("", isOn: Binding(
-                                        get: { SettingsStore.shared.autoUpdateCheckEnabled },
-                                        set: { SettingsStore.shared.autoUpdateCheckEnabled = $0 }
-                                    ))
-                                    .toggleStyle(.switch)
-                                    .tint(self.theme.palette.accent)
-                                    .labelsHidden()
-                                }
-
-                                HStack(alignment: .center) {
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text("Show update pop-ups")
-                                            .font(self.theme.typography.bodyStrong)
-                                            .foregroundStyle(self.settingsTitleText)
-                                        Text("When off, available updates appear in the top bar and here without automatic pop-ups.")
-                                            .font(self.theme.typography.bodySmall)
-                                            .foregroundStyle(self.settingsSecondaryText)
-                                    }
-
-                                    Spacer()
-
-                                    Toggle("Show update pop-ups", isOn: Binding(
-                                        get: { self.settings.showUpdatePopups },
-                                        set: { self.settings.showUpdatePopups = $0 }
-                                    ))
-                                    .toggleStyle(.switch)
-                                    .tint(self.theme.palette.accent)
-                                    .labelsHidden()
-                                }
-
-                                HStack(alignment: .center) {
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text("Beta Releases")
-                                            .font(self.theme.typography.bodyStrong)
-                                            .foregroundStyle(self.settingsTitleText)
-                                        Text("Opt in to preview builds that may be unstable")
-                                            .font(self.theme.typography.bodySmall)
-                                            .foregroundStyle(self.settingsSecondaryText)
-                                    }
-
-                                    Spacer()
-
-                                    Toggle("", isOn: Binding(
-                                        get: { SettingsStore.shared.betaReleasesEnabled },
-                                        set: { SettingsStore.shared.betaReleasesEnabled = $0 }
-                                    ))
-                                    .toggleStyle(.switch)
-                                    .tint(self.theme.palette.accent)
-                                    .labelsHidden()
-                                }
-
-                                if SettingsStore.shared.betaReleasesEnabled {
-                                    Text("Beta opt-in enabled. Update checks include both stable and beta builds.")
-                                        .font(.fluidSystem(.caption))
-                                        .foregroundStyle(self.theme.palette.warning)
-                                }
-
-                                if let lastCheck = SettingsStore.shared.lastUpdateCheckDate {
-                                    Text("Last checked: \(lastCheck.formatted(date: .abbreviated, time: .shortened))")
-                                        .font(self.theme.typography.bodySmall)
-                                        .foregroundStyle(self.settingsSecondaryText)
-                                }
-
-                                Text("Current version: \(self.currentAppVersion)")
-                                    .font(self.theme.typography.bodySmall)
-                                    .foregroundStyle(self.settingsSecondaryText)
-                            }
-                            .settingsSearchTarget(.automaticUpdates)
-
-                            if let version = self.updater.availableUpdateVersion {
-                                HStack(spacing: 10) {
-                                    Label("Update available · \(version)", systemImage: "arrow.down.circle")
-                                        .font(self.theme.typography.bodyStrong)
-                                        .foregroundStyle(self.theme.palette.accent)
-                                        .fixedSize(horizontal: false, vertical: true)
-
-                                    Spacer()
-
-                                    Button("View Update") {
-                                        self.updater.showAvailableUpdate()
-                                    }
-                                    .fluidOutlinedButton()
-                                    .controlSize(.regular)
-                                    .disabled(self.updater.isCheckingForUpdates || self.updater.isUpdateInProgress)
-                                }
-                            }
-
-                            // Update Buttons
-                            HStack(spacing: 10) {
-                                Button("Check for Updates") {
-                                    self.updater.checkForUpdatesManually()
-                                }
-                                .buttonStyle(.borderedProminent)
-                                .tint(self.theme.palette.accent)
-                                .controlSize(.regular)
-                                .disabled(self.updater.isCheckingForUpdates || self.updater.isUpdateInProgress)
-
-                                Button("Release Notes") {
-                                    if let url = URL(string: "https://github.com/altic-dev/Fluid-oss/releases") {
-                                        NSWorkspace.shared.open(url)
-                                    }
-                                }
-                                .fluidOutlinedButton()
-                                .controlSize(.regular)
-
-                                Button(self.rollbackVersion.isEmpty ? "Rollback" : "Rollback to \(self.rollbackVersion)") {
-                                    guard !self.isRollingBack else { return }
-
-                                    let infoText = self.rollbackVersion.isEmpty ? "your previously installed version" : self.rollbackVersion
-                                    let targetVersion = self.rollbackVersion
-                                    let confirm = NSAlert()
-                                    confirm.messageText = "Rollback to \(infoText)?"
-                                    confirm.informativeText = "This will restore a previous app version and relaunch FluidVoice."
-                                    confirm.alertStyle = .warning
-                                    confirm.addButton(withTitle: "Rollback")
-                                    confirm.addButton(withTitle: "Cancel")
-
-                                    guard confirm.runModal() == .alertFirstButtonReturn else { return }
-
-                                    self.isRollingBack = true
-                                    Task {
-                                        defer {
-                                            Task { @MainActor in
-                                                self.isRollingBack = false
-                                            }
-                                        }
-
-                                        do {
-                                            try await SimpleUpdater.shared.rollbackToLatestBackup()
-                                            await MainActor.run {
-                                                let success = NSAlert()
-                                                success.messageText = "Rollback Successful"
-                                                success.informativeText = "Rolled back to \(targetVersion). FluidVoice will relaunch shortly."
-                                                success.alertStyle = .informational
-                                                success.addButton(withTitle: "Report Bug")
-                                                success.addButton(withTitle: "OK")
-                                                let response = success.runModal()
-                                                if response == .alertFirstButtonReturn {
-                                                    self.openIssueReportingPage()
-                                                }
-                                            }
-                                        } catch {
-                                            await MainActor.run {
-                                                let fail = NSAlert()
-                                                fail.messageText = "Rollback Failed"
-                                                fail.informativeText = error.localizedDescription
-                                                fail.alertStyle = .critical
-                                                fail.addButton(withTitle: "OK")
-                                                fail.runModal()
-                                                self.refreshRollbackState()
-                                            }
-                                        }
-                                    }
-                                }
-                                .fluidOutlinedButton()
-                                .controlSize(.regular)
-                                .disabled(self.rollbackVersion.isEmpty || self.isRollingBack)
-                                .opacity(self.isRollingBack ? 0.7 : 1.0)
-
-                                Button("Get Previous Builds") {
-                                    self.openPreviousBuildPicker()
-                                }
-                                .fluidOutlinedButton()
-                                .controlSize(.regular)
-                            }
-                            .padding(.top, 12)
-
-                            if self.rollbackVersion.isEmpty {
-                                Text("No rollback backup found.")
-                                    .font(self.theme.typography.bodySmall)
-                                    .foregroundStyle(self.settingsSecondaryText)
-                            } else {
-                                Text("Rollback target: \(self.rollbackVersion)")
-                                    .font(self.theme.typography.bodySmall)
-                                    .foregroundStyle(self.settingsSecondaryText)
-                            }
                         }
                     }
                     .padding(16)
                 }
                 .shownInSettingsSection(.general, selectedSection: self.selectedSection)
+
+                self.updateSettingsCard
+                    .shownInSettingsSection(.general, selectedSection: self.selectedSection)
 
                 if self.asr.micStatus != .authorized {
                     // Only surface microphone permission when the user needs to act.
@@ -799,6 +637,33 @@ struct SettingsView: View {
                                                 }
                                             )
                                             .settingsSearchTarget(.pasteLastTranscriptionShortcut)
+                                            self.shortcutGroupDivider
+                                            self.shortcutRow(
+                                                content: .init(
+                                                    icon: "person.2.wave.2",
+                                                    iconColor: .secondary,
+                                                    title: "Start / Stop Meeting",
+                                                    description: self.settings.fluidMeetEnabled
+                                                        ? "Toggle meeting recording using your saved source"
+                                                        : "Enable FluidMeet in FluidMeet Settings to use this shortcut"
+                                                ),
+                                                shortcut: self.settings.meetingRecordingHotkeyShortcut,
+                                                isRecording: self.isRecording(.meeting),
+                                                isAnyRecordingActive: self.isRecordingAnyShortcut,
+                                                recordingMessage: self.isRecording(.meeting) ? self.shortcutRecordingMessage : nil,
+                                                onChangePressed: {
+                                                    self.shortcutRecordingMessage = nil
+                                                    self.activeShortcutRecordingTarget = .meeting
+                                                },
+                                                onRemovePressed: {
+                                                    if self.activeShortcutRecordingTarget == .meeting {
+                                                        self.shortcutRecordingMessage = nil
+                                                        self.activeShortcutRecordingTarget = nil
+                                                    }
+                                                    self.settings.meetingRecordingHotkeyShortcut = nil
+                                                }
+                                            )
+                                            .settingsSearchTarget(.meetingRecordingShortcut)
                                         }
                                     }
                                 }
@@ -1635,6 +1500,19 @@ struct SettingsView: View {
                 }
                 .settingsSearchTarget(.fasterLongDictation)
                 .shownInSettingsSection(.experimental, selectedSection: self.selectedSection)
+
+                if PrivateAIProviderFeature.shared.isAvailable {
+                    ThemedCard(style: .standard) {
+                        VStack(alignment: .leading, spacing: 16) {
+                            Label("Fluid Intelligence", systemImage: "sparkles")
+                                .font(.fluidSystem(.headline))
+                            DictationScreenContextSettings(settings: self.settings, isBusy: self.asr.isRunningOrStarting)
+                        }
+                        .padding(16)
+                    }
+                    .settingsSearchTarget(.dictationScreenContext)
+                    .shownInSettingsSection(.experimental, selectedSection: self.selectedSection)
+                }
             }
             .padding(.bottom, 28)
             .fluidPageContent(width: .expanding)
@@ -1669,10 +1547,6 @@ struct SettingsView: View {
         .onChange(of: self.visualizerNoiseThreshold) { _, newValue in
             SettingsStore.shared.visualizerNoiseThreshold = newValue
         }
-    }
-
-    private func refreshRollbackState() {
-        self.rollbackVersion = SimpleUpdater.shared.latestRollbackVersion() ?? ""
     }
 
     private func openIssueReportingPage() {
@@ -1860,57 +1734,6 @@ struct SettingsView: View {
         alert.alertStyle = .critical
         alert.addButton(withTitle: "OK")
         alert.runModal()
-    }
-
-    private func openPreviousBuildPicker() {
-        Task { @MainActor in
-            do {
-                let options = try await SimpleUpdater.shared.fetchRecentReleaseBuildOptions(
-                    owner: "altic-dev",
-                    repo: "Fluid-oss",
-                    limit: 3,
-                    includePrerelease: SettingsStore.shared.betaReleasesEnabled
-                )
-                self.presentPreviousBuildPicker(options)
-            } catch {
-                self.openAllReleasesPage()
-            }
-        }
-    }
-
-    private func presentPreviousBuildPicker(_ options: [SimpleUpdater.ReleaseBuildOption]) {
-        guard !options.isEmpty else {
-            self.openAllReleasesPage()
-            return
-        }
-
-        let picker = NSAlert()
-        picker.messageText = "Download Previous Build"
-        picker.informativeText = "No local rollback backup was found. Choose a recent release build:"
-        picker.alertStyle = .informational
-
-        for option in options {
-            picker.addButton(withTitle: option.version)
-        }
-        picker.addButton(withTitle: "All Releases")
-        picker.addButton(withTitle: "Cancel")
-
-        let response = picker.runModal()
-        let first = NSApplication.ModalResponse.alertFirstButtonReturn.rawValue
-        let index = response.rawValue - first
-
-        if index >= 0, index < options.count {
-            NSWorkspace.shared.open(options[index].url)
-            return
-        }
-        if index == options.count {
-            self.openAllReleasesPage()
-        }
-    }
-
-    private func openAllReleasesPage() {
-        guard let url = URL(string: "https://github.com/altic-dev/Fluid-oss/releases") else { return }
-        NSWorkspace.shared.open(url)
     }
 
     private func applyAnalyticsConsentChange(_ enabled: Bool) {
@@ -2708,11 +2531,12 @@ private extension SettingsView {
         case .general:
             self.refreshRollbackState()
             self.settings.refreshLaunchAtStartupStatus(clearError: true, logMismatch: false)
+            await self.loadRollbackVersions()
         case .audio:
             await self.prepareAudioSettings()
         case .dictation:
             await self.refreshAudioHistoryUsageInBackground()
-        case .dictationFormatting, .shortcuts, .notifications, .overlay, .dataAndDiagnostics, .experimental:
+        case .fluidMeet, .dictationFormatting, .shortcuts, .notifications, .overlay, .dataAndDiagnostics, .experimental:
             break
         }
     }
@@ -3196,5 +3020,278 @@ private extension SettingsView {
             )
         )
         .settingsSearchTarget(.returnToStartingField)
+    }
+}
+
+private extension SettingsView {
+    private var updateSettingsCard: some View {
+        ThemedCard(style: .standard) {
+            VStack(alignment: .leading, spacing: 14) {
+                Label("Updates", systemImage: "arrow.triangle.2.circlepath")
+                    .font(.fluidSystem(.headline))
+                    .foregroundStyle(.primary)
+
+                ViewThatFits(in: .horizontal) {
+                    HStack(alignment: .center, spacing: 24) {
+                        self.installedVersionLabel.fixedSize()
+                        Spacer(minLength: 16)
+                        self.updateActions
+                    }
+                    VStack(alignment: .leading, spacing: 14) {
+                        self.installedVersionLabel
+                        self.updateActions
+                    }
+                }
+
+                self.updateCheckStatus
+
+                Divider().opacity(0.2)
+                VStack(spacing: 16) {
+                    self.settingsToggleRow(
+                        title: "Automatic update checks",
+                        description: "Check for new versions once per hour.",
+                        isOn: Binding(
+                            get: { self.settings.autoUpdateCheckEnabled },
+                            set: { self.settings.autoUpdateCheckEnabled = $0 }
+                        )
+                    )
+                    Divider().opacity(0.2)
+                    self.settingsToggleRow(
+                        title: "Show update pop-ups",
+                        description: "When off, available updates still appear in the top bar and here.",
+                        isOn: Binding(
+                            get: { self.settings.showUpdatePopups },
+                            set: { self.settings.showUpdatePopups = $0 }
+                        )
+                    )
+                    Divider().opacity(0.2)
+                    self.settingsToggleRow(
+                        title: "Include beta releases",
+                        description: "Check stable and preview releases. Preview builds may be less reliable.",
+                        isOn: Binding(
+                            get: { self.settings.betaReleasesEnabled },
+                            set: { self.settings.betaReleasesEnabled = $0 }
+                        )
+                    )
+                }
+
+                Divider().opacity(0.2)
+                self.rollbackControls
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(16)
+        }
+        .settingsSearchTarget(.automaticUpdates)
+    }
+
+    private var installedVersionLabel: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text("Version \(self.currentAppVersion)")
+                .font(self.theme.typography.bodyStrong)
+                .foregroundStyle(self.settingsTitleText)
+                .textSelection(.enabled)
+            Text(self.lastUpdateCheckLabel)
+                .font(self.theme.typography.bodySmall)
+                .foregroundStyle(self.settingsSecondaryText)
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    private var lastUpdateCheckLabel: String {
+        self.settings.lastUpdateCheckDate.map {
+            "Checked " + $0.formatted(.dateTime.month(.abbreviated).day().hour().minute())
+        } ?? "Not checked yet"
+    }
+
+    private var updateActions: some View {
+        FluidGlassControlGroup {
+            HStack(spacing: 8) {
+                Button(self.updateActionTitle) {
+                    if self.updater.availableUpdateVersion != nil {
+                        self.updater.showAvailableUpdate()
+                    } else {
+                        self.updater.checkForUpdatesManually()
+                    }
+                }
+                .fluidGlassAction(prominent: true)
+                .disabled(self.updater.isCheckingForUpdates || self.updater.isUpdateInProgress || self.isRollingBack)
+
+                if self.updater.availableUpdateVersion != nil {
+                    Button("Check Again") { self.updater.checkForUpdatesManually() }
+                        .fluidGlassAction()
+                        .disabled(self.updater.isCheckingForUpdates || self.updater.isUpdateInProgress || self.isRollingBack)
+                }
+
+                Button("Release Notes") {
+                    if let url = URL(string: "https://github.com/altic-dev/Fluid-oss/releases") {
+                        NSWorkspace.shared.open(url)
+                    }
+                }
+                .fluidGlassAction()
+            }
+        }
+    }
+
+    private var updateActionTitle: String {
+        if self.updater.isUpdateInProgress { return "Installing…" }
+        if self.updater.isCheckingForUpdates { return "Checking…" }
+        return self.updater.availableUpdateVersion == nil ? "Check for Updates" : "View Update"
+    }
+
+    @ViewBuilder private var updateCheckStatus: some View {
+        if self.updater.isCheckingForUpdates || self.updater.isUpdateInProgress {
+            HStack(spacing: 8) {
+                ProgressView().controlSize(.small)
+                Text(self.updater.isUpdateInProgress ? "Installing an update…" : "Checking for updates…")
+                    .font(self.theme.typography.bodySmall)
+            }
+        } else if let version = self.updater.availableUpdateVersion {
+            Label("Version \(version) is available", systemImage: "arrow.down.circle")
+                .font(self.theme.typography.bodySmallStrong)
+                .foregroundStyle(self.theme.palette.accent)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var rollbackControls: some View {
+        VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
+            FluidManagementRow(title: "Roll back", detail: "Choose an earlier version. FluidVoice will restart.") {
+                HStack(spacing: self.theme.metrics.spacing.sm) {
+                    FluidDropdownPicker(
+                        "Rollback version",
+                        selectedTitle: self.selectedRollbackTitle,
+                        selection: self.$selectedRollbackVersion
+                    ) {
+                        Text("Choose a version").tag("")
+                        if !self.rollbackVersion.isEmpty {
+                            Text("\(self.rollbackVersion) · Saved on this Mac").tag("local")
+                        }
+                        ForEach(self.rollbackOptions, id: \.version) { option in
+                            Text(option.version).tag(option.version)
+                        }
+                    }
+                    .fluidDropdownStyle()
+                    .disabled(self.isRollingBack || self.updater.isUpdateInProgress)
+                    Button(self.isRollingBack ? "Rolling Back…" : "Roll Back") {
+                        self.restorePreviousVersion()
+                    }
+                    .fluidGlassAction()
+                    .disabled(self.selectedRollbackVersion.isEmpty || self.isRollingBack || self.updater.isUpdateInProgress)
+                }
+            }
+            if self.isLoadingRollbackVersions {
+                HStack(spacing: self.theme.metrics.spacing.sm) {
+                    ProgressView().controlSize(.mini)
+                    Text("Loading versions…").font(self.theme.typography.caption)
+                }
+                .foregroundStyle(self.settingsSecondaryText)
+            } else if let error = self.rollbackVersionsError {
+                HStack {
+                    Text(error).font(self.theme.typography.caption)
+                        .foregroundStyle(self.settingsSecondaryText)
+                    Button("Try Again") { Task { await self.loadRollbackVersions() } }
+                        .buttonStyle(.link)
+                }
+            } else if self.rollbackOptions.isEmpty, self.rollbackVersion.isEmpty {
+                Text("No earlier versions are available.")
+                    .font(self.theme.typography.caption)
+                    .foregroundStyle(self.settingsSecondaryText)
+            }
+        }
+    }
+
+    private var selectedRollbackTitle: String {
+        if self.selectedRollbackVersion == "local" { return "\(self.rollbackVersion) · Saved on this Mac" }
+        return self.selectedRollbackVersion.isEmpty ? "Choose a version" : self.selectedRollbackVersion
+    }
+
+    private func loadRollbackVersions() async {
+        guard !self.isLoadingRollbackVersions, !self.rollbackVersionsLoaded else { return }
+        self.isLoadingRollbackVersions = true
+        self.rollbackVersionsError = nil
+        defer { self.isLoadingRollbackVersions = false }
+        do {
+            let options = try await self.updater.fetchRecentReleaseBuildOptions(
+                owner: "altic-dev",
+                repo: "Fluid-oss",
+                limit: 12,
+                includePrerelease: true,
+                olderThanCurrent: true
+            )
+            try Task.checkCancellation()
+            self.rollbackOptions = options.filter {
+                $0.version.trimmingCharacters(in: CharacterSet(charactersIn: "v")) != self.rollbackVersion
+            }
+            self.rollbackVersionsLoaded = true
+        } catch {
+            self.rollbackVersionsError = self.rollbackVersion.isEmpty
+                ? "Couldn't load versions. Check your connection and try again."
+                : "Couldn't load online versions. Your saved version is still available."
+        }
+    }
+
+    private func restorePreviousVersion() {
+        guard !self.isRollingBack, !self.updater.isUpdateInProgress,
+              !self.selectedRollbackVersion.isEmpty else { return }
+        let useLocalBackup = self.selectedRollbackVersion == "local"
+        let targetVersion = useLocalBackup ? self.rollbackVersion : self.selectedRollbackVersion
+        guard !targetVersion.isEmpty else { return }
+        let infoText = targetVersion
+        let confirm = NSAlert()
+        confirm.messageText = "Roll back to \(infoText)?"
+        confirm.informativeText = "This will restore a previous app version and relaunch FluidVoice."
+        confirm.alertStyle = .warning
+        confirm.addButton(withTitle: "Roll Back")
+        confirm.addButton(withTitle: "Cancel")
+
+        guard confirm.runModal() == .alertFirstButtonReturn else { return }
+
+        self.isRollingBack = true
+        Task {
+            defer {
+                Task { @MainActor in
+                    self.isRollingBack = false
+                }
+            }
+
+            do {
+                if useLocalBackup {
+                    try await self.updater.rollbackToLatestBackup(expectedVersion: targetVersion)
+                } else {
+                    try await self.updater.installPreviousRelease(version: targetVersion)
+                }
+                await MainActor.run {
+                    let success = NSAlert()
+                    success.messageText = "Rollback Successful"
+                    success.informativeText = "Rolled back to \(targetVersion). FluidVoice will relaunch shortly."
+                    success.alertStyle = .informational
+                    success.addButton(withTitle: "Report Bug")
+                    success.addButton(withTitle: "OK")
+                    let response = success.runModal()
+                    if response == .alertFirstButtonReturn {
+                        self.openIssueReportingPage()
+                    }
+                }
+            } catch {
+                await MainActor.run {
+                    let fail = NSAlert()
+                    fail.messageText = "Rollback Failed"
+                    fail.informativeText = error.localizedDescription
+                    fail.alertStyle = .critical
+                    fail.addButton(withTitle: "OK")
+                    fail.runModal()
+                    self.refreshRollbackState()
+                }
+            }
+        }
+    }
+
+    private func refreshRollbackState() {
+        self.rollbackVersion = SimpleUpdater.shared.latestRollbackVersion() ?? ""
+        if self.selectedRollbackVersion.isEmpty, !self.rollbackVersion.isEmpty {
+            self.selectedRollbackVersion = "local"
+        } else if self.selectedRollbackVersion == "local", self.rollbackVersion.isEmpty {
+            self.selectedRollbackVersion = ""
+        }
     }
 }
