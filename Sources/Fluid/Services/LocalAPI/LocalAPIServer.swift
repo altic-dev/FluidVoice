@@ -165,9 +165,7 @@ private final class LocalAPIConnectionHandler {
 
     private func send(_ response: LocalAPI.Response) {
         let body = response.body
-        var headers = response.headers
-        headers["Content-Length"] = "\(body.count)"
-        headers["Connection"] = "close"
+        let headers = LocalAPI.wireHeaders(for: response)
 
         let statusLine = "HTTP/1.1 \(response.status) \(LocalAPI.reasonPhrase(for: response.status))\r\n"
         let headerLines = headers

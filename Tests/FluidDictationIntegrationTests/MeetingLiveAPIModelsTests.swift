@@ -109,7 +109,8 @@ final class MeetingLiveAPIModelsTests: XCTestCase {
     }
 
     func test_reading_notRecording_isIdle() {
-        // After Stop the coordinator keeps the last captions; they must not be served as live.
+        // After Stop the coordinator keeps the last captions until live teardown finishes; they
+        // must not be served as live.
         var stale = MeetingLiveTranscriptSnapshot.empty
             .inserting(MeetingLiveUtterance(id: UUID(), speaker: .you, text: "Bye", start: 0, end: 1))
         stale.revision = 40

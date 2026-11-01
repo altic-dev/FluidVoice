@@ -13,7 +13,7 @@ extension MeetingSessionCoordinator: MeetingLiveTranscriptSource {
 
 extension MeetingLiveTranscriptReading {
     /// Live captions only while a meeting records. After Stop the coordinator keeps the last
-    /// snapshot, which must not be served as current.
+    /// snapshot until live teardown finishes; that snapshot must not be served as current.
     nonisolated static func live(
         isRecording: Bool,
         sessionID: UUID?,
@@ -28,11 +28,15 @@ extension MeetingLiveTranscriptReading {
 nonisolated struct MeetingCoordinatorLiveTranscriptProvider: MeetingLiveTranscriptProviding {
     private let source: @MainActor @Sendable () -> (any MeetingLiveTranscriptSource)?
 
-    init(source: @escaping @MainActor @Sendable () -> (any MeetingLiveTranscriptSource)? = {
-        // A poll must not create the coordinator: without one, no meeting is recording.
-        AppServices.shared.isMeetingSessionCoordinatorMaterialized ? AppServices.shared.meetingSessionCoordinator : nil
-    }) {
+    init(source: @escaping @MainActor @Sendable () -> (any MeetingLiveTranscriptSource)? = Self.sharedCoordinator) {
         self.source = source
+    }
+
+    /// A poll must not create the coordinator: without one, no meeting is recording.
+    @MainActor
+    private static func sharedCoordinator() -> (any MeetingLiveTranscriptSource)? {
+        let services = AppServices.shared
+        return services.isMeetingSessionCoordinatorMaterialized ? services.meetingSessionCoordinator : nil
     }
 
     func currentLiveTranscript() async -> MeetingLiveTranscriptReading {

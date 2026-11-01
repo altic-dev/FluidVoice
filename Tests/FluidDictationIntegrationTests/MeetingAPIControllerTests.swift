@@ -386,6 +386,29 @@ final class MeetingLiveAPIControllerTests: XCTestCase {
         }
     }
 
+    func test_live_responsesAreNotCached() async throws {
+        let router = self.router(self.reading(revision: 5))
+
+        let full = await router.route(self.request())
+        XCTAssertEqual(full.status, 200)
+        XCTAssertEqual(full.headers["Cache-Control"], "no-store")
+        let notModified = await router.route(self.request(query: ["since": "5", "session": self.sessionID.uuidString]))
+        XCTAssertEqual(notModified.status, 304)
+        XCTAssertEqual(notModified.headers["Cache-Control"], "no-store")
+    }
+
+    func test_wireHeaders_omitContentLengthWithoutBody() {
+        for status in [204, 304] {
+            let headers = LocalAPI.wireHeaders(for: LocalAPI.Response(status: status))
+            XCTAssertNil(headers["Content-Length"], "\(status)")
+            XCTAssertEqual(headers["Connection"], "close")
+        }
+        let ok = LocalAPI.wireHeaders(for: LocalAPI.Response(status: 200, headers: ["X": "1"], body: Data("{}".utf8)))
+        XCTAssertEqual(ok["Content-Length"], "2")
+        XCTAssertEqual(ok["Connection"], "close")
+        XCTAssertEqual(ok["X"], "1")
+    }
+
     func test_notModified_hasReasonPhrase() {
         XCTAssertEqual(LocalAPI.reasonPhrase(for: 304), "Not Modified")
     }

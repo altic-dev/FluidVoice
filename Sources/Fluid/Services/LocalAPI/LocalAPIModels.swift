@@ -86,6 +86,16 @@ enum LocalAPI {
         )
     }
 
+    /// The headers as sent. `204` and `304` carry no body, so they get no `Content-Length`.
+    static func wireHeaders(for response: Response) -> [String: String] {
+        var headers = response.headers
+        if response.status != 204, response.status != 304 {
+            headers["Content-Length"] = "\(response.body.count)"
+        }
+        headers["Connection"] = "close"
+        return headers
+    }
+
     static func reasonPhrase(for status: Int) -> String {
         switch status {
         case 200: return "OK"
