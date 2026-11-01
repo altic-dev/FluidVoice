@@ -4176,7 +4176,7 @@ final class ASRService: ObservableObject {
                 try await self.retireDictationASRResourcesForMeeting(lease: lease)
             },
             makeProvider: { configuration in
-                // Language selects the pinned Parakeet v2/v3 model; never reads selectedSpeechModel.
+                // The frozen request selects the model; preparation never rereads dictation settings.
                 try FluidAudioProvider(meetingConfiguration: configuration)
             },
             prepareProvider: { provider, _, progress in

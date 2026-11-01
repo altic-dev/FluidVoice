@@ -1329,6 +1329,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
     private let serializationGate: MeetingProcessingSerializationGate
     private let backendRegistry: MeetingTranscriptionBackendRegistry
     private let backendIDProvider: @MainActor (String) -> MeetingBackendID
+    private let preferredASRModelProvider: @MainActor () -> SettingsStore.SpeechModel
     /// Canonical path only: observes chunk files for the analysis manifest. `nil` uses the real
     /// filesystem observer; tests inject fixture observations instead of writing audio.
     private let chunkObserver: (any MeetingChunkAudioObserving)?
@@ -1358,9 +1359,11 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         echoVerdictProvider: (any MeetingUnitEchoVerdictProviding)? = nil,
         meetingRuntimeFactory: MeetingParakeetNemotronRuntimeFactory? = nil,
         prepareDiarizationModel: @escaping @MainActor () async throws -> Void = {},
-        canonicalSidecarVerifiedProbe: ((MeetingResultSidecarReference) -> Void)? = nil
+        canonicalSidecarVerifiedProbe: ((MeetingResultSidecarReference) -> Void)? = nil,
+        preferredASRModelProvider: @escaping @MainActor () -> SettingsStore.SpeechModel = { SettingsStore.shared.selectedSpeechModel }
     ) {
         self.asrServiceProvider = asrServiceProvider
+        self.preferredASRModelProvider = preferredASRModelProvider
         self.managesModelResidency = managesModelResidency
         self.serializationGate = serializationGate
         self.chunkObserver = chunkObserver
@@ -1426,7 +1429,10 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
             attemptID: Self.resolvedAttemptID(session: session),
             session: session,
             sessionDirectory: sessionDirectory,
-            configuration: MeetingFinalProcessingConfiguration(languageCode: session.languageCode)
+            configuration: MeetingFinalProcessingConfiguration(
+                preferredASRModel: backendID == .parakeetNemotron ? self.preferredASRModelProvider() : nil,
+                languageCode: session.languageCode
+            )
         )
         let backend = try self.backendRegistry.makeBackend(
             id: backendID,
