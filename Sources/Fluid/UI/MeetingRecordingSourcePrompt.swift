@@ -12,6 +12,7 @@ nonisolated struct MeetingRecordingSourceSnapshot: Sendable {
     var selectedMicrophoneID: String?
     var sourceMessage: String?
     var recentApplication: MeetingApplicationIdentity?
+    var installedApplications: [MeetingInstalledCallApplication] = []
 
     var microphoneSelectionLabel: String {
         if let selected = self.microphones.identities.first(where: { $0.captureDeviceID == self.selectedMicrophoneID }) {
@@ -248,6 +249,7 @@ final class MeetingRecordingSourcePromptController: ObservableObject {
     }
 
     private static func loadSnapshot(foreground: MeetingApplicationIdentity?) async throws -> MeetingRecordingSourceSnapshot {
+        async let installedApplications = MeetingInstalledCallApplications.snapshot()
         let defaults = SettingsStore.shared.meetingRecordingDefaults
         let target = AppServices.shared.meetingAutomaticTarget
         let preferredInputUID = SettingsStore.shared.preferredInputDeviceUID
@@ -281,7 +283,8 @@ final class MeetingRecordingSourcePromptController: ObservableObject {
                 defaults: defaults, target: target, foreground: foreground, applications: applications
             ),
             selectedMicrophoneID: selection.deviceID,
-            sourceMessage: sourceMessage
+            sourceMessage: sourceMessage,
+            installedApplications: await installedApplications
         )
     }
 
@@ -367,9 +370,10 @@ struct MeetingRecordingSourcePromptContent: View {
     private func sourceSelector(_ snapshot: MeetingRecordingSourceSnapshot) -> some View {
         let recent = snapshot.availableRecentApplication
         let sections = MeetingAppRegistry.pickerSections(
-            snapshot.applications.filter { $0 != recent }.map(MeetingApplicationOption.init),
-            bundleIdentifier: { $0.identity.bundleIdentifier },
-            name: { $0.identity.displayName },
+            MeetingAppPickerEntry.entries(applications: snapshot.applications, installed: snapshot.installedApplications)
+                .filter { $0.application != recent || recent == nil },
+            bundleIdentifier: { $0.bundleIdentifier },
+            name: { $0.displayName },
             isBackgroundItem: { _ in false }
         )
         return Menu {
@@ -380,15 +384,17 @@ struct MeetingRecordingSourcePromptContent: View {
             Button("In person · mic only") { self.controller.selectApplication(nil) }
             Divider()
             ForEach(sections.usual) { option in
-                self.applicationEntry(option, snapshot: snapshot)
+                self.pickerEntry(option, snapshot: snapshot)
             }
             if !sections.others.isEmpty {
                 Menu("Other apps") {
                     ForEach(sections.others) { option in
-                        self.applicationEntry(option, snapshot: snapshot)
+                        self.pickerEntry(option, snapshot: snapshot)
                     }
                 }
             }
+            Divider()
+            Button("Refresh apps") { self.controller.refresh() }
         } label: {
             Text(snapshot.defaults.mode == .inRoom ? "In person · mic only" : snapshot.selectedApplication.map(snapshot.applicationLabel) ?? "Choose an app…")
                 .lineLimit(1).truncationMode(.middle)
@@ -397,6 +403,15 @@ struct MeetingRecordingSourcePromptContent: View {
         .accessibilityLabel("App to record")
         .accessibilityValue(snapshot.defaults.mode == .inRoom ? "In person, microphone only" : snapshot.selectedApplication.map(snapshot.applicationLabel) ?? "No app selected")
         .disabled(self.controller.isStarting)
+    }
+
+    @ViewBuilder
+    private func pickerEntry(_ entry: MeetingAppPickerEntry, snapshot: MeetingRecordingSourceSnapshot) -> some View {
+        if let application = entry.application {
+            self.applicationEntry(MeetingApplicationOption(identity: application), snapshot: snapshot)
+        } else {
+            Button(entry.unavailableLabel) {}.disabled(true)
+        }
     }
 
     private func applicationEntry(_ option: MeetingApplicationOption, snapshot: MeetingRecordingSourceSnapshot) -> some View {

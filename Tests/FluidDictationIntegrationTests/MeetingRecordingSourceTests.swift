@@ -35,6 +35,32 @@ final class MeetingRecordingSourceTests: XCTestCase {
         )
     }
 
+    func testInstalledPickerAppsStayVisibleWithoutBecomingCaptureTargets() {
+        let chrome = MeetingApplicationIdentity(bundleIdentifier: "com.google.Chrome", processID: 100, displayName: "Chrome")
+        let entries = MeetingAppPickerEntry.entries(applications: [chrome], installed: [
+            .init(bundleIdentifier: "com.google.Chrome", displayName: "Chrome", isRunning: true),
+            .init(bundleIdentifier: "com.apple.Safari", displayName: "Safari"),
+            .init(bundleIdentifier: "com.apple.iChat", displayName: "Messages", isRunning: true),
+            .init(bundleIdentifier: "com.apple.Safari", displayName: "Safari duplicate"),
+        ])
+        XCTAssertEqual(entries.count, 3)
+        XCTAssertEqual(entries[0].application, chrome)
+        XCTAssertNil(entries[1].application)
+        XCTAssertEqual(entries[1].unavailableLabel, "Safari · Not running")
+        XCTAssertNil(entries[2].application)
+        XCTAssertEqual(entries[2].unavailableLabel, "Messages · Not available")
+        XCTAssertFalse(entries.contains { $0.bundleIdentifier == "us.zoom.xos" }, "never invent an uninstalled app")
+        XCTAssertTrue(MeetingAppPickerEntry.entries(applications: [], installed: []).isEmpty)
+    }
+
+    func testPickerPreservesSeparateRunningProcessesForTheSameApp() {
+        let first = MeetingApplicationIdentity(bundleIdentifier: "browser", processID: 1, displayName: "Browser")
+        let second = MeetingApplicationIdentity(bundleIdentifier: "browser", processID: 2, displayName: "Browser")
+        let entries = MeetingAppPickerEntry.entries(applications: [first, second], installed: [])
+        XCTAssertEqual(entries.compactMap(\.application), [first, second])
+        XCTAssertEqual(Set(entries.map(\.id)).count, 2)
+    }
+
     func testMicrophoneLabelWhenNoDevicesAreAvailable() {
         var snapshot = self.snapshot()
         snapshot.microphones = MeetingMicrophoneCatalogSnapshot(identities: [], defaultCoreAudioUID: nil)
