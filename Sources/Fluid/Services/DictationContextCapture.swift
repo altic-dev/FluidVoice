@@ -254,16 +254,20 @@ nonisolated enum DictationContextReader {
     ) async -> DictationTypingContext? {
         guard request.isEnabled, !Task.isCancelled else { return nil }
         if let element = request.element { AXUIElementSetMessagingTimeout(element, self.messagingTimeoutSeconds) }
-        guard !self.isPrivate(request), let window = self.windows(for: request).first else { return nil }
+        guard !self.isPrivate(request) else { return nil }
+        let isFirstLook = !self.hasAskedForWebContent(pid: request.pid)
+        guard let window = self.windows(for: request).first else { return nil }
 
-        // Web content builds its Accessibility tree only once asked, so the first
-        // press in such an app may need another look.
+        // Web content builds its Accessibility tree only once asked, and the app's
+        // own toolbars can hide that the page is still missing, so a first look
+        // always takes a few reads.
         var lines = EditModeWindowLines()
-        for attempt in 0..<self.windowReadAttempts where lines.wordCount < self.minimumAccessibilityWords {
+        for attempt in 0..<self.windowReadAttempts where isFirstLook || lines.wordCount < self.minimumAccessibilityWords {
             if attempt > 0 { try? await Task.sleep(for: self.windowReadRetryDelay) }
             guard !Task.isCancelled else { return nil }
-            lines = EditModeWindowLines()
-            self.collectWindowLines(in: window, into: &lines)
+            var fresh = EditModeWindowLines()
+            self.collectWindowLines(in: window, into: &fresh)
+            if fresh.wordCount >= lines.wordCount { lines = fresh }
         }
         var read = lines.lines
         if lines.wordCount < self.minimumAccessibilityWords {
@@ -283,6 +287,10 @@ nonisolated enum DictationContextReader {
 
     private static let webContentLock = NSLock()
     private nonisolated(unsafe) static var webContentPIDs: [pid_t] = []
+
+    private static func hasAskedForWebContent(pid: pid_t) -> Bool {
+        self.webContentLock.withLock { self.webContentPIDs.contains(pid) }
+    }
 
     /// Chrome and Electron apps build their page's Accessibility tree only
     /// when asked; other apps ignore the attribute. The tree may still be
