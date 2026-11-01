@@ -73,6 +73,7 @@ nonisolated enum MeetingAppRegistry {
     /// of the source pickers; nothing here is detected or prompted for.
     static let otherCallAppBundleIdentifiers: [String] = [
         "com.apple.FaceTime",
+        "com.apple.MobileSMS",
         "com.apple.iChat",
         "com.tinyspeck.slackmacgap",
         "com.hnc.Discord",

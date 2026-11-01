@@ -37,15 +37,18 @@ nonisolated enum MeetingInstalledCallApplications {
         await Task.detached(priority: .utility) {
             let workspace = NSWorkspace.shared
             let running = Set(workspace.runningApplications.compactMap(\.bundleIdentifier))
-            return MeetingAppRegistry.commonPickerBundleIdentifiers.compactMap { bundle in
+            var seen = Set<String>()
+            return MeetingAppRegistry.commonPickerBundleIdentifiers.compactMap { bundle -> MeetingInstalledCallApplication? in
                 guard let url = workspace.urlForApplication(withBundleIdentifier: bundle),
                       FileManager.default.fileExists(atPath: url.path)
                 else { return nil }
                 let info = Bundle(url: url)
+                let identifier = info?.bundleIdentifier ?? bundle
+                guard seen.insert(identifier).inserted else { return nil }
                 let name = (info?.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String)
                     ?? (info?.object(forInfoDictionaryKey: "CFBundleName") as? String)
                     ?? url.deletingPathExtension().lastPathComponent
-                return MeetingInstalledCallApplication(bundleIdentifier: bundle, displayName: name, isRunning: running.contains(bundle))
+                return MeetingInstalledCallApplication(bundleIdentifier: identifier, displayName: name, isRunning: running.contains(identifier))
             }
         }.value
     }
