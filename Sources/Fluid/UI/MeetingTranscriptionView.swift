@@ -324,7 +324,8 @@ struct MeetingTranscriptionView: View {
                         errorMessage: self.actionErrorMessage,
                         onStart: self.startRecording,
                         onStop: self.stopAndTranscribe,
-                        onRetrySession: { self.retryProcessingSession(id: $0.id) },
+                        onRetrySession: { self.retryProcessingSession(id: $0.id, languageCode: MeetingRetranscriptionLanguage.failedAttemptLanguage(for: $0)) },
+                        onRetranscribe: { self.retryProcessingSession(id: $0, languageCode: $1) },
                         onRevealAudio: self.revealCapturedAudio,
                         onRecordAgain: self.recordAgain,
                         onCopyTranscript: self.copyTranscript,
@@ -372,7 +373,13 @@ struct MeetingTranscriptionView: View {
                             isLoading: !self.historySnapshot.hasLoaded,
                             isQuiescent: self.coordinator.isQuiescent,
                             onRefresh: { Task { await self.loadMeetingHistory() } },
-                            onRetry: { self.retryProcessingSession(id: $0) },
+                            onRetry: { id in
+                                let session = self.historySnapshot.sessions.first { $0.id == id }
+                                self.retryProcessingSession(
+                                    id: id,
+                                    languageCode: session.flatMap(MeetingRetranscriptionLanguage.failedAttemptLanguage(for:))
+                                )
+                            },
                             onRevealAudio: self.revealCapturedAudio,
                             onExportAudio: self.exportAudio,
                             onExportTranscript: { self.exportTranscript($0, format: $1, includeEchoes: false) },
@@ -859,7 +866,7 @@ struct MeetingTranscriptionView: View {
         }
     }
 
-    private func retryProcessingSession(id: MeetingSessionID) {
+    private func retryProcessingSession(id: MeetingSessionID, languageCode: String? = nil) {
         guard !self.isRetrying, self.summaryActivity.selectionLock == nil else { return }
         self.isRetrying = true
         self.actionErrorMessage = nil
@@ -867,7 +874,7 @@ struct MeetingTranscriptionView: View {
         Task {
             defer { self.isRetrying = false }
             do {
-                _ = try await self.coordinator.retryProcessing(sessionID: id)
+                _ = try await self.coordinator.retryProcessing(sessionID: id, languageCode: languageCode)
             } catch {
                 self.actionErrorMessage = error.localizedDescription
             }
@@ -1449,6 +1456,7 @@ struct MeetingTranscriptionCanvas: View {
     let onStart: () -> Void
     let onStop: () -> Void
     let onRetrySession: (MeetingSession) -> Void
+    var onRetranscribe: (MeetingSessionID, String) -> Void = { _, _ in }
     let onRevealAudio: (MeetingSession) -> Void
     let onRecordAgain: (MeetingSession) -> Void
     let onCopyTranscript: (MeetingSession, Bool) -> Void
@@ -1560,8 +1568,10 @@ struct MeetingTranscriptionCanvas: View {
                         },
                         onUndo: { await self.onUndoCorrection(session.id) },
                         onRenameSession: { title in self.onRenameSession(session.id, title) },
+                        onRetranscribe: { languageCode in self.onRetranscribe(session.id, languageCode) },
                         onAssignSpeakers: { names in await self.onAssignSpeakers(session.id, names) },
                         onClose: self.onCloseSelection,
+                        isRetranscribing: self.isRetrying,
                         onOpenIntegrations: self.onOpenIntegrations
                     )
                 }
@@ -1616,13 +1626,13 @@ private struct MeetingTranscriptionHeader: View {
             HStack(spacing: 12) {
                 if availability.showsNewMeeting {
                     Button(action: self.onNewMeeting) {
-                        Label("New Meeting", systemImage: "plus")
+                        Label("Meeting Home", systemImage: "house")
                     }
                     .fluidGlassAction()
                     .disabled(!availability.canStartNewMeeting)
                     .keyboardShortcut("n", modifiers: .command)
-                    .help(self.isSummaryRunning ? "Finish or cancel the summary before starting a new meeting" : "Return to recording setup")
-                    .accessibilityHint("Return to recording setup; the current meeting stays saved")
+                    .help(self.isSummaryRunning ? "Finish or cancel the summary before returning to Meeting Home" : "Return to Meeting Home")
+                    .accessibilityHint("Return to Meeting Home; the current meeting stays saved")
                 }
                 Spacer(minLength: 8)
                 MeetingHeaderIconButton(

@@ -15,6 +15,21 @@ final class MeetingProviderOptionsTests: XCTestCase {
         XCTAssertFalse(options.experimentalUnifiedFinalEnabled)
     }
 
+    func testRetranscriptionLanguageAcceptsParakeetMeetingLanguagesOnly() {
+        XCTAssertEqual(MeetingRetranscriptionLanguage.canonicalCode(" de "), "de")
+        XCTAssertEqual(MeetingRetranscriptionLanguage.canonicalCode("en"), "en")
+        XCTAssertEqual(MeetingRetranscriptionLanguage.canonicalCode("ru"), "ru")
+        XCTAssertNil(MeetingRetranscriptionLanguage.canonicalCode("zh"))
+        XCTAssertNil(MeetingRetranscriptionLanguage.canonicalCode(" "))
+        XCTAssertEqual(MeetingRetranscriptionLanguage.displayName(for: "de"), "German")
+        XCTAssertFalse(MeetingRetranscriptionLanguage.canRetranscribe(selection: "en", currentLanguageCode: "en"))
+        XCTAssertTrue(MeetingRetranscriptionLanguage.canRetranscribe(selection: "nl", currentLanguageCode: "en"))
+        XCTAssertEqual(
+            MeetingFinalProcessingConfiguration(languageCode: "de").asrModel,
+            "parakeet-tdt"
+        )
+    }
+
     func testP1DefaultASRModelMatchesSpeechModelRawValue() {
         XCTAssertEqual(
             MeetingFinalProcessingConfiguration.defaultASRModel,
