@@ -97,8 +97,75 @@ final class MeetingLiveAPIModelsTests: XCTestCase {
         }
     }
 
+    func test_reading_recordingSession_returnsSnapshot() {
+        let sessionID = UUID()
+        var snapshot = MeetingLiveTranscriptSnapshot.empty.settingAvailability(.available)
+        snapshot.revision = 9
+
+        let reading = MeetingLiveTranscriptReading.live(isRecording: true, sessionID: sessionID, snapshot: snapshot)
+
+        XCTAssertEqual(reading.sessionID, sessionID)
+        XCTAssertEqual(reading.snapshot, snapshot)
+    }
+
+    func test_reading_notRecording_isIdle() {
+        // After Stop the coordinator keeps the last captions; they must not be served as live.
+        var stale = MeetingLiveTranscriptSnapshot.empty
+            .inserting(MeetingLiveUtterance(id: UUID(), speaker: .you, text: "Bye", start: 0, end: 1))
+        stale.revision = 40
+
+        let reading = MeetingLiveTranscriptReading.live(isRecording: false, sessionID: UUID(), snapshot: stale)
+
+        XCTAssertEqual(reading, .idle)
+    }
+
+    func test_reading_recordingWithoutSession_isIdle() {
+        var snapshot = MeetingLiveTranscriptSnapshot.empty
+        snapshot.revision = 2
+
+        XCTAssertEqual(MeetingLiveTranscriptReading.live(isRecording: true, sessionID: nil, snapshot: snapshot), .idle)
+    }
+
+    func test_provider_returnsSourceSessionAndRevision() async {
+        let sessionID = UUID()
+        var snapshot = MeetingLiveTranscriptSnapshot.empty.settingAvailability(.available)
+        snapshot.revision = 3
+        let source = FakeLiveTranscriptSource(reading: MeetingLiveTranscriptReading(sessionID: sessionID, snapshot: snapshot))
+        let provider = MeetingCoordinatorLiveTranscriptProvider(source: { source })
+
+        let first = await provider.currentLiveTranscript()
+        XCTAssertEqual(first.sessionID, sessionID)
+        XCTAssertEqual(first.snapshot.revision, 3)
+
+        snapshot.revision = 4
+        source.reading = MeetingLiveTranscriptReading(sessionID: sessionID, snapshot: snapshot)
+        let second = await provider.currentLiveTranscript()
+        XCTAssertEqual(second.snapshot.revision, 4)
+    }
+
+    func test_provider_withoutCoordinator_isIdle() async {
+        let provider = MeetingCoordinatorLiveTranscriptProvider(source: { nil })
+
+        let reading = await provider.currentLiveTranscript()
+
+        XCTAssertEqual(reading, .idle)
+    }
+
     private func encode(_ reading: MeetingLiveTranscriptReading) throws -> [String: Any] {
         let data = try LocalAPI.encoder.encode(MeetingLiveResponse(reading: reading))
         return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    }
+}
+
+@MainActor
+private final class FakeLiveTranscriptSource: MeetingLiveTranscriptSource {
+    var reading: MeetingLiveTranscriptReading
+
+    init(reading: MeetingLiveTranscriptReading) {
+        self.reading = reading
+    }
+
+    var liveTranscriptReading: MeetingLiveTranscriptReading {
+        self.reading
     }
 }

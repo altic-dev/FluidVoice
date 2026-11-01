@@ -10,7 +10,7 @@ final class LocalAPIRouter {
 
     init(
         meetingStore: any MeetingSessionStoring = MeetingSessionStore.shared,
-        liveTranscript: any MeetingLiveTranscriptProviding = IdleLiveTranscriptProvider()
+        liveTranscript: any MeetingLiveTranscriptProviding = MeetingCoordinatorLiveTranscriptProvider()
     ) {
         self.register(method: "GET", path: "/v1/health", handler: HealthController())
 
@@ -63,12 +63,5 @@ private struct HealthController: LocalAPIRouteHandler {
 
         let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "unknown"
         return LocalAPI.json(Body(status: "ok", version: version))
-    }
-}
-
-/// Placeholder until the coordinator-backed provider is wired in.
-private nonisolated struct IdleLiveTranscriptProvider: MeetingLiveTranscriptProviding {
-    func currentLiveTranscript() async -> MeetingLiveTranscriptReading {
-        .idle
     }
 }
