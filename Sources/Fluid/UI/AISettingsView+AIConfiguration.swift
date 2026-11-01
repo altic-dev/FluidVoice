@@ -1852,9 +1852,9 @@ extension AIEnhancementSettingsView {
     }
 
     var promptsStepContent: some View {
-        VStack(alignment: .leading, spacing: FluidPageLayout.sectionSpacing) {
-            self.editModeSection
+        VStack(alignment: .leading, spacing: AISettingsLayout.stylesSectionSpacing) {
             self.advancedSettingsCard
+            self.editModeSection
         }
     }
 

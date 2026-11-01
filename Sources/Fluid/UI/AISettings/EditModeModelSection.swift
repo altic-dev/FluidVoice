@@ -1,33 +1,26 @@
 import Combine
 import SwiftUI
 
-/// Edit Mode picks its own model, apart from dictation's. When that is the model on
-/// this Mac, this is also where it downloads: nothing downloads when the shortcut is
-/// pressed. API users never see the download.
-struct EditModeModelSection<ModelControls: View>: View {
-    let showsLocalModel: Bool
-    @ViewBuilder let modelControls: () -> ModelControls
+/// The model on this Mac that Edit Mode runs on. This row is where it downloads:
+/// nothing downloads when the shortcut is pressed, and API users never see it.
+struct EditModeLocalModelRow: View {
     @Environment(\.theme) private var theme
     @ObservedObject private var controller = EditModeModelController.shared
 
     var body: some View {
-        FluidManagementGroup(title: "Edit Mode") {
-            self.modelControls()
-            if self.showsLocalModel, let model = self.controller.model {
-                Divider()
-                HStack(spacing: self.theme.metrics.spacing.lg) {
-                    VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xs) {
-                        Text(ModelDisplayName.forID(model.id))
-                            .font(self.theme.typography.bodyStrong)
-                            .foregroundStyle(self.theme.palette.primaryText)
-                        self.status(for: model)
-                    }
-                    Spacer(minLength: self.theme.metrics.spacing.md)
-                    self.action(for: model)
+        if let model = self.controller.model {
+            HStack(spacing: 24) {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(ModelDisplayName.forID(model.id))
+                        .font(self.theme.typography.bodyStrong)
+                        .foregroundStyle(self.theme.palette.primaryText)
+                    self.status(for: model)
                 }
+                Spacer(minLength: 0)
+                self.action(for: model)
             }
+            .task { await self.controller.refresh() }
         }
-        .task { await self.controller.refresh() }
     }
 
     @ViewBuilder private func status(for model: PrivateAIRegisteredModel) -> some View {
@@ -46,11 +39,11 @@ struct EditModeModelSection<ModelControls: View>: View {
                 .foregroundStyle(self.theme.palette.warning)
                 .fixedSize(horizontal: false, vertical: true)
         } else if self.controller.installed {
-            Label("Ready · rewrites selected text on this Mac", systemImage: "checkmark.circle.fill")
+            Label("Ready · runs on this Mac", systemImage: "checkmark.circle.fill")
                 .font(self.theme.typography.caption)
                 .foregroundStyle(self.theme.palette.success)
         } else {
-            Text("Rewrites selected text when you press the Edit Mode shortcut. Stays on this Mac.")
+            Text("A one-time download. It stays on this Mac.")
                 .font(self.theme.typography.caption)
                 .foregroundStyle(self.theme.palette.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
