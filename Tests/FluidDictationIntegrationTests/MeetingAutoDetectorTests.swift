@@ -1943,10 +1943,17 @@ final class MeetingAutoDetectorTests: XCTestCase {
         let sections = MeetingAppRegistry.pickerSections(apps, bundleIdentifier: \.bundle, name: \.name, isBackgroundItem: \.background)
         XCTAssertEqual(
             sections.usual.map(\.name),
-            ["zoom.us", "Microsoft Teams", "FaceTime", "Slack", "Google Meet", "Google Chrome", "Safari"]
+            ["Google Chrome", "Safari", "zoom.us", "Microsoft Teams", "Google Meet", "FaceTime", "Slack"]
         )
         XCTAssertEqual(sections.others.map(\.name), ["Finder", "Music", "AirPlayUIAgent", "Control Center"])
         XCTAssertEqual(sections.usual.count + sections.others.count, apps.count, "nothing is dropped from the list")
+    }
+
+    func testPickerOnlyBrowsersDoNotEnableAutomaticDetection() {
+        for bundle in ["org.mozilla.firefox", "com.duckduckgo.macos.browser"] {
+            XCTAssertNotNil(MeetingAppRegistry.pickerRank(forBundleIdentifier: bundle))
+            XCTAssertNil(MeetingAppRegistry.tier(forBundleIdentifier: bundle))
+        }
     }
 
     func testAppsThatOnlyShapeThePickerAreNeverDetected() {

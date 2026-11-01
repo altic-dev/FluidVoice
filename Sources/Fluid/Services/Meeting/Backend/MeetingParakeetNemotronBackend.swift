@@ -16,7 +16,7 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
 
     static let descriptor = MeetingBackendDescriptor(
         id: .parakeetNemotron,
-        version: "8",
+        version: "10",
         execution: .local,
         supportedLanguageCodes: VoiceEngineLanguageCatalog.parakeetV3LanguageIDs,
         supportedTrackKinds: Set(MeetingAudioTrackKind.allCases),
@@ -313,7 +313,9 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
                 }
                 try Task.checkCancellation()
                 do {
-                    let output = try await asr.transcribeWithTimings(materialized.samples)
+                    // Parakeet rejects subsecond input. Pad only inference; the original
+                    // sample count below still bounds word timings and coverage receipts.
+                    let output = try await asr.transcribeWithTimings(Self.asrInput(materialized.samples))
                     result.outputs.append(MeetingParakeetEpochOutput(
                         epochID: work.epoch.id,
                         text: output.result.text,
@@ -372,6 +374,11 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
             try cache.insert(materialized, spanID: work.spans.last?.id ?? "unknown")
         }
         return materialized
+    }
+
+    nonisolated static func asrInput(_ samples: [Float]) -> [Float] {
+        guard !samples.isEmpty, samples.count < 16_000 else { return samples }
+        return samples + [Float](repeating: 0, count: 16_000 - samples.count)
     }
 
     // MARK: - Units, assignment and receipts
@@ -534,6 +541,9 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
             }
         }
 
+        // A provider without timings may supply an utterance. Rejected timed words must
+        // not return through that fallback, including words predicted only in padded silence.
+        guard output.words.isEmpty else { return [] }
         let text = output.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return [] }
         let spanIDs = work.spans.map(\.id)
