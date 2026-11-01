@@ -27,6 +27,7 @@ final nonisolated class MeetingAECOutputCommitter: @unchecked Sendable {
     private let protectionChanged: @Sendable (MeetingMicrophoneEchoProtection) -> Void
     private let pending = DispatchGroup()
     private var state: State = .unprotected
+    private var reportedProtection: MeetingMicrophoneEchoProtection?
     private var generation: UInt64 = 0
     /// Gate epoch captured when a promotion begins; the open succeeds only if nothing closed meanwhile.
     private var promotionGateEpoch: UInt64 = 0
@@ -104,6 +105,7 @@ final nonisolated class MeetingAECOutputCommitter: @unchecked Sendable {
             // earlier samples, including a rapid filtered-to-unfiltered transition.
             _ = self.enqueueOrFail(sampleBox.sampleBuffer, startSeconds: startSeconds) { [self] in
                 self.offerLive(sampleBox, gateEpoch: action.gateEpoch)
+                if reportsProtectionChange { self.reportProtection(protection, gateEpoch: action.gateEpoch) }
             }
             return
         }
@@ -141,9 +143,7 @@ final nonisolated class MeetingAECOutputCommitter: @unchecked Sendable {
                     return
                 }
                 self.offerLive(sampleBox, gateEpoch: action.gateEpoch)
-                if reportsProtectionChange, self.transcriptGate.invalidationEpoch == action.gateEpoch {
-                    self.protectionChanged(protection)
-                }
+                if reportsProtectionChange { self.reportProtection(protection, gateEpoch: action.gateEpoch) }
                 self.lock.withLock {
                     if self.generation == token { self.state = .admitted(protection) }
                 }
@@ -155,6 +155,16 @@ final nonisolated class MeetingAECOutputCommitter: @unchecked Sendable {
                 self.reportTerminalFailure(Self.terminalFailure(for: error))
             }
         }
+    }
+
+    private func reportProtection(_ protection: MeetingMicrophoneEchoProtection, gateEpoch: UInt64) {
+        guard self.transcriptGate.invalidationEpoch == gateEpoch else { return }
+        let changed = self.lock.withLock {
+            guard self.reportedProtection != protection else { return false }
+            self.reportedProtection = protection
+            return true
+        }
+        if changed { self.protectionChanged(protection) }
     }
 
     private func offerLive(_ sample: SampleBox, gateEpoch: UInt64) {

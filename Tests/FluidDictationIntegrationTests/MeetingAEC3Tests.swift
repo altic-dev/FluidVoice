@@ -683,6 +683,44 @@ final class MeetingAEC3Tests: XCTestCase {
         ))
     }
 
+    func testFailureDuringWarmupStillReportsUnfilteredAudioOnce() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("aec-warmup-failure-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let writer = try MeetingAudioChunkWriter(
+            track: Self.microphoneTrack(), sessionDirectory: directory, chunkDuration: 60, eventHandler: { _ in }
+        )
+        let gate = MeetingMicrophoneTranscriptGate(.unprotected)
+        let live = AECLiveRecorder()
+        let protections = AECProtectionRecorder()
+        let committer = MeetingAECOutputCommitter(
+            writer: writer,
+            transcriptGate: gate,
+            liveAudioHandler: { _, sample in live.append(sample) },
+            protectionChanged: { protections.append($0) },
+            terminalFailure: { _ in }
+        )
+        let processor = AECFakeProcessor()
+        let pipeline = MeetingAECPipeline(processor: processor, committer: committer)
+        for frame in 0..<3 {
+            if frame == 1 { processor.failNext = true }
+            let pts = CMTime(value: CMTimeValue(frame * 480), timescale: 48_000)
+            try pipeline.consumeRender(XCTUnwrap(MeetingAECPCMAdapter.synthesize(
+                samples: [Float](repeating: 0.2, count: 480), presentationTime: pts
+            )), stream: self.token)
+            try pipeline.consumeCapture(XCTUnwrap(MeetingAECPCMAdapter.synthesize(
+                samples: [Float](repeating: 0.1, count: 480), presentationTime: pts
+            )), stream: self.token)
+            await committer.waitForPendingCommits()
+            _ = await writer.snapshot()
+            if frame == 0 { XCTAssertTrue(protections.values.isEmpty) }
+        }
+        XCTAssertEqual(protections.values, [.unfiltered], "a real failure after silent warm-up must still warn, once")
+        XCTAssertEqual(live.count, 3)
+        pipeline.stop(boundary: gate.invalidate())
+        await committer.waitForPendingCommits()
+        _ = await writer.stop()
+    }
+
     func testPipelinePromotesOnlyOnFrame201AndBridgeFailureKeepsSpeech() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("fluid-aec3-test-\(UUID().uuidString)", isDirectory: true)
