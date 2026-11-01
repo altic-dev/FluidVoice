@@ -2341,7 +2341,9 @@ private extension MeetingSessionCoordinator {
     }
 
     nonisolated static func restoringCompletedResult(_ input: MeetingSession) -> MeetingSession? {
-        guard let language = retainedCompletedLanguage(for: input) else { return nil }
+        guard [.processing, .interrupted].contains(input.state),
+              let language = retainedCompletedLanguage(for: input)
+        else { return nil }
         var session = input
         session.languageCode = language
         session.state = .completed
