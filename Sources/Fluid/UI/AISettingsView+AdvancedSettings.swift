@@ -1346,7 +1346,7 @@ extension AIEnhancementSettingsView {
         let providers = self.editModeVerifiedProviders
         return self.stylesSection(
             title: "Edit Mode",
-            subtitle: "Select text, press the shortcut, and say what to change. It runs on its own model, separate from dictation."
+            subtitle: "Press the shortcut and say what you want. Select text first to change it. It runs on its own model, separate from dictation."
         ) {
             ThemedCard(style: .subtle, padding: 16) {
                 VStack(alignment: .leading, spacing: 14) {
@@ -1368,6 +1368,11 @@ extension AIEnhancementSettingsView {
                     Divider()
                     if self.isPrivateAIProviderID(providerID) {
                         EditModeLocalModelRow()
+                        Divider()
+                        FluidManagementRow(title: "Read my screen", detail: "Lets it use the text in your front window. It stays on this Mac.") {
+                            Toggle("Read my screen", isOn: self.$settings.editModeReadsScreen)
+                                .labelsHidden().toggleStyle(.switch)
+                        }
                     } else {
                         self.editModeProviderModelRow(providerID: providerID)
                     }
@@ -1375,7 +1380,7 @@ extension AIEnhancementSettingsView {
                     FluidManagementRow(
                         title: "Shortcut",
                         detail: self.settings.rewriteModeShortcutEnabled
-                            ? "Press it with text selected."
+                            ? "Press it and say what you want."
                             : "Off. Turn it on in Settings to use Edit Mode."
                     ) {
                         HStack(spacing: 10) {

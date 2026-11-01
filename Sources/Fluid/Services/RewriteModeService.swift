@@ -15,6 +15,8 @@ final class RewriteModeService: ObservableObject {
     @Published private(set) var lastErrorMessage: String?
     @Published var isWriteMode: Bool = false // true = no text selected (write/improve), false = text selected (rewrite)
     private var promptAppBundleID: String?
+    /// The front window as read when the shortcut was pressed.
+    private var windowCapture: DictationContextCapture?
 
     private let textSelectionService = TextSelectionService.shared
     private let typingService = TypingService()
@@ -191,6 +193,19 @@ final class RewriteModeService: ObservableObject {
         self.thinkingBuffer = []
         self.promptAppBundleID = nil
         self.lastErrorMessage = nil
+        self.stopReadingWindow()
+    }
+
+    /// Starts reading the window while it is still in front, so the answer can use
+    /// what the user is looking at. Replaces the reading of any earlier press.
+    func startReadingWindow(target: TypingService.RecordingTargetContext) {
+        self.windowCapture?.cancel()
+        self.windowCapture = DictationContextCapture.startForEditMode(target: target)
+    }
+
+    func stopReadingWindow() {
+        self.windowCapture?.cancel()
+        self.windowCapture = nil
     }
 
     func setPromptAppBundleID(_ bundleID: String?) {
@@ -303,6 +318,12 @@ final class RewriteModeService: ObservableObject {
         if usesPrivateAIProvider || PrivateAIIntegrationService.shouldHandleDictation(model: model) {
             // A follow-up applies to the last result, not to the original selection.
             let textToEdit = self.rewrittenText.isEmpty ? self.selectedContextText : self.rewrittenText
+            let window = await self.windowCapture?.result(timeout: .seconds(2))
+            // Counts only: what was read is never logged.
+            DebugLogger.shared.info(
+                "Edit Mode read the window | lines=\(window?.windowLines?.count ?? 0) | hasSelection=\(!textToEdit.isEmpty)",
+                source: "RewriteModeService"
+            )
             let response = try await PrivateAIIntegrationService.shared.rewrite(
                 instruction,
                 systemPrompt: systemPrompt,
@@ -322,7 +343,9 @@ final class RewriteModeService: ObservableObject {
                     bundleID: appBundleID ?? "",
                     windowTitle: "",
                     appVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String,
-                    selectedText: textToEdit.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : textToEdit
+                    selectedText: textToEdit.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : textToEdit,
+                    windowLines: window?.windowLines,
+                    userDisplayName: NSFullUserName()
                 )
             )
             return response.outputText

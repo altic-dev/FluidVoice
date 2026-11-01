@@ -36,6 +36,11 @@ actor PrivateAIIntegrationService {
         var screenText: [String]? = nil
         /// The text an Edit Mode instruction applies to, when any was selected.
         var selectedText: String? = nil
+        /// The front window, for Edit Mode models that read it.
+        // swiftlint:disable:next discouraged_optional_collection
+        var windowLines: [EditModeWindowLine]? = nil
+        /// Signs what Edit Mode writes.
+        var userDisplayName: String? = nil
     }
 
     struct EnhancementResult: Sendable, Equatable {

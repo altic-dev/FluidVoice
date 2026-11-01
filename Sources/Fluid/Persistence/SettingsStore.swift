@@ -3457,6 +3457,15 @@ final class SettingsStore: ObservableObject {
         }
     }
 
+    /// Lets on-device Edit Mode use the text in the front window. On until turned off.
+    var editModeReadsScreen: Bool {
+        get { self.defaults.object(forKey: Keys.editModeReadsScreen) as? Bool ?? true }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue, forKey: Keys.editModeReadsScreen)
+        }
+    }
+
     /// Global check if a model is a reasoning model (requires special params/max_completion_tokens)
     func isReasoningModel(_ model: String) -> Bool {
         // Drop a provider/namespace prefix (e.g. OpenRouter's "openai/") so the
@@ -6072,6 +6081,7 @@ private extension SettingsStore {
         // Model Reasoning Config Keys
         static let modelReasoningConfigs = "ModelReasoningConfigs"
         static let rewriteModeShortcutEnabled = "RewriteModeShortcutEnabled"
+        static let editModeReadsScreen = "EditModeReadsScreen"
         static let showThinkingTokens = "ShowThinkingTokens"
 
         // Stats Keys

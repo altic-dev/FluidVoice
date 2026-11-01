@@ -4672,6 +4672,7 @@ struct ContentView: View {
                     self.rewriteModeService.startWithoutSelection()
                 }
             }
+            self.startReadingEditWindow()
             self.menuBarManager.setOverlayMode(.edit)
         case .write, .rewrite:
             guard self.activeRecordingMode != .edit || NotchContentState.shared.mode == .dictation else { return }
@@ -4685,8 +4686,22 @@ struct ContentView: View {
                     self.rewriteModeService.startWithoutSelection()
                 }
             }
+            self.startReadingEditWindow()
             self.menuBarManager.setOverlayMode(.edit)
         }
+    }
+
+    /// Reads the front window for on-device Edit Mode. An API never gets it.
+    private func startReadingEditWindow() {
+        guard self.settings.editModeReadsScreen,
+              self.settings.effectiveRewriteModeProviderID == PrivateAIProviderFeature.shared.providerID,
+              let target = NotchContentState.shared.recordingTargetContext,
+              target.pid != ProcessInfo.processInfo.processIdentifier
+        else {
+            self.rewriteModeService.stopReadingWindow()
+            return
+        }
+        self.rewriteModeService.startReadingWindow(target: target)
     }
 
     private func handleLiveOverlayModeSwitch(_ mode: OverlayMode) {
@@ -5065,6 +5080,7 @@ struct ContentView: View {
             // Text was selected - edit mode (with selected context)
             self.menuBarManager.setOverlayMode(.edit)
         }
+        self.startReadingEditWindow()
 
         // Set flag so stopAndProcessTranscription knows to process as rewrite
         self.setActiveRecordingMode(.edit)
