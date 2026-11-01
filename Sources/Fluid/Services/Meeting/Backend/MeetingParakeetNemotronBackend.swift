@@ -25,7 +25,7 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
         knownLimits: [
             "Nemotron-3 has 8 speaker slots per analysis epoch; a ninth voice is not reliably announced or separated.",
             "Speaker slots are epoch-scoped; conservative local voice matching can reconnect identities across epochs of the same track.",
-            "Parakeet TDT v2 handles English; v3 handles the supported European languages.",
+            "Parakeet v2 and Fluid Speech Pro handle English; v3 handles the supported European languages.",
             "When ASR returns text without usable word timings, one utterance covering the epoch is emitted instead of fabricated words.",
             "Local Nemotron model must be installed before planning. Voice matching downloads its local embedding model on first use.",
         ],
