@@ -819,6 +819,7 @@ final class MeetingSessionCoordinator: ObservableObject {
         let closedAt = Date()
         for index in session.processingAttempts.indices where session.processingAttempts[index].completedAt == nil {
             session.processingAttempts[index].completedAt = closedAt
+            session.processingAttempts[index].errorCode = session.processingAttempts[index].errorCode ?? "interrupted"
         }
         // Record the language on the new attempt before the first save. A language change
         // otherwise leaves only the previous attempt's language, and persistence rejects the session.

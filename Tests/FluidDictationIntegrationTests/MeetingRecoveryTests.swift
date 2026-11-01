@@ -2840,6 +2840,44 @@ final class MeetingRecoveryTests: XCTestCase {
         XCTAssertNil(coordinator.activeSession)
     }
 
+    func testRetryAfterInterruptedEmptyResultDoesNotCommitAbandonedLanguage() async throws {
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MeetingSessionStore(rootDirectory: dir)
+        var session = try self.completedEnglishRetranscriptionFixture()
+        session.transcriptSegments = []
+        session.state = .interrupted
+        var abandoned = try XCTUnwrap(session.processingAttempts.last)
+        abandoned.id = UUID()
+        abandoned.completedAt = nil
+        abandoned.languageCode = "nl"
+        abandoned.stage = .completed
+        session.processingAttempts.append(abandoned)
+        try await store.create(session)
+        let arbiter = StubArbiter()
+        let coordinator = MeetingSessionCoordinator(
+            store: store,
+            capture: StubCaptureController(),
+            processing: DiagnosticFailingProcessingController(error: ProcessingFailure()),
+            audioArbiter: arbiter
+        )
+        await coordinator.ensureRestored()
+        do {
+            _ = try await coordinator.retryProcessing(sessionID: session.id, languageCode: "nl")
+            XCTFail("Expected processing failure")
+        } catch { XCTAssertTrue(error is ProcessingFailure) }
+        let saved = try await store.load(id: session.id)
+        let result = try XCTUnwrap(saved)
+        XCTAssertEqual(result.languageCode, "en")
+        XCTAssertEqual(MeetingRetranscriptionLanguage.failedAttemptLanguage(for: result), "nl")
+        XCTAssertEqual(result.state, .failed)
+        XCTAssertEqual(result.processingAttempts.first(where: { $0.id == abandoned.id })?.errorCode, "interrupted")
+        XCTAssertNotNil(result.processingAttempts.last?.errorCode)
+        XCTAssertFalse(result.failures.isEmpty)
+        XCTAssertEqual(arbiter.acquireCount, arbiter.releaseCount)
+        await coordinator.shutdownForTermination()
+    }
+
     func testUnsupportedRetranscriptionLanguageDoesNotLeakAudioLease() async throws {
         let dir = self.makeTempDirectory()
         defer { try? FileManager.default.removeItem(at: dir) }
