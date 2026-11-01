@@ -71,7 +71,17 @@ final nonisolated class MeetingAECOutputCommitter: @unchecked Sendable {
         self.commitAdmitted(sampleBuffer, protection: .unfiltered)
     }
 
-    private func commitAdmitted(_ sampleBuffer: CMSampleBuffer, protection: MeetingMicrophoneEchoProtection) {
+    /// Keep opening speech while the filter learns, without claiming verified cancellation or
+    /// reporting normal warm-up as a filtering failure. Provenance still commits before live ASR.
+    func commitWarmup(_ sampleBuffer: CMSampleBuffer) {
+        self.commitAdmitted(sampleBuffer, protection: .unfiltered, reportsProtectionChange: false)
+    }
+
+    private func commitAdmitted(
+        _ sampleBuffer: CMSampleBuffer,
+        protection: MeetingMicrophoneEchoProtection,
+        reportsProtectionChange: Bool = true
+    ) {
         let sampleBox = SampleBox(sampleBuffer)
         let startSeconds = Self.seconds(of: sampleBuffer)
         let action = self.lock.withLock { () -> (token: UInt64?, gateEpoch: UInt64) in
@@ -131,7 +141,7 @@ final nonisolated class MeetingAECOutputCommitter: @unchecked Sendable {
                     return
                 }
                 self.offerLive(sampleBox, gateEpoch: action.gateEpoch)
-                if self.transcriptGate.invalidationEpoch == action.gateEpoch {
+                if reportsProtectionChange, self.transcriptGate.invalidationEpoch == action.gateEpoch {
                     self.protectionChanged(protection)
                 }
                 self.lock.withLock {
