@@ -1626,13 +1626,13 @@ private struct MeetingTranscriptionHeader: View {
             HStack(spacing: 12) {
                 if availability.showsNewMeeting {
                     Button(action: self.onNewMeeting) {
-                        Label("New Meeting", systemImage: "plus")
+                        Label("Meeting Home", systemImage: "house")
                     }
                     .fluidGlassAction()
                     .disabled(!availability.canStartNewMeeting)
                     .keyboardShortcut("n", modifiers: .command)
-                    .help(self.isSummaryRunning ? "Finish or cancel the summary before starting a new meeting" : "Return to recording setup")
-                    .accessibilityHint("Return to recording setup; the current meeting stays saved")
+                    .help(self.isSummaryRunning ? "Finish or cancel the summary before returning to Meeting Home" : "Return to Meeting Home")
+                    .accessibilityHint("Return to Meeting Home; the current meeting stays saved")
                 }
                 Spacer(minLength: 8)
                 MeetingHeaderIconButton(
