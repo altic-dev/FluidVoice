@@ -675,6 +675,15 @@ final class MeetingSessionCoordinator: ObservableObject {
     }
 
     private func performRetryProcessing(sessionID: MeetingSessionID, languageCode: String?) async throws -> MeetingSession {
+        let requestedLanguage: String?
+        if let languageCode {
+            guard let code = MeetingRetranscriptionLanguage.canonicalCode(languageCode) else {
+                throw MeetingCoordinatorError.unsupportedRetranscriptionLanguage
+            }
+            requestedLanguage = code
+        } else {
+            requestedLanguage = nil
+        }
         await self.ensureRestored()
         guard self.stopTask == nil,
               self.interruptionTask == nil,
@@ -690,14 +699,16 @@ final class MeetingSessionCoordinator: ObservableObject {
             guard let session = self.activeSession, session.hasRetryableAudio else {
                 throw MeetingCoordinatorError.noRecoverableAudio
             }
-            let retainedLanguage = session.languageCode
-            let hadVisibleTranscript = session.state == .completed && !session.transcriptSegments.isEmpty
-            let prepared = try self.sessionPreparedForRetranscription(session, languageCode: languageCode)
+            let retainedLanguage = Self.retainedCompletedLanguage(for: session) ?? session.languageCode
+            let hadVisibleTranscript = Self.retainedCompletedLanguage(for: session) != nil
+            var prepared = session
+            prepared.languageCode = retainedLanguage
             self.activeSession = prepared
             return try await self.beginProcessingRetry(
                 prepared,
                 retainedLanguage: retainedLanguage,
-                hadVisibleTranscript: hadVisibleTranscript
+                hadVisibleTranscript: hadVisibleTranscript,
+                requestedLanguageCode: requestedLanguage ?? session.languageCode
             )
         }
 
@@ -742,34 +753,18 @@ final class MeetingSessionCoordinator: ObservableObject {
             self.state = .idle
         }
 
-        let retainedLanguage = session.languageCode
-        let hadVisibleTranscript = session.state == .completed && !session.transcriptSegments.isEmpty
-        let prepared = try self.sessionPreparedForRetranscription(session, languageCode: languageCode)
+        let retainedLanguage = Self.retainedCompletedLanguage(for: session) ?? session.languageCode
+        let hadVisibleTranscript = Self.retainedCompletedLanguage(for: session) != nil
+        var prepared = session
+        prepared.languageCode = retainedLanguage
         self.activeSession = prepared
         self.trackHealth = Dictionary(uniqueKeysWithValues: prepared.audioTracks.map { ($0.kind, $0.health) })
         return try await self.beginProcessingRetry(
             prepared,
             retainedLanguage: retainedLanguage,
-            hadVisibleTranscript: hadVisibleTranscript
+            hadVisibleTranscript: hadVisibleTranscript,
+            requestedLanguageCode: requestedLanguage ?? session.languageCode
         )
-    }
-
-    /// A nil language keeps the session's current language. A new code must be one final meeting
-    /// transcription can actually run, and it is stored before processing so a failed attempt still
-    /// remembers what the user asked for.
-    private func sessionPreparedForRetranscription(
-        _ session: MeetingSession,
-        languageCode: String?
-    ) throws -> MeetingSession {
-        guard let languageCode else { return session }
-        guard let code = MeetingRetranscriptionLanguage.canonicalCode(languageCode) else {
-            throw MeetingCoordinatorError.unsupportedRetranscriptionLanguage
-        }
-        guard code != session.languageCode else { return session }
-        var updated = session
-        updated.languageCode = code
-        updated.updatedAt = Date()
-        return updated
     }
 
     /// Puts back the transcript that was already stored. A failed language change must not leave
@@ -809,7 +804,8 @@ final class MeetingSessionCoordinator: ObservableObject {
     private func beginProcessingRetry(
         _ inputSession: MeetingSession,
         retainedLanguage: String,
-        hadVisibleTranscript: Bool
+        hadVisibleTranscript: Bool,
+        requestedLanguageCode: String
     ) async throws -> MeetingSession {
         var session = inputSession
         if self.activityLease == nil {
@@ -827,7 +823,8 @@ final class MeetingSessionCoordinator: ObservableObject {
         // Record the language on the new attempt before the first save. A language change
         // otherwise leaves only the previous attempt's language, and persistence rejects the session.
         var attempt = Self.pendingProcessingAttempt()
-        attempt.languageCode = session.languageCode
+        attempt.languageCode = requestedLanguageCode
+        attempt.retainedTranscriptLanguageCode = hadVisibleTranscript ? retainedLanguage : nil
         session.processingAttempts.append(attempt)
         session.updatedAt = Date()
         self.activeSession = session
@@ -839,7 +836,8 @@ final class MeetingSessionCoordinator: ObservableObject {
             session,
             generation: generation,
             retainedLanguage: retainedLanguage,
-            hadVisibleTranscript: hadVisibleTranscript
+            hadVisibleTranscript: hadVisibleTranscript,
+            requestedLanguageCode: requestedLanguageCode
         )
     }
 
@@ -1450,6 +1448,16 @@ final class MeetingSessionCoordinator: ObservableObject {
 
         var viable: [MeetingSession] = []
         for session in recoverable {
+            if let restored = Self.restoringCompletedResult(session) {
+                do { try await self.store.save(restored) } catch {
+                    self.restoreTask = nil
+                    DebugLogger.shared.log("Failed to persist retained meeting result for \(session.id): \(error)")
+                }
+                if self.latestCompletedSession.map({ $0.startedAt < restored.startedAt }) ?? true {
+                    self.latestCompletedSession = restored
+                }
+                continue
+            }
             let expectedKinds: Set<MeetingAudioTrackKind> = session.mode == .onlineCall
                 ? [.applicationAudio, .microphone]
                 : [.microphone]
@@ -1488,7 +1496,10 @@ final class MeetingSessionCoordinator: ObservableObject {
                 DebugLogger.shared.log("Failed to persist non-viable recovery classification for \(session.id): \(error)")
             }
         }
-        guard !viable.isEmpty else { return }
+        guard !viable.isEmpty else {
+            if let completed = self.latestCompletedSession { self.state = .completed(completed.id) }
+            return
+        }
 
         guard let active = viable.sorted(by: { lhs, rhs in
             lhs.startedAt != rhs.startedAt
@@ -1581,7 +1592,9 @@ final class MeetingSessionCoordinator: ObservableObject {
         }
         await self.tearDownLiveTranscription()
 
-        session.state = .interrupted
+        let retainedResult = Self.restoringCompletedResult(session)
+        session = retainedResult ?? session
+        if retainedResult == nil { session.state = .interrupted }
         if !session.events.contains(where: { $0.kind == .appTermination }) {
             session.events.append(MeetingSessionEvent(
                 id: UUID(),
@@ -1590,10 +1603,12 @@ final class MeetingSessionCoordinator: ObservableObject {
                 trackID: nil,
                 detail: wasCapturing
                     ? "Capture stopped at app termination; transcription is pending."
+                    : retainedResult != nil
+                    ? "Retranscription paused at app termination; the previous transcript was kept."
                     : "Transcription paused at app termination and will resume next launch."
             ))
         }
-        if Self.shouldQueuePendingAttempt(for: session) {
+        if retainedResult == nil, Self.shouldQueuePendingAttempt(for: session) {
             session.processingAttempts.append(Self.pendingProcessingAttempt())
         }
         session.updatedAt = Date()
@@ -1610,8 +1625,14 @@ final class MeetingSessionCoordinator: ObservableObject {
         } catch {
             // Preserve today's behavior: reinstall as interrupted despite the save failure.
         }
-        self.activeSession = session
-        self.state = .interrupted(session.id)
+        if session.state == .completed {
+            self.activeSession = nil
+            self.latestCompletedSession = session
+            self.state = .completed(session.id)
+        } else {
+            self.activeSession = session
+            self.state = .interrupted(session.id)
+        }
         await self.releaseActivityLease()
     }
 
@@ -1683,7 +1704,8 @@ final class MeetingSessionCoordinator: ObservableObject {
         _ inputSession: MeetingSession,
         generation: UUID,
         retainedLanguage: String,
-        hadVisibleTranscript: Bool
+        hadVisibleTranscript: Bool,
+        requestedLanguageCode: String? = nil
     ) async throws -> MeetingSession {
         let diagnosticStarted = ContinuousClock.now
         var diagnosticStage = MeetingProcessingStage.pending
@@ -1717,8 +1739,10 @@ final class MeetingSessionCoordinator: ObservableObject {
         var session = inputSession
         do {
             let sessionDirectory = try await self.store.sessionDirectory(for: session.id)
+            var processingSession = session
+            processingSession.languageCode = requestedLanguageCode ?? session.languageCode
             let result = try await self.processing.process(
-                session: session,
+                session: processingSession,
                 sessionDirectory: sessionDirectory
             ) { [weak self] stage in
                 guard self?.operationGeneration == generation else { return }
@@ -1730,6 +1754,10 @@ final class MeetingSessionCoordinator: ObservableObject {
             else {
                 throw CancellationError()
             }
+            session.languageCode = processingSession.languageCode
+            var completedAttempt = result.attempt
+            if requestedLanguageCode != nil { completedAttempt.languageCode = processingSession.languageCode }
+            completedAttempt.retainedTranscriptLanguageCode = nil
             session.speakers = result.speakers
             session.transcriptSegments = result.segments
             session.postProcessing = result.postProcessing
@@ -1748,9 +1776,9 @@ final class MeetingSessionCoordinator: ObservableObject {
                 $0.completedAt == nil && $0.id != result.attempt.id
             }
             if let index = session.processingAttempts.lastIndex(where: { $0.id == result.attempt.id }) {
-                session.processingAttempts[index] = result.attempt
+                session.processingAttempts[index] = completedAttempt
             } else {
-                session.processingAttempts.append(result.attempt)
+                session.processingAttempts.append(completedAttempt)
             }
             if !result.skippedChunkIDs.isEmpty {
                 session.events.append(MeetingSessionEvent(
@@ -1835,7 +1863,7 @@ final class MeetingSessionCoordinator: ObservableObject {
             }
             if error is CancellationError {
                 self.restoreStoredTranscript(&session, from: inputSession)
-                if retainedLanguage != session.languageCode, let lastIndex = session.processingAttempts.indices.last {
+                if requestedLanguageCode != nil, let lastIndex = session.processingAttempts.indices.last {
                     session.processingAttempts[lastIndex].errorCode = "cancelled"
                     session.processingAttempts[lastIndex].completedAt = Date()
                 }
@@ -2299,6 +2327,31 @@ final class MeetingSessionCoordinator: ObservableObject {
             message: message ?? error.localizedDescription,
             recoverable: recoverable
         )
+    }
+}
+
+private extension MeetingSessionCoordinator {
+    nonisolated static func retainedCompletedLanguage(for session: MeetingSession) -> String? {
+        guard !session.transcriptSegments.isEmpty else { return nil }
+        if session.state == .completed { return session.languageCode }
+        if let completed = session.processingAttempts.last(where: {
+            $0.stage == .completed && $0.completedAt != nil && $0.errorCode == nil && $0.languageCode != nil
+        })?.languageCode { return completed }
+        return session.processingAttempts.reversed().compactMap(\.retainedTranscriptLanguageCode).first
+    }
+
+    nonisolated static func restoringCompletedResult(_ input: MeetingSession) -> MeetingSession? {
+        guard let language = retainedCompletedLanguage(for: input) else { return nil }
+        var session = input
+        session.languageCode = language
+        session.state = .completed
+        let now = Date()
+        for index in session.processingAttempts.indices where session.processingAttempts[index].completedAt == nil {
+            session.processingAttempts[index].completedAt = now
+            session.processingAttempts[index].errorCode = session.processingAttempts[index].errorCode ?? "interrupted"
+        }
+        session.updatedAt = now
+        return session
     }
 }
 
