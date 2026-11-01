@@ -252,3 +252,171 @@ final class MeetingAPIControllerTests: XCTestCase {
         return session
     }
 }
+
+@MainActor
+final class MeetingLiveAPIControllerTests: XCTestCase {
+    private let sessionID = UUID()
+
+    func test_live_returnsSnapshot() async throws {
+        let utterance = MeetingLiveUtterance(id: UUID(), speaker: .them, text: "Agenda first", start: 0.5, end: 1.75)
+        let partial = MeetingLivePartial(id: UUID(), text: "Sounds", start: 2.0)
+        var snapshot = MeetingLiveTranscriptSnapshot.empty
+            .inserting(utterance)
+            .settingPartial(partial, for: .you)
+            .settingAvailability(.degraded(reason: "Application audio is silent."))
+        snapshot.revision = 12
+        let router = self.router(MeetingLiveTranscriptReading(sessionID: self.sessionID, snapshot: snapshot))
+
+        let response = await router.route(self.request())
+
+        XCTAssertEqual(response.status, 200)
+        XCTAssertEqual(response.headers["Content-Type"], "application/json; charset=utf-8")
+        let body = try self.json(response)
+        XCTAssertEqual(body["sessionID"] as? String, self.sessionID.uuidString)
+        XCTAssertEqual(body["revision"] as? Int, 12)
+        let availability = try XCTUnwrap(body["availability"] as? [String: Any])
+        XCTAssertEqual(availability["state"] as? String, "degraded")
+        XCTAssertEqual(availability["reason"] as? String, "Application audio is silent.")
+        let utterances = try XCTUnwrap(body["utterances"] as? [[String: Any]])
+        XCTAssertEqual(utterances.count, 1)
+        XCTAssertEqual(utterances[0]["id"] as? String, utterance.id.uuidString)
+        XCTAssertEqual(utterances[0]["speaker"] as? String, "them")
+        XCTAssertEqual(utterances[0]["text"] as? String, "Agenda first")
+        XCTAssertEqual(utterances[0]["start"] as? Double, 0.5)
+        XCTAssertEqual(utterances[0]["end"] as? Double, 1.75)
+        let partials = try XCTUnwrap(body["partials"] as? [[String: Any]])
+        XCTAssertEqual(partials.count, 1)
+        XCTAssertEqual(partials[0]["id"] as? String, partial.id.uuidString)
+        XCTAssertEqual(partials[0]["speaker"] as? String, "you")
+        XCTAssertEqual(partials[0]["text"] as? String, "Sounds")
+    }
+
+    func test_live_sinceAndSessionMatch_returns304() async throws {
+        let router = self.router(self.reading(revision: 5))
+
+        let response = await router.route(self.request(query: ["since": "5", "session": self.sessionID.uuidString.lowercased()]))
+
+        XCTAssertEqual(response.status, 304)
+        XCTAssertTrue(response.body.isEmpty)
+    }
+
+    func test_live_sinceMatchesButSessionMissing_returns200() async throws {
+        let router = self.router(self.reading(revision: 5))
+
+        let response = await router.route(self.request(query: ["since": "5"]))
+
+        XCTAssertEqual(response.status, 200)
+        XCTAssertEqual(try self.json(response)["revision"] as? Int, 5)
+    }
+
+    func test_live_sessionMatchesButSinceMissing_returns200() async throws {
+        let router = self.router(self.reading(revision: 5))
+
+        let response = await router.route(self.request(query: ["session": self.sessionID.uuidString]))
+
+        XCTAssertEqual(response.status, 200)
+    }
+
+    func test_live_sinceBehindCurrentRevision_returns200() async throws {
+        let router = self.router(self.reading(revision: 6))
+
+        let response = await router.route(self.request(query: ["since": "5", "session": self.sessionID.uuidString]))
+
+        XCTAssertEqual(response.status, 200)
+        XCTAssertEqual(try self.json(response)["revision"] as? Int, 6)
+    }
+
+    func test_live_newSessionSameRevision_returns200() async throws {
+        // Revisions restart with each meeting, so an old poller's `since` can equal the new
+        // meeting's revision. Only the session ID tells them apart.
+        let oldSessionID = UUID()
+        let router = self.router(self.reading(revision: 3))
+
+        let response = await router.route(self.request(query: ["since": "3", "session": oldSessionID.uuidString]))
+
+        XCTAssertEqual(response.status, 200)
+        let body = try self.json(response)
+        XCTAssertEqual(body["sessionID"] as? String, self.sessionID.uuidString)
+        XCTAssertEqual(body["revision"] as? Int, 3)
+    }
+
+    func test_live_noActiveMeeting_returns200WithNullSession() async throws {
+        let router = self.router(.idle)
+
+        for query in [[:], ["since": "0"], ["since": "0", "session": self.sessionID.uuidString]] {
+            let response = await router.route(self.request(query: query))
+            XCTAssertEqual(response.status, 200, "\(query)")
+            let body = try self.json(response)
+            XCTAssertTrue(body["sessionID"] is NSNull)
+            XCTAssertEqual(body["revision"] as? Int, 0)
+            XCTAssertEqual((body["availability"] as? [String: Any])?["state"] as? String, "unavailable")
+            XCTAssertEqual((body["utterances"] as? [Any])?.count, 0)
+            XCTAssertEqual((body["partials"] as? [Any])?.count, 0)
+        }
+    }
+
+    func test_live_badSince_returns400() async throws {
+        let router = self.router(self.reading(revision: 1))
+
+        for since in ["abc", "-1", "", "1.5", "18446744073709551616"] {
+            let response = await router.route(self.request(query: ["since": since, "session": self.sessionID.uuidString]))
+            XCTAssertEqual(response.status, 400, "since=\(since)")
+            let message = try XCTUnwrap(self.json(response)["error"] as? String)
+            XCTAssertTrue(message.contains("since"), message)
+        }
+    }
+
+    func test_live_badSession_returns400() async throws {
+        let router = self.router(self.reading(revision: 1))
+
+        for session in ["not-a-uuid", "", "../session.json"] {
+            let response = await router.route(self.request(query: ["since": "1", "session": session]))
+            XCTAssertEqual(response.status, 400, "session=\(session)")
+            let message = try XCTUnwrap(self.json(response)["error"] as? String)
+            XCTAssertTrue(message.contains("session"), message)
+        }
+    }
+
+    func test_live_post_returns405() async throws {
+        let router = self.router(self.reading(revision: 1))
+
+        for method in ["POST", "DELETE", "PUT"] {
+            let response = await router.route(self.request(method: method))
+            XCTAssertEqual(response.status, 405, method)
+        }
+    }
+
+    func test_notModified_hasReasonPhrase() {
+        XCTAssertEqual(LocalAPI.reasonPhrase(for: 304), "Not Modified")
+    }
+
+    private func router(_ reading: MeetingLiveTranscriptReading) -> LocalAPIRouter {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        return LocalAPIRouter(
+            meetingStore: MeetingSessionStore(rootDirectory: root),
+            liveTranscript: FixedLiveTranscriptProvider(reading: reading)
+        )
+    }
+
+    private func reading(revision: UInt64) -> MeetingLiveTranscriptReading {
+        var snapshot = MeetingLiveTranscriptSnapshot.empty.settingAvailability(.available)
+        snapshot.revision = revision
+        return MeetingLiveTranscriptReading(sessionID: self.sessionID, snapshot: snapshot)
+    }
+
+    private func request(method: String = "GET", query: [String: String] = [:]) -> LocalAPI.Request {
+        LocalAPI.Request(method: method, path: "/v1/meetings/live", query: query, headers: [:], body: Data())
+    }
+
+    private func json(_ response: LocalAPI.Response) throws -> [String: Any] {
+        try XCTUnwrap(JSONSerialization.jsonObject(with: response.body) as? [String: Any])
+    }
+}
+
+private struct FixedLiveTranscriptProvider: MeetingLiveTranscriptProviding {
+    let reading: MeetingLiveTranscriptReading
+
+    func currentLiveTranscript() async -> MeetingLiveTranscriptReading {
+        self.reading
+    }
+}

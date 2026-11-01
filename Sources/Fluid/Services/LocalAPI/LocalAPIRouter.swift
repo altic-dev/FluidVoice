@@ -8,15 +8,19 @@ final class LocalAPIRouter {
 
     private var routes: [RouteKey: LocalAPIRouteHandler] = [:]
 
-    init(meetingStore: any MeetingSessionStoring = MeetingSessionStore.shared) {
+    init(
+        meetingStore: any MeetingSessionStoring = MeetingSessionStore.shared,
+        liveTranscript: any MeetingLiveTranscriptProviding = IdleLiveTranscriptProvider()
+    ) {
         self.register(method: "GET", path: "/v1/health", handler: HealthController())
 
         let history = HistoryAPIController()
         self.register(method: "GET", path: "/v1/history", handler: history)
 
-        let meetings = MeetingAPIController(store: meetingStore)
+        let meetings = MeetingAPIController(store: meetingStore, liveTranscript: liveTranscript)
         self.register(method: "GET", path: "/v1/meetings", handler: meetings)
         self.register(method: "GET", path: "/v1/meetings/transcript", handler: meetings)
+        self.register(method: "GET", path: "/v1/meetings/live", handler: meetings)
 
         let dictionary = DictionaryAPIController()
         self.register(method: "GET", path: "/v1/dictionary/replacements", handler: dictionary)
@@ -59,5 +63,12 @@ private struct HealthController: LocalAPIRouteHandler {
 
         let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "unknown"
         return LocalAPI.json(Body(status: "ok", version: version))
+    }
+}
+
+/// Placeholder until the coordinator-backed provider is wired in.
+private nonisolated struct IdleLiveTranscriptProvider: MeetingLiveTranscriptProviding {
+    func currentLiveTranscript() async -> MeetingLiveTranscriptReading {
+        .idle
     }
 }
