@@ -1325,6 +1325,12 @@ extension AIEnhancementSettingsView {
         )
     }
 
+    var editModeSection: some View {
+        EditModeModelSection(showsLocalModel: self.isPrivateAIProviderID(self.activeEditModeProviderID)) {
+            self.editModeInlineModelControls
+        }
+    }
+
     private var editModeInlineModelControls: some View {
         let verified = self.editModeVerifiedProviders
 
@@ -1347,7 +1353,7 @@ extension AIEnhancementSettingsView {
                 let providerID = self.activeEditModeProviderID
                 let models = self.editModeModels(for: providerID)
                 Group {
-                    Toggle("Sync", isOn: self.editModeLinkedToGlobalBinding)
+                    Toggle("Same as dictation", isOn: self.editModeLinkedToGlobalBinding)
                         .toggleStyle(.checkbox)
                         .font(.fluidSystem(.caption))
                         .foregroundStyle(.secondary)
@@ -1583,7 +1589,14 @@ extension AIEnhancementSettingsView {
     }
 
     private var editModeVerifiedProviders: [AIEnhancementSettingsViewModel.ProviderItemData] {
-        self.viewModel.cachedVerifiedProviderItems
+        var providers = self.viewModel.cachedVerifiedProviderItems
+        // The on-device Edit Mode model has its own download, so choosing it never
+        // depends on dictation having verified a model.
+        let feature = PrivateAIProviderFeature.shared
+        if EditModeModelController.shared.model != nil, !providers.contains(where: { $0.id == feature.providerID }) {
+            providers.append(.init(id: feature.providerID, name: feature.providerName, isBuiltIn: true))
+        }
+        return providers
             .sorted { lhs, rhs in
                 lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
             }

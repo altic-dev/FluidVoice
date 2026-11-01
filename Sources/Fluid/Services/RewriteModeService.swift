@@ -11,6 +11,8 @@ final class RewriteModeService: ObservableObject {
     @Published var streamingThinkingText: String = "" // Real-time thinking tokens for UI
     @Published var isProcessing = false
     @Published var conversationHistory: [Message] = []
+    /// Why the last request produced nothing, for the overlay to show.
+    @Published private(set) var lastErrorMessage: String?
     @Published var isWriteMode: Bool = false // true = no text selected (write/improve), false = text selected (rewrite)
     private var promptAppBundleID: String?
 
@@ -89,6 +91,7 @@ final class RewriteModeService: ObservableObject {
         defer { MeetingSummaryActivityCoordinator.shared.endProcessing(summaryActivity) }
 
         let startTime = Date()
+        self.lastErrorMessage = nil
         AnalyticsService.shared.recordUsage(
             mode: .edit,
             aiModel: SettingsStore.shared.analyticsAIModelDescriptor(for: .edit)
@@ -135,7 +138,7 @@ final class RewriteModeService: ObservableObject {
         self.isProcessing = true
 
         do {
-            let response = try await callLLM(messages: conversationHistory, isWriteMode: isWriteMode)
+            let response = try await callLLM(messages: conversationHistory, isWriteMode: isWriteMode, instruction: prompt)
             self.conversationHistory.append(Message(role: .assistant, content: response))
             self.rewrittenText = response
             self.isProcessing = false
@@ -145,6 +148,7 @@ final class RewriteModeService: ObservableObject {
 
         } catch {
             self.conversationHistory.append(Message(role: .assistant, content: "Error: \(error.localizedDescription)"))
+            self.lastErrorMessage = error.localizedDescription
             self.isProcessing = false
             self.appendDiagnosticLog(
                 "processRewriteRequest failure | writeMode=\(self.isWriteMode) | error=\(error.localizedDescription)"
@@ -186,6 +190,7 @@ final class RewriteModeService: ObservableObject {
         self.isWriteMode = false
         self.thinkingBuffer = []
         self.promptAppBundleID = nil
+        self.lastErrorMessage = nil
     }
 
     func setPromptAppBundleID(_ bundleID: String?) {
@@ -195,7 +200,7 @@ final class RewriteModeService: ObservableObject {
 
     // MARK: - LLM Integration
 
-    private func callLLM(messages: [Message], isWriteMode: Bool) async throws -> String {
+    private func callLLM(messages: [Message], isWriteMode: Bool, instruction: String) async throws -> String {
         let settings = SettingsStore.shared
         let promptMode: SettingsStore.PromptMode = .edit
         let appBundleID = self.promptAppBundleID
@@ -266,18 +271,18 @@ final class RewriteModeService: ObservableObject {
         var runtimeModel = model
         var localModelPath = PrivateAIIntegrationService.configuredLocalModelPath
         if usesPrivateAIProvider {
-            guard let verifiedModelID = PrivateAIProviderPromptFormat.verifiedModelID(for: model, settings: settings),
-                  let verifiedModel = PrivateAIModelRegistry.model(id: verifiedModelID),
-                  let verifiedModelPath = PrivateAIIntegrationService.localModelPath(for: verifiedModel)
+            let route = EditModeRoute.current(providerID: providerID)
+            guard case let .local(editModel) = route,
+                  let editModelPath = PrivateAIIntegrationService.localModelPath(for: editModel)
             else {
                 throw NSError(
                     domain: "RewriteMode",
                     code: -5,
-                    userInfo: [NSLocalizedDescriptionKey: "Selected Fluid-1 model is not installed and verified"]
+                    userInfo: [NSLocalizedDescriptionKey: route.failureMessage ?? EditModeRoute.modelMissing.failureMessage ?? ""]
                 )
             }
-            runtimeModel = verifiedModelID
-            localModelPath = verifiedModelPath
+            runtimeModel = editModel.id
+            localModelPath = editModelPath
         }
         self.appendDiagnosticLog(
             "LLM config | writeMode=\(isWriteMode) | linkedToGlobal=\(settings.rewriteModeLinkedToGlobal) | " +
@@ -296,12 +301,10 @@ final class RewriteModeService: ObservableObject {
         }
 
         if usesPrivateAIProvider || PrivateAIIntegrationService.shouldHandleDictation(model: model) {
-            let inputText = messages.map {
-                let role = $0.role == .user ? "user" : "assistant"
-                return "[\(role)]\n\($0.content)"
-            }.joined(separator: "\n\n")
+            // A follow-up applies to the last result, not to the original selection.
+            let textToEdit = self.rewrittenText.isEmpty ? self.selectedContextText : self.rewrittenText
             let response = try await PrivateAIIntegrationService.shared.rewrite(
-                inputText,
+                instruction,
                 systemPrompt: systemPrompt,
                 runtime: PrivateAIIntegrationService.RuntimeConfiguration(
                     selectedProviderID: providerID,
@@ -318,7 +321,8 @@ final class RewriteModeService: ObservableObject {
                     appName: "",
                     bundleID: appBundleID ?? "",
                     windowTitle: "",
-                    appVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
+                    appVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String,
+                    selectedText: textToEdit.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : textToEdit
                 )
             )
             return response.outputText

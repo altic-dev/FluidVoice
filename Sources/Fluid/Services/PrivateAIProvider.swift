@@ -266,6 +266,8 @@ protocol PrivateAIIntegrationProviding: Sendable {
     func prewarmDictation() async
     func unloadCachedRuntime(reason: String) async
     func shutdownForTermination() async
+    /// Loads the Edit Mode model ahead of its first request.
+    func prewarmEdit() async
     nonisolated func enhanceDictation(
         _ inputText: String,
         runtime: PrivateAIIntegrationService.RuntimeConfiguration,
@@ -350,6 +352,8 @@ extension PrivateAIIntegrationProviding {
     func shutdownForTermination() async {
         await self.unloadCachedRuntime(reason: "termination")
     }
+
+    func prewarmEdit() async {}
 
     nonisolated func enhanceDictation(
         _ inputText: String,
