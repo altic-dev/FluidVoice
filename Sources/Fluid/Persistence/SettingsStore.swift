@@ -4545,7 +4545,16 @@ final class SettingsStore: ObservableObject {
     }
 
     var effectiveRewriteModeProviderID: String {
-        self.rewriteModeLinkedToGlobal ? self.selectedProviderID : self.rewriteModeSelectedProviderID
+        guard self.rewriteModeLinkedToGlobal else { return self.rewriteModeSelectedProviderID }
+        // "Same as dictation" follows what the main shortcut really uses. On the on-device
+        // style that is the local provider, whatever selectedProviderID holds.
+        let selection = self.dictationPromptSelection(for: .primary)
+        return DictationDefaultProvider.providerID(
+            selection: selection,
+            configuration: self.dictationPromptConfiguration(for: selection),
+            selectedProviderID: self.selectedProviderID,
+            privateProviderID: PrivateAIProviderFeature.shared.providerID
+        )
     }
 
     var effectiveRewriteModeSelectedModel: String {
