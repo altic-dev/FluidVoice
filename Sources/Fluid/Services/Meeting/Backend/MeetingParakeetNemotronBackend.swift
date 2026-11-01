@@ -16,7 +16,7 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
 
     static let descriptor = MeetingBackendDescriptor(
         id: .parakeetNemotron,
-        version: "9",
+        version: "10",
         execution: .local,
         supportedLanguageCodes: VoiceEngineLanguageCatalog.parakeetV3LanguageIDs,
         supportedTrackKinds: Set(MeetingAudioTrackKind.allCases),
@@ -541,6 +541,9 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
             }
         }
 
+        // A provider without timings may supply an utterance. Rejected timed words must
+        // not return through that fallback, including words predicted only in padded silence.
+        guard output.words.isEmpty else { return [] }
         let text = output.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return [] }
         let spanIDs = work.spans.map(\.id)

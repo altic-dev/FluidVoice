@@ -958,6 +958,31 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
         }
     }
 
+    func testWordsEntirelyInPaddingDoNotReturnAsUntimedText() async throws {
+        let duration = 0.05
+        let chunk = self.makePCMChunk(sequence: 0, start: 100, end: 100 + duration)
+        let track = self.makeMicTrack(chunks: [chunk], eraStart: 100)
+        let session = self.makeSession(mode: .inRoom, tracks: [track])
+        let runtime = FakeRuntime()
+        runtime.asrSession.minimumSampleCount = 16_000
+        runtime.asrSession.responses = [
+            .init(text: "phantom word", words: [
+                ASRWordTiming(text: "phantom", start: 0.6, end: 0.7),
+                ASRWordTiming(text: "word", start: 0.7, end: 0.8),
+            ]),
+        ]
+        let backend = self.makeBackend(runtime: runtime, materializer: FakeMaterializer())
+        let plan = try backend.plan(self.makeRequest(session: session, directory: self.makeTempSessionDirectory()))
+        let manifest = try self.makeManifest(plan: plan, observations: [
+            MeetingAnalysisChunkKey(trackID: track.id, chunkID: chunk.id): self.makeObserved(chunk, duration: duration),
+        ])
+        let outcome = try await backend.execute(plan: plan, manifest: manifest, progress: { _ in })
+        guard case let .canonicalEvidence(bundle) = outcome else { return XCTFail("Expected canonical evidence") }
+        XCTAssertEqual(runtime.asrSession.callSampleCounts, [16_000])
+        XCTAssertTrue(bundle.coverageReceipts.allSatisfy { $0.status == .processed })
+        XCTAssertTrue(bundle.evidence.units.isEmpty, "Rejected timed words must never be reintroduced as a whole-clip utterance")
+    }
+
     func testSubsecondEpochPadsInferenceWithoutExtendingTranscriptCoverage() async throws {
         let duration = 0.05
         let chunk = self.makePCMChunk(sequence: 0, start: 100, end: 100 + duration)
