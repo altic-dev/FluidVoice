@@ -60,7 +60,7 @@ struct FileTranscriptionView: View {
         return entries.first { $0.id == self.fileHistoryStore.selectedEntryID } ?? entries.first
     }
 
-    enum ExportFormat: String, CaseIterable {
+    enum ExportFormat: String, CaseIterable, Sendable {
         case text = "Text (.txt)"
         case json = "JSON (.json)"
 
@@ -129,8 +129,7 @@ struct FileTranscriptionView: View {
             isPresented: self.$showingExportDialog,
             document: TranscriptionDocument(
                 result: self.exportResult ?? TranscriptionResult(text: "", confidence: 0, duration: 0, processingTime: 0, fileName: "transcript"),
-                format: self.exportFormat,
-                service: self.transcriptionService
+                format: self.exportFormat
             ),
             contentType: self.exportFormat == .text ? .plainText : .json,
             defaultFilename: "\((self.exportResult?.fileName).map { "\($0)_transcript" } ?? "transcript").\(self.exportFormat.fileExtension)"
@@ -860,18 +859,12 @@ struct TranscriptionDocument: FileDocument {
         [.plainText, .json]
     }
 
-    let result: TranscriptionResult
-    let format: FileTranscriptionView.ExportFormat
-    let service: FileTranscriptionService
+    private let result: TranscriptionResult
+    private let format: FileTranscriptionView.ExportFormat
 
-    init(
-        result: TranscriptionResult,
-        format: FileTranscriptionView.ExportFormat,
-        service: FileTranscriptionService
-    ) {
+    init(result: TranscriptionResult, format: FileTranscriptionView.ExportFormat) {
         self.result = result
         self.format = format
-        self.service = service
     }
 
     init(configuration: ReadConfiguration) throws {
@@ -879,18 +872,17 @@ struct TranscriptionDocument: FileDocument {
     }
 
     func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
-        let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent("temp.\(self.format.fileExtension)")
+        try self.makeFileWrapper()
+    }
 
+    nonisolated func makeFileWrapper() throws -> FileWrapper {
+        let data: Data
         switch self.format {
         case .text:
-            try self.service.exportToText(self.result, to: tempURL)
+            data = Data(self.result.textExport.utf8)
         case .json:
-            try self.service.exportToJSON(self.result, to: tempURL)
+            data = try self.result.jsonExport
         }
-
-        let data = try Data(contentsOf: tempURL)
-        try? FileManager.default.removeItem(at: tempURL)
-
         return FileWrapper(regularFileWithContents: data)
     }
 }

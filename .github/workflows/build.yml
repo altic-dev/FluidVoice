@@ -91,7 +91,9 @@ jobs:
     - name: Run shared CI checks
       env:
         CI_RESULT_DIR: build/test-results
-      run: bash Tests/run_ci_checks.sh
+      run: |
+        export TEST_RUNNER_FLUID_EXPORT_TEST_SANDBOX_TEMP="$(getconf DARWIN_USER_TEMP_DIR)"
+        bash Tests/run_ci_checks.sh
 
     - name: Collect crash reports
       if: always()

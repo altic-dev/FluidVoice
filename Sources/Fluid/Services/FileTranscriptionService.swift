@@ -301,6 +301,15 @@ nonisolated struct TranscriptionResult: Identifiable, Sendable, Codable {
         }
     }
 
+    var jsonExport: Data {
+        get throws {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            encoder.dateEncodingStrategy = .iso8601
+            return try encoder.encode(self)
+        }
+    }
+
     var textExport: String {
         var metadata = [
             "Transcription: \(self.fileName)",
@@ -671,12 +680,7 @@ final class FileTranscriptionService: ObservableObject {
 
     /// Export transcription result to JSON
     nonisolated func exportToJSON(_ result: TranscriptionResult, to destinationURL: URL) throws {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        encoder.dateEncodingStrategy = .iso8601
-
-        let jsonData = try encoder.encode(result)
-        try jsonData.write(to: destinationURL)
+        try result.jsonExport.write(to: destinationURL)
     }
 
     /// Reset the service state
