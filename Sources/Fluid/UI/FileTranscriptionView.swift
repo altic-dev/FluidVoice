@@ -60,7 +60,7 @@ struct FileTranscriptionView: View {
         return entries.first { $0.id == self.fileHistoryStore.selectedEntryID } ?? entries.first
     }
 
-    enum ExportFormat: String, CaseIterable {
+    enum ExportFormat: String, CaseIterable, Sendable {
         case text = "Text (.txt)"
         case json = "JSON (.json)"
 
@@ -859,17 +859,12 @@ struct TranscriptionDocument: FileDocument {
         [.plainText, .json]
     }
 
-    private let data: Result<Data, Error>
+    private let result: TranscriptionResult
+    private let format: FileTranscriptionView.ExportFormat
 
     init(result: TranscriptionResult, format: FileTranscriptionView.ExportFormat) {
-        self.data = Result {
-            switch format {
-            case .text:
-                Data(result.textExport.utf8)
-            case .json:
-                try result.jsonExport
-            }
-        }
+        self.result = result
+        self.format = format
     }
 
     init(configuration: ReadConfiguration) throws {
@@ -881,7 +876,14 @@ struct TranscriptionDocument: FileDocument {
     }
 
     nonisolated func makeFileWrapper() throws -> FileWrapper {
-        try FileWrapper(regularFileWithContents: self.data.get())
+        let data: Data
+        switch self.format {
+        case .text:
+            data = Data(self.result.textExport.utf8)
+        case .json:
+            data = try self.result.jsonExport
+        }
+        return FileWrapper(regularFileWithContents: data)
     }
 }
 
