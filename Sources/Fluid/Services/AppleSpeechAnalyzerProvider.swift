@@ -36,6 +36,10 @@ final class AppleSpeechAnalyzerProvider: TranscriptionProvider {
 
     init() {}
 
+    static func supportedLocaleIdentifiers() async -> [String] {
+        await SpeechTranscriber.supportedLocales.map { $0.identifier(.bcp47) }
+    }
+
     // MARK: - Lifecycle
 
     func prepare(progressHandler: ((ModelPreparationProgress) -> Void)?) async throws {

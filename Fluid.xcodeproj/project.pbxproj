@@ -100,7 +100,9 @@
 		7CFA1D0B2F500000C0DEF001 /* TypingServiceTransientPasteboardTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7CFA1D0B2F500000C0DEF002 /* TypingServiceTransientPasteboardTests.swift */; };
 		803000000000000000000002 /* MediaPlaybackServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 803000000000000000000001 /* MediaPlaybackServiceTests.swift */; };
 		0B05F11E000000000000A002 /* SupportedFileExtensionsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B05F11E000000000000A001 /* SupportedFileExtensionsTests.swift */; };
+		BF1510100000000000000002 /* FileTranscriptionAudioTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BF1510100000000000000001 /* FileTranscriptionAudioTests.swift */; };
 		CD0E00000000000000000002 /* MeetingOverlayModelsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD0E00000000000000000001 /* MeetingOverlayModelsTests.swift */; };
+		AE1223000000000000000002 /* MeetingRecordingSourceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AE1223000000000000000001 /* MeetingRecordingSourceTests.swift */; };
 		CD0F00000000000000000002 /* MeetingProcessingConfigurationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD0F00000000000000000001 /* MeetingProcessingConfigurationTests.swift */; };
 		CD100000000000000000000002 /* MeetingProviderOptionsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD100000000000000000000001 /* MeetingProviderOptionsTests.swift */; };
 		CD110000000000000000000002 /* MeetingASRPreparationOwnerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD110000000000000000000001 /* MeetingASRPreparationOwnerTests.swift */; };
@@ -121,6 +123,7 @@
 		B51800000000000000000002 /* SpokenSendTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B51800000000000000000001 /* SpokenSendTests.swift */; };
 		B51900000000000000000002 /* PrivateAIProviderPromptFormatTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B51900000000000000000001 /* PrivateAIProviderPromptFormatTests.swift */; };
 		C0DE63700000000000000002 /* WhisperLanguageSelectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE63700000000000000001 /* WhisperLanguageSelectionTests.swift */; };
+		C0DE63800000000000000002 /* AppleSpeechLocaleSelectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE63800000000000000001 /* AppleSpeechLocaleSelectionTests.swift */; };
 		CACEC0010000000000000002 /* KeychainServiceCacheTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CACEC0010000000000000001 /* KeychainServiceCacheTests.swift */; };
 		FEED67600000000000000002 /* PasteDeliveryCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FEED67600000000000000001 /* PasteDeliveryCoordinatorTests.swift */; };
 		7CDB0A2F2F3C4D5600FB7CAD /* dictation_fixture.wav in Resources */ = {isa = PBXBuildFile; fileRef = 7CDB0A2B2F3C4D5600FB7CAD /* dictation_fixture.wav */; };
@@ -280,6 +283,7 @@
 		B51900000000000000000001 /* PrivateAIProviderPromptFormatTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrivateAIProviderPromptFormatTests.swift; sourceTree = "<group>"; };
 		B52000000000000000000001 /* PrivateAIDictationTokenBudgetTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrivateAIDictationTokenBudgetTests.swift; sourceTree = "<group>"; };
 		C0DE63700000000000000001 /* WhisperLanguageSelectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WhisperLanguageSelectionTests.swift; sourceTree = "<group>"; };
+		C0DE63800000000000000001 /* AppleSpeechLocaleSelectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleSpeechLocaleSelectionTests.swift; sourceTree = "<group>"; };
 		CACEC0010000000000000001 /* KeychainServiceCacheTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainServiceCacheTests.swift; sourceTree = "<group>"; };
 		FEED67600000000000000001 /* PasteDeliveryCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PasteDeliveryCoordinatorTests.swift; sourceTree = "<group>"; };
 		7C078D8F2E3B339200FB7CAC /* FluidVoice Debug.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "FluidVoice Debug.app"; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -294,7 +298,9 @@
 		7CFA1D0B2F500000C0DEF002 /* TypingServiceTransientPasteboardTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TypingServiceTransientPasteboardTests.swift; sourceTree = "<group>"; };
 		803000000000000000000001 /* MediaPlaybackServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaPlaybackServiceTests.swift; sourceTree = "<group>"; };
 		0B05F11E000000000000A001 /* SupportedFileExtensionsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SupportedFileExtensionsTests.swift; sourceTree = "<group>"; };
+		BF1510100000000000000001 /* FileTranscriptionAudioTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileTranscriptionAudioTests.swift; sourceTree = "<group>"; };
 		CD0E00000000000000000001 /* MeetingOverlayModelsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingOverlayModelsTests.swift; sourceTree = "<group>"; };
+		AE1223000000000000000001 /* MeetingRecordingSourceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingRecordingSourceTests.swift; sourceTree = "<group>"; };
 		CD0F00000000000000000001 /* MeetingProcessingConfigurationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingProcessingConfigurationTests.swift; sourceTree = "<group>"; };
 		CD100000000000000000000001 /* MeetingProviderOptionsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingProviderOptionsTests.swift; sourceTree = "<group>"; };
 		CD110000000000000000000001 /* MeetingASRPreparationOwnerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingASRPreparationOwnerTests.swift; sourceTree = "<group>"; };
@@ -551,10 +557,13 @@
 				B52000000000000000000001 /* PrivateAIDictationTokenBudgetTests.swift */,
 				C0DE123A0000000000000001 /* DictationContextCaptureTests.swift */,
 				C0DE63700000000000000001 /* WhisperLanguageSelectionTests.swift */,
+				C0DE63800000000000000001 /* AppleSpeechLocaleSelectionTests.swift */,
 				CACEC0010000000000000001 /* KeychainServiceCacheTests.swift */,
 				0B05F11E000000000000A001 /* SupportedFileExtensionsTests.swift */,
+				BF1510100000000000000001 /* FileTranscriptionAudioTests.swift */,
 				FEED67600000000000000001 /* PasteDeliveryCoordinatorTests.swift */,
 				CD0E00000000000000000001 /* MeetingOverlayModelsTests.swift */,
+				AE1223000000000000000001 /* MeetingRecordingSourceTests.swift */,
 				CD0F00000000000000000001 /* MeetingProcessingConfigurationTests.swift */,
 				CD100000000000000000000001 /* MeetingProviderOptionsTests.swift */,
 				CD110000000000000000000001 /* MeetingASRPreparationOwnerTests.swift */,
@@ -958,10 +967,13 @@
 				B51900000000000000000002 /* PrivateAIProviderPromptFormatTests.swift in Sources */,
 				C0DE123A0000000000000002 /* DictationContextCaptureTests.swift in Sources */,
 				C0DE63700000000000000002 /* WhisperLanguageSelectionTests.swift in Sources */,
+				C0DE63800000000000000002 /* AppleSpeechLocaleSelectionTests.swift in Sources */,
 				CACEC0010000000000000002 /* KeychainServiceCacheTests.swift in Sources */,
 				0B05F11E000000000000A002 /* SupportedFileExtensionsTests.swift in Sources */,
+				BF1510100000000000000002 /* FileTranscriptionAudioTests.swift in Sources */,
 				FEED67600000000000000002 /* PasteDeliveryCoordinatorTests.swift in Sources */,
 				CD0E00000000000000000002 /* MeetingOverlayModelsTests.swift in Sources */,
+				AE1223000000000000000002 /* MeetingRecordingSourceTests.swift in Sources */,
 				CD0F00000000000000000002 /* MeetingProcessingConfigurationTests.swift in Sources */,
 				CD100000000000000000000002 /* MeetingProviderOptionsTests.swift in Sources */,
 				CD110000000000000000000002 /* MeetingASRPreparationOwnerTests.swift in Sources */,
@@ -1189,7 +1201,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 15.0;
-				MARKETING_VERSION = "1.6.13-beta.1";
+				MARKETING_VERSION = "1.6.13-beta.2";
 				PRODUCT_BUNDLE_IDENTIFIER = com.FluidApp.app.debug;
 				PRODUCT_NAME = "FluidVoice Debug";
 				PROVISIONING_PROFILE_SPECIFIER = "";
@@ -1244,7 +1256,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 15.0;
-				MARKETING_VERSION = "1.6.13-beta.1";
+				MARKETING_VERSION = "1.6.13-beta.2";
 				PRODUCT_BUNDLE_IDENTIFIER = com.FluidApp.app;
 				PRODUCT_NAME = FluidVoice;
 				PROVISIONING_PROFILE_SPECIFIER = "";

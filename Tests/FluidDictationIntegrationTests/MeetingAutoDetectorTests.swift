@@ -1943,10 +1943,17 @@ final class MeetingAutoDetectorTests: XCTestCase {
         let sections = MeetingAppRegistry.pickerSections(apps, bundleIdentifier: \.bundle, name: \.name, isBackgroundItem: \.background)
         XCTAssertEqual(
             sections.usual.map(\.name),
-            ["zoom.us", "Microsoft Teams", "FaceTime", "Slack", "Google Meet", "Google Chrome", "Safari"]
+            ["Google Chrome", "Safari", "zoom.us", "Microsoft Teams", "Google Meet", "FaceTime", "Slack"]
         )
         XCTAssertEqual(sections.others.map(\.name), ["Finder", "Music", "AirPlayUIAgent", "Control Center"])
         XCTAssertEqual(sections.usual.count + sections.others.count, apps.count, "nothing is dropped from the list")
+    }
+
+    func testPickerOnlyBrowsersDoNotEnableAutomaticDetection() {
+        for bundle in ["org.mozilla.firefox", "com.duckduckgo.macos.browser"] {
+            XCTAssertNotNil(MeetingAppRegistry.pickerRank(forBundleIdentifier: bundle))
+            XCTAssertNil(MeetingAppRegistry.tier(forBundleIdentifier: bundle))
+        }
     }
 
     func testAppsThatOnlyShapeThePickerAreNeverDetected() {
@@ -1979,6 +1986,32 @@ final class MeetingAutoDetectorTests: XCTestCase {
         XCTAssertEqual(MeetingAppRegistry.tier(forBundleIdentifier: "com.google.Chrome.app.abcdef"), .browserTier2)
         XCTAssertNil(MeetingAppRegistry.tier(forBundleIdentifier: "com.tinyspeck.slackmacgap"))
         XCTAssertNil(MeetingAppRegistry.tier(forBundleIdentifier: "com.apple.FaceTime"))
+    }
+
+    func testGoogleMeetRoomURLsAcceptBothPathFormats() {
+        for path in ["/abc-defg-hij", "/abc-defg-hij/", "/meet/abc-defg-hij", "/meet/abc-defg-hij/"] {
+            XCTAssertTrue(MeetingInCallURLMatcher.isInCallURL(host: "meet.google.com", path: path), path)
+        }
+    }
+
+    func testGoogleMeetRoomURLsRejectLandingPagesAndMalformedRooms() {
+        for path in [
+            "/",
+            "/meet",
+            "/meet/",
+            "/landing",
+            "/meet/landing",
+            "/meet/abc-defg-hi",
+            "/meet/ABC-defg-hij",
+            "/meet/abc-defg-h1j",
+            "/meet/meet/abc-defg-hij",
+            "/other/abc-defg-hij",
+            "/meet//abc-defg-hij",
+            "/meet/abc-defg-hij/extra",
+        ] {
+            XCTAssertFalse(MeetingInCallURLMatcher.isInCallURL(host: "meet.google.com", path: path), path)
+        }
+        XCTAssertFalse(MeetingInCallURLMatcher.isInCallURL(host: "meet.google.com.example.com", path: "/meet/abc-defg-hij"))
     }
 
     func testInCallURLMatcherAcceptsRoomsAndRejectsLandingPages() {

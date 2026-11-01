@@ -25,4 +25,14 @@ final class DeliveryTargetAssessmentTests: XCTestCase {
             XCTAssertEqual(DeliveryTargetAssessment.classify(role: role, valueSettable: false), .unknown(reason: "role_\(role)"), role)
         }
     }
+
+    func testMuseComposerExceptionIsLimitedToItsComposer() {
+        let label = "Message Attach file\nSend"
+        XCTAssertTrue(DeliveryTargetAssessment.isMuseComposer(bundleID: "com.meta.endo", role: "AXButton", title: label, description: nil))
+        XCTAssertTrue(DeliveryTargetAssessment.isMuseComposer(bundleID: "com.meta.endo", role: "AXButton", title: nil, description: label))
+        XCTAssertFalse(DeliveryTargetAssessment.isMuseComposer(bundleID: "com.meta.endo", role: "AXButton", title: "Send", description: nil))
+        XCTAssertFalse(DeliveryTargetAssessment.isMuseComposer(bundleID: "another.app", role: "AXButton", title: label, description: nil))
+        XCTAssertFalse(DeliveryTargetAssessment.isMuseComposer(bundleID: "com.meta.endo", role: "AXMenuButton", title: label, description: nil))
+        XCTAssertFalse(DeliveryTargetAssessment.isMuseComposer(bundleID: "com.meta.endo", role: "AXButton", title: nil, description: nil))
+    }
 }

@@ -132,16 +132,22 @@ final nonisolated class MeetingAECPipeline: @unchecked Sendable {
                 capture: joined.capture.samples
             )
             self.diagnosticObserver?(joined, result.samples, result.statistics)
+            let mayPromote = joined.clockAttested
+                && joined.pairedFrameCount > MeetingAECConstants.attestationFrames
             guard let output = MeetingAECPCMAdapter.synthesize(
-                samples: result.samples,
+                samples: mayPromote ? result.samples : joined.capture.samples,
                 presentationTime: joined.capture.presentationTime
             ) else {
                 self.beginFallback(joined.capture, failure: .outputSynthesis, allowFallback: allowFallback)
                 return false
             }
-            let mayPromote = joined.clockAttested
-                && joined.pairedFrameCount > MeetingAECConstants.attestationFrames
-            self.committer.commitProcessed(output, mayPromote: mayPromote)
+            if mayPromote {
+                self.committer.commitProcessed(output, mayPromote: true)
+            } else if allowFallback {
+                self.committer.commitWarmup(output)
+            } else {
+                self.committer.commitRaw(output, failure: .stopped)
+            }
             return true
         } catch let failure as MeetingAECFailure {
             self.beginFallback(joined.capture, failure: failure, allowFallback: allowFallback)

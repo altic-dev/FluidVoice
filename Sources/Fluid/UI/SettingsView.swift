@@ -644,7 +644,7 @@ struct SettingsView: View {
                                                     iconColor: .secondary,
                                                     title: "Start / Stop Meeting",
                                                     description: self.settings.fluidMeetEnabled
-                                                        ? "Toggle meeting recording using your saved source"
+                                                        ? "Choose sources, press again to record, or stop an active meeting"
                                                         : "Enable FluidMeet in FluidMeet Settings to use this shortcut"
                                                 ),
                                                 shortcut: self.settings.meetingRecordingHotkeyShortcut,

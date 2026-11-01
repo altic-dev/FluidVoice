@@ -151,8 +151,10 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
             .store(in: &self.cancellables)
 
         NotificationCenter.default.addObserver(forName: .fluidPasteNotLanded, object: nil, queue: .main) { [weak self] note in
-            guard let transcript = note.userInfo?["transcript"] as? String else { return }
-            Task { @MainActor [weak self] in self?.showPasteNotLandedFailure(transcript: transcript) }
+            guard let transcript = note.userInfo?["transcript"] as? String,
+                  let verificationID = note.userInfo?["verificationID"] as? UInt64,
+                  let postedAt = note.userInfo?["postedAt"] as? TimeInterval else { return }
+            Task { @MainActor [weak self] in self?.showPasteNotLandedFailure(transcript: transcript, verificationID: verificationID, postedAt: postedAt) }
         }
 
         // Subscribe to recording state changes
@@ -497,8 +499,13 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
 
     /// A verified non-landing paste re-presents the overlay in its failure
     /// state so the transcript can be copied.
-    func showPasteNotLandedFailure(transcript: String) {
-        guard !self.overlayVisible, !self.isProcessingActive, self.asrService?.isRunning != true else { return }
+    func showPasteNotLandedFailure(transcript: String, verificationID: UInt64, postedAt: TimeInterval) {
+        guard PasteRecoveryPresentationPolicy.shared.claim(
+            verificationID,
+            alertsEnabled: SettingsStore.shared.showPasteCheckAlerts,
+            isBusy: self.overlayVisible || self.isProcessingActive || self.asrService?.isRunning == true,
+            userActed: PasteVerifier.userActedAfterPaste(secondsSinceLastInput: PasteVerifier.secondsSinceLastUserInput(), secondsSincePaste: ProcessInfo.processInfo.systemUptime - postedAt)
+        ) else { return }
         DeliveryFailureOverlayController.shared.show(kind: .pasteNotLanded, transcript: transcript)
     }
 
@@ -509,6 +516,8 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
             self.overlayBench("instant_show_return reason=no_asr_service")
             return
         }
+
+        PasteRecoveryPresentationPolicy.shared.beginDelivery()
 
         self.pendingHideOperation?.cancel()
         self.pendingHideOperation = nil
@@ -1473,7 +1482,7 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
     @objc private func startMeetingRecording() {
         Task { @MainActor in
             await self.startMeetingRecordingInBackground {
-                try await AppServices.shared.startMeetingRecordingFromMenuBar()
+                MeetingRecordingSourcePromptController.shared.handleShortcut()
             }
         }
     }

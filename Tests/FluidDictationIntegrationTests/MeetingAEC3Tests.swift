@@ -683,6 +683,44 @@ final class MeetingAEC3Tests: XCTestCase {
         ))
     }
 
+    func testFailureDuringWarmupStillReportsUnfilteredAudioOnce() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("aec-warmup-failure-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let writer = try MeetingAudioChunkWriter(
+            track: Self.microphoneTrack(), sessionDirectory: directory, chunkDuration: 60, eventHandler: { _ in }
+        )
+        let gate = MeetingMicrophoneTranscriptGate(.unprotected)
+        let live = AECLiveRecorder()
+        let protections = AECProtectionRecorder()
+        let committer = MeetingAECOutputCommitter(
+            writer: writer,
+            transcriptGate: gate,
+            liveAudioHandler: { _, sample in live.append(sample) },
+            protectionChanged: { protections.append($0) },
+            terminalFailure: { _ in }
+        )
+        let processor = AECFakeProcessor()
+        let pipeline = MeetingAECPipeline(processor: processor, committer: committer)
+        for frame in 0..<3 {
+            if frame == 1 { processor.failNext = true }
+            let pts = CMTime(value: CMTimeValue(frame * 480), timescale: 48_000)
+            try pipeline.consumeRender(XCTUnwrap(MeetingAECPCMAdapter.synthesize(
+                samples: [Float](repeating: 0.2, count: 480), presentationTime: pts
+            )), stream: self.token)
+            try pipeline.consumeCapture(XCTUnwrap(MeetingAECPCMAdapter.synthesize(
+                samples: [Float](repeating: 0.1, count: 480), presentationTime: pts
+            )), stream: self.token)
+            await committer.waitForPendingCommits()
+            _ = await writer.snapshot()
+            if frame == 0 { XCTAssertTrue(protections.values.isEmpty) }
+        }
+        XCTAssertEqual(protections.values, [.unfiltered], "a real failure after silent warm-up must still warn, once")
+        XCTAssertEqual(live.count, 3)
+        pipeline.stop(boundary: gate.invalidate())
+        await committer.waitForPendingCommits()
+        _ = await writer.stop()
+    }
+
     func testPipelinePromotesOnlyOnFrame201AndBridgeFailureKeepsSpeech() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("fluid-aec3-test-\(UUID().uuidString)", isDirectory: true)
@@ -696,10 +734,12 @@ final class MeetingAEC3Tests: XCTestCase {
         let gate = MeetingMicrophoneTranscriptGate(.unprotected)
         let live = AECLiveRecorder()
         let failures = AECTerminalRecorder()
+        let protections = AECProtectionRecorder()
         let committer = MeetingAECOutputCommitter(
             writer: writer,
             transcriptGate: gate,
             liveAudioHandler: { _, sample in live.append(sample) },
+            protectionChanged: { protections.append($0) },
             terminalFailure: { failure in failures.append(failure) }
         )
         let processor = AECFakeProcessor()
@@ -717,9 +757,13 @@ final class MeetingAEC3Tests: XCTestCase {
             pipeline.consumeCapture(capture, stream: self.token)
             if frame.isMultiple(of: 8) { _ = await writer.snapshot() }
         }
+        await committer.waitForPendingCommits()
         var track = await writer.snapshot()
-        XCTAssertEqual(track.captureEras?.last?.echoProtection, .unprotected)
-        XCTAssertEqual(live.count, 0)
+        XCTAssertEqual(track.captureEras?.last?.echoProtection, .unfiltered)
+        XCTAssertNil(track.captureEras?.last?.aecProvenance)
+        XCTAssertTrue(protections.values.isEmpty, "normal warm-up must not announce filtering failure")
+        XCTAssertEqual(live.count, 200, "warm-up must preserve every opening microphone frame")
+        XCTAssertEqual(try live.firstMean(token: self.token), 0.1, accuracy: 0.00_001)
 
         let promotionPTS = CMTime(value: 200 * 480, timescale: 48_000)
         try pipeline.consumeRender(XCTUnwrap(MeetingAECPCMAdapter.synthesize(
@@ -732,8 +776,9 @@ final class MeetingAEC3Tests: XCTestCase {
         track = await writer.snapshot()
         XCTAssertEqual(track.captureEras?.last?.echoProtection, .softwareEchoCancelled)
         XCTAssertEqual(track.captureEras?.last?.aecProvenance, MeetingAECConstants.provenance)
-        XCTAssertEqual(live.count, 1)
-        XCTAssertEqual(try live.firstMean(token: self.token), 0.35, accuracy: 0.00_001)
+        XCTAssertEqual(protections.values, [.softwareEchoCancelled])
+        XCTAssertEqual(live.count, 201)
+        XCTAssertEqual(try live.mean(at: 200, token: self.token), 0.35, accuracy: 0.00_001)
 
         processor.failNext = true
         let failurePTS = CMTime(value: 201 * 480, timescale: 48_000)
@@ -752,7 +797,8 @@ final class MeetingAEC3Tests: XCTestCase {
             [0, 2, 2.01],
             "the demotion era must be ordered after the protected era on the sample timeline"
         )
-        XCTAssertEqual(live.count, 2, "the bridge-failure frame must reach live ASR with honest unfiltered provenance")
+        XCTAssertEqual(live.count, 202, "the bridge-failure frame must reach live ASR with honest unfiltered provenance")
+        XCTAssertEqual(protections.values, [.softwareEchoCancelled, .unfiltered])
         XCTAssertTrue(failures.values.isEmpty)
 
         pipeline.stop(boundary: gate.invalidate())
@@ -1475,6 +1521,13 @@ private final nonisolated class AECFakeProcessor: MeetingAECProcessing, @uncheck
     }
 }
 
+private final nonisolated class AECProtectionRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage: [MeetingMicrophoneEchoProtection] = []
+    var values: [MeetingMicrophoneEchoProtection] { self.lock.withLock { self.storage } }
+    func append(_ value: MeetingMicrophoneEchoProtection) { self.lock.withLock { self.storage.append(value) } }
+}
+
 private final nonisolated class AECLiveRecorder: @unchecked Sendable {
     private let lock = NSLock()
     private var samples: [CMSampleBuffer] = []
@@ -1490,9 +1543,13 @@ private final nonisolated class AECLiveRecorder: @unchecked Sendable {
     }
 
     func firstMean(token: MeetingAECStreamToken) throws -> Float {
+        try self.mean(at: 0, token: token)
+    }
+
+    func mean(at index: Int, token: MeetingAECStreamToken) throws -> Float {
         let sample = try self.lock.withLock { () throws -> CMSampleBuffer in
-            guard let first = self.samples.first else { throw MeetingAECFailure.invalidSampleBuffer }
-            return first
+            guard self.samples.indices.contains(index) else { throw MeetingAECFailure.invalidSampleBuffer }
+            return self.samples[index]
         }
         let block = try MeetingAECPCMAdapter.extract(sample, kind: .capture, stream: token).get()
         return block.samples.reduce(0, +) / Float(block.samples.count)

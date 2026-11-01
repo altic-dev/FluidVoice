@@ -73,6 +73,8 @@ nonisolated enum MeetingAppRegistry {
     /// of the source pickers; nothing here is detected or prompted for.
     static let otherCallAppBundleIdentifiers: [String] = [
         "com.apple.FaceTime",
+        "com.apple.MobileSMS",
+        "com.apple.iChat",
         "com.tinyspeck.slackmacgap",
         "com.hnc.Discord",
         "net.whatsapp.WhatsApp",
@@ -87,7 +89,7 @@ nonisolated enum MeetingAppRegistry {
         "com.microsoft.teams",
         "com.cisco.webexmeetingsapp",
         "Cisco-Systems.Spark",
-    ] + otherCallAppBundleIdentifiers
+    ]
 
     private static let pickerBrowserOrder: [String] = [
         "com.google.Chrome",
@@ -95,14 +97,23 @@ nonisolated enum MeetingAppRegistry {
         "company.thebrowser.Browser",
         "com.microsoft.edgemac",
         "com.brave.Browser",
+        "org.mozilla.firefox",
+        "com.duckduckgo.macos.browser",
     ]
 
-    /// Where an app belongs among the usual meeting sources, lower first: call apps, then browser
-    /// web apps such as Google Meet's, then browsers. Nil for anything that is not a usual source.
+    static var commonPickerBundleIdentifiers: [String] {
+        self.pickerBrowserOrder + self.pickerCallAppOrder + self.otherCallAppBundleIdentifiers
+    }
+
+    /// Browsers and meeting apps first, then web apps and personal call apps. This ranking
+    /// changes only manual source pickers; automatic detection keeps its separate registry.
     static func pickerRank(forBundleIdentifier bundleIdentifier: String) -> Int? {
-        if let index = self.pickerCallAppOrder.firstIndex(of: bundleIdentifier) { return index }
-        if self.pwaBundlePrefixes.contains(where: { bundleIdentifier.hasPrefix($0) }) { return self.pickerCallAppOrder.count }
-        if let index = self.pickerBrowserOrder.firstIndex(of: bundleIdentifier) { return self.pickerCallAppOrder.count + 1 + index }
+        if let index = self.pickerBrowserOrder.firstIndex(of: bundleIdentifier) { return index }
+        let nativeOffset = self.pickerBrowserOrder.count
+        if let index = self.pickerCallAppOrder.firstIndex(of: bundleIdentifier) { return nativeOffset + index }
+        let webAppOffset = nativeOffset + self.pickerCallAppOrder.count
+        if self.pwaBundlePrefixes.contains(where: { bundleIdentifier.hasPrefix($0) }) { return webAppOffset }
+        if let index = self.otherCallAppBundleIdentifiers.firstIndex(of: bundleIdentifier) { return webAppOffset + 1 + index }
         return nil
     }
 
@@ -170,9 +181,10 @@ nonisolated enum MeetingInCallURLMatcher {
         }
     }
 
-    /// `/xxx-yyyy-zzz` — a lowercase-letter room code, three groups separated by hyphens.
+    /// `/xxx-yyyy-zzz` or `/meet/xxx-yyyy-zzz` — the same lowercase-letter room code.
     private static func matchesGoogleMeetPath(_ path: String) -> Bool {
-        let segment = path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        var segment = path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        if segment.hasPrefix("meet/") { segment.removeFirst("meet/".count) }
         let parts = segment.split(separator: "-")
         guard parts.count == 3 else { return false }
         let lengths = parts.map(\.count)

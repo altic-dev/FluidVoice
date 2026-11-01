@@ -88,38 +88,12 @@ jobs:
     - name: Show Xcode version
       run: xcodebuild -version
       
-    - name: Run standalone onboarding regressions
-      run: sh Tests/run_onboarding_tests.sh
-
-    - name: Run release highlights regressions
-      run: sh Tests/run_release_highlights_tests.sh
-
-    - name: Run history decode recovery regressions
-      run: sh Tests/run_history_decode_recovery_tests.sh
-
-    - name: Run settings backup concurrency regressions
-      run: python3 Tests/run_settings_backup_concurrency_tests.py
-
-    - name: Run meeting backup refresh regressions
-      run: python3 Tests/run_meeting_backup_refresh_tests.py
-
-    # Tiny Whisper GGUF output is nondeterministic on hosted macOS runners.
-    # Keep this E2E assertion in the suite for local validation, but skip it in CI.
-    - name: Build and test (excluding flaky Tiny Whisper E2E)
+    - name: Run shared CI checks
+      env:
+        CI_RESULT_DIR: build/test-results
       run: |
-        set -o pipefail
-        mkdir -p build/test-results
-        TEST_RUNNER_FLUID_EXPORT_TEST_SANDBOX_TEMP="$(getconf DARWIN_USER_TEMP_DIR)" \
-        xcodebuild test \
-          -project Fluid.xcodeproj \
-          -scheme Fluid \
-          -destination 'platform=macOS,arch=arm64' \
-          -resultBundlePath build/test-results/Fluid.xcresult \
-          -skip-testing:FluidDictationIntegrationTests/DictationE2ETests/testDictationEndToEnd_whisperTiny_transcribesFixture \
-          CODE_SIGN_IDENTITY="" \
-          CODE_SIGNING_REQUIRED=NO \
-          CODE_SIGNING_ALLOWED=NO \
-          2>&1 | tee build/test-results/xcodebuild.log | xcpretty
+        export TEST_RUNNER_FLUID_EXPORT_TEST_SANDBOX_TEMP="$(getconf DARWIN_USER_TEMP_DIR)"
+        bash Tests/run_ci_checks.sh
 
     - name: Collect crash reports
       if: always()

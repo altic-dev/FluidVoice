@@ -7,6 +7,9 @@ struct VoiceEngineSettingsView: View {
     @State var isShowingNemotronLanguagePicker = false
     @State var isShowingWhisperLanguagePicker = false
     @State var whisperLanguageSearchText = ""
+    @State var isShowingAppleSpeechLocalePicker = false
+    @State var appleSpeechLocaleSearchText = ""
+    @State var appleSpeechLocaleOptions: [AppleSpeechLocaleOption] = []
     let theme: AppTheme
 
     var voiceEngineTitleText: Color {

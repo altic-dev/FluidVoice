@@ -818,6 +818,8 @@ nonisolated struct MeetingProcessingAttempt: Codable, Identifiable, Equatable, S
     var asrProvider: String?
     var asrModel: String?
     var languageCode: String? = nil
+    /// The language of a retained completed transcript while a replacement is pending.
+    var retainedTranscriptLanguageCode: String? = nil
     var diarizationModel: String?
     var lastCompletedTrackID: MeetingAudioTrackID?
     var errorCode: String?
@@ -1247,12 +1249,29 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
                 throw MeetingModelValidationError.missingSegmentSpeaker
             }
         }
+        // Requests and stored text can have different languages during a retry. Only the
+        // latest successful result owns the stored transcript language; a legacy result without
+        // attempt metadata records that ownership on the replacement attempt instead.
         for attempt in self.processingAttempts {
-            if let languageCode = attempt.languageCode,
-               languageCode != self.languageCode
-            {
-                throw MeetingModelValidationError.unsupportedLanguage
+            for code in [attempt.languageCode, attempt.retainedTranscriptLanguageCode].compactMap({ $0 }) {
+                guard VoiceEngineLanguageCatalog.parakeetV3LanguageIDs.contains(code) else {
+                    throw MeetingModelValidationError.unsupportedLanguage
+                }
             }
+        }
+        let completedLanguage = self.processingAttempts.last(where: {
+            $0.stage == .completed && $0.completedAt != nil && $0.errorCode == nil && $0.languageCode != nil
+        })?.languageCode
+        let retainedLanguage = self.processingAttempts.reversed().compactMap(\.retainedTranscriptLanguageCode).first
+        if let transcriptLanguage = completedLanguage ?? retainedLanguage, transcriptLanguage != self.languageCode {
+            // An older PR build saved the requested language over retained text during a retry.
+            // Let recovery read that snapshot and restore its completed result once, without
+            // making it unreadable before the coordinator can repair it.
+            let latest = self.processingAttempts.last(where: { $0.languageCode != nil })
+            let legacyPending = [.processing, .interrupted].contains(self.state)
+                && latest?.completedAt == nil && latest?.errorCode == nil
+                && latest?.languageCode == self.languageCode && latest?.retainedTranscriptLanguageCode == nil
+            guard legacyPending else { throw MeetingModelValidationError.unsupportedLanguage }
         }
     }
 

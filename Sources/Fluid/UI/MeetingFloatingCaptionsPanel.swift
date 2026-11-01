@@ -2,13 +2,14 @@ import AppKit
 import Combine
 import SwiftUI
 
-/// Borderless, non-activating panel that mirrors the live captions card while FluidVoice is buried
-/// under a meeting app. `canBecomeKey` stays false and `title` stays unset so MenuBarManager's
-/// main-window heuristics (level == .normal, styleMask.contains(.titled), canBecomeKey) never treat
-/// it as the app's main window — see MenuBarManager.isFluidMainWindow.
+/// Floating panels remain untitled so main-window navigation ignores them.
+/// Caption panels do not take keyboard focus; source confirmation explicitly opts in
+/// so Return and Escape work while the meeting app remains active.
 final class MeetingFloatingCaptionsPanel: NSPanel {
+    var allowsKeyboardFocus = false
+
     override var canBecomeKey: Bool {
-        false
+        self.allowsKeyboardFocus
     }
 }
 
@@ -41,7 +42,8 @@ enum MeetingFloatingPanelFactory {
         size: NSSize,
         resizable: Bool,
         content: AnyView,
-        overlayHitPadding: MeetingOverlayPadding? = nil
+        overlayHitPadding: MeetingOverlayPadding? = nil,
+        allowsKeyboardFocus: Bool = false
     ) -> MeetingFloatingCaptionsPanel {
         var styleMask: NSWindow.StyleMask = [.borderless, .nonactivatingPanel]
         if resizable { styleMask.insert(.resizable) }
@@ -51,6 +53,7 @@ enum MeetingFloatingPanelFactory {
             backing: .buffered,
             defer: false
         )
+        panel.allowsKeyboardFocus = allowsKeyboardFocus
         panel.isFloatingPanel = true
         panel.level = .floating
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
