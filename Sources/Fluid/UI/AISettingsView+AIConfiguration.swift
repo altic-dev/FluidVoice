@@ -66,6 +66,7 @@ extension AIEnhancementSettingsView {
                 self.legacyAIConfigurationCard
             }
             if self.selectedConfigurationSection == .providers {
+                Divider()
                 self.editModeSection
             }
         }
