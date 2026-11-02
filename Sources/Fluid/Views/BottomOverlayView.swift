@@ -3319,6 +3319,17 @@ struct BottomOverlayView: View {
                 }
             }
 
+            if let download = self.contentState.aiProcessingFailureDownloadAction {
+                Button("Download") {
+                    self.contentState.clearAIProcessingFailure()
+                    NotchOverlayManager.shared.hide()
+                    download()
+                }
+                .font(.fluidSystem(size: self.layout.transFontSize, weight: .bold))
+                .foregroundStyle(Color.white.opacity(0.9))
+                .buttonStyle(.plain)
+            }
+
             self.failureIconButton(systemName: "xmark", help: "Dismiss") {
                 self.contentState.clearAIProcessingFailure()
                 NotchOverlayManager.shared.hide()

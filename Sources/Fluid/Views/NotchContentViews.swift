@@ -105,6 +105,8 @@ class NotchContentState: ObservableObject {
     @Published var isAIProcessingFailureVisible: Bool = false
     @Published private(set) var aiProcessingFailureMessage: String = "AI Enhancement failed"
     @Published private(set) var canRetryAIProcessingFailure: Bool = true
+    /// Set only while a model download would fix the failure on screen.
+    @Published private(set) var aiProcessingFailureDownloadAction: (() -> Void)?
     @Published private(set) var spokenSendIndicatorState: SpokenSendIndicatorState = .hidden
     @Published private(set) var spokenSendCountdownID: UInt64 = 0
     @Published var isTextDeliveryFailureVisible: Bool = false
@@ -197,15 +199,18 @@ class NotchContentState: ObservableObject {
 
     func showAIProcessingFailure(
         message: String = "AI Enhancement failed",
-        canRetry: Bool = true
+        canRetry: Bool = true,
+        downloadAction: (() -> Void)? = nil
     ) {
         self.aiProcessingFailureMessage = message
         self.canRetryAIProcessingFailure = canRetry
+        self.aiProcessingFailureDownloadAction = downloadAction
         self.isAIProcessingFailureVisible = true
     }
 
     func clearAIProcessingFailure() {
         self.isAIProcessingFailureVisible = false
+        self.aiProcessingFailureDownloadAction = nil
     }
 
     func setSpokenSendIndicatorState(_ state: SpokenSendIndicatorState) {
@@ -1146,6 +1151,16 @@ struct NotchExpandedView: View {
                         }
                         .buttonStyle(.plain)
                         .help("Try again")
+                    }
+
+                    if let download = self.contentState.aiProcessingFailureDownloadAction {
+                        Button("Download") {
+                            self.contentState.clearAIProcessingFailure()
+                            NotchOverlayManager.shared.hide()
+                            download()
+                        }
+                        .font(.fluidSystem(size: 10, weight: .bold))
+                        .buttonStyle(.plain)
                     }
 
                     Button {

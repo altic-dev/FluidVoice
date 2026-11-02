@@ -1211,6 +1211,8 @@ struct ContentView: View {
             self.navigateToApp(.meetingTranscription)
         case .preferences:
             self.openSettings(.general)
+        case .cleanupStyles:
+            self.navigateToApp(.cleanupStyles)
         }
     }
 
@@ -3892,41 +3894,30 @@ struct ContentView: View {
         self.menuBarManager.finishProcessingKeepingOverlayVisible()
     }
 
-    private func showPrivateAIEditModeUnavailableIfNeeded() -> Bool {
-        let settings = SettingsStore.shared
-        let providerID = settings.rewriteModeLinkedToGlobal
-            ? settings.selectedProviderID
-            : settings.rewriteModeSelectedProviderID
-        guard PrivateFeatures.privateAIProvider,
-              providerID.trimmingCharacters(in: .whitespacesAndNewlines) ==
-              PrivateAIProviderFeature.shared.providerID
-        else {
-            return false
-        }
-
-        guard !self.asr.isRunningOrStarting,
-              !NotchContentState.shared.isProcessing
-        else {
-            return true
-        }
-
+    /// Shows why Edit Mode can't run, for a few seconds. A missing model only happens
+    /// when Edit Mode is set to run on this Mac, so only then is there a Download button.
+    private func showEditModeFailure(_ message: String) {
+        let needsModel = message == EditModeRoute.modelMissing.failureMessage
         self.menuBarManager.setOverlayMode(.edit)
         self.advanceOverlayLifecycle()
         let expectedOverlayLifecycleID = self.overlayLifecycleID
         self.menuBarManager.showRecordingOverlayImmediately()
         NotchContentState.shared.showAIProcessingFailure(
-            message: "Edit Mode cannot be used with Fluid-1",
-            canRetry: false
+            message: message,
+            canRetry: false,
+            downloadAction: needsModel ? {
+                EditModeModelController.shared.download()
+                self.menuBarManager.openCleanupStyles()
+            } : nil
         )
         self.menuBarManager.finishProcessingKeepingOverlayVisible()
 
         Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 6_000_000_000)
+            try? await Task.sleep(for: .seconds(needsModel ? 10 : 6))
             guard self.overlayLifecycleID == expectedOverlayLifecycleID else { return }
             NotchContentState.shared.clearAIProcessingFailure()
             await self.menuBarManager.finishProcessingAndHideOverlay()
         }
-        return true
     }
 
     private func advanceOverlayLifecycle() {
@@ -4621,8 +4612,12 @@ struct ContentView: View {
             self.rewriteModeService.clearState()
             self.hideOverlayAfterOutput()
         } else {
-            await self.menuBarManager.finishProcessingAndHideOverlay()
             DebugLogger.shared.error("Rewrite failed - no result", source: "ContentView")
+            if let message = self.rewriteModeService.lastErrorMessage {
+                self.showEditModeFailure(message)
+            } else {
+                await self.menuBarManager.finishProcessingAndHideOverlay()
+            }
         }
     }
 
@@ -4677,6 +4672,7 @@ struct ContentView: View {
                     self.rewriteModeService.startWithoutSelection()
                 }
             }
+            self.startReadingEditWindow()
             self.menuBarManager.setOverlayMode(.edit)
         case .write, .rewrite:
             guard self.activeRecordingMode != .edit || NotchContentState.shared.mode == .dictation else { return }
@@ -4690,8 +4686,22 @@ struct ContentView: View {
                     self.rewriteModeService.startWithoutSelection()
                 }
             }
+            self.startReadingEditWindow()
             self.menuBarManager.setOverlayMode(.edit)
         }
+    }
+
+    /// Reads the front window for on-device Edit Mode. An API never gets it.
+    private func startReadingEditWindow() {
+        guard self.settings.editModeReadsScreen,
+              self.settings.effectiveRewriteModeProviderID == PrivateAIProviderFeature.shared.providerID,
+              let target = NotchContentState.shared.recordingTargetContext,
+              target.pid != ProcessInfo.processInfo.processIdentifier
+        else {
+            self.rewriteModeService.stopReadingWindow()
+            return
+        }
+        self.rewriteModeService.startReadingWindow(target: target)
     }
 
     private func handleLiveOverlayModeSwitch(_ mode: OverlayMode) {
@@ -5031,6 +5041,22 @@ struct ContentView: View {
     private func beginRewriteRecording() async {
         guard self.canBeginDictationRecording() else { return }
 
+        let editProviderID = SettingsStore.shared.effectiveRewriteModeProviderID
+        let editRoute = await Task.detached(priority: .userInitiated) {
+            EditModeRoute.current(providerID: editProviderID)
+        }.value
+        // The check above left the main thread, so what it allowed may have changed.
+        guard self.canBeginDictationRecording() else { return }
+        if let message = editRoute.failureMessage {
+            // A dictation in progress keeps going; only a fresh press has an overlay to use.
+            if !self.canSwitchActiveDictationCaptureMode { self.showEditModeFailure(message) }
+            return
+        }
+        if case .local = editRoute {
+            // Ready by the time the user stops speaking; never delays the recording.
+            Task { await PrivateAIIntegrationService.shared.prewarmEdit() }
+        }
+
         DictationStopSnapshot.captureStartingContext(reusingCapture: self.canSwitchActiveDictationCaptureMode) {
             self.captureRecordingContext()
         }
@@ -5054,6 +5080,7 @@ struct ContentView: View {
             // Text was selected - edit mode (with selected context)
             self.menuBarManager.setOverlayMode(.edit)
         }
+        self.startReadingEditWindow()
 
         // Set flag so stopAndProcessTranscription knows to process as rewrite
         self.setActiveRecordingMode(.edit)

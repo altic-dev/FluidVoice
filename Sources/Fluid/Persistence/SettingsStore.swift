@@ -3457,6 +3457,15 @@ final class SettingsStore: ObservableObject {
         }
     }
 
+    /// Lets on-device Edit Mode use the text in the front window. On until turned off.
+    var editModeReadsScreen: Bool {
+        get { self.defaults.object(forKey: Keys.editModeReadsScreen) as? Bool ?? true }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue, forKey: Keys.editModeReadsScreen)
+        }
+    }
+
     /// Global check if a model is a reasoning model (requires special params/max_completion_tokens)
     func isReasoningModel(_ model: String) -> Bool {
         // Drop a provider/namespace prefix (e.g. OpenRouter's "openai/") so the
@@ -4545,7 +4554,16 @@ final class SettingsStore: ObservableObject {
     }
 
     var effectiveRewriteModeProviderID: String {
-        self.rewriteModeLinkedToGlobal ? self.selectedProviderID : self.rewriteModeSelectedProviderID
+        guard self.rewriteModeLinkedToGlobal else { return self.rewriteModeSelectedProviderID }
+        // "Same as dictation" follows what the main shortcut really uses. On the on-device
+        // style that is the local provider, whatever selectedProviderID holds.
+        let selection = self.dictationPromptSelection(for: .primary)
+        return DictationDefaultProvider.providerID(
+            selection: selection,
+            configuration: self.dictationPromptConfiguration(for: selection),
+            selectedProviderID: self.selectedProviderID,
+            privateProviderID: PrivateAIProviderFeature.shared.providerID
+        )
     }
 
     var effectiveRewriteModeSelectedModel: String {
@@ -6063,6 +6081,7 @@ private extension SettingsStore {
         // Model Reasoning Config Keys
         static let modelReasoningConfigs = "ModelReasoningConfigs"
         static let rewriteModeShortcutEnabled = "RewriteModeShortcutEnabled"
+        static let editModeReadsScreen = "EditModeReadsScreen"
         static let showThinkingTokens = "ShowThinkingTokens"
 
         // Stats Keys

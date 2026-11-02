@@ -1852,7 +1852,10 @@ extension AIEnhancementSettingsView {
     }
 
     var promptsStepContent: some View {
-        self.advancedSettingsCard
+        VStack(alignment: .leading, spacing: AISettingsLayout.stylesSectionSpacing) {
+            self.advancedSettingsCard
+            self.editModeSection
+        }
     }
 
     var builtInProvidersList: [(id: String, name: String)] {

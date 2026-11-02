@@ -62,6 +62,87 @@ final class DictationContextCaptureTests: XCTestCase {
         XCTAssertNil(context)
     }
 
+    func testEditModeWindowReadUsesOCRPositionsWhenAppTextIsMissing() async {
+        let request = DictationContextReader.Request(
+            pid: 999_999,
+            bundleID: "test.context",
+            window: AXUIElementCreateApplication(999_999),
+            element: nil,
+            textBeforeCursor: nil,
+            isEnabled: true
+        )
+        let line = EditModeWindowLine(text: "Friday at 7:30", x: 10, y: 20, width: 100, height: 14)
+        let context = await DictationContextReader.readWindowLines(request) { _, _ in [line] }
+        XCTAssertEqual(context?.windowLines, [line])
+        XCTAssertNil(context?.screenText)
+    }
+
+    func testEditModeWindowReadSkipsPasswordManagersAndMissingWindows() async {
+        let privateApp = await DictationContextReader.readWindowLines(self.request(bundleID: "com.1password", isEnabled: true)) { _, _ in
+            XCTFail("Private apps must not invoke OCR")
+            return []
+        }
+        XCTAssertNil(privateApp)
+        let noWindow = await DictationContextReader.readWindowLines(self.request(isEnabled: true)) { _, _ in
+            XCTFail("A missing target window must not fall back to another window")
+            return []
+        }
+        XCTAssertNil(noWindow)
+    }
+
+    func testEditModeWindowLinesKeepNumbersAndRepeatsButNotOverlappingCopies() {
+        var lines = EditModeWindowLines()
+        let frame = CGRect(x: 10, y: 20, width: 200, height: 20)
+        lines.add("$42.10", frame: frame)
+        lines.add("$42.10", frame: frame.insetBy(dx: 2, dy: 2)) // A link and the text inside it.
+        lines.add("$42.10", frame: frame.offsetBy(dx: 0, dy: 100)) // Another row of a table.
+        lines.add("•", frame: frame.offsetBy(dx: 0, dy: 200))
+        XCTAssertEqual(lines.lines.map(\.text), ["$42.10", "$42.10"])
+        XCTAssertEqual(lines.lines.map(\.y), [20, 120])
+    }
+
+    func testEditModeWindowLinesSplitAnElementIntoRowsAndKeepTitlesAtTheTop() {
+        var lines = EditModeWindowLines()
+        lines.add("one\ntwo", frame: CGRect(x: 0, y: 100, width: 300, height: 40))
+        XCTAssertEqual(lines.lines.map(\.y), [100, 120])
+        XCTAssertEqual(lines.lines.map(\.height), [20, 20])
+
+        var window = EditModeWindowLines()
+        window.add("Inbox - Mail", frame: CGRect(x: 0, y: 0, width: 1000, height: 800))
+        XCTAssertEqual(window.lines.map(\.y), [0])
+        XCTAssertEqual(window.lines.map(\.height), [40])
+    }
+
+    func testEditModeWindowLinesStopAtTheirCaps() {
+        var lines = EditModeWindowLines()
+        for row in 0..<(EditModeWindowLines.maxLines + 10) {
+            lines.add("row \(row)", frame: CGRect(x: 0, y: row * 20, width: 100, height: 20))
+        }
+        XCTAssertEqual(lines.lines.count, EditModeWindowLines.maxLines)
+
+        var long = EditModeWindowLines()
+        let text = String(repeating: "word ", count: EditModeWindowLines.maxLineCharacters)
+        for row in 0..<100 {
+            long.add("\(row) \(text)", frame: CGRect(x: 0, y: row * 20, width: 100, height: 20))
+        }
+        XCTAssertTrue(long.isFull)
+        XCTAssertEqual(long.lines.first?.text.count, EditModeWindowLines.maxLineCharacters)
+        XCTAssertLessThan(long.lines.count, 100)
+    }
+
+    func testEditModeReadsTheScreenUntilTurnedOff() {
+        let key = "EditModeReadsScreen"
+        let defaults = UserDefaults.standard
+        let saved = defaults.object(forKey: key)
+        defer {
+            if let saved { defaults.set(saved, forKey: key) } else { defaults.removeObject(forKey: key) }
+        }
+        defaults.removeObject(forKey: key)
+        XCTAssertTrue(SettingsStore.shared.editModeReadsScreen)
+        SettingsStore.shared.editModeReadsScreen = false
+        XCTAssertFalse(SettingsStore.shared.editModeReadsScreen)
+    }
+
     func testCursorContextIsBounded() async {
         let request = DictationContextReader.Request(
             pid: 999_999,
