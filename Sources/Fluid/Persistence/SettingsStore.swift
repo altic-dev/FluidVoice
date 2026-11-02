@@ -4554,8 +4554,17 @@ final class SettingsStore: ObservableObject {
     /// Also runs after restoring an older backup; an empty route stays visibly unconfigured.
     func makeEditModeIndependentIfNeeded() {
         guard self.rewriteModeLinkedToGlobal else { return }
-        let providerID = self.effectiveRewriteModeProviderID
-        let modelID = self.effectiveRewriteModeSelectedModel
+        let linkedProviderID = self.effectiveRewriteModeProviderID.trimmingCharacters(in: .whitespacesAndNewlines)
+        let storedProviderID = self.rewriteModeSelectedProviderID.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Basic dictation has no cleanup provider; it must not erase an existing Edit choice.
+        let providerID = linkedProviderID.isEmpty
+            ? (storedProviderID.isEmpty ? self.selectedProviderID : storedProviderID)
+            : linkedProviderID
+        let linkedModelID = self.effectiveRewriteModeSelectedModel
+        let modelID = ModelRepository.eligibleModel(
+            preferred: linkedModelID.isEmpty ? self.rewriteModeSelectedModel : linkedModelID,
+            from: self.availableModels(for: providerID, task: .edit)
+        )
         self.objectWillChange.send()
         Self.makeEditModeIndependent(defaults: self.defaults, providerID: providerID, modelID: modelID)
     }

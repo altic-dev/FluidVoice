@@ -2247,17 +2247,51 @@ extension DictationE2ETests {
                 self.selectedModelByProviderKey,
                 self.selectedProviderIDKey,
                 self.rewriteModeLinkedToGlobalKey,
+                self.rewriteModeSelectedProviderIDKey,
+                self.rewriteModeSelectedModelKey,
+                self.commandModeLinkedToGlobalKey,
             ]
         ) {
             let settings = SettingsStore.shared
-            settings.rewriteModeLinkedToGlobal = true
+            settings.commandModeLinkedToGlobal = false
+            settings.rewriteModeLinkedToGlobal = false
+            settings.rewriteModeSelectedProviderID = "lmstudio"
+            settings.rewriteModeSelectedModel = "local-edit-model"
             settings.selectedProviderID = "lmstudio"
             settings.availableModelsByProvider = ["lmstudio": ["local-edit-model"]]
-            settings.selectedModelByProvider = ["lmstudio": "local-edit-model"]
+            settings.selectedModelByProvider = ["lmstudio": "dictation-model"]
 
             XCTAssertEqual(settings.availableModels(for: "lmstudio", task: .edit), ["local-edit-model"])
             XCTAssertEqual(settings.effectiveRewriteModeProviderID, "lmstudio")
             XCTAssertEqual(settings.effectiveRewriteModeSelectedModel, "local-edit-model")
+            settings.selectedProviderID = "openai"
+            XCTAssertEqual(settings.effectiveRewriteModeProviderID, "lmstudio")
+            XCTAssertEqual(settings.effectiveRewriteModeSelectedModel, "local-edit-model")
+        }
+    }
+
+    func testBasicDictationDoesNotClearTheLegacyEditProviderOnMigration() {
+        self.withRestoredDefaults(
+            keys: [
+                self.availableModelsByProviderKey,
+                self.rewriteModeLinkedToGlobalKey,
+                self.rewriteModeSelectedProviderIDKey,
+                self.rewriteModeSelectedModelKey,
+                self.dictationPromptOffKey,
+                self.selectedDictationPromptIDKey,
+            ]
+        ) {
+            let settings = SettingsStore.shared
+            settings.setDictationPromptSelection(.off, for: .primary)
+            settings.rewriteModeLinkedToGlobal = true
+            settings.rewriteModeSelectedProviderID = "lmstudio"
+            settings.rewriteModeSelectedModel = "local-edit-model"
+            settings.availableModelsByProvider = ["lmstudio": ["local-edit-model"]]
+            settings.makeEditModeIndependentIfNeeded()
+            XCTAssertFalse(settings.rewriteModeLinkedToGlobal)
+            XCTAssertEqual(settings.effectiveRewriteModeProviderID, "lmstudio")
+            XCTAssertEqual(settings.effectiveRewriteModeSelectedModel, "local-edit-model")
+            XCTAssertEqual(settings.dictationPromptSelection(for: .primary), .off)
         }
     }
 
