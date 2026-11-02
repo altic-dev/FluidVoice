@@ -3458,12 +3458,17 @@ final class SettingsStore: ObservableObject {
         }
     }
 
+    /// Invalidates old captures even when the switch changes off and back on.
+    private(set) var editModeScreenContextRevision: UInt64 = 0
+
     /// Lets on-device Edit Mode use the text in the front window. On until turned off.
     var editModeReadsScreen: Bool {
         get { self.defaults.object(forKey: Keys.editModeReadsScreen) as? Bool ?? true }
         set {
+            guard newValue != self.editModeReadsScreen else { return }
             objectWillChange.send()
             self.defaults.set(newValue, forKey: Keys.editModeReadsScreen)
+            self.editModeScreenContextRevision &+= 1
         }
     }
 
@@ -3881,7 +3886,6 @@ final class SettingsStore: ObservableObject {
         self.rewriteModeSelectedModel = payload.rewriteModeSelectedModel
         self.rewriteModeSelectedProviderID = payload.rewriteModeSelectedProviderID
         self.rewriteModeLinkedToGlobal = payload.rewriteModeLinkedToGlobal
-        self.makeEditModeIndependentIfNeeded()
         if let enabled = payload.meetingRecordingShortcutEnabled {
             self.meetingRecordingHotkeyShortcut = enabled ? payload.meetingRecordingHotkeyShortcut : nil
         }
@@ -4061,6 +4065,7 @@ final class SettingsStore: ObservableObject {
             self.normalizeDictationPromptConfigurationsIfNeeded()
         }
         self.purgeRetiredAppleIntelligenceState()
+        self.makeEditModeIndependentIfNeeded()
     }
 
     // MARK: - Private Methods

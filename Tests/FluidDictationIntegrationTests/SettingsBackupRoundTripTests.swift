@@ -108,6 +108,41 @@ final class SettingsBackupRoundTripTests: XCTestCase {
         }
     }
 
+    func testLegacyLinkedEditUsesRestoredPromptProvider() throws {
+        try self.withSavedDefaults {
+            let settings = SettingsStore.shared
+            settings.selectedProviderID = "openai"
+            settings.rewriteModeLinkedToGlobal = true
+            settings.setDictationPromptSelection(.default, for: .primary)
+            settings.dictationPromptConfigurations = ["__default__": .init(providerID: "openai", modelName: "gpt-4o-mini")]
+            let payload = settings.makeBackupPayload()
+            settings.dictationPromptConfigurations = ["__default__": .init(providerID: "anthropic", modelName: "claude-haiku")]
+
+            settings.restore(from: payload, promptProfiles: [], appPromptBindings: [])
+
+            XCTAssertEqual(settings.rewriteModeSelectedProviderID, "openai")
+            XCTAssertFalse(settings.rewriteModeLinkedToGlobal)
+            XCTAssertEqual(settings.dictationPromptSelection(for: .primary), .default)
+            XCTAssertEqual(settings.selectedProviderID, payload.selectedProviderID)
+            XCTAssertEqual(settings.primaryDictationShortcuts, payload.primaryDictationShortcuts)
+        }
+    }
+
+    func testIndependentEditBackupKeepsItsOwnProvider() throws {
+        try self.withSavedDefaults {
+            let settings = SettingsStore.shared
+            settings.rewriteModeLinkedToGlobal = false
+            settings.rewriteModeSelectedProviderID = "anthropic"
+            settings.rewriteModeSelectedModel = "saved-edit-model"
+            let payload = settings.makeBackupPayload()
+            settings.rewriteModeSelectedProviderID = "openai"
+            settings.restore(from: payload, promptProfiles: [], appPromptBindings: [])
+            XCTAssertEqual(settings.rewriteModeSelectedProviderID, "anthropic")
+            XCTAssertEqual(settings.rewriteModeSelectedModel, "saved-edit-model")
+            XCTAssertFalse(settings.rewriteModeLinkedToGlobal)
+        }
+    }
+
     private func payload(removing keys: [String]) throws -> SettingsBackupPayload {
         var json = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(SettingsStore.shared.makeBackupPayload())) as? [String: Any])
         for key in keys {

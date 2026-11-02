@@ -498,6 +498,78 @@ final class DictationContextCaptureTests: XCTestCase {
         semaphore.wait(timeout: .now() + 2) == .success
     }
 
+    func testEditWindowContextIsDroppedWhenDisabled() async {
+        let settings = SettingsStore.shared
+        let old = settings.editModeReadsScreen
+        defer { settings.editModeReadsScreen = old }
+        settings.editModeReadsScreen = true
+        let expected = DictationTypingContext(textBeforeCursor: nil, screenText: ["captured window"])
+        let capture = DictationContextCapture(target: self.target(), task: Task { expected })
+        let service = RewriteModeService(captureWindow: { _ in capture })
+        service.selectedContextText = "explicit selection"
+        service.startReadingWindow(target: self.target())
+        settings.editModeReadsScreen = false
+        let result = await service.windowContextForRewrite()
+        XCTAssertNil(result)
+        XCTAssertEqual(service.selectedContextText, "explicit selection")
+    }
+
+    func testEditWindowContextIsNotReusedAfterOffThenOn() async {
+        let settings = SettingsStore.shared
+        let old = settings.editModeReadsScreen
+        defer { settings.editModeReadsScreen = old }
+        settings.editModeReadsScreen = true
+        let capture = DictationContextCapture(target: self.target(), task: Task {
+            DictationTypingContext(textBeforeCursor: nil, screenText: ["stale window"])
+        })
+        let service = RewriteModeService(captureWindow: { _ in capture })
+        service.startReadingWindow(target: self.target())
+        settings.editModeReadsScreen = false
+        settings.editModeReadsScreen = true
+        let result = await service.windowContextForRewrite()
+        XCTAssertNil(result)
+    }
+
+    func testDisablingEditScreenContextCancelsItsTaskWithoutChangingDictation() async {
+        let settings = SettingsStore.shared
+        let old = settings.editModeReadsScreen
+        let dictation = settings.dictationScreenContextEnabled
+        defer { settings.editModeReadsScreen = old }
+        settings.editModeReadsScreen = true
+        let task = self.delayedRead()
+        let capture = DictationContextCapture(target: self.target(), task: task)
+        let service = RewriteModeService(captureWindow: { _ in capture })
+        service.startReadingWindow(target: self.target())
+        settings.editModeReadsScreen = false
+        service.cancelOutdatedWindowCapture()
+        XCTAssertTrue(task.isCancelled)
+        XCTAssertEqual(settings.dictationScreenContextEnabled, dictation)
+        let context = await service.windowContextForRewrite()
+        XCTAssertNil(context)
+    }
+
+    func testEditWindowCaptureDoesNotStartWhileDisabledAndCanRestartFresh() async {
+        let settings = SettingsStore.shared
+        let old = settings.editModeReadsScreen
+        defer { settings.editModeReadsScreen = old }
+        settings.editModeReadsScreen = false
+        let expected = DictationTypingContext(textBeforeCursor: nil, screenText: ["fresh window"])
+        var starts = 0
+        let service = RewriteModeService(captureWindow: { target in
+            starts += 1
+            return DictationContextCapture(target: target, task: Task { expected })
+        })
+        service.startReadingWindow(target: self.target())
+        XCTAssertEqual(starts, 0)
+        settings.editModeReadsScreen = true
+        service.startReadingWindow(target: self.target())
+        // A delayed preference observer must not cancel this new capture.
+        service.cancelOutdatedWindowCapture()
+        let context = await service.windowContextForRewrite()
+        XCTAssertEqual(context, expected)
+        XCTAssertEqual(starts, 1)
+    }
+
     private func target(pid: pid_t = 1, window: AXUIElement? = nil, element: AXUIElement? = nil) -> TypingService.RecordingTargetContext {
         .init(id: UUID(), pid: pid, bundleIdentifier: "test.context", window: window, element: element)
     }

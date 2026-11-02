@@ -17,6 +17,14 @@ final class RewriteModeService: ObservableObject {
     private var promptAppBundleID: String?
     /// The front window as read when the shortcut was pressed.
     private var windowCapture: DictationContextCapture?
+    private var windowCaptureRevision: UInt64?
+    private let captureWindow: @MainActor (TypingService.RecordingTargetContext) -> DictationContextCapture?
+
+    init(captureWindow: @escaping @MainActor (TypingService.RecordingTargetContext) -> DictationContextCapture? = {
+        DictationContextCapture.startForEditMode(target: $0)
+    }) {
+        self.captureWindow = captureWindow
+    }
 
     private let textSelectionService = TextSelectionService.shared
     private let typingService = TypingService()
@@ -199,13 +207,34 @@ final class RewriteModeService: ObservableObject {
     /// Starts reading the window while it is still in front, so the answer can use
     /// what the user is looking at. Replaces the reading of any earlier press.
     func startReadingWindow(target: TypingService.RecordingTargetContext) {
-        self.windowCapture?.cancel()
-        self.windowCapture = DictationContextCapture.startForEditMode(target: target)
+        self.stopReadingWindow()
+        guard SettingsStore.shared.editModeReadsScreen else { return }
+        self.windowCaptureRevision = SettingsStore.shared.editModeScreenContextRevision
+        self.windowCapture = self.captureWindow(target)
+    }
+
+    func windowContextForRewrite() async -> DictationTypingContext? {
+        self.cancelOutdatedWindowCapture()
+        guard let capture = self.windowCapture, let revision = self.windowCaptureRevision else { return nil }
+        let context = await capture.result(timeout: .seconds(2))
+        // The switch or target may change while the window reader is pending.
+        guard !Task.isCancelled, SettingsStore.shared.editModeReadsScreen,
+              revision == SettingsStore.shared.editModeScreenContextRevision,
+              self.windowCapture === capture
+        else { return nil }
+        return context
+    }
+
+    func cancelOutdatedWindowCapture() {
+        if !SettingsStore.shared.editModeReadsScreen || self.windowCaptureRevision != SettingsStore.shared.editModeScreenContextRevision {
+            self.stopReadingWindow()
+        }
     }
 
     func stopReadingWindow() {
         self.windowCapture?.cancel()
         self.windowCapture = nil
+        self.windowCaptureRevision = nil
     }
 
     func setPromptAppBundleID(_ bundleID: String?) {
@@ -318,7 +347,7 @@ final class RewriteModeService: ObservableObject {
         if usesPrivateAIProvider || PrivateAIIntegrationService.shouldHandleDictation(model: model) {
             // A follow-up applies to the last result, not to the original selection.
             let textToEdit = self.rewrittenText.isEmpty ? self.selectedContextText : self.rewrittenText
-            let window = await self.windowCapture?.result(timeout: .seconds(2))
+            let window = await self.windowContextForRewrite()
             // Counts only: what was read is never logged.
             DebugLogger.shared.info(
                 "Edit Mode read the window | lines=\(window?.windowLines?.count ?? 0) | hasSelection=\(!textToEdit.isEmpty)",
