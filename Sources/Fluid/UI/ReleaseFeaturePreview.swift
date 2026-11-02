@@ -89,7 +89,7 @@ struct ReleaseFeaturePreview: View {
 
     private var models: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Label(PrivateAIProviderFeature.shared.isAvailable ? "Fluid Intelligence" : "AI Providers", systemImage: "sparkles")
+            Label(PrivateAIProviderFeature.shared.isAvailable ? "Fluid Intelligence" : "AI Settings", systemImage: "sparkles")
                 .font(.system(size: 11, weight: .semibold))
             if PrivateAIProviderFeature.shared.isAvailable {
                 self.model("Fluid 1.1 Splash", detail: "Reads your screen", symbol: "text.viewfinder")

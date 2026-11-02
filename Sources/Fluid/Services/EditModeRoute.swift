@@ -3,7 +3,7 @@ import Foundation
 /// Where an Edit Mode request runs. The shortcut and the request ask the same
 /// question, so they can't disagree about whether the model is there.
 enum EditModeRoute: Equatable {
-    /// A cloud or custom provider, picked in AI Providers.
+    /// A cloud or custom provider, picked in AI Settings.
     case provider
     case local(PrivateAIRegisteredModel)
     /// Fluid Intelligence is selected, but its Edit Mode model isn't downloaded.

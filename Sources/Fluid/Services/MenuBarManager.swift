@@ -9,6 +9,7 @@ enum MenuBarNavigationDestination: String {
     case meetingTranscription
     case preferences
     case cleanupStyles
+    case aiSettings
 }
 
 @MainActor
@@ -1517,6 +1518,10 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
         self.meetingStopRequested = true
         self.updateMeetingMenuItemsText()
         self.stopMeetingRecordingHandler?()
+    }
+
+    func openAISettings() {
+        self.openNavigationDestination(.aiSettings)
     }
 
     func openCleanupStyles() {

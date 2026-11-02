@@ -45,9 +45,9 @@ struct EditModeLocalModelRow: View {
                 .foregroundStyle(self.theme.palette.warning)
                 .fixedSize(horizontal: false, vertical: true)
         } else if self.controller.installed {
-            Label("Ready · runs on this Mac", systemImage: "checkmark.circle.fill")
+            Text("Downloaded · On this Mac")
                 .font(self.theme.typography.caption)
-                .foregroundStyle(self.theme.palette.success)
+                .foregroundStyle(self.theme.palette.secondaryText)
         } else {
             Text("A one-time download. It stays on this Mac.")
                 .font(self.theme.typography.caption)

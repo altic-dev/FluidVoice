@@ -3221,7 +3221,7 @@ final class OverlayFailureStateTests: XCTestCase {
             for: AIProcessingError.missingAPIKey(provider: "OpenAI")
         )
 
-        XCTAssertEqual(message, "API key not set for OpenAI. Open AI Providers to configure a provider.")
+        XCTAssertEqual(message, "API key not set for OpenAI. Open AI Settings to configure a provider.")
     }
 
     func testCustomNonRetryableMessage() {

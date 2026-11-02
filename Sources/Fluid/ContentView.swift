@@ -37,7 +37,7 @@ nonisolated enum AIProcessingError: LocalizedError {
         }
     }
 
-    /// Configuration errors the user can fix in AI Providers.
+    /// Configuration errors the user can fix in AI Settings.
     var isConfigurationError: Bool {
         switch self {
         case .noVerifiedProvider, .missingAPIKey, .missingModel:
@@ -55,7 +55,7 @@ nonisolated enum DictationAIFailurePresentationPolicy {
 
     static func notificationMessage(for error: Error) -> String {
         if let aiError = error as? AIProcessingError, aiError.isConfigurationError {
-            return "\(aiError.localizedDescription). Open AI Providers to configure a provider."
+            return "\(aiError.localizedDescription). Open AI Settings to configure a provider."
         }
         return error.localizedDescription
     }
@@ -1211,6 +1211,8 @@ struct ContentView: View {
             self.navigateToApp(.meetingTranscription)
         case .preferences:
             self.openSettings(.general)
+        case .aiSettings:
+            self.navigateToApp(.aiEnhancements)
         case .cleanupStyles:
             self.navigateToApp(.cleanupStyles)
         }
@@ -1537,7 +1539,7 @@ struct ContentView: View {
 
             Section {
                 self.sidebarNavigationLink(.voiceEngine, title: "Voice Engine", systemImage: "waveform")
-                self.sidebarNavigationLink(.aiEnhancements, title: "AI Providers", systemImage: "cpu")
+                self.sidebarNavigationLink(.aiEnhancements, title: "AI Settings", systemImage: "cpu")
                 self.sidebarNavigationLink(.cleanupStyles, title: "Cleanup Styles", systemImage: "wand.and.stars")
                 self.sidebarNavigationLink(.customDictionary, title: "Custom Dictionary", systemImage: "text.book.closed.fill")
             } header: {
@@ -3907,7 +3909,7 @@ struct ContentView: View {
             canRetry: false,
             downloadAction: needsModel ? {
                 EditModeModelController.shared.download()
-                self.menuBarManager.openCleanupStyles()
+                self.menuBarManager.openAISettings()
             } : nil
         )
         self.menuBarManager.finishProcessingKeepingOverlayVisible()

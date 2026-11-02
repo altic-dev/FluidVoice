@@ -829,7 +829,7 @@ extension AIEnhancementSettingsView {
         .sheet(isPresented: self.$showingPromptProviderSetup) {
             VStack(alignment: .leading, spacing: 16) {
                 HStack {
-                    Text("AI Providers").font(self.theme.typography.title)
+                    Text("AI Settings").font(self.theme.typography.title)
                     Spacer()
                     Button("Done") { self.showingPromptProviderSetup = false }
                         .fluidGlassAction()
@@ -1352,8 +1352,8 @@ extension AIEnhancementSettingsView {
         let providerID = self.activeEditModeProviderID
         let providers = self.editModeVerifiedProviders
         return self.stylesSection(
-            title: "Edit Mode",
-            subtitle: "Press the shortcut and say what you want. Select text first to change it. It runs on its own model, separate from dictation."
+            title: "Edit Mode (Beta)",
+            subtitle: "Select text and say what to change. Edit Mode uses its own model, separate from dictation."
         ) {
             ThemedCard(style: .subtle, padding: 16) {
                 VStack(alignment: .leading, spacing: 14) {
@@ -1407,7 +1407,7 @@ extension AIEnhancementSettingsView {
         let models = self.editModeModels(for: providerID)
         if providerID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             FluidManagementRow(title: "Model", detail: "Add an AI provider to use Edit Mode.") {
-                Button("AI Providers") { AppNavigationRouter.shared.request(.aiEnhancements) }
+                Button("AI Settings") { AppNavigationRouter.shared.request(.aiEnhancements) }
                     .fluidGlassAction()
             }
         } else {

@@ -26,7 +26,7 @@ enum SidebarItem: Hashable {
         switch self {
         case .welcome: "Dashboard"
         case .voiceEngine: "Voice Engine"
-        case .aiEnhancements: "AI Providers"
+        case .aiEnhancements: "AI Settings"
         case .cleanupStyles: "Cleanup Styles"
         case .fileTranscription: "File Transcription"
         case .meetingTranscription: "FluidMeet"
