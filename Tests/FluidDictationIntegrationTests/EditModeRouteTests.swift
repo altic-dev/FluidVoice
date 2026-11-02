@@ -71,6 +71,26 @@ final class EditModeRouteTests: XCTestCase {
         XCTAssertEqual(route.failureMessage, "Choose an AI provider to use Edit Mode.")
     }
 
+    func testUnsupportedHardwareDoesNotCheckOrDownloadTheLocalModel() {
+        let route = EditModeRoute.resolve(
+            providerID: "fluid-1",
+            privateProviderID: "fluid-1",
+            editModel: self.model,
+            supportsLocalModel: false,
+            isInstalled: { _ in
+                XCTFail("Unsupported hardware must stop before checking model files")
+                return true
+            }
+        )
+        XCTAssertEqual(route, .unsupportedHardware)
+        XCTAssertEqual(route.failureMessage, "On-device Edit Mode needs Apple Silicon. Choose an AI provider.")
+        XCTAssertNotEqual(route.failureMessage, EditModeRoute.modelMissing.failureMessage)
+        XCTAssertEqual(EditModeRoute.resolve(
+            providerID: "openai", privateProviderID: "fluid-1", editModel: self.model,
+            supportsLocalModel: false, isInstalled: { _ in false }
+        ), .provider)
+    }
+
     @MainActor
     func testDownloadButtonOnlyLastsForItsOwnFailure() {
         let state = NotchContentState.shared

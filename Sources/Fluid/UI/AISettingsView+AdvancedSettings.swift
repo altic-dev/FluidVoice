@@ -1625,6 +1625,9 @@ extension AIEnhancementSettingsView {
         // The on-device Edit Mode model has its own download, so choosing it never
         // depends on dictation having verified a model.
         let feature = PrivateAIProviderFeature.shared
+        if EditModeModelController.shared.model == nil {
+            providers.removeAll { $0.id == feature.providerID }
+        }
         if EditModeModelController.shared.model != nil, !providers.contains(where: { $0.id == feature.providerID }) {
             providers.append(.init(id: feature.providerID, name: feature.providerName, isBuiltIn: true))
         }
@@ -1636,6 +1639,7 @@ extension AIEnhancementSettingsView {
 
     private var editModeSelectedProviderID: String {
         let current = self.settings.rewriteModeSelectedProviderID
+        if self.isPrivateAIProviderID(current), EditModeModelController.shared.model == nil { return "" }
         if self.editModeVerifiedProviders.contains(where: { $0.id == current }) {
             return current
         }
@@ -1662,6 +1666,8 @@ extension AIEnhancementSettingsView {
     }
 
     private func normalizeEditModeProviderSelection() {
+        // An unsupported local choice needs an explicit replacement, never an automatic API fallback.
+        if self.isPrivateAIProviderID(self.settings.rewriteModeSelectedProviderID), EditModeModelController.shared.model == nil { return }
         guard let first = self.editModeVerifiedProviders.first else { return }
         let current = self.settings.rewriteModeSelectedProviderID
         if !self.editModeVerifiedProviders.contains(where: { $0.id == current }) {

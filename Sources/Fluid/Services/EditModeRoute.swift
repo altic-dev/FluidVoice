@@ -10,6 +10,7 @@ enum EditModeRoute: Equatable {
     case modelMissing
     /// Fluid Intelligence is selected, and this build turns its Edit Mode model off.
     case notOffered
+    case unsupportedHardware
 
     /// Why Edit Mode can't run, or nil when it can.
     var failureMessage: String? {
@@ -17,6 +18,7 @@ enum EditModeRoute: Equatable {
         case .provider, .local: nil
         case .modelMissing: "Edit Mode needs its model"
         case .notOffered: "Choose an AI provider to use Edit Mode."
+        case .unsupportedHardware: "On-device Edit Mode needs Apple Silicon. Choose an AI provider."
         }
     }
 
@@ -24,10 +26,12 @@ enum EditModeRoute: Equatable {
         providerID: String,
         privateProviderID: String?,
         editModel: PrivateAIRegisteredModel?,
+        supportsLocalModel: Bool = true,
         isInstalled: (PrivateAIRegisteredModel) -> Bool
     ) -> EditModeRoute {
         let trimmed = providerID.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let privateProviderID, trimmed == privateProviderID else { return .provider }
+        guard supportsLocalModel else { return .unsupportedHardware }
         guard let editModel else { return .notOffered }
         return isInstalled(editModel) ? .local(editModel) : .modelMissing
     }
@@ -38,6 +42,7 @@ enum EditModeRoute: Equatable {
             providerID: providerID,
             privateProviderID: PrivateAIProviderFeature.shared.isAvailable ? PrivateAIProviderFeature.shared.providerID : nil,
             editModel: PrivateAIIntegrationService.editModel,
+            supportsLocalModel: CPUArchitecture.isAppleSilicon,
             isInstalled: { PrivateAIIntegrationService.isModelInstalled($0) }
         )
     }
