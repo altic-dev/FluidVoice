@@ -46,23 +46,29 @@ extension AIEnhancementSettingsView {
 
     // MARK: - AI Configuration Card
 
-    @ViewBuilder var aiConfigurationCard: some View {
-        if self.selectedConfigurationSection == .providers, PrivateAIProviderFeature.shared.isAvailable {
-            VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xl) {
-                FluidIntelligenceLiveSection(
-                    controller: self.privateAIController,
-                    backendID: self.settings.privateAIBackendPreference.rawValue,
-                    isPrimary: self.primaryDefaultProviderID == PrivateAIProviderFeature.shared.providerID,
-                    isVerified: self.isPrivateAIModelVerified(self.privateAIController.selectedPrivateAIModel),
-                    makePrimary: { self.makePrimaryDefaultProvider(PrivateAIProviderFeature.shared.providerID, isPrivateAI: true) }
-                ) {
-                    self.privateAIManagementSettings(isBusy: self.privateAIController.isBusy)
+    var aiConfigurationCard: some View {
+        VStack(alignment: .leading, spacing: AISettingsLayout.stylesSectionSpacing) {
+            if self.selectedConfigurationSection == .providers, PrivateAIProviderFeature.shared.isAvailable {
+                VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xl) {
+                    FluidIntelligenceLiveSection(
+                        controller: self.privateAIController,
+                        backendID: self.settings.privateAIBackendPreference.rawValue,
+                        isPrimary: self.primaryDefaultProviderID == PrivateAIProviderFeature.shared.providerID,
+                        isVerified: self.isPrivateAIModelVerified(self.privateAIController.selectedPrivateAIModel),
+                        makePrimary: { self.makePrimaryDefaultProvider(PrivateAIProviderFeature.shared.providerID, isPrivateAI: true) }
+                    ) {
+                        self.privateAIManagementSettings(isBusy: self.privateAIController.isBusy)
+                    }
+                    self.addedExternalProvidersSection
                 }
-                self.addedExternalProvidersSection
+                .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                self.legacyAIConfigurationCard
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-        } else {
-            self.legacyAIConfigurationCard
+            if self.selectedConfigurationSection == .providers {
+                Divider()
+                self.editModeSection
+            }
         }
     }
 

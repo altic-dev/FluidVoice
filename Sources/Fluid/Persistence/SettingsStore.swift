@@ -58,6 +58,7 @@ final class SettingsStore: ObservableObject {
         Self.migrateModifierOnlyCancelShortcutIfNeeded(defaults: self.defaults)
         self.retireLegacySecondaryPromptShortcutIfNeeded()
         self.normalizePromptSelectionsIfNeeded()
+        self.makeEditModeIndependentIfNeeded()
         self.purgeRetiredAppleIntelligenceState()
         self.repairForcedOnboardingResetIfNeeded()
         self.migrateOverlayBottomOffsetTo50IfNeeded()
@@ -3457,6 +3458,20 @@ final class SettingsStore: ObservableObject {
         }
     }
 
+    /// Invalidates old captures even when the switch changes off and back on.
+    private(set) var editModeScreenContextRevision: UInt64 = 0
+
+    /// Lets on-device Edit Mode use the text in the front window. On until turned off.
+    var editModeReadsScreen: Bool {
+        get { self.defaults.object(forKey: Keys.editModeReadsScreen) as? Bool ?? true }
+        set {
+            guard newValue != self.editModeReadsScreen else { return }
+            objectWillChange.send()
+            self.defaults.set(newValue, forKey: Keys.editModeReadsScreen)
+            self.editModeScreenContextRevision &+= 1
+        }
+    }
+
     /// Global check if a model is a reasoning model (requires special params/max_completion_tokens)
     func isReasoningModel(_ model: String) -> Bool {
         // Drop a provider/namespace prefix (e.g. OpenRouter's "openai/") so the
@@ -4050,6 +4065,7 @@ final class SettingsStore: ObservableObject {
             self.normalizeDictationPromptConfigurationsIfNeeded()
         }
         self.purgeRetiredAppleIntelligenceState()
+        self.makeEditModeIndependentIfNeeded()
     }
 
     // MARK: - Private Methods
@@ -4476,11 +4492,6 @@ final class SettingsStore: ObservableObject {
     private func syncLinkedProviderSelections(to providerID: String) {
         let trimmed = providerID.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        if self.rewriteModeLinkedToGlobal {
-            self.rewriteModeSelectedProviderID = trimmed
-            self.rewriteModeSelectedModel = self.modelSelection(for: trimmed)
-        }
-
         if self.commandModeLinkedToGlobal {
             let linkedProviderID = self.isPrivateAIProviderID(trimmed) ? "" : trimmed
             self.commandModeSelectedProviderID = linkedProviderID
@@ -4544,8 +4555,43 @@ final class SettingsStore: ObservableObject {
         return ModelRepository.shared.defaultModels(for: providerID)
     }
 
+    /// Keep a legacy linked choice once, then let Edit Mode own its provider/model.
+    /// Also runs after restoring an older backup; an empty route stays visibly unconfigured.
+    func makeEditModeIndependentIfNeeded() {
+        guard self.rewriteModeLinkedToGlobal else { return }
+        let linkedProviderID = self.effectiveRewriteModeProviderID.trimmingCharacters(in: .whitespacesAndNewlines)
+        let storedProviderID = self.rewriteModeSelectedProviderID.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Basic dictation has no cleanup provider; it must not erase an existing Edit choice.
+        let providerID = linkedProviderID.isEmpty
+            ? (storedProviderID.isEmpty ? self.selectedProviderID : storedProviderID)
+            : linkedProviderID
+        let linkedModelID = self.effectiveRewriteModeSelectedModel
+        let modelID = ModelRepository.eligibleModel(
+            preferred: linkedModelID.isEmpty ? self.rewriteModeSelectedModel : linkedModelID,
+            from: self.availableModels(for: providerID, task: .edit)
+        )
+        self.objectWillChange.send()
+        Self.makeEditModeIndependent(defaults: self.defaults, providerID: providerID, modelID: modelID)
+    }
+
+    static func makeEditModeIndependent(defaults: UserDefaults, providerID: String, modelID: String?) {
+        guard defaults.object(forKey: Keys.rewriteModeLinkedToGlobal) as? Bool != false else { return }
+        defaults.set(providerID, forKey: Keys.rewriteModeSelectedProviderID)
+        defaults.set(modelID, forKey: Keys.rewriteModeSelectedModel)
+        defaults.set(false, forKey: Keys.rewriteModeLinkedToGlobal)
+    }
+
     var effectiveRewriteModeProviderID: String {
-        self.rewriteModeLinkedToGlobal ? self.selectedProviderID : self.rewriteModeSelectedProviderID
+        guard self.rewriteModeLinkedToGlobal else { return self.rewriteModeSelectedProviderID }
+        // "Same as dictation" follows what the main shortcut really uses. On the on-device
+        // style that is the local provider, whatever selectedProviderID holds.
+        let selection = self.dictationPromptSelection(for: .primary)
+        return DictationDefaultProvider.providerID(
+            selection: selection,
+            configuration: self.dictationPromptConfiguration(for: selection),
+            selectedProviderID: self.selectedProviderID,
+            privateProviderID: PrivateAIProviderFeature.shared.providerID
+        )
     }
 
     var effectiveRewriteModeSelectedModel: String {
@@ -6063,6 +6109,7 @@ private extension SettingsStore {
         // Model Reasoning Config Keys
         static let modelReasoningConfigs = "ModelReasoningConfigs"
         static let rewriteModeShortcutEnabled = "RewriteModeShortcutEnabled"
+        static let editModeReadsScreen = "EditModeReadsScreen"
         static let showThinkingTokens = "ShowThinkingTokens"
 
         // Stats Keys
@@ -6328,9 +6375,9 @@ extension SettingsStore {
 extension SettingsStore.SpeechModel {
     var supportedLanguageCodes: String? {
         switch self {
-        case .parakeetTDT:
+        case .parakeetTDT, .fluidParakeetMini, .fluidParakeetPico, .fluidParakeetPro:
             return "BG, HR, CS, DA, NL, EN, ET, FI, FR, DE, EL, HU, IT, LV, LT, MT, PL, PT, RO, SK, SL, ES, SV, RU, UK"
-        case .fluidParakeetMini, .fluidParakeetPico, .fluidParakeetPro, .parakeetRealtime:
+        case .parakeetRealtime:
             return "EN"
         case .cohereTranscribeSixBit:
             return "AR, DE, EL, EN, ES, FR, IT, JA, KO, NL, PL, PT, VI, ZH"
@@ -6348,12 +6395,10 @@ extension SettingsStore.SpeechModel {
 
     var supportedLanguageNames: String? {
         switch self {
-        case .parakeetTDT:
+        case .parakeetTDT, .fluidParakeetMini, .fluidParakeetPico, .fluidParakeetPro:
             return """
             Bulgarian, Croatian, Czech, Danish, Dutch, English, Estonian, Finnish, French, German, Greek, Hungarian, Italian, Latvian, Lithuanian, Maltese, Polish, Portuguese, Romanian, Slovak, Slovenian, Spanish, Swedish, Russian, and Ukrainian
             """
-        case .fluidParakeetMini, .fluidParakeetPico, .fluidParakeetPro:
-            return "English"
         case .cohereTranscribeSixBit:
             return "Arabic, German, Greek, English, Spanish, French, Italian, Japanese, Korean, Dutch, Polish, Portuguese, Vietnamese, and Mandarin Chinese"
         case .qwen3Asr, .qwen3Asr17B:

@@ -12,7 +12,7 @@ enum PrivateAIHardwareRecommendation {
 
     enum Model: String, Sendable {
         case pico = "fluid-1-pico-96k-dflash"
-        case mini = "fluid-1-mini-96k-dflash"
+        case splash = "fluid-1.1-splash"
     }
 
     enum Reason: String, Sendable {
@@ -58,7 +58,7 @@ enum PrivateAIHardwareRecommendation {
         let tier = hardware.chip.split(whereSeparator: { $0.isWhitespace }).last?.lowercased()
         let isPerformanceChip = ["pro", "max", "ultra"].contains(tier ?? "")
         return Recommendation(
-            model: isPerformanceChip ? .mini : .pico,
+            model: isPerformanceChip ? .splash : .pico,
             reason: isPerformanceChip ? .sufficientHardware : .entryLevelChip,
             bandwidthGBps: bandwidth
         )

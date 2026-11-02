@@ -2219,6 +2219,7 @@ private extension SettingsView {
                     var updated = self.settings.dictationPromptConfiguration(for: .privateAI)
                     updated.shortcut = nil
                     self.settings.setDictationPromptConfiguration(updated, for: .privateAI)
+                    NotificationCenter.default.post(name: .dictationPromptShortcutsChanged, object: nil)
                 }
             )
             .padding(.vertical, 2)

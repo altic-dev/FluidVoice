@@ -40,7 +40,7 @@ final class MeetingProviderOptionsTests: XCTestCase {
     func testPreferredMeetingModelRespectsLanguageAndSupportedModels() throws {
         let cases: [(SettingsStore.SpeechModel, String, SettingsStore.SpeechModel)] = [
             (.fluidParakeetPro, "en", .fluidParakeetPro),
-            (.fluidParakeetPro, "de", .parakeetTDT),
+            (.fluidParakeetPro, "de", .fluidParakeetPro),
             (.parakeetTDT, "en", .parakeetTDT),
             (.parakeetTDT, "nl", .parakeetTDT),
             (.parakeetTDTv2, "en", .parakeetTDTv2),
@@ -64,13 +64,10 @@ final class MeetingProviderOptionsTests: XCTestCase {
         XCTAssertEqual(try MeetingProviderOptions.resolve(configuration).model, .parakeetTDTv2)
     }
 
-    func testProCannotBeExplicitlyUsedForNonEnglishMeetingLanguages() {
-        for language in VoiceEngineLanguageCatalog.parakeetV3LanguageIDs where language != "en" {
-            XCTAssertThrowsError(try MeetingProviderOptions.resolve(MeetingFinalProcessingConfiguration(
-                asrModel: "fluid-parakeet-pro", languageCode: language
-            ))) { error in
-                XCTAssertEqual(error as? MeetingProviderOptionsError, .unsupportedLanguageCode(language))
-            }
+    func testProCanBeExplicitlyUsedForEveryV3MeetingLanguage() throws {
+        for language in VoiceEngineLanguageCatalog.parakeetV3LanguageIDs {
+            let configuration = MeetingFinalProcessingConfiguration(asrModel: "fluid-parakeet-pro", languageCode: language)
+            XCTAssertEqual(try MeetingProviderOptions.resolve(configuration).model, .fluidParakeetPro)
         }
     }
 

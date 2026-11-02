@@ -49,7 +49,7 @@ struct CommandModelPicker: View {
             if self.options.isEmpty {
                 self.emptyState(
                     title: "No models available",
-                    message: "Verify a chat provider in AI Providers to make its models available here."
+                    message: "Verify a chat provider in AI Settings to make its models available here."
                 )
             } else if filtered.isEmpty {
                 self.emptyState(

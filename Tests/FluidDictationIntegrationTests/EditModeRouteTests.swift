@@ -1,0 +1,204 @@
+import Foundation
+import XCTest
+
+@testable import FluidVoice_Debug
+
+final class EditModeRouteTests: XCTestCase {
+    private let model = PrivateAIRegisteredModel(
+        displayName: "Edit",
+        detail: "",
+        isEnabled: true,
+        parameterCount: "",
+        recommendedMemoryGB: nil,
+        artifact: PrivateAIModelArtifact(identifier: "edit-model", filename: "edit-model")
+    )
+
+    func testCloudProviderKeepsItsRouteWhateverIsInstalled() {
+        for installed in [true, false] {
+            let route = EditModeRoute.resolve(
+                providerID: "openai",
+                privateProviderID: "fluid-1",
+                editModel: self.model,
+                isInstalled: { _ in installed }
+            )
+            XCTAssertEqual(route, .provider)
+        }
+    }
+
+    func testBuildWithoutThePrivateProviderAlwaysUsesTheProvider() {
+        let route = EditModeRoute.resolve(
+            providerID: "fluid-1",
+            privateProviderID: nil,
+            editModel: nil,
+            isInstalled: { _ in false }
+        )
+        XCTAssertEqual(route, .provider)
+    }
+
+    func testLocalProviderRunsOnTheInstalledEditModel() {
+        let route = EditModeRoute.resolve(
+            providerID: " fluid-1 ",
+            privateProviderID: "fluid-1",
+            editModel: self.model,
+            isInstalled: { _ in true }
+        )
+        XCTAssertEqual(route, .local(self.model))
+    }
+
+    func testLocalProviderAsksForTheDownloadInsteadOfFetchingIt() {
+        var checked = 0
+        let route = EditModeRoute.resolve(
+            providerID: "fluid-1",
+            privateProviderID: "fluid-1",
+            editModel: self.model,
+            isInstalled: { _ in
+                checked += 1
+                return false
+            }
+        )
+        XCTAssertEqual(route, .modelMissing)
+        XCTAssertEqual(checked, 1)
+    }
+
+    func testLocalProviderWithTheModelTurnedOffPointsElsewhere() {
+        let route = EditModeRoute.resolve(
+            providerID: "fluid-1",
+            privateProviderID: "fluid-1",
+            editModel: nil,
+            isInstalled: { _ in true }
+        )
+        XCTAssertEqual(route, .notOffered)
+        XCTAssertEqual(route.failureMessage, "Choose an AI provider to use Edit Mode.")
+    }
+
+    func testUnsupportedHardwareDoesNotCheckOrDownloadTheLocalModel() {
+        let route = EditModeRoute.resolve(
+            providerID: "fluid-1",
+            privateProviderID: "fluid-1",
+            editModel: self.model,
+            supportsLocalModel: false,
+            isInstalled: { _ in
+                XCTFail("Unsupported hardware must stop before checking model files")
+                return true
+            }
+        )
+        XCTAssertEqual(route, .unsupportedHardware)
+        XCTAssertEqual(route.failureMessage, "On-device Edit Mode needs Apple Silicon. Choose an AI provider.")
+        XCTAssertNotEqual(route.failureMessage, EditModeRoute.modelMissing.failureMessage)
+        XCTAssertEqual(EditModeRoute.resolve(
+            providerID: "openai",
+            privateProviderID: "fluid-1",
+            editModel: self.model,
+            supportsLocalModel: false,
+            isInstalled: { _ in false }
+        ), .provider)
+    }
+
+    @MainActor
+    func testDownloadButtonOnlyLastsForItsOwnFailure() {
+        let state = NotchContentState.shared
+        defer {
+            state.showAIProcessingFailure()
+            state.clearAIProcessingFailure()
+        }
+
+        state.showAIProcessingFailure(message: "needs model", canRetry: false, downloadAction: {})
+        XCTAssertNotNil(state.aiProcessingFailureDownloadAction)
+
+        state.showAIProcessingFailure(message: "other failure", canRetry: false)
+        XCTAssertNil(state.aiProcessingFailureDownloadAction)
+
+        state.showAIProcessingFailure(message: "needs model", canRetry: false, downloadAction: {})
+        state.clearAIProcessingFailure()
+        XCTAssertNil(state.aiProcessingFailureDownloadAction)
+    }
+
+    func testOnlyFailuresHaveAMessage() {
+        XCTAssertNil(EditModeRoute.provider.failureMessage)
+        XCTAssertNil(EditModeRoute.local(self.model).failureMessage)
+        XCTAssertNotNil(EditModeRoute.modelMissing.failureMessage)
+    }
+    @MainActor
+    func testLegacyEditLinkIsPinnedOnceWithoutChangingOtherModes() {
+        self.withIndependentDefaults { defaults in
+            defaults.set(true, forKey: "RewriteModeLinkedToGlobal")
+            defaults.set("dictation-provider", forKey: "SelectedProviderID")
+            defaults.set("dictation-model", forKey: "SelectedAIModel")
+            defaults.set("command-provider", forKey: "CommandModeSelectedProviderID")
+            SettingsStore.makeEditModeIndependent(defaults: defaults, providerID: "edit-provider", modelID: "edit-model")
+            XCTAssertFalse(defaults.bool(forKey: "RewriteModeLinkedToGlobal"))
+            XCTAssertEqual(defaults.string(forKey: "RewriteModeSelectedProviderID"), "edit-provider")
+            XCTAssertEqual(defaults.string(forKey: "RewriteModeSelectedModel"), "edit-model")
+            XCTAssertEqual(defaults.string(forKey: "SelectedProviderID"), "dictation-provider")
+            XCTAssertEqual(defaults.string(forKey: "SelectedAIModel"), "dictation-model")
+            XCTAssertEqual(defaults.string(forKey: "CommandModeSelectedProviderID"), "command-provider")
+
+            defaults.set("new-dictation-provider", forKey: "SelectedProviderID")
+            SettingsStore.makeEditModeIndependent(defaults: defaults, providerID: "new-dictation-provider", modelID: "new-model")
+            XCTAssertEqual(defaults.string(forKey: "RewriteModeSelectedProviderID"), "edit-provider")
+            XCTAssertEqual(defaults.string(forKey: "RewriteModeSelectedModel"), "edit-model")
+        }
+    }
+
+    @MainActor
+    func testExplicitIndependentEditChoiceIsNotOverwritten() {
+        self.withIndependentDefaults { defaults in
+            defaults.set(false, forKey: "RewriteModeLinkedToGlobal")
+            defaults.set("chosen-provider", forKey: "RewriteModeSelectedProviderID")
+            defaults.set("chosen-model", forKey: "RewriteModeSelectedModel")
+            SettingsStore.makeEditModeIndependent(defaults: defaults, providerID: "other", modelID: nil)
+            XCTAssertEqual(defaults.string(forKey: "RewriteModeSelectedProviderID"), "chosen-provider")
+            XCTAssertEqual(defaults.string(forKey: "RewriteModeSelectedModel"), "chosen-model")
+        }
+    }
+
+    @MainActor
+    func testMissingLegacyRouteBecomesIndependentWithoutAnInventedModel() {
+        self.withIndependentDefaults { defaults in
+            defaults.set("stale-model", forKey: "RewriteModeSelectedModel")
+            SettingsStore.makeEditModeIndependent(defaults: defaults, providerID: "", modelID: nil)
+            XCTAssertFalse(defaults.bool(forKey: "RewriteModeLinkedToGlobal"))
+            XCTAssertEqual(defaults.string(forKey: "RewriteModeSelectedProviderID"), "")
+            XCTAssertNil(defaults.string(forKey: "RewriteModeSelectedModel"))
+        }
+    }
+
+    @MainActor
+    func testEditScreenToggleDoesNotPromptOrChangeDictationContext() async {
+        let defaults = UserDefaults.standard
+        let editKey = "EditModeReadsScreen"
+        let dictationKey = "DictationScreenContextEnabled"
+        let oldEdit = defaults.object(forKey: editKey)
+        let oldDictation = defaults.object(forKey: dictationKey)
+        defer {
+            defaults.set(oldEdit, forKey: editKey)
+            defaults.set(oldDictation, forKey: dictationKey)
+        }
+        defaults.set(false, forKey: dictationKey)
+        var requests = 0
+        let permission = DictationScreenPermissionController(check: { false }, request: {
+            requests += 1
+            return true
+        })
+        let settings = SettingsStore.shared
+        let row = EditModeScreenContextSettings(settings: settings, permission: permission)
+        row.enabledBinding.wrappedValue = false
+        row.enabledBinding.wrappedValue = true
+        await permission.refresh()
+        XCTAssertTrue(settings.editModeReadsScreen)
+        XCTAssertFalse(settings.dictationScreenContextEnabled)
+        XCTAssertFalse(permission.isAllowed)
+        XCTAssertEqual(requests, 0)
+    }
+
+    private func withIndependentDefaults(_ body: (UserDefaults) -> Void) {
+        let name = "EditModeRouteTests-\(UUID().uuidString)"
+        guard let defaults = UserDefaults(suiteName: name) else {
+            XCTFail("Could not create isolated defaults")
+            return
+        }
+        defer { defaults.removePersistentDomain(forName: name) }
+        body(defaults)
+    }
+
+}

@@ -79,7 +79,7 @@ final class MeetingSummaryPreferences: ObservableObject {
     }
 }
 
-/// A verified provider from AI Providers, resolved the same way Command Mode resolves its route.
+/// A verified provider from AI Settings, resolved the same way Command Mode resolves its route.
 nonisolated struct MeetingSummaryRoute {
     let providerID: String
     let providerName: String
@@ -104,7 +104,7 @@ nonisolated struct MeetingSummaryRoute {
         let repository = ModelRepository.shared
         let key = repository.providerKey(for: providerID)
         guard !providerID.isEmpty else {
-            throw LLMError.invalidRequest("Choose a provider to summarize with, or add one in AI Providers.")
+            throw LLMError.invalidRequest("Choose a provider to summarize with, or add one in AI Settings.")
         }
         let model = selection.modelsByProvider[key] ?? ""
         guard !model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
@@ -114,7 +114,7 @@ nonisolated struct MeetingSummaryRoute {
         guard settings.commandModeModelCatalog().contains(where: {
             repository.providerKey(for: $0.providerID) == key && $0.modelID == model
         }) else {
-            throw LLMError.invalidRequest("This model is unavailable or its provider needs verification. Update it in AI Providers.")
+            throw LLMError.invalidRequest("This model is unavailable or its provider needs verification. Update it in AI Settings.")
         }
         let saved = settings.savedProviders.first { repository.providerKey(for: $0.id) == key }
         let baseURL = (saved?.baseURL ?? repository.defaultBaseURL(for: providerID)).trimmingCharacters(in: .whitespacesAndNewlines)

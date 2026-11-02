@@ -71,9 +71,9 @@ extension SettingsStore {
 
         guard self.isCommandModeProviderVerified(providerID) else {
             if self.commandModeLinkedToGlobal {
-                return "Command Mode needs a verified chat provider. Choose a verified model, or verify a provider in AI Providers."
+                return "Command Mode needs a verified chat provider. Choose a verified model, or verify a provider in AI Settings."
             }
-            return "Command Mode needs a verified chat provider. Verify this provider in AI Providers before using Command Mode."
+            return "Command Mode needs a verified chat provider. Verify this provider in AI Settings before using Command Mode."
         }
 
         return nil

@@ -153,15 +153,15 @@ final class ParakeetSpeechModelCatalogTests: XCTestCase {
             XCTAssertEqual(descriptor.archiveSHA256, hash)
             XCTAssertEqual(descriptor.archiveURL?.absoluteString, "https://models.fluidvoice.app/parakeet/\(path)/1.1.1/\(descriptor.folderName).tar")
             XCTAssertEqual(descriptor.archiveURL?.scheme, "https")
-            XCTAssertEqual(descriptor.supportedLanguageCodes, ["en"])
-            XCTAssertTrue(descriptor.isEnglishOnly)
-            XCTAssertEqual(model.languageSupport, "English Only")
+            XCTAssertEqual(descriptor.supportedLanguageCodes, ParakeetSpeechModelCatalog.v3.supportedLanguageCodes)
+            XCTAssertFalse(descriptor.isEnglishOnly)
+            XCTAssertEqual(model.languageSupport, "25 Languages")
             XCTAssertEqual(model.brandName, "FluidVoice")
             XCTAssertEqual(model.brandColorHex, "#1A75FF")
             XCTAssertEqual(model.provider, .nvidia, "Product branding must not change the Parakeet backend or family filter")
             XCTAssertFalse(model.usesAppleLogo)
-            XCTAssertEqual(model.supportedLanguageCodes, "EN")
-            XCTAssertEqual(model.supportedLanguageNames, "English")
+            XCTAssertEqual(model.supportedLanguageCodes, SettingsStore.SpeechModel.parakeetTDT.supportedLanguageCodes)
+            XCTAssertEqual(model.supportedLanguageNames, SettingsStore.SpeechModel.parakeetTDT.supportedLanguageNames)
             XCTAssertTrue(model.hasPerformanceRatings)
             XCTAssertNotNil(descriptor.performanceRatings)
             XCTAssertEqual(descriptor.attribution, "NVIDIA Parakeet · Moondream Parakeet Ultra")
@@ -194,7 +194,9 @@ final class ParakeetSpeechModelCatalogTests: XCTestCase {
         XCTAssertEqual(descriptor.requiredModelNames, ParakeetSpeechModelCatalog.standardModelNames, "The Mac pack has one encoder")
         XCTAssertEqual(model.displayName, ParakeetSpeechModelCatalog.proName)
         XCTAssertEqual(model.humanReadableName, ParakeetSpeechModelCatalog.proName)
-        XCTAssertTrue(descriptor.isEnglishOnly)
+        XCTAssertFalse(descriptor.isEnglishOnly)
+        XCTAssertEqual(descriptor.supportedLanguageCodes, ParakeetSpeechModelCatalog.v3.supportedLanguageCodes)
+        XCTAssertEqual(model.languageSupport, "25 Languages")
         XCTAssertEqual(model.brandName, "FluidVoice")
         XCTAssertEqual(model.provider, .nvidia)
         XCTAssertEqual(descriptor.creditLine, ParakeetSpeechModelCatalog.mini.creditLine)
@@ -226,7 +228,19 @@ final class ParakeetSpeechModelCatalogTests: XCTestCase {
         XCTAssertEqual(descriptor.installedArchiveSHA256(at: directory), descriptor.archiveSHA256)
     }
 
-    func testSmallVariantsAreOfferedOnlyForEnglishAndDoNotReplaceExistingFirstChoice() {
+    func testProRoutesMatchAllSupportedLanguagesAndRejectOthers() {
+        let models: [SettingsStore.SpeechModel] = [.fluidParakeetPro]
+        XCTAssertEqual(
+            Set(VoiceEngineLanguageCatalog.allLanguages(availableModels: models).map(\.id)),
+            VoiceEngineLanguageCatalog.parakeetV3LanguageIDs
+        )
+        for language in VoiceEngineLanguageCatalog.parakeetV3LanguageIDs {
+            XCTAssertEqual(VoiceEngineLanguageCatalog.routes(forLanguageID: language, availableModels: models).map(\.model), models)
+        }
+        XCTAssertTrue(VoiceEngineLanguageCatalog.routes(forLanguageID: "zh", availableModels: models).isEmpty)
+    }
+
+    func testSmallVariantsFollowV3LanguagesAndDoNotReplaceExistingFirstChoice() {
         let models: [SettingsStore.SpeechModel] = [.parakeetTDTv2, .parakeetRealtime, .parakeetTDT, .fluidParakeetMini, .fluidParakeetPico]
         let english = VoiceEngineLanguageCatalog.routes(forLanguageID: "en", availableModels: models)
         XCTAssertEqual(english.map(\.model), models)
@@ -237,11 +251,16 @@ final class ParakeetSpeechModelCatalogTests: XCTestCase {
         }
         for language in VoiceEngineLanguageCatalog.allLanguages(availableModels: models) where language.id != "en" {
             let routes = VoiceEngineLanguageCatalog.routes(for: language, availableModels: models)
-            XCTAssertFalse(routes.contains { $0.model == .fluidParakeetMini || $0.model == .fluidParakeetPico })
-            XCTAssertEqual(routes.map(\.model), [.parakeetTDT])
+            XCTAssertEqual(routes.map(\.model), [.parakeetTDT, .fluidParakeetMini, .fluidParakeetPico])
         }
-        XCTAssertEqual(VoiceEngineLanguageCatalog.allLanguages(availableModels: [.fluidParakeetMini, .fluidParakeetPico]).map(\.id), ["en"])
-        XCTAssertTrue(VoiceEngineLanguageCatalog.routes(forLanguageID: "fr", availableModels: [.fluidParakeetMini, .fluidParakeetPico]).isEmpty)
+        XCTAssertEqual(
+            Set(VoiceEngineLanguageCatalog.allLanguages(availableModels: [.fluidParakeetMini, .fluidParakeetPico]).map(\.id)),
+            VoiceEngineLanguageCatalog.parakeetV3LanguageIDs
+        )
+        XCTAssertEqual(
+            VoiceEngineLanguageCatalog.routes(forLanguageID: "fr", availableModels: [.fluidParakeetMini, .fluidParakeetPico]).map(\.model),
+            [.fluidParakeetMini, .fluidParakeetPico]
+        )
         XCTAssertTrue(VoiceEngineLanguageCatalog.routes(forLanguageID: "missing", availableModels: models).isEmpty)
     }
 
