@@ -166,7 +166,7 @@ final class SpeechModelInstallationSnapshotTests: XCTestCase {
             XCTAssertEqual(release.vocabularyFile, original.vocabularyFile)
             XCTAssertEqual(release.displayName, original.displayName)
             XCTAssertEqual(release.cardDescription, original.cardDescription)
-            XCTAssertEqual(release.supportedLanguageCodes, ["en"])
+            XCTAssertEqual(release.supportedLanguageCodes, original.supportedLanguageCodes)
         }
         let builtins: [ParakeetSpeechModelCatalog.Variant: ParakeetSpeechModelCatalog.Descriptor] = [.mini: ParakeetSpeechModelCatalog.mini, .pico: ParakeetSpeechModelCatalog.pico]
         XCTAssertEqual(CompactSpeechModelReleaseCatalog.descriptors(in: payload, build: 26), builtins)

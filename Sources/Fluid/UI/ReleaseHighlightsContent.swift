@@ -42,9 +42,9 @@ struct ReleaseHighlightsContent {
         )
         return Self(
             release: "1.6.13-beta.2",
-            title: hasPrivateAI ? "Smarter cleanup, sharper speech" : "Sharper speech",
+            title: hasPrivateAI ? "Edit by voice, with sharper speech" : "Sharper speech",
             subtitle: hasPrivateAI
-                ? "Meet Fluid 1.1 Splash and Fluid Speech Pro. Plus Qwen dictation, smoother live captions and faster cleanup on M5 Macs."
+                ? "New on-device Edit Mode with its own Edit 1.1 model. Select text and say what to change, with optional on-screen context. Plus Fluid 1.1 Splash and Fluid Speech Pro."
                 : "Meet Fluid Speech Pro. Plus Qwen dictation and smoother live captions.",
             officialSiteNotice: "**Help people find the real FluidVoice.** A site impersonating FluidVoice is appearing above us in search results, making it harder for people to find us. "
                 + "Our official websites are [fluidvoice.com](https://fluidvoice.com) and [altic.dev/fluid](https://altic.dev/fluid). "
