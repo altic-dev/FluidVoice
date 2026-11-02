@@ -86,8 +86,11 @@ final class EditModeRouteTests: XCTestCase {
         XCTAssertEqual(route.failureMessage, "On-device Edit Mode needs Apple Silicon. Choose an AI provider.")
         XCTAssertNotEqual(route.failureMessage, EditModeRoute.modelMissing.failureMessage)
         XCTAssertEqual(EditModeRoute.resolve(
-            providerID: "openai", privateProviderID: "fluid-1", editModel: self.model,
-            supportsLocalModel: false, isInstalled: { _ in false }
+            providerID: "openai",
+            privateProviderID: "fluid-1",
+            editModel: self.model,
+            supportsLocalModel: false,
+            isInstalled: { _ in false }
         ), .provider)
     }
 
