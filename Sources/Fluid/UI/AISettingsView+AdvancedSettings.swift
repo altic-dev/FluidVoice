@@ -1363,7 +1363,6 @@ extension AIEnhancementSettingsView {
                             selectedTitle: self.editModeRunsOnTitle(providers: providers),
                             selection: self.editModeRunsOnBinding
                         ) {
-                            Text("Same as dictation").tag(Self.editModeSameAsDictationID)
                             ForEach(providers) { provider in
                                 Text(provider.name).tag(provider.id)
                             }
@@ -1401,19 +1400,14 @@ extension AIEnhancementSettingsView {
             }
         }
         .onAppear {
-            self.ensureDefaultEditModeSyncState()
-            if self.settings.rewriteModeLinkedToGlobal {
-                self.syncEditModeToGlobalSelection()
-            } else if !providers.isEmpty {
-                self.normalizeEditModeProviderSelection()
-            }
+            self.settings.makeEditModeIndependentIfNeeded()
+            if !providers.isEmpty { self.normalizeEditModeProviderSelection() }
         }
     }
 
     @ViewBuilder
     private func editModeProviderModelRow(providerID: String) -> some View {
         let models = self.editModeModels(for: providerID)
-        let isLinked = self.settings.rewriteModeLinkedToGlobal
         if providerID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             FluidManagementRow(title: "Model", detail: "Add an AI provider to use Edit Mode.") {
                 Button("AI Providers") { AppNavigationRouter.shared.request(.aiEnhancements) }
@@ -1422,7 +1416,7 @@ extension AIEnhancementSettingsView {
         } else {
             FluidManagementRow(
                 title: "Model",
-                detail: isLinked ? "The one dictation uses." : "Which of your provider's models to use."
+                detail: "Which of your provider's models to use."
             ) {
                 SearchableModelPicker(
                     models: models,
@@ -1432,44 +1426,27 @@ extension AIEnhancementSettingsView {
                         await self.viewModel.fetchModels(for: providerID)
                     },
                     isRefreshing: self.viewModel.refreshingProviderID == providerID,
-                    refreshEnabled: !isLinked && self.canFetchModels(for: providerID),
-                    selectionEnabled: !isLinked && !models.isEmpty,
+                    refreshEnabled: self.canFetchModels(for: providerID),
+                    selectionEnabled: !models.isEmpty,
                     controlWidth: AISettingsLayout.editModeControlWidth,
                     controlHeight: AISettingsLayout.controlHeight
                 )
-                .disabled(isLinked)
             }
         }
     }
 
-    private static let editModeSameAsDictationID = "__edit_mode_same_as_dictation__"
-
     private func editModeRunsOnTitle(providers: [AIEnhancementSettingsViewModel.ProviderItemData]) -> String {
-        guard self.settings.rewriteModeLinkedToGlobal else {
-            return providers.first(where: { $0.id == self.editModeSelectedProviderID })?.name ?? "Choose provider"
-        }
-        guard let dictationProvider = providers.first(where: { $0.id == self.settings.effectiveRewriteModeProviderID }) else {
-            return "Same as dictation"
-        }
-        return "Same as dictation · \(dictationProvider.name)"
+        providers.first(where: { $0.id == self.editModeSelectedProviderID })?.name ?? "Choose provider"
     }
 
     private var editModeRunsOnBinding: Binding<String> {
         Binding(
-            get: {
-                self.settings.rewriteModeLinkedToGlobal ? Self.editModeSameAsDictationID : self.editModeSelectedProviderID
-            },
+            get: { self.editModeSelectedProviderID },
             set: { selection in
-                if selection == Self.editModeSameAsDictationID {
-                    self.settings.rewriteModeLinkedToGlobal = true
-                    self.syncEditModeToGlobalSelection()
-                } else {
-                    self.settings.rewriteModeLinkedToGlobal = false
-                    self.settings.rewriteModeSelectedProviderID = selection
-                    let models = self.editModeModels(for: selection)
-                    if !models.contains(self.settings.rewriteModeSelectedModel ?? "") {
-                        self.settings.rewriteModeSelectedModel = models.first
-                    }
+                self.settings.rewriteModeSelectedProviderID = selection
+                let models = self.editModeModels(for: selection)
+                if !models.contains(self.settings.rewriteModeSelectedModel ?? "") {
+                    self.settings.rewriteModeSelectedModel = models.first
                 }
             }
         )
@@ -1669,29 +1646,19 @@ extension AIEnhancementSettingsView {
     }
 
     private var activeEditModeProviderID: String {
-        if self.settings.rewriteModeLinkedToGlobal {
-            return self.settings.effectiveRewriteModeProviderID
-        }
-        return self.editModeSelectedProviderID
+        self.editModeSelectedProviderID
     }
 
     private func editModeModelBinding(for providerID: String) -> Binding<String> {
         Binding(
             get: {
                 let models = self.editModeModels(for: providerID)
-                if self.settings.rewriteModeLinkedToGlobal {
-                    let key = self.viewModel.providerKey(for: providerID)
-                    let preferred = self.settings.selectedModelByProvider[key]
-                        ?? self.settings.selectedModel
-                    return ModelRepository.eligibleModel(preferred: preferred, from: models) ?? ""
-                }
                 return ModelRepository.eligibleModel(
                     preferred: self.settings.rewriteModeSelectedModel,
                     from: models
                 ) ?? ""
             },
             set: { newModel in
-                guard !self.settings.rewriteModeLinkedToGlobal else { return }
                 self.settings.rewriteModeSelectedModel = newModel
             }
         )
@@ -1712,28 +1679,6 @@ extension AIEnhancementSettingsView {
         }
     }
 
-    private func syncEditModeToGlobalSelection() {
-        let global = self.settings.effectiveRewriteModeProviderID
-        guard !global.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            self.settings.rewriteModeSelectedProviderID = ""
-            self.settings.rewriteModeSelectedModel = nil
-            return
-        }
-
-        self.settings.rewriteModeSelectedProviderID = global
-
-        if self.isPrivateAIProviderID(global) {
-            self.settings.rewriteModeSelectedModel = self.editModeModels(for: global).first
-            return
-        }
-
-        let key = self.viewModel.providerKey(for: global)
-        let model = self.settings.selectedModelByProvider[key]
-            ?? self.settings.selectedModel
-            ?? self.viewModel.models(for: global).first
-        self.settings.rewriteModeSelectedModel = model
-    }
-
     private func editModeModels(for providerID: String) -> [String] {
         if self.isPrivateAIProviderID(providerID) {
             return ModelRepository.shared.defaultModels(for: providerID, task: .edit)
@@ -1745,14 +1690,6 @@ extension AIEnhancementSettingsView {
         PrivateFeatures.privateAIProvider &&
             providerID.trimmingCharacters(in: .whitespacesAndNewlines)
             == PrivateAIProviderFeature.shared.providerID
-    }
-
-    private func ensureDefaultEditModeSyncState() {
-        // If no persisted value exists yet, default Sync to ON.
-        if UserDefaults.standard.object(forKey: "RewriteModeLinkedToGlobal") == nil {
-            self.settings.rewriteModeLinkedToGlobal = true
-            self.syncEditModeToGlobalSelection()
-        }
     }
 
     private func canFetchModels(for providerID: String) -> Bool {

@@ -95,4 +95,59 @@ final class EditModeRouteTests: XCTestCase {
         XCTAssertNil(EditModeRoute.local(self.model).failureMessage)
         XCTAssertNotNil(EditModeRoute.modelMissing.failureMessage)
     }
+    @MainActor
+    func testLegacyEditLinkIsPinnedOnceWithoutChangingOtherModes() {
+        self.withIndependentDefaults { defaults in
+            defaults.set(true, forKey: "RewriteModeLinkedToGlobal")
+            defaults.set("dictation-provider", forKey: "SelectedProviderID")
+            defaults.set("dictation-model", forKey: "SelectedAIModel")
+            defaults.set("command-provider", forKey: "CommandModeSelectedProviderID")
+            SettingsStore.makeEditModeIndependent(defaults: defaults, providerID: "edit-provider", modelID: "edit-model")
+            XCTAssertFalse(defaults.bool(forKey: "RewriteModeLinkedToGlobal"))
+            XCTAssertEqual(defaults.string(forKey: "RewriteModeSelectedProviderID"), "edit-provider")
+            XCTAssertEqual(defaults.string(forKey: "RewriteModeSelectedModel"), "edit-model")
+            XCTAssertEqual(defaults.string(forKey: "SelectedProviderID"), "dictation-provider")
+            XCTAssertEqual(defaults.string(forKey: "SelectedAIModel"), "dictation-model")
+            XCTAssertEqual(defaults.string(forKey: "CommandModeSelectedProviderID"), "command-provider")
+
+            defaults.set("new-dictation-provider", forKey: "SelectedProviderID")
+            SettingsStore.makeEditModeIndependent(defaults: defaults, providerID: "new-dictation-provider", modelID: "new-model")
+            XCTAssertEqual(defaults.string(forKey: "RewriteModeSelectedProviderID"), "edit-provider")
+            XCTAssertEqual(defaults.string(forKey: "RewriteModeSelectedModel"), "edit-model")
+        }
+    }
+
+    @MainActor
+    func testExplicitIndependentEditChoiceIsNotOverwritten() {
+        self.withIndependentDefaults { defaults in
+            defaults.set(false, forKey: "RewriteModeLinkedToGlobal")
+            defaults.set("chosen-provider", forKey: "RewriteModeSelectedProviderID")
+            defaults.set("chosen-model", forKey: "RewriteModeSelectedModel")
+            SettingsStore.makeEditModeIndependent(defaults: defaults, providerID: "other", modelID: nil)
+            XCTAssertEqual(defaults.string(forKey: "RewriteModeSelectedProviderID"), "chosen-provider")
+            XCTAssertEqual(defaults.string(forKey: "RewriteModeSelectedModel"), "chosen-model")
+        }
+    }
+
+    @MainActor
+    func testMissingLegacyRouteBecomesIndependentWithoutAnInventedModel() {
+        self.withIndependentDefaults { defaults in
+            defaults.set("stale-model", forKey: "RewriteModeSelectedModel")
+            SettingsStore.makeEditModeIndependent(defaults: defaults, providerID: "", modelID: nil)
+            XCTAssertFalse(defaults.bool(forKey: "RewriteModeLinkedToGlobal"))
+            XCTAssertEqual(defaults.string(forKey: "RewriteModeSelectedProviderID"), "")
+            XCTAssertNil(defaults.string(forKey: "RewriteModeSelectedModel"))
+        }
+    }
+
+    private func withIndependentDefaults(_ body: (UserDefaults) -> Void) {
+        let name = "EditModeRouteTests-\(UUID().uuidString)"
+        guard let defaults = UserDefaults(suiteName: name) else {
+            XCTFail("Could not create isolated defaults")
+            return
+        }
+        defer { defaults.removePersistentDomain(forName: name) }
+        body(defaults)
+    }
+
 }

@@ -58,6 +58,7 @@ final class SettingsStore: ObservableObject {
         Self.migrateModifierOnlyCancelShortcutIfNeeded(defaults: self.defaults)
         self.retireLegacySecondaryPromptShortcutIfNeeded()
         self.normalizePromptSelectionsIfNeeded()
+        self.makeEditModeIndependentIfNeeded()
         self.purgeRetiredAppleIntelligenceState()
         self.repairForcedOnboardingResetIfNeeded()
         self.migrateOverlayBottomOffsetTo50IfNeeded()
@@ -3880,6 +3881,7 @@ final class SettingsStore: ObservableObject {
         self.rewriteModeSelectedModel = payload.rewriteModeSelectedModel
         self.rewriteModeSelectedProviderID = payload.rewriteModeSelectedProviderID
         self.rewriteModeLinkedToGlobal = payload.rewriteModeLinkedToGlobal
+        self.makeEditModeIndependentIfNeeded()
         if let enabled = payload.meetingRecordingShortcutEnabled {
             self.meetingRecordingHotkeyShortcut = enabled ? payload.meetingRecordingHotkeyShortcut : nil
         }
@@ -4485,11 +4487,6 @@ final class SettingsStore: ObservableObject {
     private func syncLinkedProviderSelections(to providerID: String) {
         let trimmed = providerID.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        if self.rewriteModeLinkedToGlobal {
-            self.rewriteModeSelectedProviderID = trimmed
-            self.rewriteModeSelectedModel = self.modelSelection(for: trimmed)
-        }
-
         if self.commandModeLinkedToGlobal {
             let linkedProviderID = self.isPrivateAIProviderID(trimmed) ? "" : trimmed
             self.commandModeSelectedProviderID = linkedProviderID
@@ -4551,6 +4548,23 @@ final class SettingsStore: ObservableObject {
         }
 
         return ModelRepository.shared.defaultModels(for: providerID)
+    }
+
+    /// Keep a legacy linked choice once, then let Edit Mode own its provider/model.
+    /// Also runs after restoring an older backup; an empty route stays visibly unconfigured.
+    func makeEditModeIndependentIfNeeded() {
+        guard self.rewriteModeLinkedToGlobal else { return }
+        let providerID = self.effectiveRewriteModeProviderID
+        let modelID = self.effectiveRewriteModeSelectedModel
+        self.objectWillChange.send()
+        Self.makeEditModeIndependent(defaults: self.defaults, providerID: providerID, modelID: modelID)
+    }
+
+    static func makeEditModeIndependent(defaults: UserDefaults, providerID: String, modelID: String?) {
+        guard defaults.object(forKey: Keys.rewriteModeLinkedToGlobal) as? Bool != false else { return }
+        defaults.set(providerID, forKey: Keys.rewriteModeSelectedProviderID)
+        defaults.set(modelID, forKey: Keys.rewriteModeSelectedModel)
+        defaults.set(false, forKey: Keys.rewriteModeLinkedToGlobal)
     }
 
     var effectiveRewriteModeProviderID: String {
