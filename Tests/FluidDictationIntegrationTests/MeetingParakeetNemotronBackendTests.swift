@@ -613,6 +613,29 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
         XCTAssertEqual(Set(plan.chunkIDsByTrackID.keys), [fixture.micTrack.id, fixture.appTrack.id])
     }
 
+    func testSelectedProAndMultilingualFallbackReachTheFrozenRuntime() async throws {
+        for (language, model) in [("en", "fluid-parakeet-pro"), ("de", "parakeet-tdt")] {
+            let fixture = self.makeTwoEpochFixture()
+            var session = fixture.session
+            session.languageCode = language
+            let runtime = FakeRuntime()
+            let backend = self.makeBackend(runtime: runtime)
+            let configuration = MeetingFinalProcessingConfiguration(preferredASRModel: .fluidParakeetPro, languageCode: language)
+            let request = try self.makeRequest(session: session, directory: self.makeTempSessionDirectory(), configuration: configuration)
+            let plan = try backend.plan(request)
+            let manifest = try self.makeManifest(plan: plan, observations: fixture.observations)
+            runtime.asrSession.responses = (0..<3).map { _ in
+                .init(text: "Hello", words: [.init(text: "Hello", start: 0.2, end: 0.4)])
+            }
+            let outcome = try await backend.execute(plan: plan, manifest: manifest, progress: { _ in })
+            guard case let .canonicalEvidence(bundle) = outcome else { return XCTFail("Expected canonical evidence") }
+            XCTAssertEqual(configuration.asrModel, model)
+            XCTAssertEqual(runtime.asrConfigurations, [configuration])
+            XCTAssertEqual(bundle.evidence.units.map(\.text), ["Hello", "Hello", "Hello"])
+            XCTAssertTrue(bundle.coverageReceipts.allSatisfy { $0.status == .processed })
+        }
+    }
+
     func testMultilingualPlanAndExecutionKeepV3LanguageAndWordEvidence() async throws {
         let fixture = self.makeTwoEpochFixture()
         var session = fixture.session
@@ -766,7 +789,8 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
             meetingRuntimeFactory: { request in
                 spy.requests.append(request)
                 return runtime
-            }
+            },
+            preferredASRModelProvider: { .parakeetTDTv2 }
         )
         runtime.asrSession.responses = [
             .init(text: "", words: []), .init(text: "", words: []), .init(text: "", words: []),

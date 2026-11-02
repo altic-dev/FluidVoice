@@ -121,9 +121,23 @@ nonisolated enum MeetingProviderOptionsError: Error, Equatable {
 }
 
 /// Immutable provider options for the opt-in meeting post-processing path. Only the fixed
-/// Parakeet TDT v2 handles English; v3 handles its supported multilingual languages.
+/// Parakeet v2 and Fluid Speech Pro handle English; v3 handles its supported languages.
 /// Unsupported model/language combinations and enhancement features are rejected.
 nonisolated struct MeetingProviderOptions: Equatable, Sendable {
+    private static let supportedModels: Set<SettingsStore.SpeechModel> = [
+        .parakeetTDTv2, .parakeetTDT, .fluidParakeetPro,
+    ]
+
+    static func preferredModel(
+        for languageCode: String,
+        selected: SettingsStore.SpeechModel?
+    ) -> SettingsStore.SpeechModel {
+        if let selected, self.supportedModels.contains(selected),
+           ParakeetSpeechModelCatalog.descriptor(forModelID: selected.rawValue)?.supportedLanguageCodes.contains(languageCode) == true
+        { return selected }
+        return languageCode == "en" ? .parakeetTDTv2 : .parakeetTDT
+    }
+
     let model: SettingsStore.SpeechModel
     let vocabularyBoostingEnabled: Bool
     let pronunciationMatchingEnabled: Bool
@@ -134,12 +148,12 @@ nonisolated struct MeetingProviderOptions: Equatable, Sendable {
         _ configuration: MeetingFinalProcessingConfiguration
     ) throws -> MeetingProviderOptions {
         guard let model = SettingsStore.SpeechModel(rawValue: configuration.asrModel),
-              model == .parakeetTDTv2 || model == .parakeetTDT
+              self.supportedModels.contains(model)
         else {
             throw MeetingProviderOptionsError.unsupportedASRModel(configuration.asrModel)
         }
         guard VoiceEngineLanguageCatalog.parakeetV3LanguageIDs.contains(configuration.languageCode),
-              model != .parakeetTDTv2 || configuration.languageCode == "en"
+              ParakeetSpeechModelCatalog.descriptor(forModelID: model.rawValue)?.supportedLanguageCodes.contains(configuration.languageCode) == true
         else {
             throw MeetingProviderOptionsError.unsupportedLanguageCode(configuration.languageCode)
         }
