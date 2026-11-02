@@ -613,8 +613,8 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
         XCTAssertEqual(Set(plan.chunkIDsByTrackID.keys), [fixture.micTrack.id, fixture.appTrack.id])
     }
 
-    func testSelectedProAndMultilingualFallbackReachTheFrozenRuntime() async throws {
-        for (language, model) in [("en", "fluid-parakeet-pro"), ("de", "parakeet-tdt")] {
+    func testSelectedProReachesTheFrozenRuntimeInEveryLanguage() async throws {
+        for (language, model) in [("en", "fluid-parakeet-pro"), ("de", "fluid-parakeet-pro")] {
             let fixture = self.makeTwoEpochFixture()
             var session = fixture.session
             session.languageCode = language

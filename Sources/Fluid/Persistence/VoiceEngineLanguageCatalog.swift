@@ -165,9 +165,6 @@ enum VoiceEngineLanguageCatalog {
             routes.append(Self.route(language, .parakeetTDT, .automatic))
             routes.append(Self.route(language, .fluidParakeetMini, .automatic))
             routes.append(Self.route(language, .fluidParakeetPico, .automatic))
-        }
-
-        if language.id == "en" {
             routes.append(Self.route(language, .fluidParakeetPro, .automatic))
         }
 

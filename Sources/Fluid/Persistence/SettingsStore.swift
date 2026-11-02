@@ -6328,9 +6328,9 @@ extension SettingsStore {
 extension SettingsStore.SpeechModel {
     var supportedLanguageCodes: String? {
         switch self {
-        case .parakeetTDT, .fluidParakeetMini, .fluidParakeetPico:
+        case .parakeetTDT, .fluidParakeetMini, .fluidParakeetPico, .fluidParakeetPro:
             return "BG, HR, CS, DA, NL, EN, ET, FI, FR, DE, EL, HU, IT, LV, LT, MT, PL, PT, RO, SK, SL, ES, SV, RU, UK"
-        case .fluidParakeetPro, .parakeetRealtime:
+        case .parakeetRealtime:
             return "EN"
         case .cohereTranscribeSixBit:
             return "AR, DE, EL, EN, ES, FR, IT, JA, KO, NL, PL, PT, VI, ZH"
@@ -6348,12 +6348,10 @@ extension SettingsStore.SpeechModel {
 
     var supportedLanguageNames: String? {
         switch self {
-        case .parakeetTDT, .fluidParakeetMini, .fluidParakeetPico:
+        case .parakeetTDT, .fluidParakeetMini, .fluidParakeetPico, .fluidParakeetPro:
             return """
             Bulgarian, Croatian, Czech, Danish, Dutch, English, Estonian, Finnish, French, German, Greek, Hungarian, Italian, Latvian, Lithuanian, Maltese, Polish, Portuguese, Romanian, Slovak, Slovenian, Spanish, Swedish, Russian, and Ukrainian
             """
-        case .fluidParakeetPro:
-            return "English"
         case .cohereTranscribeSixBit:
             return "Arabic, German, Greek, English, Spanish, French, Italian, Japanese, Korean, Dutch, Polish, Portuguese, Vietnamese, and Mandarin Chinese"
         case .qwen3Asr, .qwen3Asr17B:
