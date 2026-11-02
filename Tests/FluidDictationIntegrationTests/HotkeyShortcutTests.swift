@@ -389,6 +389,9 @@ final class HotkeyShortcutTests: XCTestCase {
         manager.updatePrimaryShortcuts([HotkeyShortcut(mouseButton: 2, modifierFlags: [])])
         let down = try XCTUnwrap(CGEvent(mouseEventSource: nil, mouseType: .otherMouseDown, mouseCursorPosition: .zero, mouseButton: .center))
         let up = try XCTUnwrap(CGEvent(mouseEventSource: nil, mouseType: .otherMouseUp, mouseCursorPosition: .zero, mouseButton: .center))
+        // The unmodified shortcut needs explicit fixture flags, independent of the live keyboard.
+        down.flags = []
+        up.flags = []
 
         XCTAssertNil(manager.handleMouseShortcutEvent(type: .otherMouseDown, event: down))
         for _ in 0..<10 {
@@ -1799,6 +1802,7 @@ final class HotkeyShortcutTests: XCTestCase {
             manager.updatePrimaryShortcuts([shortcut])
             if mouse {
                 let down = try XCTUnwrap(CGEvent(mouseEventSource: nil, mouseType: .otherMouseDown, mouseCursorPosition: .zero, mouseButton: .center))
+                down.flags = []
                 _ = manager.handleMouseShortcutEvent(type: .otherMouseDown, event: down)
             } else {
                 _ = try manager.handleKeyEvent(type: .keyDown, event: self.primaryReleaseTestEvent(type: .keyDown))
@@ -1806,6 +1810,7 @@ final class HotkeyShortcutTests: XCTestCase {
             manager.updatePrimaryShortcuts([shortcut, HotkeyShortcut(keyCode: 3, modifierFlags: .control)])
             if mouse {
                 let up = try XCTUnwrap(CGEvent(mouseEventSource: nil, mouseType: .otherMouseUp, mouseCursorPosition: .zero, mouseButton: .center))
+                up.flags = []
                 _ = manager.handleMouseShortcutEvent(type: .otherMouseUp, event: up)
             } else {
                 _ = try manager.handleKeyEvent(type: .keyUp, event: self.primaryReleaseTestEvent(type: .keyUp))
