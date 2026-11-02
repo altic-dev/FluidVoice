@@ -6,7 +6,7 @@ final class DashboardLayoutTests: XCTestCase {
     func testSetupCardsAlwaysFillTheirRows() {
         for width in stride(from: 320, through: 2000, by: 1) {
             let layout = DashboardLayout(width: CGFloat(width))
-            for count in 1...3 {
+            for count in 1...4 {
                 XCTAssertEqual(count % layout.setupColumns(count: count), 0)
                 if layout.setupColumns(count: count) > 1 {
                     XCTAssertGreaterThanOrEqual((layout.contentWidth - CGFloat(count - 1) * 10) / CGFloat(count), 280)
@@ -36,18 +36,35 @@ final class DashboardLayoutTests: XCTestCase {
         XCTAssertEqual(DashboardLayout(width: 320).statisticColumns(count: 4), 1)
     }
 
-    func testOnlyMissingEssentialsAreShown() {
+    func testOnlyMissingSetupOptionsAreShown() {
         for model in [false, true] {
             for microphone in [false, true] {
                 for typing in [false, true] {
-                    let missing = DashboardSetupStatus(voiceModelReady: model, microphoneReady: microphone, typingAccessReady: typing).missing
-                    XCTAssertEqual(missing.contains(.voiceModel), !model)
-                    XCTAssertEqual(missing.contains(.microphone), !microphone)
-                    XCTAssertEqual(missing.contains(.typingAccess), !typing)
-                    XCTAssertEqual(missing.isEmpty, model && microphone && typing)
+                    for screen in [false, true] {
+                        let missing = DashboardSetupStatus(
+                            voiceModelReady: model,
+                            microphoneReady: microphone,
+                            typingAccessReady: typing,
+                            screenCaptureReady: screen
+                        ).missing
+                        XCTAssertEqual(missing.contains(.voiceModel), !model)
+                        XCTAssertEqual(missing.contains(.microphone), !microphone)
+                        XCTAssertEqual(missing.contains(.typingAccess), !typing)
+                        XCTAssertEqual(missing.contains(.screenCapture), !screen)
+                        XCTAssertEqual(missing.isEmpty, model && microphone && typing && screen)
+                    }
                 }
             }
         }
+    }
+
+    func testOptionalScreenAccessDoesNotAddOtherMissingRequirements() {
+        XCTAssertEqual(DashboardSetupStatus(
+            voiceModelReady: true, microphoneReady: true, typingAccessReady: true, screenCaptureReady: false
+        ).missing, [.screenCapture])
+        XCTAssertEqual(DashboardSetupStatus(
+            voiceModelReady: true, microphoneReady: false, typingAccessReady: false, screenCaptureReady: true
+        ).missing, [.microphone, .typingAccess])
     }
 
     func testIntelligenceInvitationOnlyAppearsForUntriedUndismissedUsers() {
