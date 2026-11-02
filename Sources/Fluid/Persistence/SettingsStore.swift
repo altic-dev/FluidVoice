@@ -3821,7 +3821,8 @@ final class SettingsStore: ObservableObject {
             fileTranscriptionExpectedSpeakerCount: self.fileTranscriptionExpectedSpeakerCount,
             meetingRecordingDefaults: self.meetingRecordingDefaults,
             privateAIIdleUnload: self.privateAIIdleUnload,
-            dictationPromptConfigurations: self.dictationPromptConfigurations
+            dictationPromptConfigurations: self.dictationPromptConfigurations,
+            automaticDictionaryPromptDelay: self.automaticDictionaryPromptDelay
         )
     }
 
@@ -4025,6 +4026,9 @@ final class SettingsStore: ObservableObject {
         self.continuousDictationSpacingEnabled = payload.continuousDictationSpacingEnabled ?? restoredContinuousDictationModeEnabled
         self.contextAwareCapitalizationEnabled = payload.contextAwareCapitalizationEnabled ?? restoredContinuousDictationModeEnabled
         self.pauseMediaDuringTranscription = payload.pauseMediaDuringTranscription
+        if let automaticDictionaryPromptDelay = payload.automaticDictionaryPromptDelay {
+            self.automaticDictionaryPromptDelay = automaticDictionaryPromptDelay
+        }
         if let automaticDictionaryLearningEnabled = payload.automaticDictionaryLearningEnabled {
             self.automaticDictionaryLearningEnabled = automaticDictionaryLearningEnabled
         }
@@ -5192,6 +5196,37 @@ final class SettingsStore: ObservableObject {
         }
     }
 
+    enum AutomaticDictionaryPromptDelay: Int, Codable, CaseIterable, Identifiable {
+        case threeQuarters = 750
+        case one = 1000
+        case two = 2000
+        case three = 3000
+
+        var id: Int { self.rawValue }
+        var displayName: String {
+            switch self {
+            case .threeQuarters: "0.75 seconds"
+            case .one: "1 second"
+            case .two: "2 seconds"
+            case .three: "3 seconds"
+            }
+        }
+
+        var inactivityNanoseconds: UInt64 { UInt64(self.rawValue) * 1_000_000 }
+        // Leaving the corrected word should never wait longer than inactivity.
+        var completionNanoseconds: UInt64 { min(self.inactivityNanoseconds, 1_000_000_000) }
+    }
+
+    var automaticDictionaryPromptDelay: AutomaticDictionaryPromptDelay {
+        get {
+            AutomaticDictionaryPromptDelay(rawValue: self.defaults.integer(forKey: Keys.automaticDictionaryPromptDelay)) ?? .three
+        }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue.rawValue, forKey: Keys.automaticDictionaryPromptDelay)
+        }
+    }
+
     var automaticDictionaryLearningEnabled: Bool {
         get { self.defaults.object(forKey: Keys.automaticDictionaryLearningEnabled) as? Bool ?? true }
         set {
@@ -6143,6 +6178,7 @@ private extension SettingsStore {
         static let customDictionaryEntries = "CustomDictionaryEntries"
         static let automaticDictionaryLearningEnabled = "AutomaticDictionaryLearningEnabled"
         static let automaticDictionarySuggestionFrequency = "AutomaticDictionarySuggestionFrequency"
+        static let automaticDictionaryPromptDelay = "AutomaticDictionaryPromptDelay"
         static let vocabularyBoostingEnabled = "VocabularyBoostingEnabled"
         static let pronunciationMatchingEnabled = "PronunciationMatchingEnabled"
 

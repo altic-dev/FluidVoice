@@ -161,6 +161,7 @@ final class AutomaticDictionaryCorrectionTracker {
         let pid: pid_t
         let expectedValue: String
         let insertedRange: NSRange
+        let selection: NSRange
     }
 
     private struct PendingCorrection {
@@ -179,6 +180,7 @@ final class AutomaticDictionaryCorrectionTracker {
         let observesFocusChanges: Bool
         let learningRecording: DictionaryLearningRecording?
         var lastValue: String
+        var lastSelection: NSRange
         var insertedRange: NSRange
         var pendingCorrection: PendingCorrection?
     }
@@ -191,8 +193,13 @@ final class AutomaticDictionaryCorrectionTracker {
         hasVoiceSpellings ? DictionaryVoiceSpellingLearner.confirmationWindow + .seconds(5) : .seconds(30)
     }
 
-    private static let completionSignalDelayNanoseconds: UInt64 = 1_000_000_000
-    private static let inactivityFallbackNanoseconds: UInt64 = 3_000_000_000
+    private static var completionSignalDelayNanoseconds: UInt64 {
+        SettingsStore.shared.automaticDictionaryPromptDelay.completionNanoseconds
+    }
+
+    private static var inactivityFallbackNanoseconds: UInt64 {
+        SettingsStore.shared.automaticDictionaryPromptDelay.inactivityNanoseconds
+    }
 
     private var observer: AXObserver?
     private var session: ObservationSession?
@@ -335,13 +342,18 @@ final class AutomaticDictionaryCorrectionTracker {
     }
 
     func handleObservedSelectionChange() {
-        guard let session = self.session,
-              let pending = session.pendingCorrection,
-              let correctedRange = pending.correctedRange,
-              let selection = Self.selectedRange(of: session.element)
+        guard var session = self.session,
+              let selection = Self.selectedRange(of: session.element),
+              selection != session.lastSelection
         else {
             return
         }
+        // Some editors repeat this notification while the caret has not moved.
+        // Keep the original deadline, but still track real moves before any edit.
+        session.lastSelection = selection
+        self.session = session
+        guard let pending = session.pendingCorrection,
+              let correctedRange = pending.correctedRange else { return }
 
         let delay = AutomaticDictionaryCorrectionDetector.selectionTouchesCandidate(
             selection,
@@ -411,7 +423,8 @@ final class AutomaticDictionaryCorrectionTracker {
             element: focus.element,
             pid: focus.pid,
             expectedValue: value,
-            insertedRange: insertedRange
+            insertedRange: insertedRange,
+            selection: selectedRange
         )
     }
 
@@ -453,6 +466,7 @@ final class AutomaticDictionaryCorrectionTracker {
             observesFocusChanges: focusResult == .success,
             learningRecording: learningRecording,
             lastValue: seed.expectedValue,
+            lastSelection: seed.selection,
             insertedRange: seed.insertedRange,
             pendingCorrection: nil
         )

@@ -2933,6 +2933,32 @@ private struct DictionarySuggestionsSettingsRow: View {
                     .fixedSize()
                 }
                 .padding(.leading, 16)
+
+                HStack(alignment: .center, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Prompt delay")
+                            .font(self.theme.typography.bodyStrong)
+                            .foregroundStyle(self.theme.palette.primaryText)
+                        Text("Wait this long after you stop editing. Shorter delays may ask while you're still correcting.")
+                            .font(self.theme.typography.bodySmall)
+                            .foregroundStyle(self.theme.palette.secondaryText)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                    FluidDropdownPicker(
+                        "Prompt delay",
+                        selectedTitle: self.settings.automaticDictionaryPromptDelay.displayName,
+                        selection: self.$settings.automaticDictionaryPromptDelay
+                    ) {
+                        ForEach(SettingsStore.AutomaticDictionaryPromptDelay.allCases) { delay in
+                            Text(delay.displayName).tag(delay)
+                        }
+                    }
+                    .fluidDropdownStyle()
+                    .fixedSize()
+                }
+                .padding(.leading, 16)
             }
         }
     }
