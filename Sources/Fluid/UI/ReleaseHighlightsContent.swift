@@ -25,7 +25,7 @@ struct ReleaseHighlightsContent {
         let splash = Feature(
             id: "splash",
             preview: .models,
-            eyebrow: "RESEARCH PREVIEW",
+            eyebrow: "NEW CLEANUP MODEL",
             title: "Meet Fluid 1.1 Splash",
             detail: "Our best cleanup model yet. Multilingual, and it reads what's on screen so names and terms come out right.",
             action: "Try Splash",
