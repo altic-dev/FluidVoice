@@ -1375,10 +1375,7 @@ extension AIEnhancementSettingsView {
                     if self.isPrivateAIProviderID(providerID) {
                         EditModeLocalModelRow()
                         Divider()
-                        FluidManagementRow(title: "Read my screen", detail: "Lets it use the text in your front window. It stays on this Mac.") {
-                            Toggle("Read my screen", isOn: self.$settings.editModeReadsScreen)
-                                .labelsHidden().toggleStyle(.switch)
-                        }
+                        EditModeScreenContextSettings(settings: self.settings)
                     } else {
                         self.editModeProviderModelRow(providerID: providerID)
                     }

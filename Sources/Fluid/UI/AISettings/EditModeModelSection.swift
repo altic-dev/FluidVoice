@@ -76,6 +76,68 @@ struct EditModeLocalModelRow: View {
     }
 }
 
+/// Edit Mode's opt-in and its optional screenshot fallback have separate controls.
+struct EditModeScreenContextSettings: View {
+    @ObservedObject var settings: SettingsStore
+    @StateObject private var permission: DictationScreenPermissionController
+    @State private var permissionRequestTask: Task<Void, Never>?
+
+    init(settings: SettingsStore, permission: DictationScreenPermissionController? = nil) {
+        self.settings = settings
+        self._permission = StateObject(wrappedValue: permission ?? DictationScreenPermissionController())
+    }
+
+    var body: some View {
+        FluidManagementRow(
+            title: "Read my screen",
+            detail: "Uses app text, with screen capture as a fallback. Everything stays on this Mac."
+        ) {
+            HStack(spacing: 12) {
+                if self.settings.editModeReadsScreen, self.permission.hasChecked, !self.permission.isAllowed {
+                    Button(self.permission.requiresSettings ? "Open System Settings" : "Allow Screen Capture") {
+                        self.requestScreenAccess()
+                    }
+                    .fluidGlassAction()
+                    .disabled(self.permission.isRequesting)
+                }
+                Toggle("Read my screen", isOn: self.enabledBinding)
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+            }
+        }
+        .task { await self.permission.refresh() }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            Task { await self.permission.refresh() }
+        }
+        .onChange(of: self.settings.editModeReadsScreen) { _, enabled in
+            if !enabled { self.permissionRequestTask?.cancel() }
+        }
+        .onDisappear { self.permissionRequestTask?.cancel() }
+    }
+
+    /// Changing the feature preference never prompts or changes dictation's context setting.
+    var enabledBinding: Binding<Bool> {
+        Binding(
+            get: { self.settings.editModeReadsScreen },
+            set: { self.settings.editModeReadsScreen = $0 }
+        )
+    }
+
+    private func requestScreenAccess() {
+        guard self.settings.editModeReadsScreen, self.permissionRequestTask == nil else { return }
+        if self.permission.requiresSettings {
+            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
+                NSWorkspace.shared.open(url)
+            }
+            return
+        }
+        self.permissionRequestTask = Task {
+            defer { self.permissionRequestTask = nil }
+            await self.permission.requestIfNeeded { self.settings.editModeReadsScreen && !Task.isCancelled }
+        }
+    }
+}
+
 @MainActor
 final class EditModeModelController: ObservableObject {
     static let shared = EditModeModelController()

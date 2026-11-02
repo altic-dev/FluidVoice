@@ -140,6 +140,34 @@ final class EditModeRouteTests: XCTestCase {
         }
     }
 
+    @MainActor
+    func testEditScreenToggleDoesNotPromptOrChangeDictationContext() async {
+        let defaults = UserDefaults.standard
+        let editKey = "EditModeReadsScreen"
+        let dictationKey = "DictationScreenContextEnabled"
+        let oldEdit = defaults.object(forKey: editKey)
+        let oldDictation = defaults.object(forKey: dictationKey)
+        defer {
+            defaults.set(oldEdit, forKey: editKey)
+            defaults.set(oldDictation, forKey: dictationKey)
+        }
+        defaults.set(false, forKey: dictationKey)
+        var requests = 0
+        let permission = DictationScreenPermissionController(check: { false }, request: {
+            requests += 1
+            return true
+        })
+        let settings = SettingsStore.shared
+        let row = EditModeScreenContextSettings(settings: settings, permission: permission)
+        row.enabledBinding.wrappedValue = false
+        row.enabledBinding.wrappedValue = true
+        await permission.refresh()
+        XCTAssertTrue(settings.editModeReadsScreen)
+        XCTAssertFalse(settings.dictationScreenContextEnabled)
+        XCTAssertFalse(permission.isAllowed)
+        XCTAssertEqual(requests, 0)
+    }
+
     private func withIndependentDefaults(_ body: (UserDefaults) -> Void) {
         let name = "EditModeRouteTests-\(UUID().uuidString)"
         guard let defaults = UserDefaults(suiteName: name) else {
