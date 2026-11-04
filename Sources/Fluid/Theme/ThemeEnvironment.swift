@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 private struct ThemeKey: EnvironmentKey {
@@ -67,6 +68,13 @@ extension Color {
         let blue = Double(rgb & 0x0000ff) / 255.0
 
         self.init(red: red, green: green, blue: blue)
+    }
+
+    /// "#RRGGBB" in sRGB, the inverse of `init?(hex:)`.
+    var hexString: String? {
+        guard let rgb = NSColor(self).usingColorSpace(.sRGB) else { return nil }
+        let channel = { (value: CGFloat) in Int((min(max(value, 0), 1) * 255).rounded()) }
+        return String(format: "#%02X%02X%02X", channel(rgb.redComponent), channel(rgb.greenComponent), channel(rgb.blueComponent))
     }
 
     static var fluidGreen: Color {

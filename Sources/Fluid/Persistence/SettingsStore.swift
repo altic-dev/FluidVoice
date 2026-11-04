@@ -2708,11 +2708,23 @@ final class SettingsStore: ObservableObject {
         set {
             objectWillChange.send()
             self.defaults.set(newValue.rawValue, forKey: Keys.accentColorOption)
+            self.defaults.removeObject(forKey: Keys.customAccentColorHex)
+        }
+    }
+
+    /// Overrides the preset when set. Kept separate from `AccentColorOption` so backups stay readable by older builds.
+    var customAccentColorHex: String? {
+        get { self.defaults.string(forKey: Keys.customAccentColorHex) }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue, forKey: Keys.customAccentColorHex)
         }
     }
 
     var accentColor: Color {
-        Color(hex: self.accentColorOption.hex) ?? Color(red: 0.227, green: 0.784, blue: 0.776)
+        self.customAccentColorHex.flatMap { Color(hex: $0) }
+            ?? Color(hex: self.accentColorOption.hex)
+            ?? Color(red: 0.227, green: 0.784, blue: 0.776)
     }
 
     var themePreference: ThemePreference {
@@ -3741,6 +3753,7 @@ final class SettingsStore: ObservableObject {
             hideFromDockAndAppSwitcher: self.hideFromDockAndAppSwitcher,
             showMainWindowAtLoginLaunch: self.showMainWindowAtLoginLaunch,
             accentColorOption: self.accentColorOption,
+            customAccentColorHex: self.customAccentColorHex,
             transcriptionStartSound: self.transcriptionStartSound,
             transcriptionSoundVolume: self.transcriptionSoundVolume,
             transcriptionSoundIndependentVolume: false,
@@ -3902,6 +3915,7 @@ final class SettingsStore: ObservableObject {
         self.hideFromDockAndAppSwitcher = payload.hideFromDockAndAppSwitcher
         self.showMainWindowAtLoginLaunch = payload.showMainWindowAtLoginLaunch ?? true
         self.accentColorOption = payload.accentColorOption
+        self.customAccentColorHex = payload.customAccentColorHex
         self.transcriptionStartSound = payload.transcriptionStartSound
         self.transcriptionSoundVolume = payload.transcriptionSoundVolume
         self.autoUpdateCheckEnabled = payload.autoUpdateCheckEnabled
@@ -6042,6 +6056,7 @@ private extension SettingsStore {
         static let launchAtStartup = "LaunchAtStartup"
         static let showInDock = "ShowInDock"
         static let accentColorOption = "AccentColorOption"
+        static let customAccentColorHex = "CustomAccentColorHex"
         static let themePreference = "ThemePreference"
         static let enableTranscriptionSounds = "EnableTranscriptionSounds"
         static let transcriptionStartSound = "TranscriptionStartSound"
