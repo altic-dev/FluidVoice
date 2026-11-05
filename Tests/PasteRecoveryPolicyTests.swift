@@ -26,6 +26,13 @@ enum PasteRecoveryPolicyTests {
     }
 
     static func main() async {
+        // The verification task can be the last owner on a background executor.
+        let retainedEvidence = UInt(bitPattern: Unmanaged.passRetained(PasteRecoveryEvidence { _ in }).toOpaque())
+        await Task.detached {
+            guard let pointer = UnsafeRawPointer(bitPattern: retainedEvidence) else { fatalError("Missing retained evidence") }
+            Unmanaged<PasteRecoveryEvidence>.fromOpaque(pointer).release()
+        }.value
+
         let before = self.snapshot()
         let inserted = self.snapshot("hello", count: 5, caret: CFRange(location: 5, length: 0))
         let late = await self.verify(before, [before, before, inserted])

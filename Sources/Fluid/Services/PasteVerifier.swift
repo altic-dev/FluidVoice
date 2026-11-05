@@ -294,6 +294,8 @@ final class PasteRecoveryEvidence {
 
     init(report: @escaping (Recovery) -> Void) { self.report = report }
 
+    nonisolated deinit {}
+
     func clipboardTimedOut() { self.unread = true; self.evaluate() }
     func verified(_ verdict: PasteVerifier.Verdict) {
         guard self.verdict == nil else { return }
