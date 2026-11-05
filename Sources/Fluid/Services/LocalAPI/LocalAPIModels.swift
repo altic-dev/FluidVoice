@@ -87,6 +87,21 @@ enum LocalAPI {
     }
 
     /// The headers as sent. `204` and `304` carry no body, so they get no `Content-Length`.
+    /// Blocks DNS rebinding. A loopback peer is not enough: a web page whose host name resolves to
+    /// 127.0.0.1 also connects from loopback. So the Host header must name this server as loopback,
+    /// and requests that carry Origin (sent by browsers, not by local CLI or agent clients) are refused.
+    /// Returns the 403 response to send, or nil when the request may be routed.
+    static func untrustedRequestRejection(for request: Request, port: UInt16) -> Response? {
+        if request.headers["origin"] != nil {
+            return self.error("Browser requests are not allowed.", status: 403)
+        }
+        let allowedHosts = ["127.0.0.1:\(port)", "localhost:\(port)", "[::1]:\(port)"]
+        guard let host = request.headers["host"]?.lowercased(), allowedHosts.contains(host) else {
+            return Self.error("Host not allowed.", status: 403)
+        }
+        return nil
+    }
+
     static func wireHeaders(for response: Response) -> [String: String] {
         var headers = response.headers
         if response.status != 204, response.status != 304 {

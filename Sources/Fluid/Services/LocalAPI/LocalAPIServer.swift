@@ -45,7 +45,11 @@ final class LocalAPIServer {
                         return
                     }
 
-                    let handler = LocalAPIConnectionHandler(connection: connection, router: self.router)
+                    let handler = LocalAPIConnectionHandler(
+                        connection: connection,
+                        router: self.router,
+                        port: config.port
+                    )
                     let id = ObjectIdentifier(handler)
                     handler.onClose = { [weak self] in
                         Task { @MainActor in
@@ -114,13 +118,15 @@ final class LocalAPIServer {
 private final class LocalAPIConnectionHandler {
     private let connection: NWConnection
     private let router: LocalAPIRouter
+    private let port: UInt16
     private var buffer = Data()
     private var isClosed = false
     var onClose: (() -> Void)?
 
-    init(connection: NWConnection, router: LocalAPIRouter) {
+    init(connection: NWConnection, router: LocalAPIRouter, port: UInt16) {
         self.connection = connection
         self.router = router
+        self.port = port
     }
 
     func start(on queue: DispatchQueue) {
@@ -152,6 +158,10 @@ private final class LocalAPIConnectionHandler {
 
                 switch self.parseRequestIfComplete() {
                 case let .request(request):
+                    if let rejection = LocalAPI.untrustedRequestRejection(for: request, port: self.port) {
+                        self.send(rejection)
+                        return
+                    }
                     let response = await self.router.route(request)
                     self.send(response)
                 case let .failure(response):

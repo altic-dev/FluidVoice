@@ -409,6 +409,30 @@ final class MeetingLiveAPIControllerTests: XCTestCase {
         XCTAssertEqual(ok["X"], "1")
     }
 
+    func test_untrustedRequestRejection_allowsLoopbackHostsWithoutOrigin() {
+        for host in ["127.0.0.1:47733", "localhost:47733", "LOCALHOST:47733", "[::1]:47733"] {
+            let request = self.request(headers: ["host": host])
+            XCTAssertNil(LocalAPI.untrustedRequestRejection(for: request, port: 47733), host)
+        }
+    }
+
+    func test_untrustedRequestRejection_rejectsRebindingHostsAndBrowsers() throws {
+        let cases: [[String: String]] = [
+            [:],
+            ["host": "evil.example:47733"],
+            ["host": "127.0.0.1.evil.example:47733"],
+            ["host": "127.0.0.1"],
+            ["host": "127.0.0.1:8080"],
+            ["host": "127.0.0.1:47733", "origin": "http://127.0.0.1:47733"],
+            ["host": "localhost:47733", "origin": "null"],
+        ]
+        for headers in cases {
+            let request = self.request(headers: headers)
+            let response = try XCTUnwrap(LocalAPI.untrustedRequestRejection(for: request, port: 47733), "\(headers)")
+            XCTAssertEqual(response.status, 403, "\(headers)")
+        }
+    }
+
     func test_notModified_hasReasonPhrase() {
         XCTAssertEqual(LocalAPI.reasonPhrase(for: 304), "Not Modified")
     }
@@ -427,8 +451,12 @@ final class MeetingLiveAPIControllerTests: XCTestCase {
         return MeetingLiveTranscriptReading(sessionID: self.sessionID, snapshot: snapshot)
     }
 
-    private func request(method: String = "GET", query: [String: String] = [:]) -> LocalAPI.Request {
-        LocalAPI.Request(method: method, path: "/v1/meetings/live", query: query, headers: [:], body: Data())
+    private func request(
+        method: String = "GET",
+        query: [String: String] = [:],
+        headers: [String: String] = [:]
+    ) -> LocalAPI.Request {
+        LocalAPI.Request(method: method, path: "/v1/meetings/live", query: query, headers: headers, body: Data())
     }
 
     private func json(_ response: LocalAPI.Response) throws -> [String: Any] {
