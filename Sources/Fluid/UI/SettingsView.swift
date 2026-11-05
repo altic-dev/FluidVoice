@@ -344,67 +344,6 @@ struct SettingsView: View {
                                 }
                             }
                             .settingsSearchTarget(.accentColor)
-                            Divider().opacity(0.2)
-
-                            HStack {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text("Transcription Sounds")
-                                        .font(self.theme.typography.bodyStrong)
-                                        .foregroundStyle(self.settingsTitleText)
-                                    Text("Choose the sound cue for recording. Some cues include an end sound.")
-                                        .fixedSize(horizontal: false, vertical: true)
-                                        .font(self.theme.typography.bodySmall)
-                                        .foregroundStyle(self.settingsSecondaryText)
-                                }
-
-                                Spacer()
-
-                                FluidDropdownPicker("Transcription sound", selectedTitle: SettingsStore.shared.transcriptionStartSound.displayName, selection: Binding(
-                                    get: { SettingsStore.shared.transcriptionStartSound },
-                                    set: { newValue in
-                                        SettingsStore.shared.transcriptionStartSound = newValue
-                                        TranscriptionSoundPlayer.shared.playPreview(sound: newValue)
-                                    }
-                                )) {
-                                    ForEach(SettingsStore.TranscriptionStartSound.allCases) { option in
-                                        Text(option.displayName).tag(option)
-                                    }
-                                }
-                                .fluidDropdownStyle()
-                                .frame(width: 170, alignment: .trailing)
-                            }
-                            .settingsSearchTarget(.transcriptionSounds)
-
-                            if SettingsStore.shared.transcriptionStartSound != .none {
-                                HStack {
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text("Volume")
-                                            .font(self.theme.typography.bodyStrong)
-                                            .foregroundStyle(self.settingsTitleText)
-                                        Text("Adjust the recording sound cue volume.")
-                                            .font(self.theme.typography.bodySmall)
-                                            .foregroundStyle(self.settingsSecondaryText)
-                                    }
-
-                                    Spacer()
-
-                                    Slider(
-                                        value: Binding(
-                                            get: { Double(SettingsStore.shared.transcriptionSoundVolume) },
-                                            set: { SettingsStore.shared.transcriptionSoundVolume = Float($0) }
-                                        ),
-                                        in: 0...1,
-                                        step: 0.05
-                                    ) { editing in
-                                        if !editing {
-                                            TranscriptionSoundPlayer.shared.playPreviewAtVolume(
-                                                SettingsStore.shared.transcriptionSoundVolume
-                                            )
-                                        }
-                                    }
-                                    .frame(width: 150)
-                                }
-                            }
                         }
                     }
                     .padding(16)
@@ -696,6 +635,67 @@ struct SettingsView: View {
                                             self.hotkeyManager?.setHotkeyMode(newValue)
                                         }
                                         .settingsSearchTarget(.activationMode)
+                                        Divider().opacity(0.2)
+
+                                        HStack {
+                                            VStack(alignment: .leading, spacing: 2) {
+                                                Text("Transcription Sounds")
+                                                    .font(self.theme.typography.bodyStrong)
+                                                    .foregroundStyle(self.settingsTitleText)
+                                                Text("Choose a recording sound. Paired sounds preview start and stop.")
+                                                    .fixedSize(horizontal: false, vertical: true)
+                                                    .font(self.theme.typography.bodySmall)
+                                                    .foregroundStyle(self.settingsSecondaryText)
+                                            }
+
+                                            Spacer()
+
+                                            FluidDropdownPicker("Transcription sound", selectedTitle: SettingsStore.shared.transcriptionStartSound.displayName, selection: Binding(
+                                                get: { SettingsStore.shared.transcriptionStartSound },
+                                                set: { newValue in
+                                                    SettingsStore.shared.transcriptionStartSound = newValue
+                                                    TranscriptionSoundPlayer.shared.playPreview(sound: newValue)
+                                                }
+                                            )) {
+                                                ForEach(SettingsStore.TranscriptionStartSound.allCases) { option in
+                                                    Text(option.displayName).tag(option)
+                                                }
+                                            }
+                                            .fluidDropdownStyle()
+                                            .frame(width: 170, alignment: .trailing)
+                                        }
+                                        .settingsSearchTarget(.transcriptionSounds)
+
+                                        if SettingsStore.shared.transcriptionStartSound != .none {
+                                            HStack {
+                                                VStack(alignment: .leading, spacing: 2) {
+                                                    Text("Volume")
+                                                        .font(self.theme.typography.bodyStrong)
+                                                        .foregroundStyle(self.settingsTitleText)
+                                                    Text("Adjust the recording sound cue volume.")
+                                                        .font(self.theme.typography.bodySmall)
+                                                        .foregroundStyle(self.settingsSecondaryText)
+                                                }
+
+                                                Spacer()
+
+                                                Slider(
+                                                    value: Binding(
+                                                        get: { Double(SettingsStore.shared.transcriptionSoundVolume) },
+                                                        set: { SettingsStore.shared.transcriptionSoundVolume = Float($0) }
+                                                    ),
+                                                    in: 0...1,
+                                                    step: 0.05
+                                                ) { editing in
+                                                    if !editing {
+                                                        TranscriptionSoundPlayer.shared.playPreviewAtVolume(
+                                                            SettingsStore.shared.transcriptionSoundVolume
+                                                        )
+                                                    }
+                                                }
+                                                .frame(width: 150)
+                                            }
+                                        }
                                         Divider().opacity(0.2)
 
                                         self.optionToggleRow(
@@ -2927,6 +2927,32 @@ private struct DictionarySuggestionsSettingsRow: View {
                     ) {
                         ForEach(SettingsStore.AutomaticDictionarySuggestionFrequency.allCases) { frequency in
                             Text(frequency.displayName).tag(frequency)
+                        }
+                    }
+                    .fluidDropdownStyle()
+                    .fixedSize()
+                }
+                .padding(.leading, 16)
+
+                HStack(alignment: .center, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Prompt delay")
+                            .font(self.theme.typography.bodyStrong)
+                            .foregroundStyle(self.theme.palette.primaryText)
+                        Text("Wait this long after you stop editing. Shorter delays may ask while you're still correcting.")
+                            .font(self.theme.typography.bodySmall)
+                            .foregroundStyle(self.theme.palette.secondaryText)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                    FluidDropdownPicker(
+                        "Prompt delay",
+                        selectedTitle: self.settings.automaticDictionaryPromptDelay.displayName,
+                        selection: self.$settings.automaticDictionaryPromptDelay
+                    ) {
+                        ForEach(SettingsStore.AutomaticDictionaryPromptDelay.allCases) { delay in
+                            Text(delay.displayName).tag(delay)
                         }
                     }
                     .fluidDropdownStyle()

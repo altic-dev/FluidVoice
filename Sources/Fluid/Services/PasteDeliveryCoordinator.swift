@@ -639,6 +639,13 @@ final class SystemPasteCommandPoster: PasteCommandPosting {
         for event in events {
             event.post(tap: Self.pasteEventTapLocation)
         }
+        let first = events[0]
+        DebugLogger.shared.info(
+            "PASTE_COMMAND posted tap=session keyCode=\(first.getIntegerValueField(.keyboardEventKeycode)) " +
+                "flags=\(first.flags.rawValue) sourceState=\(first.getIntegerValueField(.eventSourceStateID)) " +
+                "events=\(events.count)",
+            source: "TypingService"
+        )
         return true
     }
 
@@ -679,6 +686,7 @@ final class PasteDeliveryCoordinator {
         let shouldKeepTranscript: Bool
         let isOutputValid: @MainActor () -> Bool
         let commandPostedAt: TimeInterval
+        let onReadTimeout: (() -> Void)?
         let pipelineID: String?
         var readAt: TimeInterval?
         var settlementTask: Task<Void, Never>?
@@ -710,7 +718,8 @@ final class PasteDeliveryCoordinator {
         _ text: String,
         preserveTranscriptOnClipboard: Bool,
         isOutputValid: @escaping @MainActor () -> Bool = { true },
-        onCommandPosted: ((TimeInterval) -> Void)? = nil
+        onCommandPosted: ((TimeInterval) -> Void)? = nil,
+        onReadTimeout: (() -> Void)? = nil
     ) async -> TextDeliveryResult {
         guard isOutputValid() else { return .cancelled }
         self.log("delivery_policy keepTranscript=\(preserveTranscriptOnClipboard) auditSchema=1")
@@ -778,6 +787,7 @@ final class PasteDeliveryCoordinator {
             shouldKeepTranscript: preserveTranscriptOnClipboard,
             isOutputValid: isOutputValid,
             commandPostedAt: commandPostedAt,
+            onReadTimeout: onReadTimeout,
             pipelineID: DebugLogger.pipelineID,
             readAt: nil,
             settlementTask: nil
@@ -911,6 +921,7 @@ final class PasteDeliveryCoordinator {
             return
         }
 
+        if readTimedOut, lease.isOutputValid() { lease.onReadTimeout?() }
         let restoreStartedAt = ProcessInfo.processInfo.systemUptime
         // A late Cmd+V can still be queued in the target. Restoring the old
         // clipboard now would paste unrelated content. Materialize the promised

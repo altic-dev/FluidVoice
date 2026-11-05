@@ -37,7 +37,34 @@ enum PasteReadReceiptReproductionTests {
         await self.testStaleReceiptCannotSettleNewDelivery()
         FileHandle.standardOutput.write(Data("RUN: testReadReceiptKeepsItsOriginalPipeline\n".utf8))
         await self.testReadReceiptKeepsItsOriginalPipeline()
-        print("PASS: 12 paste receipt cases; no real keys or system clipboard used")
+        await self.testRecoveryTimeoutEvidence()
+        print("PASS: 13 paste receipt cases; no real keys or system clipboard used")
+    }
+
+    static func testRecoveryTimeoutEvidence() async {
+        for scenario in 0..<4 {
+            let board = self.board()
+            let manager = SystemPasteboardManager(pasteboard: board)
+            let poster = ReceiptTestPoster()
+            let coordinator = PasteDeliveryCoordinator(pasteboard: manager, commandPoster: poster, settlementDelayNanoseconds: 20_000_000, readTimeoutNanoseconds: 80_000_000)
+            var valid = true
+            var timeouts = 0
+            let result = await coordinator.deliver("recover me", preserveTranscriptOnClipboard: false, isOutputValid: { valid }, onReadTimeout: { timeouts += 1 })
+            self.expect(result == .commandPosted)
+            switch scenario {
+            case 1: self.expect(board.string(forType: .string) == "recover me")
+            case 2: self.expect(manager.writeIntentionalText("newer external copy"))
+            case 3: valid = false
+            default: break
+            }
+            try? await Task.sleep(nanoseconds: 180_000_000)
+            self.expect(timeouts == (scenario == 0 ? 1 : 0), "Only an owned, unread, valid delivery reports timeout evidence")
+            self.expect(poster.count == 1, "Recovery evidence never posts a second paste")
+            if scenario == 0 { self.expect(board.string(forType: .string) == "recover me") }
+            if scenario == 2 { self.expect(board.string(forType: .string) == "newer external copy") }
+            board.releaseGlobally()
+        }
+        print("PASS: unread recovery callback is single-shot; normal reads, external copies and cancellation do not trigger it")
     }
 
     static func board() -> NSPasteboard {

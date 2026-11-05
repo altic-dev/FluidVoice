@@ -143,6 +143,41 @@ final class SettingsBackupRoundTripTests: XCTestCase {
         }
     }
 
+    func testDictionaryPromptDelayDefaultsAndRejectsUnknownStoredValues() throws {
+        try self.withSavedDefaults {
+            let defaults = UserDefaults.standard
+            let settings = SettingsStore.shared
+            defaults.removeObject(forKey: "AutomaticDictionaryPromptDelay")
+            XCTAssertEqual(settings.automaticDictionaryPromptDelay, .three)
+            for invalid in [-1, 0, 999, 4000] {
+                defaults.set(invalid, forKey: "AutomaticDictionaryPromptDelay")
+                XCTAssertEqual(settings.automaticDictionaryPromptDelay, .three)
+            }
+        }
+    }
+
+    func testDictionaryPromptDelayBackupRoundTripAndLegacyPreservation() throws {
+        try self.withSavedDefaults {
+            let settings = SettingsStore.shared
+            let enabled = settings.automaticDictionaryLearningEnabled
+            let frequency = settings.automaticDictionarySuggestionFrequency
+            for delay in SettingsStore.AutomaticDictionaryPromptDelay.allCases {
+                settings.automaticDictionaryPromptDelay = delay
+                let data = try JSONEncoder().encode(settings.makeBackupPayload())
+                let payload = try JSONDecoder().decode(SettingsBackupPayload.self, from: data)
+                settings.automaticDictionaryPromptDelay = .three
+                settings.restore(from: payload, promptProfiles: [], appPromptBindings: [])
+                XCTAssertEqual(settings.automaticDictionaryPromptDelay, delay)
+                XCTAssertEqual(settings.automaticDictionaryLearningEnabled, enabled)
+                XCTAssertEqual(settings.automaticDictionarySuggestionFrequency, frequency)
+            }
+            let legacy = try self.payload(removing: ["automaticDictionaryPromptDelay"])
+            settings.automaticDictionaryPromptDelay = .threeQuarters
+            settings.restore(from: legacy, promptProfiles: [], appPromptBindings: [])
+            XCTAssertEqual(settings.automaticDictionaryPromptDelay, .threeQuarters)
+        }
+    }
+
     private func payload(removing keys: [String]) throws -> SettingsBackupPayload {
         var json = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(SettingsStore.shared.makeBackupPayload())) as? [String: Any])
         for key in keys {

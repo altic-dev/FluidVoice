@@ -2661,6 +2661,7 @@ final class SettingsStore: ObservableObject {
         case fluidSfx2 = "fluid_sfx_2"
         case fluidSfx3 = "fluid_sfx_3"
         case fluidSfx4 = "fluid_sfx_4"
+        case cream, thock, petal
 
         var id: String {
             self.rawValue
@@ -2669,11 +2670,14 @@ final class SettingsStore: ObservableObject {
         var displayName: String {
             switch self {
             case .none: return "None"
-            case .fluidSfx0: return "Fluid SFX 0"
-            case .fluidSfx1: return "Fluid SFX 1"
-            case .fluidSfx2: return "Fluid SFX 2"
-            case .fluidSfx3: return "Fluid SFX 3"
-            case .fluidSfx4: return "Fluid SFX 4"
+            case .fluidSfx0: return "Original · SFX 0"
+            case .fluidSfx1: return "Ember · SFX 1"
+            case .fluidSfx2: return "Rise · SFX 2"
+            case .fluidSfx3: return "Drift · SFX 3"
+            case .fluidSfx4: return "Echo · SFX 4"
+            case .cream: return "Cream"
+            case .thock: return "Thock"
+            case .petal: return "Petal"
             }
         }
 
@@ -2685,13 +2689,23 @@ final class SettingsStore: ObservableObject {
             case .fluidSfx2: return "FV_start_2"
             case .fluidSfx3: return "sfx_3"
             case .fluidSfx4: return "sfx_4"
+            case .cream: return "cue_cream_start"
+            case .thock: return "cue_thock_start"
+            case .petal: return "cue_petal_start"
             }
         }
 
         var stopSoundFileName: String? {
             switch self {
             case .fluidSfx0: return "FV_end_0"
-            case .none, .fluidSfx1, .fluidSfx2, .fluidSfx3, .fluidSfx4: return nil
+            case .cream: return "cue_cream_stop"
+            case .thock: return "cue_thock_stop"
+            case .petal: return "cue_petal_stop"
+            case .fluidSfx1: return "FV_stop_1"
+            case .fluidSfx2: return "FV_stop_2"
+            case .fluidSfx3: return "FV_stop_3"
+            case .fluidSfx4: return "FV_stop_4"
+            case .none: return nil
             }
         }
     }
@@ -3821,7 +3835,8 @@ final class SettingsStore: ObservableObject {
             fileTranscriptionExpectedSpeakerCount: self.fileTranscriptionExpectedSpeakerCount,
             meetingRecordingDefaults: self.meetingRecordingDefaults,
             privateAIIdleUnload: self.privateAIIdleUnload,
-            dictationPromptConfigurations: self.dictationPromptConfigurations
+            dictationPromptConfigurations: self.dictationPromptConfigurations,
+            automaticDictionaryPromptDelay: self.automaticDictionaryPromptDelay
         )
     }
 
@@ -4025,6 +4040,9 @@ final class SettingsStore: ObservableObject {
         self.continuousDictationSpacingEnabled = payload.continuousDictationSpacingEnabled ?? restoredContinuousDictationModeEnabled
         self.contextAwareCapitalizationEnabled = payload.contextAwareCapitalizationEnabled ?? restoredContinuousDictationModeEnabled
         self.pauseMediaDuringTranscription = payload.pauseMediaDuringTranscription
+        if let automaticDictionaryPromptDelay = payload.automaticDictionaryPromptDelay {
+            self.automaticDictionaryPromptDelay = automaticDictionaryPromptDelay
+        }
         if let automaticDictionaryLearningEnabled = payload.automaticDictionaryLearningEnabled {
             self.automaticDictionaryLearningEnabled = automaticDictionaryLearningEnabled
         }
@@ -5192,6 +5210,37 @@ final class SettingsStore: ObservableObject {
         }
     }
 
+    enum AutomaticDictionaryPromptDelay: Int, Codable, CaseIterable, Identifiable {
+        case threeQuarters = 750
+        case one = 1000
+        case two = 2000
+        case three = 3000
+
+        var id: Int { self.rawValue }
+        var displayName: String {
+            switch self {
+            case .threeQuarters: "0.75 seconds"
+            case .one: "1 second"
+            case .two: "2 seconds"
+            case .three: "3 seconds"
+            }
+        }
+
+        var inactivityNanoseconds: UInt64 { UInt64(self.rawValue) * 1_000_000 }
+        // Leaving the corrected word should never wait longer than inactivity.
+        var completionNanoseconds: UInt64 { min(self.inactivityNanoseconds, 1_000_000_000) }
+    }
+
+    var automaticDictionaryPromptDelay: AutomaticDictionaryPromptDelay {
+        get {
+            AutomaticDictionaryPromptDelay(rawValue: self.defaults.integer(forKey: Keys.automaticDictionaryPromptDelay)) ?? .three
+        }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue.rawValue, forKey: Keys.automaticDictionaryPromptDelay)
+        }
+    }
+
     var automaticDictionaryLearningEnabled: Bool {
         get { self.defaults.object(forKey: Keys.automaticDictionaryLearningEnabled) as? Bool ?? true }
         set {
@@ -6143,6 +6192,7 @@ private extension SettingsStore {
         static let customDictionaryEntries = "CustomDictionaryEntries"
         static let automaticDictionaryLearningEnabled = "AutomaticDictionaryLearningEnabled"
         static let automaticDictionarySuggestionFrequency = "AutomaticDictionarySuggestionFrequency"
+        static let automaticDictionaryPromptDelay = "AutomaticDictionaryPromptDelay"
         static let vocabularyBoostingEnabled = "VocabularyBoostingEnabled"
         static let pronunciationMatchingEnabled = "PronunciationMatchingEnabled"
 

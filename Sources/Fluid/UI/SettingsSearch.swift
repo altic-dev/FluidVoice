@@ -85,11 +85,11 @@ enum SettingsSearchTarget: Hashable {
              .showWindowAtLogin,
              .dockVisibility,
              .accentColor,
-             .transcriptionSounds,
              .automaticUpdates:
             return .general
 
         case .dictation,
+             .transcriptionSounds,
              .analyticsPrivacy,
              .microphonePermission,
              .activationMode,
@@ -347,7 +347,7 @@ enum SettingsSearchIndex {
         .init(
             target: .dictionarySuggestions,
             title: "Learn from my corrections",
-            terms: ["automatic corrections learn words custom dictionary frequency ignore"]
+            terms: ["automatic corrections learn words custom dictionary frequency ignore prompt delay timing seconds"]
         ),
         .init(
             target: .accessibilityPermission,

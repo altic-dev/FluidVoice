@@ -3564,7 +3564,7 @@ struct ContentView: View {
                     isOutputValid: { self.cancelledOutputLifecycleID != expectedOverlayLifecycleID }
                 )
                 self.logPipelineCompletion(
-                    outcome: String(describing: deliveryOutcome),
+                    outcome: deliveryOutcome.pipelineLogOutcome,
                     pipelineID: pipelineID,
                     pipelineStartedAt: pipelineStartedAt,
                     textReadyAt: finalTextReadyAt
@@ -3805,7 +3805,7 @@ struct ContentView: View {
         expectedOverlayLifecycleID: UInt64
     ) {
         self.logPipelineCompletion(
-            outcome: String(describing: outcome),
+            outcome: outcome.pipelineLogOutcome,
             pipelineID: pipelineID,
             pipelineStartedAt: pipelineStartedAt,
             textReadyAt: textReadyAt
