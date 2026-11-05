@@ -2661,6 +2661,7 @@ final class SettingsStore: ObservableObject {
         case fluidSfx2 = "fluid_sfx_2"
         case fluidSfx3 = "fluid_sfx_3"
         case fluidSfx4 = "fluid_sfx_4"
+        case cream, thock, petal
 
         var id: String {
             self.rawValue
@@ -2669,11 +2670,14 @@ final class SettingsStore: ObservableObject {
         var displayName: String {
             switch self {
             case .none: return "None"
-            case .fluidSfx0: return "Fluid SFX 0"
-            case .fluidSfx1: return "Fluid SFX 1"
-            case .fluidSfx2: return "Fluid SFX 2"
-            case .fluidSfx3: return "Fluid SFX 3"
-            case .fluidSfx4: return "Fluid SFX 4"
+            case .fluidSfx0: return "Original · SFX 0"
+            case .fluidSfx1: return "Ember · SFX 1"
+            case .fluidSfx2: return "Rise · SFX 2"
+            case .fluidSfx3: return "Drift · SFX 3"
+            case .fluidSfx4: return "Echo · SFX 4"
+            case .cream: return "Cream"
+            case .thock: return "Thock"
+            case .petal: return "Petal"
             }
         }
 
@@ -2685,13 +2689,23 @@ final class SettingsStore: ObservableObject {
             case .fluidSfx2: return "FV_start_2"
             case .fluidSfx3: return "sfx_3"
             case .fluidSfx4: return "sfx_4"
+            case .cream: return "cue_cream_start"
+            case .thock: return "cue_thock_start"
+            case .petal: return "cue_petal_start"
             }
         }
 
         var stopSoundFileName: String? {
             switch self {
             case .fluidSfx0: return "FV_end_0"
-            case .none, .fluidSfx1, .fluidSfx2, .fluidSfx3, .fluidSfx4: return nil
+            case .cream: return "cue_cream_stop"
+            case .thock: return "cue_thock_stop"
+            case .petal: return "cue_petal_stop"
+            case .fluidSfx1: return "FV_stop_1"
+            case .fluidSfx2: return "FV_stop_2"
+            case .fluidSfx3: return "FV_stop_3"
+            case .fluidSfx4: return "FV_stop_4"
+            case .none: return nil
             }
         }
     }

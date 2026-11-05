@@ -6,10 +6,12 @@ final class TranscriptionSoundPlayer {
 
     private let playbackQueue = DispatchQueue(label: "app.fluidvoice.transcription-sounds", qos: .userInteractive)
     private var players: [String: AVAudioPlayer] = [:]
+    private var previewStop: DispatchWorkItem?
 
     private init() {}
 
     func playStartSound() {
+        self.cancelPendingPreview()
         let settings = SettingsStore.shared
         guard settings.enableTranscriptionSounds else { return }
         let selected = settings.transcriptionStartSound
@@ -18,6 +20,7 @@ final class TranscriptionSoundPlayer {
     }
 
     func playStopSound() {
+        self.cancelPendingPreview()
         let settings = SettingsStore.shared
         guard settings.enableTranscriptionSounds else { return }
         let selected = settings.transcriptionStartSound
@@ -25,18 +28,43 @@ final class TranscriptionSoundPlayer {
         self.play(soundName: soundName, desiredVolume: settings.transcriptionSoundVolume)
     }
 
-    /// Preview a specific sound at the current volume setting (used in Settings UI).
+    /// Preview both cues, leaving enough time for the first sound to finish.
     func playPreview(sound: SettingsStore.TranscriptionStartSound) {
-        guard let soundName = sound.startSoundFileName else { return }
         let settings = SettingsStore.shared
-        self.play(soundName: soundName, desiredVolume: settings.transcriptionSoundVolume)
+        let volume = settings.transcriptionSoundVolume
+        let startURL = sound.startSoundFileName.flatMap { Bundle.main.url(forResource: $0, withExtension: "m4a") }
+        let stopURL = sound.stopSoundFileName.flatMap { Bundle.main.url(forResource: $0, withExtension: "m4a") }
+        let startedAt = ProcessInfo.processInfo.systemUptime
+        self.playbackQueue.async { [weak self] in
+            guard let self else { return }
+            self.previewStop?.cancel()
+            self.previewStop = nil
+            guard let name = sound.startSoundFileName, let startURL,
+                  let duration = self.playOnPlaybackQueue(soundName: name, url: startURL, desiredVolume: volume, startedAt: startedAt),
+                  let stopName = sound.stopSoundFileName, let stopURL else { return }
+            let work = DispatchWorkItem { [weak self] in
+                guard let self else { return }
+                self.previewStop = nil
+                _ = self.playOnPlaybackQueue(soundName: stopName, url: stopURL, desiredVolume: volume, startedAt: ProcessInfo.processInfo.systemUptime)
+            }
+            self.previewStop = work
+            self.playbackQueue.asyncAfter(deadline: .now() + duration + 0.15, execute: work)
+        }
     }
 
     /// Preview current sound at a specific volume (used when slider is released).
     func playPreviewAtVolume(_ volume: Float) {
+        self.cancelPendingPreview()
         let selected = SettingsStore.shared.transcriptionStartSound
         guard let soundName = selected.startSoundFileName else { return }
         self.play(soundName: soundName, desiredVolume: volume)
+    }
+
+    private func cancelPendingPreview() {
+        self.playbackQueue.async { [weak self] in
+            self?.previewStop?.cancel()
+            self?.previewStop = nil
+        }
     }
 
     private func play(soundName: String, desiredVolume: Float) {
@@ -53,7 +81,9 @@ final class TranscriptionSoundPlayer {
         }
 
         self.playbackQueue.async { [weak self] in
-            self?.playOnPlaybackQueue(
+            self?.previewStop?.cancel()
+            self?.previewStop = nil
+            _ = self?.playOnPlaybackQueue(
                 soundName: soundName,
                 url: url,
                 desiredVolume: desiredVolume,
@@ -67,7 +97,7 @@ final class TranscriptionSoundPlayer {
         url: URL,
         desiredVolume: Float,
         startedAt: TimeInterval
-    ) {
+    ) -> TimeInterval? {
         do {
             let player: AVAudioPlayer
             if let existing = self.players[soundName] {
@@ -86,11 +116,13 @@ final class TranscriptionSoundPlayer {
                 message: "sound_play_dispatched sound=\(soundName) elapsedMs=\(Int(((ProcessInfo.processInfo.systemUptime - startedAt) * 1000).rounded()))",
                 source: "AppBenchmark"
             )
+            return player.duration
         } catch {
             DebugLogger.shared.error(
                 "Failed to play sound \(soundName).m4a: \(error.localizedDescription)",
                 source: "TranscriptionSoundPlayer"
             )
+            return nil
         }
     }
 }

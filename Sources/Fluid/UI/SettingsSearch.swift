@@ -85,11 +85,11 @@ enum SettingsSearchTarget: Hashable {
              .showWindowAtLogin,
              .dockVisibility,
              .accentColor,
-             .transcriptionSounds,
              .automaticUpdates:
             return .general
 
         case .dictation,
+             .transcriptionSounds,
              .analyticsPrivacy,
              .microphonePermission,
              .activationMode,
