@@ -100,20 +100,73 @@ enum PasteRecoveryPolicyTests {
         precondition(shorterWithNewline.0 == .confirmed(method: "count"), "A shrinking replacement with newline tolerance must still confirm")
         print("PASS: blocked one-unit-shorter replacements never confirm unchanged counts; real replacements, emoji and newline tolerance still confirm")
 
-        let policy = PasteRecoveryPresentationPolicy()
-        let first = policy.beginDelivery()
-        precondition(!policy.claim(first, alertsEnabled: false, isBusy: false, userActed: false))
-        precondition(!policy.claim(first, alertsEnabled: true, isBusy: true, userActed: false))
-        precondition(!policy.claim(first, alertsEnabled: true, isBusy: false, userActed: true))
-        precondition(policy.claim(first, alertsEnabled: true, isBusy: false, userActed: false), "Suppressed checks must not consume a valid recovery")
-        precondition(!policy.claim(first, alertsEnabled: true, isBusy: false, userActed: false), "A duplicate must not reopen the card")
-        let second = policy.beginDelivery()
-        precondition(!policy.claim(first, alertsEnabled: true, isBusy: false, userActed: false))
-        precondition(policy.claim(second, alertsEnabled: true, isBusy: false, userActed: false), "A distinct genuine miss must not be hidden by a cooldown")
-        let pending = policy.beginDelivery()
-        _ = policy.beginDelivery() // New recording supersedes a pending check.
-        precondition(!policy.claim(pending, alertsEnabled: true, isBusy: false, userActed: false))
+        let container = PasteVerifier.Snapshot(element: self.element, pid: getpid(), role: "AXGroup", value: "", characterCount: 0, caret: CFRange(location: 0, length: 0))
+        guard case .unknown = await self.verify(container, [container]).0 else {
+            fatalError("A container is not evidence of an unchanged editor")
+        }
+        let recovered = await self.verify(before, [nil, before, inserted])
+        precondition(recovered.0 == .confirmed(method: "value"), "A transient unreadable sample must not abandon later insertion evidence")
+
+        // Focused descendants are eligible; merely finding an editor is not enough.
+        let graph = [0: [1, 2], 1: [0], 2: [3]]
+        func find(_ roots: [Int], focused: Set<Int>, limit: Int = 64, proceed: Bool = true) -> Int? {
+            PasteVerificationTargetSearch.find(roots: roots, isText: { $0 == 1 || $0 == 3 }, isFocused: { focused.contains($0) }, children: { graph[$0] ?? [] }, maxNodes: limit, shouldContinue: { proceed })
+        }
+        precondition(find([0], focused: [3]) == 3)
+        precondition(find([0], focused: []) == nil, "An unfocused composer must not become the destination")
+        precondition(find([1], focused: []) == 1, "A directly focused text field does not need a duplicate focused attribute")
+        precondition(find([0], focused: [3], limit: 2) == nil)
+        precondition(find([0], focused: [3], proceed: false) == nil)
+        precondition(find([], focused: [3]) == nil)
+        precondition(!PasteVerifier.isTextRole("AXGroup"))
+        precondition(!PasteVerifier.isTextRole("AXSecureTextField"))
+
+        var recoveries: [PasteRecoveryEvidence.Recovery] = []
+        let evidence = PasteRecoveryEvidence { recoveries.append($0) }
+        evidence.verified(.unknown(reason: "baseline_unavailable"))
+        precondition(recoveries.isEmpty, "An unreadable editor alone must not spam a copy card")
+        evidence.clipboardTimedOut()
+        evidence.clipboardTimedOut()
+        precondition(recoveries == [.unverified], "Unread clipboard plus unknown insertion offers one honest recovery")
+        let confirmed = PasteRecoveryEvidence { recoveries.append($0) }
+        confirmed.clipboardTimedOut()
+        confirmed.verified(.confirmed(method: "value"))
+        confirmed.verified(.unknown(reason: "duplicate_stale_result"))
+        precondition(recoveries == [.unverified], "Confirmed insertion overrides a clipboard timeout")
+        let reversed = PasteRecoveryEvidence { recoveries.append($0) }
+        reversed.clipboardTimedOut()
+        reversed.verified(.unknown(reason: "focus_moved"))
+        precondition(recoveries == [.unverified, .unverified])
+        let definite = PasteRecoveryEvidence { recoveries.append($0) }
+        definite.verified(.notLanded(reason: "unchanged"))
+        precondition(recoveries.last == .notLanded, "A readable unchanged editor does not require a clipboard timeout")
+
+        let inbox = PasteRecoveryInbox()
+        inbox.submit(id: 1, transcript: "earlier miss", unverified: true, now: 0, alertsEnabled: true)
+        precondition(inbox.disposition(now: 1, isBusy: true, alertsEnabled: true) == .waitingForIdle)
+        precondition(inbox.take(now: 1, isBusy: true, alertsEnabled: true) == nil)
+        precondition(inbox.disposition(now: 2, isBusy: false, alertsEnabled: true) == .ready)
+        let deferred = inbox.take(now: 2, isBusy: false, alertsEnabled: true)
+        precondition(deferred?.transcript == "earlier miss" && deferred?.unverified == true, "The next recording must defer, not lose the recovery")
+        inbox.submit(id: 1, transcript: "duplicate", unverified: false, now: 3, alertsEnabled: true)
+        precondition(inbox.take(now: 3, isBusy: false, alertsEnabled: true) == nil)
+        inbox.submit(id: 3, transcript: "newer miss", unverified: false, now: 4, alertsEnabled: true)
+        inbox.submit(id: 2, transcript: "stale late result", unverified: true, now: 5, alertsEnabled: true)
+        precondition(inbox.take(now: 6, isBusy: false, alertsEnabled: true)?.transcript == "newer miss")
+        inbox.submit(id: 4, transcript: "expired", unverified: true, now: 0, alertsEnabled: true)
+        inbox.expire(now: PasteRecoveryInbox.lifetime)
+        precondition(inbox.take(now: 31, isBusy: false, alertsEnabled: true) == nil)
+        inbox.submit(id: 5, transcript: "opted out", unverified: true, now: 32, alertsEnabled: false)
+        precondition(inbox.take(now: 33, isBusy: false, alertsEnabled: true) == nil)
+        inbox.submit(id: 6, transcript: "opted out later", unverified: true, now: 34, alertsEnabled: true)
+        precondition(inbox.take(now: 35, isBusy: false, alertsEnabled: false) == nil)
+        precondition(inbox.take(now: 36, isBusy: false, alertsEnabled: true) == nil)
+        print("PASS: bounded focused-editor search, transient reads, combined clipboard/field evidence and deferred recovery")
+
+        let sequence = PasteRecoverySequence()
+        let firstID = sequence.nextID()
+        precondition(sequence.nextID() > firstID)
         print("PASS: late insertion, definite misses, partial signals, changed fields, focus loss, unreadable/cancelled checks, UTF-16, selection replacement")
-        print("PASS: opt-out, busy/user activity suppression, duplicate/stale checks and distinct genuine failures")
+        print("PASS: opt-out, busy deferral, duplicate/stale checks and distinct genuine failures")
     }
 }

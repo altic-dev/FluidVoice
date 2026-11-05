@@ -18,10 +18,42 @@ from pathlib import Path
 
 
 MARKER = re.compile(
-    r"\b(HOTKEY_BENCH|APP_BENCH|ASR_BENCH|FI_SERVICE_BENCH|FI_BRIDGE_BENCH|LLM_BENCH|OVERLAY_BENCH|TYPING_BENCH|HISTORY_BENCH|PIPELINE_SUMMARY|DICTATION_SUMMARY)\b(.*)"
+    r"\b(HOTKEY_BENCH|APP_BENCH|ASR_BENCH|FI_SERVICE_BENCH|FI_BRIDGE_BENCH|LLM_BENCH|OVERLAY_BENCH|TYPING_BENCH|HISTORY_BENCH|PIPELINE_SUMMARY|DICTATION_SUMMARY|FOCUS_ASSESS|TEXT_DELIVERY|PASTE_VERIFY|PASTE_READ_TIMEOUT|PASTE_READ)\b(.*)"
 )
 FIELD = re.compile(r"(?:^|\s)(\w+)=([^\s]+)")
 WALL = re.compile(r"^\[([\d:.]+)\]")
+
+
+def paste_observation(events):
+    """A clipboard read and command dispatch are not field confirmation.
+
+    Verification lacks a delivery generation: multiple deliveries in one
+    pipeline cannot be paired safely, even if one field check succeeded.
+    """
+    deliveries = [e for e in events if e["family"] == "TEXT_DELIVERY"]
+    checks = [e for e in events if e["family"] == "PASTE_VERIFY"]
+    landing, reason = "unknown", "not_logged"
+    if len(deliveries) > 1 or len(checks) > 1:
+        reason = "multiple_deliveries_or_checks"
+    elif checks:
+        check = checks[0]
+        if not check["pipeline_id"]:
+            reason = "unscoped_verification"
+        else:
+            landing = {"confirmed": "confirmed", "notLanded": "not_landed"}.get(check["name"], "unknown")
+            reason = check["fields"].get("reason") or check["fields"].get("method") or check["name"]
+    return {
+        "landing": landing, "reason": reason,
+        "dispatch_result": deliveries[0]["fields"].get("result") if len(deliveries) == 1 else None,
+        "clipboard_read": any(e["family"] == "PASTE_READ" for e in events),
+        "read_timeout": any(e["family"] == "PASTE_READ_TIMEOUT" for e in events),
+    }
+
+
+def dispatch_label(outcome):
+    # Older app logs used insertion wording for dispatch-only results.
+    return {"inserted": "input_dispatched", "insertedActionSuppressed": "input_dispatched_action_suppressed",
+            "insertedAndActionDispatched": "input_and_action_dispatched"}.get(outcome, outcome)
 
 
 def parse_logs(lines):
@@ -118,6 +150,16 @@ def parse_logs(lines):
             "APP_BENCH", "PIPELINE_SUMMARY", "LLM_BENCH") else None)
         if correlation and family in ("APP_BENCH", "PIPELINE_SUMMARY", "LLM_BENCH") and fields.get("id", correlation) != correlation:
             continue
+        if family == "TEXT_DELIVERY" and correlation and correlation not in by_id:
+            # Normal INFO logs can contain delivery evidence without benchmark
+            # recording/stop markers. Preserve evidence but invent no timings.
+            wall = WALL.match(line)
+            partial = {"id": correlation, "time": wall.group(1) if wall else "?",
+                       "events": [], "cancelled": False, "partial_start": True,
+                       "correlated": True}
+            by_id[correlation] = partial
+            runs.append(partial)
+            session_runs.append(partial)
         target = by_id.get(explicit_id) if explicit_id else current
         if target and target.get("correlated") and not explicit_id:
             # Unscoped work may belong to Local API or a previous recording.
@@ -294,8 +336,9 @@ def summarize(run):
             intentional_copy["fields"].get("success"))
     if run["cancelled"]:
         outcome = "cancelled"
-    elif summary:
-        outcome = summary["fields"].get("outcome", "finished")
+    elif summary or find_untimed("PIPELINE_SUMMARY", {"summary"}, stop_event_index):
+        outcome_summary = summary or find_untimed("PIPELINE_SUMMARY", {"summary"}, stop_event_index)
+        outcome = outcome_summary["fields"].get("outcome", "finished")
     elif ready_summary and ready_summary["fields"].get("outcome") == "asr_failed":
         outcome = "asr_failed"
     elif final and final["fields"].get("textChars") == "0" and phases["handler_return"] is not None:
@@ -431,6 +474,7 @@ def summarize(run):
         "ai_model": ai_call["fields"].get("model") if ai_call else None,
     }
     return {"id": run["id"], "time": run["time"], "outcome": outcome,
+            "paste_observation": paste_observation(events),
             "ready_outcome": ready_summary["fields"].get("outcome") if ready_summary else None,
             "correlation": "request_id" if run.get("correlated") else "legacy_proximity_uncertain",
             "correctness": "not_checked_requires_expected_and_delivered_text",
@@ -451,14 +495,16 @@ def render(rows, details=False):
 
     lines = ["# Dictation evaluation", "",
              "Readiness is not delivery. Timing is not text-correctness proof.", "",
-             "| Time / ID | Correlation | Ready result | Delivery result | ASR | AI | App overhead | Ready | Delivery |",
-             "|---|---|---|---|---:|---:|---:|---:|---:|"]
+             "| Time / ID | Correlation | Ready result | Dispatch result | Landing evidence | ASR | AI | App overhead | Ready | Delivery |",
+             "|---|---|---|---|---|---:|---:|---:|---:|---:|"]
     for row in rows:
         m = row["metrics"]
         values = [m["summary_asr_ms"], m["summary_ai_ms"], m["summary_app_overhead_ms"],
                   m["summary_ready_ms"], m["stop_to_delivery_ms"]]
+        observation = row["paste_observation"]
         lines.append(f"| {row['time']} / {(row['id'] or '?')[:8]} | {row['correlation']} | "
-                     f"{row['ready_outcome'] or 'unknown'} | {row['outcome']} | "
+                     f"{row['ready_outcome'] or 'unknown'} | {dispatch_label(row['outcome'])} | "
+                     f"{observation['landing']} ({observation['reason']}) | "
                      + " | ".join(map(fmt, values)) + " |")
     lines += ["", "Legacy proximity metrics are exploratory, not authoritative overlap comparisons. "
               "FI breakdown requires a matching request ID. Correctness requires checking the actual delivered text.",
@@ -471,7 +517,7 @@ def render(rows, details=False):
         p, m = row["from_stop_ms"], row["metrics"]
         values = [p["asr_return"], p["text_ready"], p["paste_done"], p["hidden"],
                   m["hide_duration_ms"], m["overlay_after_paste_ms"], m["callback_queue_ms"], p["cleanup"]]
-        lines.append(f"| {row['time']} / {(row['id'] or '?')[:8]} | {row['outcome']} | " + " | ".join(map(fmt, values)) + " |")
+        lines.append(f"| {row['time']} / {(row['id'] or '?')[:8]} | {dispatch_label(row['outcome'])} | " + " | ".join(map(fmt, values)) + " |")
     tails = [r["metrics"]["overlay_after_paste_ms"] for r in rows if r["metrics"]["overlay_after_paste_ms"] is not None]
     if tails:
         lines += ["", f"Overlay API returned after paste in {sum(t > 0 for t in tails)}/{len(tails)} measured runs. "
@@ -639,6 +685,9 @@ def render_terminal_stages(rows, width=None, stages=None, title="DICTATION TIMIN
         load_label = f"  load {load:.1f}" if load is not None else ""
         lines.extend(textwrap.wrap(
             f"#{index}  {row['time']}  {(row['id'] or '?')[:8]}  {mode}{load_label}", width))
+        observation = row["paste_observation"]
+        lines.extend(textwrap.wrap(
+            f"Dispatch: {dispatch_label(row['outcome'])}; landing: {observation['landing']} ({observation['reason']}).", width))
     for offset in range(0, len(rows), per_table):
         batch = rows[offset:offset + per_table]
         widths = [label_width] + [value_width] * len(batch)

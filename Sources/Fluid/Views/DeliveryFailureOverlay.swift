@@ -12,6 +12,7 @@ final class DeliveryFailureOverlayController {
     enum Kind: Equatable {
         case noEditableTarget
         case pasteNotLanded
+        case pasteUnverified
         case accessibilityNotTrusted
         case deliveryFailed
 
@@ -32,6 +33,7 @@ final class DeliveryFailureOverlayController {
             switch self {
             case .noEditableTarget: "No text field focused"
             case .pasteNotLanded, .deliveryFailed: "Text wasn't inserted"
+            case .pasteUnverified: "Couldn’t verify insertion"
             case .accessibilityNotTrusted: "Enable Accessibility to insert text"
             }
         }
