@@ -422,6 +422,15 @@ final class MeetingLiveAPIControllerTests: XCTestCase {
         }
     }
 
+    func test_untrustedRequestRejection_onPort80AllowsHostsWithoutPort() throws {
+        for host in ["127.0.0.1", "localhost", "[::1]", "127.0.0.1:80"] {
+            let request = self.request(headers: ["host": host])
+            XCTAssertNil(LocalAPI.untrustedRequestRejection(for: request, port: 80), host)
+        }
+        let foreign = try XCTUnwrap(LocalAPI.untrustedRequestRejection(for: self.request(headers: ["host": "evil.example"]), port: 80))
+        XCTAssertEqual(foreign.status, 403)
+    }
+
     func test_untrustedRequestRejection_rejectsRebindingHostsAndBrowsers() throws {
         let cases: [[String: String]] = [
             [:],

@@ -95,7 +95,12 @@ enum LocalAPI {
         if request.headers["origin"] != nil {
             return self.error("Browser requests are not allowed.", status: 403)
         }
-        let allowedHosts = ["127.0.0.1:\(port)", "localhost:\(port)", "[::1]:\(port)"]
+        let loopbackNames = ["127.0.0.1", "localhost", "[::1]"]
+        var allowedHosts = Set(loopbackNames.map { "\($0):\(port)" })
+        // On port 80, HTTP clients send Host without the port.
+        if port == 80 {
+            allowedHosts.formUnion(loopbackNames)
+        }
         guard let host = request.headers["host"]?.lowercased(), allowedHosts.contains(host) else {
             return Self.error("Host not allowed.", status: 403)
         }
