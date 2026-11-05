@@ -47,6 +47,62 @@ final nonisolated class CompactSpeechModelArchiveTransportTests: XCTestCase {
         try fixture.assertSiblings()
     }
 
+    func testOversizedResponseRetriesOnlyTheFailedRange() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let recorder = Recorder()
+        let (ready, _) = try await fixture.download { request, _, progress in
+            let range = request.value(forHTTPHeaderField: "Range") ?? ""
+            recorder.add(range)
+            if range == "bytes=4-7", recorder.values.filter({ $0 == range }).count == 1 {
+                throw URLError(.dataLengthExceedsMaximum)
+            }
+            return try fixture.chunk(request, progress: progress)
+        }
+        XCTAssertEqual(recorder.values, ["bytes=0-3", "bytes=4-7", "bytes=4-7", "bytes=8-9"])
+        XCTAssertEqual(try Data(contentsOf: ready), fixture.payload)
+        try fixture.assertSiblings()
+    }
+
+    func testRepeatedOversizedResponsesStopAndKeepCompletedRanges() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let recorder = Recorder()
+        do {
+            _ = try await fixture.download { request, _, progress in
+                let range = request.value(forHTTPHeaderField: "Range") ?? ""
+                recorder.add(range)
+                if range == "bytes=4-7" { throw URLError(.dataLengthExceedsMaximum) }
+                return try fixture.chunk(request, progress: progress)
+            }
+            XCTFail("Expected bounded failure")
+        } catch { XCTAssertEqual((error as? URLError)?.code, .dataLengthExceedsMaximum) }
+        XCTAssertEqual(recorder.values, ["bytes=0-3", "bytes=4-7", "bytes=4-7", "bytes=4-7"])
+        XCTAssertEqual(try Data(contentsOf: fixture.partial), fixture.payload.prefix(4))
+        try fixture.assertSiblings()
+    }
+
+    func testCancellationStopsChunkRetries() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let (started, continuation) = AsyncStream<Void>.makeStream()
+        let recorder = Recorder()
+        let task = Task {
+            try await fixture.download { request, _, _ in
+                recorder.add(request.value(forHTTPHeaderField: "Range") ?? "")
+                continuation.yield(())
+                continuation.finish()
+                throw URLError(.dataLengthExceedsMaximum)
+            }
+        }
+        for await _ in started { break }
+        task.cancel()
+        do { _ = try await task.value; XCTFail("Expected cancellation") } catch { XCTAssertTrue(error is CancellationError) }
+        XCTAssertEqual(recorder.values, ["bytes=0-3"])
+        XCTAssertEqual(try Data(contentsOf: fixture.partial).count, 0)
+        try fixture.assertSiblings()
+    }
+
     func testCancellationJoinsTransportAndPreservesCompletedRange() async throws {
         let fixture = try Fixture()
         defer { fixture.cleanup() }

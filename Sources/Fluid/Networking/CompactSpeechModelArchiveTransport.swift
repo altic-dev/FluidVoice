@@ -6,6 +6,7 @@ nonisolated enum CompactSpeechModelArchiveTransport {
     typealias Progress = @Sendable (Int64, Int64) -> Void
     typealias ChunkTransport = @Sendable (URLRequest, Int64, @escaping @Sendable (Int64) -> Void) async throws -> (URL, URLResponse)
     static let rangeBytes: Int64 = 16 * 1024 * 1024
+    static let maximumChunkRetries = 2
 
     enum Failure: LocalizedError, Equatable {
         case invalidDescriptor, invalidRange, alreadyDownloading
@@ -71,6 +72,7 @@ nonisolated enum CompactSpeechModelArchiveTransport {
             try await ChunkLoader.download(request: request, maximumBytes: maximumBytes, progress: progress)
         }
         progress(completed, descriptor.expectedDownloadBytes)
+        var chunkRetries = 0
         while completed < descriptor.expectedDownloadBytes {
             try Task.checkCancellation()
             let start = completed
@@ -96,6 +98,7 @@ nonisolated enum CompactSpeechModelArchiveTransport {
                 try self.append(chunk: chunk, to: partial, offset: start)
                 try Task.checkCancellation()
                 completed = end + 1
+                chunkRetries = 0
                 try FileManager.default.removeItem(at: chunk)
                 downloaded = nil
                 progress(completed, descriptor.expectedDownloadBytes)
@@ -103,6 +106,12 @@ nonisolated enum CompactSpeechModelArchiveTransport {
                 // Join transport cancellation before touching its file. Only complete ranges survive.
                 if let downloaded { try? FileManager.default.removeItem(at: downloaded) }
                 try self.truncate(partial, to: completed)
+                if !Task.isCancelled, self.isRetryable(error), chunkRetries < self.maximumChunkRetries {
+                    chunkRetries += 1
+                    progress(completed, descriptor.expectedDownloadBytes)
+                    try await Task.sleep(nanoseconds: UInt64(chunkRetries) * 500_000_000)
+                    continue
+                }
                 throw error
             }
         }
@@ -118,6 +127,18 @@ nonisolated enum CompactSpeechModelArchiveTransport {
             throw Failure.invalidRange
         }
         return (ready, response)
+    }
+
+    private static func isRetryable(_ error: Error) -> Bool {
+        let error = error as NSError
+        guard error.domain == NSURLErrorDomain else { return false }
+        switch error.code {
+        case NSURLErrorDataLengthExceedsMaximum, NSURLErrorTimedOut, NSURLErrorNetworkConnectionLost,
+             NSURLErrorCannotConnectToHost, NSURLErrorCannotFindHost:
+            return true
+        default:
+            return false
+        }
     }
 
     /// A completed handoff may outlive an app exit before the installer consumes it.
