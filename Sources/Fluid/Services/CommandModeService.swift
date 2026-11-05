@@ -840,6 +840,8 @@ final class CommandModeService: ObservableObject {
         }
 
         if settings.effectiveCommandModeProviderID == AppleIntelligenceAvailability.providerID {
+            self.streamingText = ""
+            self.streamingThinkingText = ""
             let history = self.conversationHistory.map {
                 (role: $0.role.appleRole, content: $0.content, call: $0.toolCall.map {
                     AppleIntelligenceCall(id: $0.id, command: $0.command, workingDirectory: $0.workingDirectory, purpose: $0.purpose)
