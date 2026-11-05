@@ -395,6 +395,12 @@ final class MeetingLiveAPIControllerTests: XCTestCase {
         let notModified = await router.route(self.request(query: ["since": "5", "session": self.sessionID.uuidString]))
         XCTAssertEqual(notModified.status, 304)
         XCTAssertEqual(notModified.headers["Cache-Control"], "no-store")
+        let badQuery = await router.route(self.request(query: ["since": "-1"]))
+        XCTAssertEqual(badQuery.status, 400)
+        XCTAssertEqual(badQuery.headers["Cache-Control"], "no-store")
+        let wrongMethod = await router.route(self.request(method: "POST"))
+        XCTAssertEqual(wrongMethod.status, 405)
+        XCTAssertEqual(wrongMethod.headers["Cache-Control"], "no-store")
     }
 
     func test_wireHeaders_omitContentLengthWithoutBody() {

@@ -86,18 +86,12 @@ struct MeetingAPIController: LocalAPIRouteHandler {
             sessionID = id
         }
 
-        // Live captions must never land in a client's on-disk HTTP cache.
-        let noStore = ["Cache-Control": "no-store"]
+        // The router adds Cache-Control: no-store to every response on this path.
         let reading = await self.liveTranscript.currentLiveTranscript()
         if let since, let sessionID, sessionID == reading.sessionID, since == reading.snapshot.revision {
-            return LocalAPI.Response(status: 304, headers: noStore)
+            return LocalAPI.Response(status: 304)
         }
-        let response = LocalAPI.json(MeetingLiveResponse(reading: reading))
-        return LocalAPI.Response(
-            status: response.status,
-            headers: response.headers.merging(noStore) { _, new in new },
-            body: response.body
-        )
+        return LocalAPI.json(MeetingLiveResponse(reading: reading))
     }
 
     private func transcript(_ request: LocalAPI.Request) async -> LocalAPI.Response {

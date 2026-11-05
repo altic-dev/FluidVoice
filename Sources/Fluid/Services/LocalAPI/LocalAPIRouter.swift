@@ -38,7 +38,20 @@ final class LocalAPIRouter {
         self.routes[key] = handler
     }
 
+    /// Paths whose every response (errors included) must stay out of a client's HTTP cache.
+    private static let noStorePaths: Set<String> = ["/v1/meetings/live"]
+
     func route(_ request: LocalAPI.Request) async -> LocalAPI.Response {
+        let response = await self.dispatch(request)
+        guard Self.noStorePaths.contains(request.path) else { return response }
+        return LocalAPI.Response(
+            status: response.status,
+            headers: response.headers.merging(["Cache-Control": "no-store"]) { _, new in new },
+            body: response.body
+        )
+    }
+
+    private func dispatch(_ request: LocalAPI.Request) async -> LocalAPI.Response {
         let key = RouteKey(method: request.method.uppercased(), path: request.path)
         guard let handler = self.routes[key] else {
             if self.routes.keys.contains(where: { $0.path == request.path }) {
