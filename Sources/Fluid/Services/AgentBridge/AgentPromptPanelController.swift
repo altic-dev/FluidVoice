@@ -2,8 +2,7 @@ import AppKit
 import SwiftUI
 
 /// Floating panel shown when a local coding agent (e.g. OpenCode) asks for a voice reply.
-/// Non-activating but key-capable: Return sends the reply, Esc cancels. Same visual family
-/// as the delivery-failure card (`TransientOverlayBackground`).
+/// The panel can receive Return and Esc without activating FluidVoice.
 @MainActor
 final class AgentPromptPanelController {
     static let windowIdentifier = NSUserInterfaceItemIdentifier("AgentPrompt")
@@ -95,7 +94,7 @@ private final class AgentPromptHostingView: NSHostingView<AgentPromptView> {
 
 private struct AgentPromptView: View {
     @ObservedObject var bridge: AgentBridgeService
-    @State private var isCloseHovered = false
+    @ObservedObject private var settings = SettingsStore.shared
 
     private var statusStyle: (label: String, color: Color, icon: String) {
         switch self.bridge.agentStatus {
@@ -109,59 +108,48 @@ private struct AgentPromptView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             self.header
-            self.messageCard
+            self.message
             self.transcriptCard
             self.footer
         }
         .padding(16)
         .frame(width: 520)
-        .background(TransientOverlayBackground())
+        .bottomOverlaySurface(self.settings.bottomOverlayAppearance, cornerRadius: 18)
         .preferredColorScheme(.dark)
     }
 
     private var header: some View {
-        HStack(spacing: 7) {
+        HStack(spacing: 8) {
             Image(systemName: self.statusStyle.icon)
                 .font(.fluidSystem(size: 11, weight: .semibold))
-                .foregroundStyle(self.statusStyle.color.opacity(0.95))
-                .frame(width: 24, height: 24)
-                .background(Circle().fill(self.statusStyle.color.opacity(0.14)))
+                .foregroundStyle(self.statusStyle.color)
+                .accessibilityHidden(true)
 
             Text(self.statusStyle.label)
                 .font(.fluidSystem(size: 12, weight: .medium))
-                .foregroundStyle(.white.opacity(0.72))
+                .foregroundStyle(.secondary)
 
             Spacer(minLength: 8)
 
             Button(action: { self.bridge.cancelActivePrompt() }) {
                 Image(systemName: "xmark")
                     .font(.fluidSystem(size: 10, weight: .semibold))
-                    .foregroundStyle(.white.opacity(self.isCloseHovered ? 0.95 : 0.68))
-                    .frame(width: 24, height: 24)
-                    .background(Circle().fill(Color.white.opacity(self.isCloseHovered ? 0.13 : 0.06)))
             }
-            .buttonStyle(.plain)
-            .contentShape(Circle())
-            .onHover { self.isCloseHovered = $0 }
+            .fluidGlassAction(circular: true, quiet: true)
             .help("Dismiss (Esc)")
             .accessibilityLabel("Dismiss")
         }
     }
 
-    private var messageCard: some View {
+    private var message: some View {
         ScrollView {
             Text(self.bridge.agentMessage)
                 .font(.fluidSystem(size: 13))
-                .foregroundStyle(.white.opacity(0.75))
+                .foregroundStyle(.primary)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .textSelection(.enabled)
         }
         .frame(maxHeight: 140)
-        .padding(10)
-        .background(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(Color.white.opacity(0.05))
-        )
     }
 
     private var transcriptCard: some View {
@@ -171,7 +159,7 @@ private struct AgentPromptView: View {
                     .controlSize(.small)
                 Text(self.bridge.phase == .starting ? "Starting microphone…" : "Transcribing…")
                     .font(.fluidSystem(size: 13, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.72))
+                    .foregroundStyle(.secondary)
             } else {
                 Image(systemName: "mic.fill")
                     .font(.fluidSystem(size: 11, weight: .semibold))
@@ -180,11 +168,11 @@ private struct AgentPromptView: View {
                     Text("Listening… speak your reply")
                         .font(.fluidSystem(size: 13))
                         .italic()
-                        .foregroundStyle(.white.opacity(0.45))
+                        .foregroundStyle(.secondary)
                 } else {
                     Text(self.bridge.liveTranscript)
                         .font(.fluidSystem(size: 13))
-                        .foregroundStyle(.white.opacity(0.9))
+                        .foregroundStyle(.primary)
                         .lineLimit(3)
                 }
             }
@@ -200,22 +188,22 @@ private struct AgentPromptView: View {
     }
 
     private var footer: some View {
-        HStack(spacing: 10) {
-            Button("Cancel") {
-                self.bridge.cancelActivePrompt()
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.regular)
+        FluidGlassControlGroup {
+            HStack(spacing: 8) {
+                Button("Cancel") {
+                    self.bridge.cancelActivePrompt()
+                }
+                .fluidGlassAction()
 
-            Spacer()
+                Spacer()
 
-            Button("Send") {
-                self.bridge.finishRecordingAndReply()
+                Button("Send") {
+                    self.bridge.finishRecordingAndReply()
+                }
+                .fluidGlassAction(prominent: true, tone: self.settings.accentColor)
+                .disabled(self.bridge.phase != .recording)
+                .keyboardShortcut(.return)
             }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.regular)
-            .disabled(self.bridge.phase != .recording)
-            .keyboardShortcut(.return)
         }
     }
 }
