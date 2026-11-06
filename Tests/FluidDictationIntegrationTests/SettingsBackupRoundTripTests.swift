@@ -1,5 +1,6 @@
 import AppKit
 @testable import FluidVoice_Debug
+import SwiftUI
 import XCTest
 
 @MainActor
@@ -56,6 +57,35 @@ final class SettingsBackupRoundTripTests: XCTestCase {
             XCTAssertEqual(settings.meetingRecordingDefaults, meeting)
             XCTAssertEqual(settings.privateAIIdleUnload, .thirtyMinutes)
             XCTAssertEqual(settings.dictationPromptConfigurations, configurations)
+        }
+    }
+
+    func testCustomAccentColorRoundTripsAndPresetClearsIt() throws {
+        try self.withSavedDefaults {
+            let settings = SettingsStore.shared
+            XCTAssertEqual(Color(hex: "#3AC8C6")?.hexString, "#3AC8C6")
+
+            settings.accentColorOption = .purple
+            settings.customAccentColorHex = "#FF2D55"
+            XCTAssertEqual(settings.accentColor.hexString, "#FF2D55")
+            let encoded = try JSONEncoder().encode(settings.makeBackupPayload())
+
+            settings.accentColorOption = .green
+            XCTAssertNil(settings.customAccentColorHex)
+            try settings.restore(
+                from: JSONDecoder().decode(SettingsBackupPayload.self, from: encoded),
+                promptProfiles: settings.dictationPromptProfiles,
+                appPromptBindings: []
+            )
+            XCTAssertEqual(settings.accentColorOption, .purple)
+            XCTAssertEqual(settings.customAccentColorHex, "#FF2D55")
+
+            settings.restore(
+                from: try self.payload(removing: ["customAccentColorHex"]),
+                promptProfiles: settings.dictationPromptProfiles,
+                appPromptBindings: []
+            )
+            XCTAssertNil(settings.customAccentColorHex)
         }
     }
 

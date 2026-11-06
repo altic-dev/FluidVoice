@@ -259,7 +259,7 @@ enum SettingsSearchIndex {
             title: "Hide from Dock & App Switcher",
             terms: ["menu bar only", "dock icon command tab cmd tab app switcher"]
         ),
-        .init(target: .accentColor, title: "Accent Color", terms: ["appearance theme tint colour preset"]),
+        .init(target: .accentColor, title: "Accent Color", terms: ["appearance theme tint colour preset custom wheel picker"]),
         .init(
             target: .transcriptionSounds,
             title: "Transcription Sounds",

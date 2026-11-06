@@ -301,7 +301,7 @@ struct SettingsView: View {
                                         Text("Accent Color")
                                             .font(self.theme.typography.bodyStrong)
                                             .foregroundStyle(self.settingsTitleText)
-                                        Text("Pick a preset accent color for the app.")
+                                        Text("Pick a preset or a custom color.")
                                             .font(self.theme.typography.bodySmall)
                                             .foregroundStyle(self.settingsSecondaryText)
                                     }
@@ -310,7 +310,7 @@ struct SettingsView: View {
 
                                     HStack(spacing: 10) {
                                         ForEach(SettingsStore.AccentColorOption.allCases) { option in
-                                            let isSelected = self.settings.accentColorOption == option
+                                            let isSelected = self.settings.customAccentColorHex == nil && self.settings.accentColorOption == option
                                             Button {
                                                 self.settings.accentColorOption = option
                                             } label: {
@@ -330,6 +330,35 @@ struct SettingsView: View {
                                             .accessibilityLabel(option.rawValue)
                                             .help(option.rawValue)
                                         }
+
+                                        let isCustom = self.settings.customAccentColorHex != nil
+                                        Button {
+                                            AccentColorPanelTarget.shared.open(with: self.settings.accentColor)
+                                        } label: {
+                                            Circle()
+                                                .fill(AngularGradient(
+                                                    colors: [.red, .yellow, .green, .cyan, .blue, .purple, .red],
+                                                    center: .center
+                                                ))
+                                                .frame(width: 16, height: 16)
+                                                .overlay(
+                                                    Circle()
+                                                        .fill(self.settings.accentColor)
+                                                        .frame(width: 7, height: 7)
+                                                        .opacity(isCustom ? 1 : 0)
+                                                )
+                                                .overlay(
+                                                    Circle()
+                                                        .stroke(
+                                                            isCustom ? self.theme.palette.accent : self.theme.palette.cardBorder.opacity(0.5),
+                                                            lineWidth: isCustom ? 2 : 1
+                                                        )
+                                                )
+                                                .padding(4)
+                                        }
+                                        .buttonStyle(.plain)
+                                        .accessibilityLabel("Custom")
+                                        .help("Custom")
                                     }
                                     .padding(.horizontal, 6)
                                     .padding(.vertical, 4)
@@ -3320,5 +3349,26 @@ private extension SettingsView {
         } else if self.selectedRollbackVersion == "local", self.rollbackVersion.isEmpty {
             self.selectedRollbackVersion = ""
         }
+    }
+}
+
+/// Routes the shared color panel's live changes into the custom accent setting.
+@MainActor
+private final class AccentColorPanelTarget: NSObject {
+    static let shared = AccentColorPanelTarget()
+
+    func open(with color: Color) {
+        let panel = NSColorPanel.shared
+        panel.mode = .wheel
+        panel.showsAlpha = false
+        panel.setTarget(nil) // avoid writing the seed color back as a custom choice
+        panel.color = NSColor(color)
+        panel.setTarget(self)
+        panel.setAction(#selector(self.colorChanged(_:)))
+        panel.orderFront(nil)
+    }
+
+    @objc private func colorChanged(_ panel: NSColorPanel) {
+        SettingsStore.shared.customAccentColorHex = Color(nsColor: panel.color).hexString
     }
 }
