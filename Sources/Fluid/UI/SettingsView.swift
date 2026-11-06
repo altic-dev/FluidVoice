@@ -1524,6 +1524,26 @@ struct SettingsView: View {
                             )
                         )
                         .settingsSearchTarget(.historyPerformance)
+
+                        Divider().padding(.vertical, 4)
+
+                        self.settingsToggleRow(
+                            title: "Voice Agent API",
+                            description: "Automatically open the recording panel and start listening when an OpenCode turn ends. Choose Send to reply to the agent.",
+                            footnote: "Served over the local HTTP API on 127.0.0.1 (loopback only). Turning this on also enables the Local API.",
+                            isOn: Binding(
+                                get: { SettingsStore.shared.agentAPIEnabled },
+                                set: { newValue in
+                                    SettingsStore.shared.agentAPIEnabled = newValue
+                                    if newValue {
+                                        UserDefaults.standard.set(true, forKey: "LocalAPIEnabled")
+                                        LocalAPIServer.shared.start()
+                                    } else {
+                                        AgentBridgeService.shared.cancelActivePrompt()
+                                    }
+                                }
+                            )
+                        )
                     }
                     .padding(16)
                 }

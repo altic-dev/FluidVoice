@@ -366,6 +366,7 @@ enum ASRStopOutcome: Equatable {
 
 enum ASRExclusiveActivity: String, Equatable {
     case dictation
+    case agentPrompt
     case fileTranscription
     case localAPI
     case meeting
@@ -376,6 +377,8 @@ enum ASRExclusiveActivity: String, Equatable {
         switch self {
         case .dictation:
             return "dictation"
+        case .agentPrompt:
+            return "agent voice reply"
         case .fileTranscription:
             return "file transcription"
         case .localAPI:
@@ -710,6 +713,15 @@ final class ASRService: ObservableObject {
             && self.isRunning && !self.isStarting && !self.isStoppingFinalTranscription
             && !self.isTerminating && !self.isDictionaryTrainingCaptureActive
             && !self.recordingBufferHandoffGate.isActive && !self.recordingBufferHandoffGate.isRecovering
+    }
+
+    private func canStopCapture(agentPromptLease: ASRActivityLease?) -> Bool {
+        if let agentPromptLease {
+            return agentPromptLease.activity == .agentPrompt
+                && self.activeActivityLease == agentPromptLease
+                && self.dictationActivityLease == agentPromptLease
+        }
+        return self.activeActivityLease?.activity != .agentPrompt
     }
 
     func acquireExclusiveActivity(_ activity: ASRExclusiveActivity) throws -> ASRActivityLease {
@@ -1139,7 +1151,7 @@ final class ASRService: ObservableObject {
             "route_recovery_shutdown elapsedMs=\(self.elapsedMilliseconds(since: routeRecoveryShutdownStartedAt))"
         )
         if self.isRunning {
-            await self.stopWithoutTranscription()
+            await self.stopWithoutTranscription(finishingRecovery: false)
         }
         let audioEngineShutdownStartedAt = Date().timeIntervalSince1970
         await self.retireAudioEngineAndWait(reason: "app_termination")
@@ -2796,6 +2808,7 @@ final class ASRService: ObservableObject {
     func start(
         forDictionaryTraining: Bool = false,
         requiresPronunciation: Bool = true,
+        onAgentCaptureReserved: (@MainActor (ASRActivityLease) -> Void)? = nil,
         onCaptureStarted: (@MainActor () -> Void)? = nil
     ) async -> AudioCaptureStartOutcome {
         guard !forDictionaryTraining || !requiresPronunciation || DictionaryMatcherExperiment.sharedFeaturesEnabled else { return .failed }
@@ -2818,7 +2831,9 @@ final class ASRService: ObservableObject {
             return .failed
         }
         do {
-            self.dictationActivityLease = try self.acquireExclusiveActivity(.dictation)
+            let lease = try self.acquireExclusiveActivity(onAgentCaptureReserved == nil ? .dictation : .agentPrompt)
+            self.dictationActivityLease = lease
+            onAgentCaptureReserved?(lease)
         } catch {
             let message = error.localizedDescription
             self.errorTitle = "Dictation Unavailable"
@@ -2835,6 +2850,9 @@ final class ASRService: ObservableObject {
         self.isPronunciationTrainingStart = forDictionaryTraining && requiresPronunciation
         self.pronunciationTrainingStartGeneration = self.isPronunciationTrainingStart ? DictionaryMatcherExperiment.generation : nil
         defer {
+            if onAgentCaptureReserved != nil, !self.isRunning {
+                self.releaseDictationActivityIfNeeded()
+            }
             self.pronunciationTrainingStartGeneration = nil
             self.isPronunciationTrainingStart = false
             self.finishAudioCaptureStart()
@@ -3470,12 +3488,14 @@ final class ASRService: ObservableObject {
     ///   shown only when final transcription outlives the short status delay.
     ///   Fast finalization proceeds without queuing transient UI work ahead of its result.
     func stop(
+        agentPromptLease: ASRActivityLease? = nil,
         onCaptureStopped: (@MainActor () -> Void)? = nil,
         onFinalTranscriptionStarted: (@MainActor () -> Void)? = nil,
         forDictionaryTraining: Bool = false,
         captureDictionaryPronunciation: Bool? = nil,
         forDictionaryTesting: Bool = false
     ) async -> String {
+        guard self.canStopCapture(agentPromptLease: agentPromptLease) else { return "" }
         guard !forDictionaryTesting || self.isDictionaryTrainingCaptureActive else { return "" }
         DebugLogger.shared.info("🛑 STOP() called - beginning shutdown sequence", source: "ASRService")
         self.lastStopOutcome = .empty
@@ -3502,6 +3522,7 @@ final class ASRService: ObservableObject {
 
         if self.isStarting, self.isRunning == false {
             await self.cancelPendingAudioCaptureStart(reason: "recording_stop")
+            guard self.canStopCapture(agentPromptLease: agentPromptLease) else { return "" }
         }
         guard self.isRunning else {
             self.isDictionaryTrainingCaptureActive = false
@@ -4383,13 +4404,16 @@ final class ASRService: ObservableObject {
         }
     }
 
-    func stopWithoutTranscription() async {
+    func stopWithoutTranscription(agentPromptLease: ASRActivityLease? = nil) async {
+        guard self.canStopCapture(agentPromptLease: agentPromptLease) else { return }
         await self.stopWithoutTranscription(finishingRecovery: false)
     }
 
     private func stopWithoutTranscription(finishingRecovery: Bool) async {
         if self.isStarting, self.isRunning == false {
+            let lease = self.dictationActivityLease
             await self.cancelPendingAudioCaptureStart(reason: "stop_without_transcription")
+            guard self.dictationActivityLease == lease else { return }
         }
         guard self.isRunning else {
             self.releaseDictationActivityIfNeeded()

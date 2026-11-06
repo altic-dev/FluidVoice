@@ -380,9 +380,8 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
         defer { if !isRunning { self.presentPendingPasteRecovery() } }
         self.overlayBench("handle_state isRunning=\(isRunning) overlayVisible=\(self.overlayVisible) processing=\(self.isProcessingActive) mode=\(self.currentOverlayMode.rawValue)")
 
-        // Dictionary training owns its recording controls, so showing the
-        // regular dictation notch here would create two competing overlays.
-        if asrService.isDictionaryTrainingCaptureActive {
+        // Dictionary training and agent replies provide their own recording controls.
+        if asrService.isDictionaryTrainingCaptureActive || asrService.activeExclusiveActivity == .agentPrompt {
             self.pendingShowOperation?.cancel()
             self.pendingShowOperation = nil
             if self.overlayVisible {

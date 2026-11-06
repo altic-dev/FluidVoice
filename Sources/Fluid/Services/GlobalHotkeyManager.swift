@@ -1149,7 +1149,7 @@ final class GlobalHotkeyManager: NSObject {
         sessionInfo["CGSSessionScreenIsLocked"] as? Bool ?? false
     }
 
-    private nonisolated static func currentSessionIsLocked() -> Bool {
+    nonisolated static func currentSessionIsLocked() -> Bool {
         self.sessionIsLocked(sessionInfo: CGSessionCopyCurrentDictionary() as? [String: Any] ?? [:])
     }
 
@@ -2438,6 +2438,7 @@ final class GlobalHotkeyManager: NSObject {
 
     @MainActor
     private func stopRecordingInternal(toggleStopRequestedAt: TimeInterval? = nil) async {
+        guard self.asrService.activeExclusiveActivity != .agentPrompt else { return }
         if self.asrService.isStarting, self.asrService.isRunning == false {
             DebugLogger.shared.debug("Cancelling pending audio capture start", source: "GlobalHotkeyManager")
             await self.asrService.cancelPendingAudioCaptureStart(reason: "hotkey_released")

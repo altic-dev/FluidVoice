@@ -3095,6 +3095,7 @@ struct ContentView: View {
     // MARK: - Stop and Process Transcription
 
     private func stopAndProcessTranscription(route: DictationOutputRoute = .normal, toggleStopRequestedAt: TimeInterval? = nil) async {
+        guard self.asr.activeExclusiveActivity != .agentPrompt else { return }
         guard self.processingDictationLifecycleID == nil else { return }
         let outputLifecycleID = self.overlayLifecycleID
         self.processingDictationLifecycleID = outputLifecycleID
@@ -5277,6 +5278,10 @@ struct ContentView: View {
     }
 
     private func handleCancelShortcutResult() -> GlobalHotkeyManager.CancelHandlingResult {
+        if self.asr.activeExclusiveActivity == .agentPrompt {
+            AgentBridgeService.shared.cancelActivePrompt()
+            return .cancelled
+        }
         if self.isSavingCancelledRecording { return .cancelled }
         var handled = false
 

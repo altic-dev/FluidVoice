@@ -2767,6 +2767,15 @@ final class SettingsStore: ObservableObject {
         }
     }
 
+    /// Lets local coding agents (e.g. OpenCode) request voice replies over the Local API.
+    var agentAPIEnabled: Bool {
+        get { self.defaults.bool(forKey: Keys.agentAPIEnabled) }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue, forKey: Keys.agentAPIEnabled)
+        }
+    }
+
     var transcriptionSoundVolume: Float {
         get {
             let value = self.defaults.object(forKey: Keys.transcriptionSoundVolume)
@@ -6108,6 +6117,7 @@ private extension SettingsStore {
         static let customAccentColorHex = "CustomAccentColorHex"
         static let themePreference = "ThemePreference"
         static let enableTranscriptionSounds = "EnableTranscriptionSounds"
+        static let agentAPIEnabled = "AgentAPIEnabled"
         static let transcriptionStartSound = "TranscriptionStartSound"
         static let transcriptionSoundVolume = "TranscriptionSoundVolume"
         static let pressAndHoldMode = "PressAndHoldMode"

@@ -31,6 +31,10 @@ final class LocalAPIRouter {
         let inference = InferenceAPIController()
         self.register(method: "POST", path: "/v1/transcribe", handler: inference)
         self.register(method: "POST", path: "/v1/postprocess", handler: inference)
+
+        let agent = AgentAPIController()
+        self.register(method: "POST", path: "/v1/agent/prompt", handler: agent)
+        self.register(method: "POST", path: "/v1/agent/cancel", handler: agent)
     }
 
     func register(method: String, path: String, handler: LocalAPIRouteHandler) {
@@ -39,7 +43,7 @@ final class LocalAPIRouter {
     }
 
     /// Paths whose every response (errors included) must stay out of a client's HTTP cache.
-    private static let noStorePaths: Set<String> = ["/v1/meetings/live"]
+    private static let noStorePaths: Set<String> = ["/v1/meetings/live", "/v1/agent/prompt", "/v1/agent/cancel"]
 
     func route(_ request: LocalAPI.Request) async -> LocalAPI.Response {
         let response = await self.dispatch(request)
