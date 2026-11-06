@@ -156,7 +156,9 @@ final class PrivateAIProviderPromptFormatTests: XCTestCase {
         )
         let choices = DictationOverlayPresentationInput.Choices(available: smart, unavailable: fallback)
         XCTAssertEqual(choices.resolve(verifiedModelID: "mini", modelName: { $0.isEmpty ? "" : "Fluid-1 Mini" }).label, "Smart · Mini")
+        XCTAssertEqual(choices.resolve(verifiedModelID: "mini", modelName: { $0.isEmpty ? "" : "Fluid-1 Mini" }).shortLabel, "Smart")
         XCTAssertEqual(choices.resolve(verifiedModelID: nil, modelName: { $0 }).label, "Basic")
+        XCTAssertEqual(choices.resolve(verifiedModelID: nil, modelName: { $0 }).shortLabel, "Basic")
         XCTAssertEqual(smart.resolve(verifiedModelID: nil, modelName: { $0 }).label, "Basic")
     }
 

@@ -46,10 +46,13 @@ struct FluidDropdownSurface: ViewModifier {
 
 struct FluidDropdownChevron: View {
     @Environment(\.theme) private var theme
+    var isExpanded = false
+
     var body: some View {
         Image(systemName: "chevron.down")
             .font(.fluidSystem(size: 10, weight: .semibold))
             .foregroundStyle(self.theme.palette.secondaryText)
+            .rotationEffect(.degrees(self.isExpanded ? 180 : 0))
             .accessibilityHidden(true)
     }
 }

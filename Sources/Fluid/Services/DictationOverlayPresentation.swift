@@ -6,6 +6,7 @@ nonisolated struct DictationOverlayPresentation: Equatable, Sendable {
     var label: String
     var builtInLabel: String?
     var hasAppOverride: Bool
+    var shortLabel: String? = nil
 
     static let pending = Self(label: "Dictation", builtInLabel: nil, hasAppOverride: false)
 }
@@ -24,7 +25,8 @@ nonisolated struct DictationOverlayPresentationInput: Equatable, Sendable {
             return DictationOverlayPresentation(
                 label: model.isEmpty ? "Basic" : "\(self.name) · \(model)",
                 builtInLabel: self.builtInLabel,
-                hasAppOverride: self.hasAppOverride
+                hasAppOverride: self.hasAppOverride,
+                shortLabel: model.isEmpty ? "Basic" : self.name
             )
         }
     }
