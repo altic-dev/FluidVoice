@@ -265,6 +265,33 @@ final class OverlayCaptionPresentationTests: XCTestCase {
         XCTAssertEqual(visibility, [false, true, false, true, false, true, false])
     }
 
+    func testOverlayChevronStaysVisibleOnBlackInBothAppearances() throws {
+        for appearance in [ColorScheme.light, .dark] {
+            for expanded in [false, true] {
+                let root = FluidDropdownChevron(isExpanded: expanded, tone: .white.opacity(0.6))
+                    .environment(\.theme, appearance == .light ? .light : .dark)
+                    .environment(\.colorScheme, appearance)
+                    .frame(width: 24, height: 24)
+                    .background(.black)
+                let host = NSHostingView(rootView: root)
+                host.frame = CGRect(x: 0, y: 0, width: 24, height: 24)
+                host.layoutSubtreeIfNeeded()
+                let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+                host.cacheDisplay(in: host.bounds, to: bitmap)
+                var visiblePixels = 0
+                for y in 0..<bitmap.pixelsHigh {
+                    for x in 0..<bitmap.pixelsWide {
+                        if let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB),
+                           min(color.redComponent, color.greenComponent, color.blueComponent) > 0.45
+                        { visiblePixels += 1 }
+                    }
+                }
+                XCTAssertGreaterThan(visiblePixels, 4, "The overlay chevron must contrast with black in \(appearance), expanded=\(expanded)")
+                XCTAssertEqual(host.frame.size, CGSize(width: 24, height: 24), "Flipping the arrow must not shift the selector")
+            }
+        }
+    }
+
     func testWaitingShimmerStopsWhenItsViewOrWindowIsHidden() async throws {
         let view = CompositorShimmerSweepView(frame: CGRect(x: 0, y: 0, width: 100, height: 20))
         let window = NSWindow(contentRect: view.frame, styleMask: [.borderless], backing: .buffered, defer: false)

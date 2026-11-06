@@ -162,6 +162,16 @@ final class PrivateAIProviderPromptFormatTests: XCTestCase {
         XCTAssertEqual(smart.resolve(verifiedModelID: nil, modelName: { $0 }).label, "Basic")
     }
 
+    func testStoppedOverlaySelectorKeepsCapturedChoiceUntilNextRecording() {
+        let captured = DictationOverlayPresentation(label: "Smart · Mini", builtInLabel: "Smart", hasAppOverride: false, shortLabel: "Smart")
+        let changed = DictationOverlayPresentation(label: "Work · Other model", builtInLabel: nil, hasAppOverride: true, shortLabel: "Work")
+        XCTAssertEqual(changed.selectorLabel(stoppedLabel: captured.label), "Smart · Mini")
+        XCTAssertEqual(changed.selectorLabel(stoppedLabel: nil), "Work", "Clearing the stopped snapshot must reveal the next recording's choice")
+        XCTAssertEqual(changed.label, "Work · Other model")
+        XCTAssertTrue(changed.hasAppOverride)
+        XCTAssertEqual(DictationOverlayPresentation.pending.selectorLabel(stoppedLabel: nil), "Dictation")
+    }
+
     func testWarmupRequestRespectsOffExternalPrivateAndAppOverrides() {
         let settings = SettingsStore.shared
         let restore = self.saveOverlaySettings(settings)

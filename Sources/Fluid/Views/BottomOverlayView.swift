@@ -2721,7 +2721,7 @@ struct BottomOverlayView: View {
 
     private var promptSelectorDisplayLabel: String {
         if self.activePromptMode?.normalized == .dictate {
-            let label = self.dictationPresentation.shortLabel ?? self.promptSelectorBuiltInLabel ?? self.selectedPromptLabel
+            let label = self.dictationPresentation.selectorLabel(stoppedLabel: self.contentState.stopSnapshotLabel)
             let limit = self.layout.showsTopControls ? 12 : 18
             guard label.count > limit else { return label }
             return "\(label.prefix(limit - 1))…"
@@ -3142,7 +3142,7 @@ struct BottomOverlayView: View {
                             .fill(Color.white.opacity(0.15))
                     )
             }
-            FluidDropdownChevron(isExpanded: self.promptMenu.isMenuVisible)
+            FluidDropdownChevron(isExpanded: self.promptMenu.isMenuVisible, tone: .white.opacity(0.6))
         }
         .padding(.horizontal, 7)
         .padding(.vertical, self.promptSelectorVerticalPadding)

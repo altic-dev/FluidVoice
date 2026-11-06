@@ -9,6 +9,10 @@ nonisolated struct DictationOverlayPresentation: Equatable, Sendable {
     var shortLabel: String? = nil
 
     static let pending = Self(label: "Dictation", builtInLabel: nil, hasAppOverride: false)
+
+    func selectorLabel(stoppedLabel: String?) -> String {
+        stoppedLabel ?? self.shortLabel ?? self.builtInLabel ?? self.label
+    }
 }
 
 nonisolated struct DictationOverlayPresentationInput: Equatable, Sendable {
