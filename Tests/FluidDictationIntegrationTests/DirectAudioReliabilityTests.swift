@@ -812,6 +812,184 @@ final class DirectAudioReliabilityTests: XCTestCase {
         XCTAssertTrue(completionSection.contains("dictionary_tracking_scheduled afterDeliveryCallback=true"))
     }
 
+    func testOutputKeepAliveStartsBuiltInOutputForAppleSiliconInternalInput() {
+        var startedDevices: [AudioObjectID] = []
+        let outputDeviceIDs = BuiltInOutputKeepAlivePolicy.prepare(
+            inputDeviceID: 100,
+            devices: [Self.internalMicrophone, Self.builtInSpeaker(id: 200)],
+            isAppleSilicon: true
+        )
+
+        let deviceID = BuiltInOutputKeepAlivePolicy.start(
+            outputDeviceIDs: outputDeviceIDs,
+            startDevice: {
+                startedDevices.append($0)
+                return noErr
+            }
+        )
+
+        XCTAssertEqual(deviceID, 200)
+        XCTAssertEqual(startedDevices, [200])
+    }
+
+    func testOutputKeepAliveLeavesIntelAndOtherInputsUntouched() {
+        let devices = [
+            Self.internalMicrophone,
+            Self.externalMicrophone,
+            Self.builtInSpeaker(id: 200),
+        ]
+        var startedDevices: [AudioObjectID] = []
+        for (inputDeviceID, isAppleSilicon) in [(AudioObjectID(100), false), (101, true)] {
+            let outputDeviceIDs = BuiltInOutputKeepAlivePolicy.prepare(
+                inputDeviceID: inputDeviceID,
+                devices: devices,
+                isAppleSilicon: isAppleSilicon
+            )
+            XCTAssertTrue(outputDeviceIDs.isEmpty)
+            XCTAssertNil(BuiltInOutputKeepAlivePolicy.start(
+                outputDeviceIDs: outputDeviceIDs,
+                startDevice: {
+                    startedDevices.append($0)
+                    return noErr
+                }
+            ))
+        }
+        XCTAssertTrue(startedDevices.isEmpty)
+    }
+
+    func testOutputKeepAliveReturnsNilWhenBuiltInOutputsFailToStart() {
+        var startedDevices: [AudioObjectID] = []
+
+        let outputDeviceIDs = BuiltInOutputKeepAlivePolicy.prepare(
+            inputDeviceID: 100,
+            devices: [
+                Self.internalMicrophone,
+                Self.builtInSpeaker(id: 200),
+                Self.builtInSpeaker(id: 201),
+            ],
+            isAppleSilicon: true
+        )
+
+        let deviceID = BuiltInOutputKeepAlivePolicy.start(
+            outputDeviceIDs: outputDeviceIDs,
+            startDevice: {
+                startedDevices.append($0)
+                return kAudioHardwareNotReadyError
+            }
+        )
+
+        XCTAssertNil(deviceID)
+        XCTAssertEqual(startedDevices, [200, 201])
+    }
+
+    func testOutputKeepAliveTriesNextPreparedOutputAfterStartFailure() {
+        let outputDeviceIDs = BuiltInOutputKeepAlivePolicy.prepare(
+            inputDeviceID: 100,
+            devices: [
+                Self.internalMicrophone,
+                Self.builtInSpeaker(id: 200),
+                Self.builtInSpeaker(id: 201),
+            ],
+            isAppleSilicon: true
+        )
+        var startedDevices: [AudioObjectID] = []
+
+        XCTAssertEqual(BuiltInOutputKeepAlivePolicy.start(
+            outputDeviceIDs: outputDeviceIDs,
+            startDevice: {
+                startedDevices.append($0)
+                return $0 == 200 ? kAudioHardwareNotReadyError : noErr
+            }
+        ), 201)
+        XCTAssertEqual(startedDevices, [200, 201])
+    }
+
+    func testOutputKeepAliveSkipsAnalogHeadsetAndMissingInput() {
+        let headset = AudioDevice.Device(
+            id: 102,
+            uid: "HeadsetMicrophoneDevice",
+            name: "Headset Microphone",
+            hasInput: true,
+            hasOutput: false,
+            transportType: kAudioDeviceTransportTypeBuiltIn,
+            inputDataSourceID: AudioDevice.Device.externalMicrophoneDataSourceID
+        )
+        let devices = [headset, Self.builtInSpeaker(id: 200)]
+
+        for inputDeviceID: AudioObjectID in [102, 999] {
+            XCTAssertTrue(BuiltInOutputKeepAlivePolicy.prepare(
+                inputDeviceID: inputDeviceID,
+                devices: devices,
+                isAppleSilicon: true
+            ).isEmpty)
+        }
+    }
+
+    func testOutputKeepAliveClearsDeviceOnlyAfterSuccessfulStop() {
+        var deviceID: AudioObjectID? = 200
+        var stoppedDevices: [AudioObjectID] = []
+
+        let status = BuiltInOutputKeepAlivePolicy.stop(deviceID: &deviceID) {
+            stoppedDevices.append($0)
+            return noErr
+        }
+
+        XCTAssertEqual(status, noErr)
+        XCTAssertNil(deviceID)
+        XCTAssertEqual(stoppedDevices, [200])
+    }
+
+    func testOutputKeepAliveRetriesStopOnceAfterTransientFailure() {
+        var deviceID: AudioObjectID? = 200
+        var stoppedDevices: [AudioObjectID] = []
+
+        let status = BuiltInOutputKeepAlivePolicy.stop(deviceID: &deviceID) {
+            stoppedDevices.append($0)
+            return stoppedDevices.count == 1 ? kAudioHardwareNotReadyError : noErr
+        }
+
+        XCTAssertEqual(status, noErr)
+        XCTAssertNil(deviceID)
+        XCTAssertEqual(stoppedDevices, [200, 200])
+    }
+
+    func testOutputKeepAliveBoundsFailedStopAndRetainsDeviceForLaterCleanup() {
+        var deviceID: AudioObjectID? = 200
+        var stoppedDevices: [AudioObjectID] = []
+
+        let failedStatus = BuiltInOutputKeepAlivePolicy.stop(deviceID: &deviceID) {
+            stoppedDevices.append($0)
+            return kAudioHardwareNotReadyError
+        }
+
+        XCTAssertEqual(failedStatus, kAudioHardwareNotReadyError)
+        XCTAssertEqual(deviceID, 200)
+        XCTAssertEqual(stoppedDevices, [200, 200])
+
+        let recoveredStatus = BuiltInOutputKeepAlivePolicy.stop(deviceID: &deviceID) {
+            stoppedDevices.append($0)
+            return noErr
+        }
+
+        XCTAssertEqual(recoveredStatus, noErr)
+        XCTAssertNil(deviceID)
+        XCTAssertEqual(stoppedDevices, [200, 200, 200])
+    }
+
+    func testOutputKeepAliveDoesNotStopWithoutAnActiveDevice() {
+        var deviceID: AudioObjectID?
+        var stopCount = 0
+
+        let status = BuiltInOutputKeepAlivePolicy.stop(deviceID: &deviceID) { _ in
+            stopCount += 1
+            return noErr
+        }
+
+        XCTAssertEqual(status, noErr)
+        XCTAssertNil(deviceID)
+        XCTAssertEqual(stopCount, 0)
+    }
+
     func testReadinessGatePreservesFirstPCMThatArrivesBeforeWait() async {
         let gate = AudioCaptureReadinessGate()
         gate.arm(sessionID: 41, attemptID: 1)
@@ -1433,6 +1611,35 @@ final class DirectAudioReliabilityTests: XCTestCase {
         XCTAssertEqual(factory.creationCount, 2)
         XCTAssertEqual(recorder.events, ["quarantine", "make:24000"])
         await controller.shutdown(reason: "test_complete")
+    }
+
+    private static let internalMicrophone = AudioDevice.Device(
+        id: 100,
+        uid: "BuiltInMicrophoneDevice",
+        name: "MacBook Pro Microphone",
+        hasInput: true,
+        hasOutput: false,
+        transportType: kAudioDeviceTransportTypeBuiltIn
+    )
+
+    private static let externalMicrophone = AudioDevice.Device(
+        id: 101,
+        uid: "ExternalMicrophoneDevice",
+        name: "USB Microphone",
+        hasInput: true,
+        hasOutput: false,
+        transportType: kAudioDeviceTransportTypeUSB
+    )
+
+    private static func builtInSpeaker(id: AudioObjectID) -> AudioDevice.Device {
+        AudioDevice.Device(
+            id: id,
+            uid: "BuiltInSpeakerDevice",
+            name: "MacBook Pro Speakers",
+            hasInput: false,
+            hasOutput: true,
+            transportType: kAudioDeviceTransportTypeBuiltIn
+        )
     }
 }
 
