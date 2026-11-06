@@ -86,6 +86,51 @@ enum LocalAPI {
         )
     }
 
+    /// The headers as sent. `204` and `304` carry no body, so they get no `Content-Length`.
+    /// Blocks DNS rebinding. A loopback peer is not enough: a web page whose host name resolves to
+    /// 127.0.0.1 also connects from loopback. So the Host header must name this server as loopback,
+    /// and requests that carry Origin (sent by browsers, not by local CLI or agent clients) are refused.
+    /// Returns the 403 response to send, or nil when the request may be routed.
+    static func untrustedRequestRejection(for request: Request, port: UInt16) -> Response? {
+        if request.headers["origin"] != nil {
+            return self.error("Browser requests are not allowed.", status: 403)
+        }
+        let loopbackNames = ["127.0.0.1", "localhost", "[::1]"]
+        var allowedHosts = Set(loopbackNames.map { "\($0):\(port)" })
+        // On port 80, HTTP clients send Host without the port.
+        if port == 80 {
+            allowedHosts.formUnion(loopbackNames)
+        }
+        guard let host = request.headers["host"]?.lowercased(), allowedHosts.contains(host) else {
+            return Self.error("Host not allowed.", status: 403)
+        }
+        return nil
+    }
+
+    static func wireHeaders(for response: Response) -> [String: String] {
+        var headers = response.headers
+        if response.status != 204, response.status != 304 {
+            headers["Content-Length"] = "\(response.body.count)"
+        }
+        headers["Connection"] = "close"
+        return headers
+    }
+
+    static func reasonPhrase(for status: Int) -> String {
+        switch status {
+        case 200: return "OK"
+        case 204: return "No Content"
+        case 304: return "Not Modified"
+        case 400: return "Bad Request"
+        case 404: return "Not Found"
+        case 405: return "Method Not Allowed"
+        case 413: return "Payload Too Large"
+        case 500: return "Internal Server Error"
+        case 503: return "Service Unavailable"
+        default: return "OK"
+        }
+    }
+
     static func boundedLimit(from request: Request, default defaultValue: Int = 100, maximum: Int = 1000) -> Int {
         guard let raw = request.query["limit"], let value = Int(raw) else {
             return defaultValue
