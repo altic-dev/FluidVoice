@@ -177,7 +177,7 @@ extension AppleIntelligenceCommandProvider {
         // A trailing tool result only worked as the prompt, with its ToolCalls entry left in the transcript.
         let session = LanguageModelSession(model: model, tools: [TerminalCommandTool()], transcript: Transcript(entries: entries.dropLast()))
         do {
-            let reply = try await session.respond(to: turns.last?.promptText ?? "", options: GenerationOptions(temperature: 0.1))
+            let reply = try await session.respond(to: turns.last?.promptText ?? "", options: GenerationOptions(temperature: 0.1, maximumResponseTokens: self.outputReserveTokens))
             return (reply.content, nil)
         } catch let error as LanguageModelSession.ToolCallError {
             guard let captured = error.underlyingError as? CapturedCommandCall else { throw error }
