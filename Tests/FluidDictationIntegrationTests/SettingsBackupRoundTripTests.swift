@@ -1,5 +1,6 @@
 import AppKit
 @testable import FluidVoice_Debug
+import SwiftUI
 import XCTest
 
 @MainActor
@@ -56,6 +57,35 @@ final class SettingsBackupRoundTripTests: XCTestCase {
             XCTAssertEqual(settings.meetingRecordingDefaults, meeting)
             XCTAssertEqual(settings.privateAIIdleUnload, .thirtyMinutes)
             XCTAssertEqual(settings.dictationPromptConfigurations, configurations)
+        }
+    }
+
+    func testCustomAccentColorRoundTripsAndPresetClearsIt() throws {
+        try self.withSavedDefaults {
+            let settings = SettingsStore.shared
+            XCTAssertEqual(Color(hex: "#3AC8C6")?.hexString, "#3AC8C6")
+
+            settings.accentColorOption = .purple
+            settings.customAccentColorHex = "#FF2D55"
+            XCTAssertEqual(settings.accentColor.hexString, "#FF2D55")
+            let encoded = try JSONEncoder().encode(settings.makeBackupPayload())
+
+            settings.accentColorOption = .green
+            XCTAssertNil(settings.customAccentColorHex)
+            try settings.restore(
+                from: JSONDecoder().decode(SettingsBackupPayload.self, from: encoded),
+                promptProfiles: settings.dictationPromptProfiles,
+                appPromptBindings: []
+            )
+            XCTAssertEqual(settings.accentColorOption, .purple)
+            XCTAssertEqual(settings.customAccentColorHex, "#FF2D55")
+
+            settings.restore(
+                from: try self.payload(removing: ["customAccentColorHex"]),
+                promptProfiles: settings.dictationPromptProfiles,
+                appPromptBindings: []
+            )
+            XCTAssertNil(settings.customAccentColorHex)
         }
     }
 
@@ -140,6 +170,41 @@ final class SettingsBackupRoundTripTests: XCTestCase {
             XCTAssertEqual(settings.rewriteModeSelectedProviderID, "anthropic")
             XCTAssertEqual(settings.rewriteModeSelectedModel, "saved-edit-model")
             XCTAssertFalse(settings.rewriteModeLinkedToGlobal)
+        }
+    }
+
+    func testDictionaryPromptDelayDefaultsAndRejectsUnknownStoredValues() throws {
+        try self.withSavedDefaults {
+            let defaults = UserDefaults.standard
+            let settings = SettingsStore.shared
+            defaults.removeObject(forKey: "AutomaticDictionaryPromptDelay")
+            XCTAssertEqual(settings.automaticDictionaryPromptDelay, .three)
+            for invalid in [-1, 0, 999, 4000] {
+                defaults.set(invalid, forKey: "AutomaticDictionaryPromptDelay")
+                XCTAssertEqual(settings.automaticDictionaryPromptDelay, .three)
+            }
+        }
+    }
+
+    func testDictionaryPromptDelayBackupRoundTripAndLegacyPreservation() throws {
+        try self.withSavedDefaults {
+            let settings = SettingsStore.shared
+            let enabled = settings.automaticDictionaryLearningEnabled
+            let frequency = settings.automaticDictionarySuggestionFrequency
+            for delay in SettingsStore.AutomaticDictionaryPromptDelay.allCases {
+                settings.automaticDictionaryPromptDelay = delay
+                let data = try JSONEncoder().encode(settings.makeBackupPayload())
+                let payload = try JSONDecoder().decode(SettingsBackupPayload.self, from: data)
+                settings.automaticDictionaryPromptDelay = .three
+                settings.restore(from: payload, promptProfiles: [], appPromptBindings: [])
+                XCTAssertEqual(settings.automaticDictionaryPromptDelay, delay)
+                XCTAssertEqual(settings.automaticDictionaryLearningEnabled, enabled)
+                XCTAssertEqual(settings.automaticDictionarySuggestionFrequency, frequency)
+            }
+            let legacy = try self.payload(removing: ["automaticDictionaryPromptDelay"])
+            settings.automaticDictionaryPromptDelay = .threeQuarters
+            settings.restore(from: legacy, promptProfiles: [], appPromptBindings: [])
+            XCTAssertEqual(settings.automaticDictionaryPromptDelay, .threeQuarters)
         }
     }
 

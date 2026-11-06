@@ -85,11 +85,11 @@ enum SettingsSearchTarget: Hashable {
              .showWindowAtLogin,
              .dockVisibility,
              .accentColor,
-             .transcriptionSounds,
              .automaticUpdates:
             return .general
 
         case .dictation,
+             .transcriptionSounds,
              .analyticsPrivacy,
              .microphonePermission,
              .activationMode,
@@ -259,7 +259,7 @@ enum SettingsSearchIndex {
             title: "Hide from Dock & App Switcher",
             terms: ["menu bar only", "dock icon command tab cmd tab app switcher"]
         ),
-        .init(target: .accentColor, title: "Accent Color", terms: ["appearance theme tint colour preset"]),
+        .init(target: .accentColor, title: "Accent Color", terms: ["appearance theme tint colour preset custom wheel picker"]),
         .init(
             target: .transcriptionSounds,
             title: "Transcription Sounds",
@@ -347,7 +347,7 @@ enum SettingsSearchIndex {
         .init(
             target: .dictionarySuggestions,
             title: "Learn from my corrections",
-            terms: ["automatic corrections learn words custom dictionary frequency ignore"]
+            terms: ["automatic corrections learn words custom dictionary frequency ignore prompt delay timing seconds"]
         ),
         .init(
             target: .accessibilityPermission,

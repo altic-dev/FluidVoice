@@ -25,6 +25,7 @@ struct MeetingAPIController: LocalAPIRouteHandler {
     }
 
     let store: any MeetingSessionStoring
+    let liveTranscript: any MeetingLiveTranscriptProviding
 
     func handle(_ request: LocalAPI.Request) async -> LocalAPI.Response {
         guard request.method == "GET" else {
@@ -36,6 +37,8 @@ struct MeetingAPIController: LocalAPIRouteHandler {
             return await self.listMeetings(request)
         case "/v1/meetings/transcript":
             return await self.transcript(request)
+        case "/v1/meetings/live":
+            return await self.live(request)
         default:
             return LocalAPI.error("Route not found.", status: 404)
         }
@@ -62,6 +65,33 @@ struct MeetingAPIController: LocalAPIRouteHandler {
         } catch {
             return LocalAPI.error("Meetings are unavailable. Retry from FluidMeet in FluidVoice.", status: 503)
         }
+    }
+
+    /// The in-progress meeting's live captions. Pollers pass back the `session` and `revision`
+    /// they last saw as `session` and `since`, and get `304` while nothing has changed. Revisions
+    /// restart with each meeting, so `304` needs both values to match.
+    private func live(_ request: LocalAPI.Request) async -> LocalAPI.Response {
+        var since: UInt64?
+        if let rawSince = request.query["since"] {
+            guard let revision = UInt64(rawSince) else {
+                return LocalAPI.error("The 'since' query parameter must be a non-negative integer revision.", status: 400)
+            }
+            since = revision
+        }
+        var sessionID: UUID?
+        if let rawSession = request.query["session"] {
+            guard let id = UUID(uuidString: rawSession) else {
+                return LocalAPI.error("Provide a valid meeting UUID in the 'session' query parameter.", status: 400)
+            }
+            sessionID = id
+        }
+
+        // The router adds Cache-Control: no-store to every response on this path.
+        let reading = await self.liveTranscript.currentLiveTranscript()
+        if let since, let sessionID, sessionID == reading.sessionID, since == reading.snapshot.revision {
+            return LocalAPI.Response(status: 304)
+        }
+        return LocalAPI.json(MeetingLiveResponse(reading: reading))
     }
 
     private func transcript(_ request: LocalAPI.Request) async -> LocalAPI.Response {

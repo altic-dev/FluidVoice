@@ -301,7 +301,7 @@ struct SettingsView: View {
                                         Text("Accent Color")
                                             .font(self.theme.typography.bodyStrong)
                                             .foregroundStyle(self.settingsTitleText)
-                                        Text("Pick a preset accent color for the app.")
+                                        Text("Pick a preset or a custom color.")
                                             .font(self.theme.typography.bodySmall)
                                             .foregroundStyle(self.settingsSecondaryText)
                                     }
@@ -310,7 +310,7 @@ struct SettingsView: View {
 
                                     HStack(spacing: 10) {
                                         ForEach(SettingsStore.AccentColorOption.allCases) { option in
-                                            let isSelected = self.settings.accentColorOption == option
+                                            let isSelected = self.settings.customAccentColorHex == nil && self.settings.accentColorOption == option
                                             Button {
                                                 self.settings.accentColorOption = option
                                             } label: {
@@ -330,6 +330,35 @@ struct SettingsView: View {
                                             .accessibilityLabel(option.rawValue)
                                             .help(option.rawValue)
                                         }
+
+                                        let isCustom = self.settings.customAccentColorHex != nil
+                                        Button {
+                                            AccentColorPanelTarget.shared.open(with: self.settings.accentColor)
+                                        } label: {
+                                            Circle()
+                                                .fill(AngularGradient(
+                                                    colors: [.red, .yellow, .green, .cyan, .blue, .purple, .red],
+                                                    center: .center
+                                                ))
+                                                .frame(width: 16, height: 16)
+                                                .overlay(
+                                                    Circle()
+                                                        .fill(self.settings.accentColor)
+                                                        .frame(width: 7, height: 7)
+                                                        .opacity(isCustom ? 1 : 0)
+                                                )
+                                                .overlay(
+                                                    Circle()
+                                                        .stroke(
+                                                            isCustom ? self.theme.palette.accent : self.theme.palette.cardBorder.opacity(0.5),
+                                                            lineWidth: isCustom ? 2 : 1
+                                                        )
+                                                )
+                                                .padding(4)
+                                        }
+                                        .buttonStyle(.plain)
+                                        .accessibilityLabel("Custom")
+                                        .help("Custom")
                                     }
                                     .padding(.horizontal, 6)
                                     .padding(.vertical, 4)
@@ -344,67 +373,6 @@ struct SettingsView: View {
                                 }
                             }
                             .settingsSearchTarget(.accentColor)
-                            Divider().opacity(0.2)
-
-                            HStack {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text("Transcription Sounds")
-                                        .font(self.theme.typography.bodyStrong)
-                                        .foregroundStyle(self.settingsTitleText)
-                                    Text("Choose the sound cue for recording. Some cues include an end sound.")
-                                        .fixedSize(horizontal: false, vertical: true)
-                                        .font(self.theme.typography.bodySmall)
-                                        .foregroundStyle(self.settingsSecondaryText)
-                                }
-
-                                Spacer()
-
-                                FluidDropdownPicker("Transcription sound", selectedTitle: SettingsStore.shared.transcriptionStartSound.displayName, selection: Binding(
-                                    get: { SettingsStore.shared.transcriptionStartSound },
-                                    set: { newValue in
-                                        SettingsStore.shared.transcriptionStartSound = newValue
-                                        TranscriptionSoundPlayer.shared.playPreview(sound: newValue)
-                                    }
-                                )) {
-                                    ForEach(SettingsStore.TranscriptionStartSound.allCases) { option in
-                                        Text(option.displayName).tag(option)
-                                    }
-                                }
-                                .fluidDropdownStyle()
-                                .frame(width: 170, alignment: .trailing)
-                            }
-                            .settingsSearchTarget(.transcriptionSounds)
-
-                            if SettingsStore.shared.transcriptionStartSound != .none {
-                                HStack {
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text("Volume")
-                                            .font(self.theme.typography.bodyStrong)
-                                            .foregroundStyle(self.settingsTitleText)
-                                        Text("Adjust the recording sound cue volume.")
-                                            .font(self.theme.typography.bodySmall)
-                                            .foregroundStyle(self.settingsSecondaryText)
-                                    }
-
-                                    Spacer()
-
-                                    Slider(
-                                        value: Binding(
-                                            get: { Double(SettingsStore.shared.transcriptionSoundVolume) },
-                                            set: { SettingsStore.shared.transcriptionSoundVolume = Float($0) }
-                                        ),
-                                        in: 0...1,
-                                        step: 0.05
-                                    ) { editing in
-                                        if !editing {
-                                            TranscriptionSoundPlayer.shared.playPreviewAtVolume(
-                                                SettingsStore.shared.transcriptionSoundVolume
-                                            )
-                                        }
-                                    }
-                                    .frame(width: 150)
-                                }
-                            }
                         }
                     }
                     .padding(16)
@@ -696,6 +664,67 @@ struct SettingsView: View {
                                             self.hotkeyManager?.setHotkeyMode(newValue)
                                         }
                                         .settingsSearchTarget(.activationMode)
+                                        Divider().opacity(0.2)
+
+                                        HStack {
+                                            VStack(alignment: .leading, spacing: 2) {
+                                                Text("Transcription Sounds")
+                                                    .font(self.theme.typography.bodyStrong)
+                                                    .foregroundStyle(self.settingsTitleText)
+                                                Text("Choose a recording sound. Paired sounds preview start and stop.")
+                                                    .fixedSize(horizontal: false, vertical: true)
+                                                    .font(self.theme.typography.bodySmall)
+                                                    .foregroundStyle(self.settingsSecondaryText)
+                                            }
+
+                                            Spacer()
+
+                                            FluidDropdownPicker("Transcription sound", selectedTitle: SettingsStore.shared.transcriptionStartSound.displayName, selection: Binding(
+                                                get: { SettingsStore.shared.transcriptionStartSound },
+                                                set: { newValue in
+                                                    SettingsStore.shared.transcriptionStartSound = newValue
+                                                    TranscriptionSoundPlayer.shared.playPreview(sound: newValue)
+                                                }
+                                            )) {
+                                                ForEach(SettingsStore.TranscriptionStartSound.allCases) { option in
+                                                    Text(option.displayName).tag(option)
+                                                }
+                                            }
+                                            .fluidDropdownStyle()
+                                            .frame(width: 170, alignment: .trailing)
+                                        }
+                                        .settingsSearchTarget(.transcriptionSounds)
+
+                                        if SettingsStore.shared.transcriptionStartSound != .none {
+                                            HStack {
+                                                VStack(alignment: .leading, spacing: 2) {
+                                                    Text("Volume")
+                                                        .font(self.theme.typography.bodyStrong)
+                                                        .foregroundStyle(self.settingsTitleText)
+                                                    Text("Adjust the recording sound cue volume.")
+                                                        .font(self.theme.typography.bodySmall)
+                                                        .foregroundStyle(self.settingsSecondaryText)
+                                                }
+
+                                                Spacer()
+
+                                                Slider(
+                                                    value: Binding(
+                                                        get: { Double(SettingsStore.shared.transcriptionSoundVolume) },
+                                                        set: { SettingsStore.shared.transcriptionSoundVolume = Float($0) }
+                                                    ),
+                                                    in: 0...1,
+                                                    step: 0.05
+                                                ) { editing in
+                                                    if !editing {
+                                                        TranscriptionSoundPlayer.shared.playPreviewAtVolume(
+                                                            SettingsStore.shared.transcriptionSoundVolume
+                                                        )
+                                                    }
+                                                }
+                                                .frame(width: 150)
+                                            }
+                                        }
                                         Divider().opacity(0.2)
 
                                         self.optionToggleRow(
@@ -2933,6 +2962,32 @@ private struct DictionarySuggestionsSettingsRow: View {
                     .fixedSize()
                 }
                 .padding(.leading, 16)
+
+                HStack(alignment: .center, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Prompt delay")
+                            .font(self.theme.typography.bodyStrong)
+                            .foregroundStyle(self.theme.palette.primaryText)
+                        Text("Wait this long after you stop editing. Shorter delays may ask while you're still correcting.")
+                            .font(self.theme.typography.bodySmall)
+                            .foregroundStyle(self.theme.palette.secondaryText)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                    FluidDropdownPicker(
+                        "Prompt delay",
+                        selectedTitle: self.settings.automaticDictionaryPromptDelay.displayName,
+                        selection: self.$settings.automaticDictionaryPromptDelay
+                    ) {
+                        ForEach(SettingsStore.AutomaticDictionaryPromptDelay.allCases) { delay in
+                            Text(delay.displayName).tag(delay)
+                        }
+                    }
+                    .fluidDropdownStyle()
+                    .fixedSize()
+                }
+                .padding(.leading, 16)
             }
         }
     }
@@ -3294,5 +3349,26 @@ private extension SettingsView {
         } else if self.selectedRollbackVersion == "local", self.rollbackVersion.isEmpty {
             self.selectedRollbackVersion = ""
         }
+    }
+}
+
+/// Routes the shared color panel's live changes into the custom accent setting.
+@MainActor
+private final class AccentColorPanelTarget: NSObject {
+    static let shared = AccentColorPanelTarget()
+
+    func open(with color: Color) {
+        let panel = NSColorPanel.shared
+        panel.mode = .wheel
+        panel.showsAlpha = false
+        panel.setTarget(nil) // avoid writing the seed color back as a custom choice
+        panel.color = NSColor(color)
+        panel.setTarget(self)
+        panel.setAction(#selector(self.colorChanged(_:)))
+        panel.orderFront(nil)
+    }
+
+    @objc private func colorChanged(_ panel: NSColorPanel) {
+        SettingsStore.shared.customAccentColorHex = Color(nsColor: panel.color).hexString
     }
 }

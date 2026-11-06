@@ -188,7 +188,7 @@ final class OverlayCaptionPresentationTests: XCTestCase {
             try await Task.sleep(for: .milliseconds(180))
             let host = try XCTUnwrap(controller.contentViewForTests)
             XCTAssertEqual(host.frame.size, host.superview?.bounds.size, "Hosting content must fit its window after every preset change")
-            if size == .pill {
+            if size == .pill || size == .small {
                 let container = try XCTUnwrap(host.window?.contentView)
                 XCTAssertNil(container.hitTest(NSPoint(x: 1, y: 1)), "Transparent padding must not intercept clicks")
                 XCTAssertNotNil(container.hitTest(NSPoint(x: container.bounds.midX, y: container.bounds.midY)), "Visible pill controls must remain clickable")
@@ -209,6 +209,86 @@ final class OverlayCaptionPresentationTests: XCTestCase {
             try await Task.sleep(for: .milliseconds(300))
             XCTAssertFalse(state.isBottomOverlayPresented)
             XCTAssertTrue(waitingViews.allSatisfy { $0.layer?.sublayers?.first?.animationKeys()?.isEmpty != false }, "No waiting shimmer may survive dismissal for \(size)")
+        }
+    }
+
+    func testCompactPromptMenuDismissalDoesNotChangeTheRecordingOrSelection() async throws {
+        let settings = SettingsStore.shared
+        let state = NotchContentState.shared
+        let controller = BottomOverlayWindowController.shared
+        let menu = BottomOverlayPromptMenuController.shared
+        let previousSize = settings.overlaySize
+        let previousText = state.transcriptionText
+        let previousProcessing = state.isProcessing
+        let selection = settings.dictationPromptSelection(for: .primary)
+        defer {
+            menu.hide()
+            controller.hideImmediately()
+            settings.overlaySize = previousSize
+            state.updateTranscription(previousText)
+            state.isProcessing = previousProcessing
+        }
+        settings.overlaySize = .small
+        state.isProcessing = false
+        controller.show(audioPublisher: Just(CGFloat.zero).eraseToAnyPublisher(), mode: .dictation)
+        state.updateTranscription("Keep these words while opening and closing the menu")
+        try await Task.sleep(for: .milliseconds(200))
+        let panel = try XCTUnwrap(controller.contentViewForTests?.window)
+        let anchor = CGRect(x: panel.frame.midX, y: panel.frame.minY + 6, width: 100, height: 24)
+        menu.updateAnchor(selectorFrameInScreen: anchor, parentWindow: panel, maxWidth: 220, menuGap: 36)
+        var dismissals = 0
+        var visibility: [Bool] = []
+        let visibilitySubscription = menu.$isMenuVisible.removeDuplicates().sink { visibility.append($0) }
+        let subscription = NotificationCenter.default.publisher(for: BottomOverlayPromptMenuController.didHideNotification)
+            .sink { _ in dismissals += 1 }
+        defer { subscription.cancel(); visibilitySubscription.cancel() }
+        for count in 1...3 {
+            menu.toggleFromTap()
+            XCTAssertTrue(menu.isMenuVisible)
+            if count == 2 {
+                menu.dismissIfNeeded(for: NSPoint(x: panel.frame.minX - 500, y: panel.frame.minY - 500))
+            } else {
+                menu.hide()
+            }
+            menu.hide()
+            XCTAssertFalse(menu.isMenuVisible)
+            XCTAssertEqual(dismissals, count, "Only a visible menu dismissal should collapse its overlay")
+        }
+        XCTAssertEqual(visibility, [false, true, false, true, false, true, false], "The chevron must track actual menu toggles without duplicate transitions")
+        XCTAssertEqual(state.transcriptionText, "Keep these words while opening and closing the menu")
+        XCTAssertTrue(state.isBottomOverlayPresented)
+        XCTAssertFalse(state.isProcessing)
+        XCTAssertEqual(settings.dictationPromptSelection(for: .primary), selection)
+        controller.hideImmediately()
+        menu.toggleFromTap()
+        XCTAssertFalse(menu.isMenuVisible, "A hidden overlay cannot open a menu or turn its chevron upward")
+        XCTAssertEqual(visibility, [false, true, false, true, false, true, false])
+    }
+
+    func testOverlayChevronStaysVisibleOnBlackInBothAppearances() throws {
+        for appearance in [ColorScheme.light, .dark] {
+            for expanded in [false, true] {
+                let root = FluidDropdownChevron(isExpanded: expanded, tone: .white.opacity(0.6))
+                    .environment(\.theme, appearance == .light ? .light : .dark)
+                    .environment(\.colorScheme, appearance)
+                    .frame(width: 24, height: 24)
+                    .background(.black)
+                let host = NSHostingView(rootView: root)
+                host.frame = CGRect(x: 0, y: 0, width: 24, height: 24)
+                host.layoutSubtreeIfNeeded()
+                let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+                host.cacheDisplay(in: host.bounds, to: bitmap)
+                var visiblePixels = 0
+                for y in 0..<bitmap.pixelsHigh {
+                    for x in 0..<bitmap.pixelsWide {
+                        if let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB),
+                           min(color.redComponent, color.greenComponent, color.blueComponent) > 0.45
+                        { visiblePixels += 1 }
+                    }
+                }
+                XCTAssertGreaterThan(visiblePixels, 4, "The overlay chevron must contrast with black in \(appearance), expanded=\(expanded)")
+                XCTAssertEqual(host.frame.size, CGSize(width: 24, height: 24), "Flipping the arrow must not shift the selector")
+            }
         }
     }
 
@@ -512,17 +592,35 @@ final class OverlayCaptionPresentationTests: XCTestCase {
             settings.enableStreamingPreview = previousPreview
             state.updateTranscription(previousText)
         }
-        settings.overlaySize = .medium
         settings.enableStreamingPreview = true
-        state.updateTranscription("")
-        controller.show(audioPublisher: Just(CGFloat.zero).eraseToAnyPublisher(), mode: .dictation)
-        try await Task.sleep(for: .milliseconds(350))
-        let initial = try XCTUnwrap(controller.windowSizeForTests)
-        XCTAssertEqual(initial.height, 114, accuracy: 1, "Keep all three caption lines while removing excess outer padding")
-        for text in ["Short", String(repeating: "W", count: 34), String(repeating: "A full caption with three visible lines. ", count: 6), "A short correction", ""] {
-            state.updateTranscription(text)
-            try await Task.sleep(for: .milliseconds(200))
-            XCTAssertEqual(try XCTUnwrap(controller.windowSizeForTests), initial, "Text updates must not resize the overlay")
+        func caption(in view: NSView) -> OverlayCaptionNSView? {
+            if let caption = view as? OverlayCaptionNSView { return caption }
+            return view.subviews.lazy.compactMap { caption(in: $0) }.first
+        }
+        for size: SettingsStore.OverlaySize in [.small, .medium] {
+            settings.overlaySize = size
+            state.updateTranscription("")
+            controller.show(audioPublisher: Just(CGFloat.zero).eraseToAnyPublisher(), mode: .dictation)
+            try await Task.sleep(for: .milliseconds(350))
+            let initial = try XCTUnwrap(controller.windowSizeForTests)
+            if size == .medium {
+                XCTAssertEqual(initial.height, 114, accuracy: 1, "Keep all three caption lines while removing excess outer padding")
+            }
+            let layout = BottomOverlayView.LayoutConstants.get(for: size)
+            for text in ["Short", String(repeating: "W", count: 34), String(repeating: "A full caption with three visible lines. ", count: 6), "A short correction", ""] {
+                state.updateTranscription(text)
+                try await Task.sleep(for: .milliseconds(200))
+                XCTAssertEqual(try XCTUnwrap(controller.windowSizeForTests), initial, "Text updates must not resize the overlay")
+                guard !text.isEmpty else { continue }
+                let host = try XCTUnwrap(controller.contentViewForTests)
+                host.layoutSubtreeIfNeeded()
+                let view = try XCTUnwrap(caption(in: host))
+                let rect = view.convert(view.bounds, to: host)
+                let inset = layout.hPadding + (host.bounds.width - layout.containerWidth) / 2
+                XCTAssertEqual(rect.minX, inset, accuracy: 0.5, "\(size): captions must retain the leading inset")
+                XCTAssertEqual(host.bounds.width - rect.maxX, inset, accuracy: 0.5, "\(size): captions must retain the trailing inset")
+            }
+            controller.hideImmediately()
         }
     }
 

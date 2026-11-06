@@ -1948,6 +1948,11 @@ extension DictationE2ETests {
             XCTAssertNil(settings.selectedModel)
             XCTAssertEqual(settings.commandModeSelectedProviderID, "")
             XCTAssertNil(settings.commandModeSelectedModel)
+            settings.commandModeSelectedProviderID = "apple-intelligence"
+            settings.commandModeSelectedModel = "System Language Model"
+            settings.purgeRetiredAppleIntelligenceState()
+            XCTAssertEqual(settings.commandModeSelectedProviderID, "apple-intelligence")
+            XCTAssertEqual(settings.commandModeSelectedModel, "System Language Model")
             XCTAssertEqual(settings.rewriteModeSelectedProviderID, "")
             XCTAssertNil(settings.rewriteModeSelectedModel)
             XCTAssertNil(settings.availableModelsByProvider["apple-intelligence"])

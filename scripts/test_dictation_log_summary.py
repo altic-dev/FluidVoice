@@ -19,6 +19,63 @@ class DictationLogSummaryTests(unittest.TestCase):
     def parse(self, *lines):
         return [summarize(run) for run in parse_logs(lines)]
 
+    def test_info_only_clipboard_read_does_not_confirm_insertion(self):
+        result = self.parse(
+            "[12:00:00.000] pipelineID=A TEXT_DELIVERY path=clipboard result=commandPosted elapsedMs=2",
+            "[12:00:00.001] pipelineID=A PIPELINE_SUMMARY id=A outcome=inserted totalMs=100",
+            "[12:00:00.020] pipelineID=A PASTE_READ generation=1 elapsedMs=20",
+            "[12:00:00.021] pipelineID=A PASTE_VERIFY unknown reason=baseline_unavailable",
+        )[0]
+        self.assertEqual(result["outcome"], "inserted", "Preserve legacy raw outcomes")
+        self.assertTrue(result["partial_start"])
+        self.assertIsNone(result["metrics"]["stop_to_delivery_ms"], "Missing stop markers are not zero latency")
+        observation = result["paste_observation"]
+        self.assertEqual(observation["landing"], "unknown")
+        self.assertEqual(observation["reason"], "baseline_unavailable")
+        self.assertTrue(observation["clipboard_read"])
+        self.assertEqual(observation["dispatch_result"], "commandPosted")
+        report = render([result])
+        self.assertIn("input_dispatched", report)
+        self.assertIn("unknown (baseline_unavailable)", report)
+        self.assertNotIn("| inserted |", report)
+
+    def test_late_verification_attaches_to_its_own_pipeline(self):
+        results = self.parse(
+            "pipelineID=A TEXT_DELIVERY path=clipboard result=commandPosted",
+            "pipelineID=A PIPELINE_SUMMARY id=A outcome=input_dispatched",
+            "pipelineID=B TEXT_DELIVERY path=clipboard result=commandPosted",
+            "pipelineID=B PIPELINE_SUMMARY id=B outcome=input_dispatched",
+            "pipelineID=B PASTE_VERIFY unknown reason=baseline_unavailable",
+            "pipelineID=A PASTE_VERIFY notLanded reason=value_count_caret_unchanged app=com.google.Chrome",
+        )
+        self.assertEqual(results[0]["paste_observation"]["landing"], "not_landed")
+        self.assertEqual(results[1]["paste_observation"]["landing"], "unknown")
+
+    def test_only_scoped_field_verification_confirms_landing(self):
+        result = self.parse(
+            "pipelineID=A TEXT_DELIVERY path=clipboard result=commandPosted",
+            "pipelineID=A PASTE_VERIFY confirmed method=value app=com.google.Chrome",
+        )[0]
+        self.assertEqual(result["paste_observation"]["landing"], "confirmed")
+        self.assertEqual(result["paste_observation"]["reason"], "value")
+        legacy = self.parse(
+            row("APP_BENCH", 1, "pipeline_begin id=A"),
+            "PASTE_VERIFY confirmed method=value",
+        )[0]
+        self.assertEqual(legacy["paste_observation"]["landing"], "unknown")
+        self.assertEqual(legacy["paste_observation"]["reason"], "unscoped_verification")
+
+    def test_multiple_dispatches_and_orphan_checks_are_not_assumed_confirmed(self):
+        results = self.parse(
+            "pipelineID=OLD PASTE_VERIFY confirmed method=value",
+            "[12:00:00.000] pipelineID=A TEXT_DELIVERY path=clipboard result=commandPosted",
+            "[12:00:00.001] pipelineID=A TEXT_DELIVERY path=clipboard result=commandPosted",
+            "pipelineID=A PASTE_VERIFY confirmed method=value",
+        )
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["paste_observation"]["landing"], "unknown")
+        self.assertEqual(results[0]["paste_observation"]["reason"], "multiple_deliveries_or_checks")
+
     def test_paste_and_main_callback_are_distinct(self):
         result = self.parse(
             row("APP_BENCH", 1, "begin_recording"),

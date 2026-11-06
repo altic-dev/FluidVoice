@@ -37,7 +37,43 @@ enum PasteReadReceiptReproductionTests {
         await self.testStaleReceiptCannotSettleNewDelivery()
         FileHandle.standardOutput.write(Data("RUN: testReadReceiptKeepsItsOriginalPipeline\n".utf8))
         await self.testReadReceiptKeepsItsOriginalPipeline()
-        print("PASS: 12 paste receipt cases; no real keys or system clipboard used")
+        await self.testRecoveryTimeoutEvidence()
+        print("PASS: 13 paste receipt cases; no real keys or system clipboard used")
+    }
+
+    static func testRecoveryTimeoutEvidence() async {
+        for scenario in 0..<4 {
+            let board = self.board()
+            let manager = ReceiptObservingPasteboard(board: board)
+            let poster = ReceiptTestPoster()
+            // The read case must settle through its receipt, even if a busy runner
+            // delays the main-actor callback beyond the timeout used by other cases.
+            let coordinator = PasteDeliveryCoordinator(
+                pasteboard: manager,
+                commandPoster: poster,
+                settlementDelayNanoseconds: 20_000_000,
+                readTimeoutNanoseconds: scenario == 1 ? .max : 80_000_000
+            )
+            var valid = true
+            var timeouts = 0
+            let result = await coordinator.deliver("recover me", preserveTranscriptOnClipboard: false, isOutputValid: { valid }, onReadTimeout: { timeouts += 1 })
+            self.expect(result == .commandPosted)
+            switch scenario {
+            case 1: self.expect(board.string(forType: .string) == "recover me")
+            case 2: self.expect(manager.writeIntentionalText("newer external copy"))
+            case 3: valid = false
+            default: break
+            }
+            // Ownership is checked synchronously during settlement. Waiting for
+            // that check also proves the no-callback cases actually finished.
+            await self.waitUntil { manager.ownershipCheckCount == 1 }
+            self.expect(timeouts == (scenario == 0 ? 1 : 0), "Only an owned, unread, valid delivery reports timeout evidence (scenario \(scenario), callbacks \(timeouts))")
+            self.expect(poster.count == 1, "Recovery evidence never posts a second paste")
+            if scenario == 0 { self.expect(board.string(forType: .string) == "recover me") }
+            if scenario == 2 { self.expect(board.string(forType: .string) == "newer external copy") }
+            board.releaseGlobally()
+        }
+        print("PASS: unread recovery callback is single-shot; normal reads, external copies and cancellation do not trigger it")
     }
 
     static func board() -> NSPasteboard {
@@ -272,12 +308,16 @@ private final class ReceiptObservingPasteboard: PasteboardManaging {
     nonisolated deinit {}
     let base: SystemPasteboardManager
     var handlers: [@MainActor @Sendable (TimeInterval) -> Void] = []
+    private(set) var ownershipCheckCount = 0
     init(board: NSPasteboard) { self.base = SystemPasteboardManager(pasteboard: board) }
     var changeCount: Int { self.base.changeCount }
     func captureSnapshot() -> PasteboardSnapshot? { self.base.captureSnapshot() }
     func writeTemporaryText(_ text: String, sessionID: String) -> Bool { self.base.writeTemporaryText(text, sessionID: sessionID) }
     func writeIntentionalText(_ text: String) -> Bool { self.base.writeIntentionalText(text) }
-    func isOwned(sessionID: String, expectedText: String) -> Bool { self.base.isOwned(sessionID: sessionID, expectedText: expectedText) }
+    func isOwned(sessionID: String, expectedText: String) -> Bool {
+        self.ownershipCheckCount += 1
+        return self.base.isOwned(sessionID: sessionID, expectedText: expectedText)
+    }
     func restore(_ snapshot: PasteboardSnapshot) -> Bool { self.base.restore(snapshot) }
     func restoreTemporarySnapshot(_ snapshot: PasteboardSnapshot, sessionID: String, expectedText: String) -> Bool {
         self.base.restoreTemporarySnapshot(snapshot, sessionID: sessionID, expectedText: expectedText)

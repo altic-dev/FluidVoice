@@ -53,6 +53,7 @@ struct SettingsBackupPayload: Codable, Equatable {
     let hideFromDockAndAppSwitcher: Bool
     let showMainWindowAtLoginLaunch: Bool?
     let accentColorOption: SettingsStore.AccentColorOption
+    var customAccentColorHex: String? = nil
     let transcriptionStartSound: SettingsStore.TranscriptionStartSound
     let transcriptionSoundVolume: Float
     // Independent Volume was removed, but the key is still written (always false) so backups
@@ -149,6 +150,7 @@ struct SettingsBackupPayload: Codable, Equatable {
     // A present empty map clears prompt overrides; an absent map preserves them.
     // swiftlint:disable:next discouraged_optional_collection
     var dictationPromptConfigurations: [String: SettingsStore.DictationPromptConfiguration]? = nil
+    var automaticDictionaryPromptDelay: SettingsStore.AutomaticDictionaryPromptDelay? = nil
 }
 
 struct AppBackupDocument: Codable, Equatable {

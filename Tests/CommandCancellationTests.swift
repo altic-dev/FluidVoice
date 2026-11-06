@@ -44,7 +44,7 @@ final class UserDefaults {
     static let shared = SettingsStore()
     var commandModeConfirmBeforeExecute = false
     let commandModeReadinessIssue: String? = nil
-    let effectiveCommandModeProviderID = "fake"
+    var effectiveCommandModeProviderID = "fake"
     let effectiveCommandModeSelectedModel = "fake"
     let savedProviders = [Provider(id: "fake", baseURL: "https://fake.invalid")]
     let enableAIStreaming = true
@@ -124,6 +124,17 @@ final class UserDefaults {
     func updateCommandStreamingText(_ text: String) {
         self.streaming = text
         if !text.isEmpty { self.nonemptyStreamUpdates += 1 }
+    }
+}
+
+@MainActor enum AppleIntelligenceCommandProvider {
+    static var replies: [(content: String, call: AppleIntelligenceCall?)] = []
+    static var received: [[AppleIntelligenceTurn]] = []
+    static var whileInFlight: (() -> Void)?
+    static func respond(to turns: [AppleIntelligenceTurn]) async throws -> (content: String, call: AppleIntelligenceCall?) {
+        self.received.append(turns)
+        self.whileInFlight?()
+        return self.replies.removeFirst()
     }
 }
 
@@ -233,6 +244,9 @@ enum LLMError: Error { case invalidRequest(String), invalidResponse }
 
     static func fixture() -> CommandModeService {
         LLMClient.shared.reset()
+        SettingsStore.shared.effectiveCommandModeProviderID = "fake"
+        AppleIntelligenceCommandProvider.whileInFlight = nil
+        AppleIntelligenceCommandProvider.received = []
         SettingsStore.shared.commandModeConfirmBeforeExecute = false
         TerminalService.executed = []
         TerminalService.delay = false
@@ -263,6 +277,7 @@ enum LLMError: Error { case invalidRequest(String), invalidResponse }
         await self.voiceConfirmationCancelledAtCallerContinuation()
         await self.notchInputClearsOnlyAcceptedText()
         await self.invalidRequestDoesNothing()
+        await self.appleIntelligenceProviderRoutes()
         self.check(MeetingSummaryActivityCoordinator.busyErrors == 0, "A canceled request left processing locked")
         print("Command cancellation: \(self.checks) checks passed (production agent loop, streaming callbacks, real in-memory chat store)")
     }
@@ -570,6 +585,28 @@ enum LLMError: Error { case invalidRequest(String), invalidResponse }
                 self.check(owner.inputText == expected, "Notch lost rejected or newly edited text")
             }
         }
+    }
+
+    static func appleIntelligenceProviderRoutes() async {
+        let service = self.fixture()
+        SettingsStore.shared.effectiveCommandModeProviderID = AppleIntelligenceAvailability.providerID
+        let call = AppleIntelligenceCall(id: "ai-1", command: "fake command", workingDirectory: nil, purpose: "checking")
+        AppleIntelligenceCommandProvider.replies = [("", call), ("All done", nil)]
+        await service.processUserCommand("apple request")
+        let received = AppleIntelligenceCommandProvider.received
+        self.check(LLMClient.shared.configs.isEmpty && TerminalService.executed == ["fake command"], "Apple call used the remote client or skipped the terminal")
+        self.check(received.count == 2 && received[1].count == 3 && received[1][1] == .call(call), "Apple call lost its transcript turn")
+        guard case let .output(id, _) = received[1][2] else { return self.check(false, "Tool result not sent to Apple") }
+        self.check(id == "ai-1", "Tool result lost its call ID")
+        self.check(service.conversationHistory.map(\.role) == [.user, .assistant, .tool, .assistant] && service.conversationHistory.last?.content == "All done", "Apple text reply did not end the turn")
+
+        let canceled = self.fixture()
+        SettingsStore.shared.effectiveCommandModeProviderID = AppleIntelligenceAvailability.providerID
+        AppleIntelligenceCommandProvider.replies = [("late", nil)]
+        var valid = true
+        AppleIntelligenceCommandProvider.whileInFlight = { valid = false }
+        await canceled.processUserCommand("canceled apple request", isOutputValid: { valid })
+        self.check(canceled.conversationHistory.isEmpty && TerminalService.executed.isEmpty, "Canceled Apple reply was appended")
     }
 
     static func invalidRequestDoesNothing() async {
