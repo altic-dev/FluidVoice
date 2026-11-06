@@ -143,13 +143,10 @@ private struct AgentPromptView: View {
 
     private var message: some View {
         ScrollView {
-            Text(self.bridge.agentMessage)
-                .font(.fluidSystem(size: 13))
-                .foregroundStyle(.primary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .textSelection(.enabled)
+            CommandMarkdownContent(text: self.bridge.agentMessage)
         }
-        .frame(maxHeight: 140)
+        // Reserve space before the renderer finishes parsing the response.
+        .frame(height: 200)
     }
 
     private var transcriptCard: some View {
