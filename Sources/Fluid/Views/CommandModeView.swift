@@ -125,6 +125,9 @@ struct CommandModeView: View {
         .onReceive(self.settings.objectWillChange.debounce(for: .milliseconds(80), scheduler: RunLoop.main)) { _ in
             if self.isPresentationActive { self.refreshModelCatalog() }
         }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            if self.isPresentationActive { self.refreshModelCatalog() }
+        }
         .onChange(of: self.canChangeSession) { _, canChange in
             if !canChange { self.showModelPicker = false }
         }
@@ -598,7 +601,7 @@ struct CommandModeView: View {
     }
 
     private func refreshModelCatalog() {
-        let options = self.settings.commandModeModelCatalog()
+        let options = self.settings.commandModeModelCatalog(includeAppleIntelligence: true)
         let providerKey = ModelRepository.shared.providerKey(for: self.settings.effectiveCommandModeProviderID)
         let modelID = self.settings.effectiveCommandModeSelectedModel
         let selected = options.first {

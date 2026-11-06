@@ -21,10 +21,13 @@ c = notch.index('    private func submitFollowUp()')
 d = notch.index('\n}\n', c)
 Path(sys.argv[1]).write_text('import Foundation\n@MainActor extension VoiceCommandOwner {\n' + voice[a:b].replace('private func', 'func', 1) + '}\n@MainActor extension NotchInputOwner {\n' + notch[c:d].replace('private func', 'func', 1) + '\n}\n')
 PYCODE
+# The real pure core compiles; only the FoundationModels provider is a double (in the test file).
+awk '/MARK: - FoundationModels/{exit} 1' Sources/Fluid/Services/AppleIntelligenceCommandProvider.swift > "$task_test_dir/AppleIntelligenceCore.swift"
 # Compile the entire production agent, including streaming callbacks and recursive turns.
 # Only its model, terminal, UI, and UserDefaults dependencies are test doubles.
 xcrun swiftc -parse-as-library \
     Sources/Fluid/Services/CommandModeService.swift \
+    "$task_test_dir/AppleIntelligenceCore.swift" \
     Sources/Fluid/Persistence/ChatHistoryStore.swift \
     Sources/Fluid/Persistence/PersistedHistory.swift \
     Tests/CommandCancellationTests.swift \
