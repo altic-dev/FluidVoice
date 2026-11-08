@@ -105,6 +105,7 @@ struct MeetingStillRecordingNudgeContent: View {
         self.deadlinesAndStaleTasks()
         self.sessionGate()
         self.systemAudioEndWatch()
+        self.targetWithdrawalCannotRearmShutdown()
         await self.detectorEvidence()
         await self.controllerActions()
         await self.stopAction()
@@ -173,6 +174,27 @@ struct MeetingStillRecordingNudgeContent: View {
         self.check(!h.detector.canStopAfterEndConfirmation(sessionID: id), "Keep recording cancels system audio auto-stop")
         AppServices.synchronizeMeetingEndWatch(state: .completed(id), session: session, detector: h.detector)
         self.check(h.detector.pendingEndConfirmationSessionID == nil, "Finishing system audio tears down its watch")
+    }
+
+    static func targetWithdrawalCannotRearmShutdown() {
+        let h = DetectorHarness()
+        _ = h.confirmChromeMeet()
+        let services = AppServices()
+        let coordinator = MeetingSessionCoordinator()
+        let id = UUID()
+        coordinator.state = .recording(id)
+        coordinator.activeSession = .init(id: id, mode: .onlineCall, capturedApplication: .init(bundleIdentifier: "com.google.Chrome", processID: 8, displayName: "Chrome"))
+        services._meetingSessionCoordinator = coordinator
+        services._meetingAutoDetector = h.detector
+        services.wireTarget(h.detector)
+        AppServices.synchronizeMeetingEndWatch(state: coordinator.state, session: coordinator.activeSession, detector: h.detector)
+        h.detector.stop()
+        self.check(services.meetingAutomaticTarget == nil, "Detector teardown clears the displayed suggestion")
+        h.detector.handleWorkspaceEvent(.init(kind: .terminated, bundleIdentifier: "com.google.Chrome", processID: 8), at: h.clock.now())
+        h.detector.tick(at: h.clock.now())
+        h.advance(MeetingAutoDetector.endSignalGraceSeconds + 1)
+        h.detector.tick(at: h.clock.now())
+        self.check(h.nudges == 0, "Target withdrawal during shutdown must not re-arm automatic stop")
     }
 
     static func pendingCall() -> (DetectorHarness, UUID) {

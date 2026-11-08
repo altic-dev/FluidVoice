@@ -35,13 +35,16 @@ def main() -> None:
         controller = declaration(ui, "final class MeetingStillRecordingNudgeController")
         (work / "Controller.swift").write_text("import AppKit\nimport Combine\nimport SwiftUI\n@MainActor\n" + controller)
         services = (ROOT / "Sources/Fluid/Services/AppServices.swift").read_text()
+        callback = declaration(services, "detector.onAutomaticTargetChanged =")
         gate = declaration(services, "static func recordingSessionID(") + "\n" + declaration(services, "static func meetingEndWatchApplication(") + "\n" + declaration(services, "static func synchronizeMeetingEndWatch(")
         can_stop = declaration(services, "private func canStopMeetingAfterEndConfirmation(").replace("private func", "func", 1)
         stop = declaration(services, "private func stopMeetingAfterEndConfirmation(").replace("private func", "func", 1)
         (work / "SessionGate.swift").write_text(
             "import Foundation\n@MainActor final class AppServices {\n"
             "var _meetingSessionCoordinator: MeetingSessionCoordinator?\n"
-            "var _meetingAutoDetector: MeetingAutoDetector?\n" + gate + "\n" + can_stop + "\n" + stop + "\n}\n"
+            "var _meetingAutoDetector: MeetingAutoDetector?\n"
+            "var meetingAutomaticTarget: MeetingAutoDetector.ResolvedTarget?\n"
+            "func wireTarget(_ detector: MeetingAutoDetector) {\n" + callback + "\n}\n" + gate + "\n" + can_stop + "\n" + stop + "\n}\n"
         )
         sources = [
             ROOT / "Sources/Fluid/Services/Meeting/MeetingEndCountdown.swift",
