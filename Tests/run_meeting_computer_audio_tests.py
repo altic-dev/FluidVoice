@@ -56,7 +56,23 @@ final class SCStreamConfiguration {
 }
 struct ScreenCaptureRuntimeDelegateProxy {}
 struct SCStream { let filter: SCContentFilter; let configuration: SCStreamConfiguration; let delegate: ScreenCaptureRuntimeDelegateProxy }
-struct MeetingSession { let timebase = 0 }
+struct MeetingSession {
+    let timebase = 0
+    var mode: MeetingCaptureMode = .systemAudio
+    var capturedApplication: MeetingApplicationIdentity?
+    var selectedMicrophone = MeetingMicrophoneIdentity(captureDeviceID: "mic", displayName: "Mic")
+    var defaultTitleBase: String?
+    var title = "Saved meeting"
+    var languageCode = "de"
+    var platform: MeetingPlatformProfile?
+}
+struct AppOption { let identity: MeetingApplicationIdentity }
+struct MicOption { let identity: MeetingMicrophoneIdentity }
+struct ReplayHarness {
+    var actionErrorMessage: String?
+    var applications: [AppOption] = []
+    var microphones = [MicOption(identity: .init(captureDeviceID: "mic", displayName: "Mic"))]
+}
 enum Health { case waiting }
 enum CaptureMethod { case screenCaptureKit, avCaptureSession }
 struct MeetingAudioTrack {
@@ -70,6 +86,8 @@ struct MeetingAudioTrack {
     swift += (ROOT / "Sources/Fluid/Services/Meeting/MeetingPCMStoragePolicy.swift").read_text() + "\n"
     swift += declaration(engine, "nonisolated enum MeetingScreenCaptureAudioSettings") + "\n"
     swift += "enum Catalog { static let preferredFallbackBundleIdentifiers: [String] = []\n" + declaration(engine, "static func resolveApplication(") + "\n}\n"
+    page = (ROOT / "Sources/Fluid/UI/MeetingTranscriptionView.swift").read_text()
+    swift += "extension ReplayHarness {\n" + declaration(page, "private func recordAgainConfiguration(").replace("private func", "mutating func") + "\n" + declaration(page, "private func resolvedMicrophone(").replace("private ", "") + "\n}\n"
     swift += "enum Runtime {\n" + declaration(engine, "private struct BuiltStream").replace("private ", "") + "\n"
     swift += declaration(engine, "private static func buildStream(").replace("private ", "") + "\n"
     swift += declaration(engine, "private nonisolated static func makeTracks(").replace("private ", "") + "\n"
@@ -87,6 +105,18 @@ struct MeetingAudioTrack {
             _ = try Catalog.resolveApplication(from: copies, preferredBundleIdentifier: "chrome", preferredProcessID: 30, requirePreferredApplication: true)
             preconditionFailure("Missing detected process cannot capture a different copy")
         } catch { check(true, "Missing detected process fails closed") }
+        var replay = ReplayHarness()
+        let saved = MeetingSession()
+        let again = replay.recordAgainConfiguration(from: saved)
+        check(again?.mode == .systemAudio && again?.application == nil && replay.actionErrorMessage == nil, "Record Again accepts Automatic without a running app")
+        check(again?.languageCode == saved.languageCode && again?.title == saved.title, "Record Again preserves language and title")
+        var legacySession = saved; legacySession.mode = .inRoom
+        check(replay.recordAgainConfiguration(from: legacySession)?.mode == .systemAudio && legacySession.mode == .inRoom, "Repeating historical mic-only audio uses the new default without rewriting history")
+        var appSession = saved; appSession.mode = .onlineCall
+        appSession.capturedApplication = .init(bundleIdentifier: "missing", displayName: "Missing")
+        check(replay.recordAgainConfiguration(from: appSession) == nil, "Record Again cannot broaden a missing app to system audio")
+        replay.actionErrorMessage = nil; replay.microphones = []
+        check(replay.recordAgainConfiguration(from: saved) == nil && replay.actionErrorMessage == "microphone unavailable", "Automatic still requires the chosen microphone")
         let all = MeetingCaptureConfiguration(mode: .systemAudio, title: "Meeting", microphone: mic)
         try all.validate()
         let tracks = Runtime.makeTracks(session: MeetingSession(), configuration: all)

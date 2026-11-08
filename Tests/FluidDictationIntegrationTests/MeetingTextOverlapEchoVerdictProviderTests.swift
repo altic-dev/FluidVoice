@@ -62,7 +62,7 @@ final class MeetingTextOverlapEchoVerdictProviderTests: XCTestCase {
     }
 
     /// Online call: mic chunk [100,102) and app chunks [100,102) and [110,112).
-    private func makeFixture(mode: MeetingCaptureMode = .onlineCall) throws -> EchoFixture {
+    private func makeFixture(mode: MeetingCaptureMode = .onlineCall, protection: MeetingMicrophoneEchoProtection = .voiceProcessed) throws -> EchoFixture {
         let micChunk = self.makeChunk(sequence: 0, start: 100, end: 102, path: "tracks/microphone/chunk_0.caf")
         let appChunk0 = self.makeChunk(sequence: 0, start: 100, end: 102, path: "tracks/application/chunk_0.caf")
         let appChunk1 = self.makeChunk(sequence: 1, start: 110, end: 112, path: "tracks/application/chunk_1.caf")
@@ -83,7 +83,7 @@ final class MeetingTextOverlapEchoVerdictProviderTests: XCTestCase {
                 deviceUID: "mic-a",
                 deviceName: "mic-a",
                 roleAtElection: .unknown,
-                echoProtection: .voiceProcessed,
+                echoProtection: protection,
                 startSeconds: 100
             )]
         )
@@ -177,72 +177,76 @@ final class MeetingTextOverlapEchoVerdictProviderTests: XCTestCase {
     // MARK: - Verdicts
 
     func testSuppressesTemporallyOverlappingEchoOnly() async throws {
-        let fixture = try self.makeFixture()
-        let echoText = "the quick brown fox jumps over the lazy dog"
-        let evidence = MeetingFinalTranscriptEvidence(
-            backendID: .parakeetNemotron,
-            attemptID: fixture.plan.attemptID,
-            units: [
-                self.unit("app-0", trackID: fixture.appTrackID, epoch: fixture.appEpochs[0], text: echoText, analysisStart: 0.2, analysisEnd: 1.8),
-                self.unit("mic-0", trackID: fixture.micTrackID, epoch: fixture.micEpoch, text: echoText, analysisStart: 0.4, analysisEnd: 1.9),
-                self.unit("mic-1", trackID: fixture.micTrackID, epoch: fixture.micEpoch, text: "an entirely local remark about lunch", analysisStart: 0.4, analysisEnd: 1.9),
-            ]
-        )
-        let verdicts = try await MeetingTextOverlapEchoVerdictProvider().echoVerdicts(
-            for: evidence, manifest: fixture.manifest, plan: fixture.plan
-        )
-        XCTAssertEqual(verdicts["mic-0"], .echoSuppressed(duplicateOfUnitID: "app-0"))
-        XCTAssertEqual(verdicts["mic-1"], .notEcho)
-        XCTAssertNil(verdicts["app-0"], "application units need no verdict")
+        for mode in [MeetingCaptureMode.onlineCall, .systemAudio] {
+            let fixture = try self.makeFixture(mode: mode, protection: .unfiltered)
+            let echoText = "the quick brown fox jumps over the lazy dog"
+            let evidence = MeetingFinalTranscriptEvidence(
+                backendID: .parakeetNemotron,
+                attemptID: fixture.plan.attemptID,
+                units: [
+                    self.unit("app-0", trackID: fixture.appTrackID, epoch: fixture.appEpochs[0], text: echoText, analysisStart: 0.2, analysisEnd: 1.8),
+                    self.unit("mic-0", trackID: fixture.micTrackID, epoch: fixture.micEpoch, text: echoText, analysisStart: 0.4, analysisEnd: 1.9),
+                    self.unit("mic-1", trackID: fixture.micTrackID, epoch: fixture.micEpoch, text: "an entirely local remark about lunch", analysisStart: 0.4, analysisEnd: 1.9),
+                ]
+            )
+            let verdicts = try await MeetingTextOverlapEchoVerdictProvider().echoVerdicts(
+                for: evidence, manifest: fixture.manifest, plan: fixture.plan
+            )
+            XCTAssertEqual(verdicts["mic-0"], .echoSuppressed(duplicateOfUnitID: "app-0"))
+            XCTAssertEqual(verdicts["mic-1"], .notEcho)
+            XCTAssertNil(verdicts["app-0"], "application units need no verdict")
+        }
     }
 
     func testWordPrecisionUsesTemporalPhraseContext() async throws {
-        let fixture = try self.makeFixture()
-        let words = ["quick", "brown", "fox", "jumps"]
-        var units: [MeetingFinalTextUnit] = []
-        for (index, word) in words.enumerated() {
-            let start = 0.2 + Double(index) * 0.25
+        for mode in [MeetingCaptureMode.onlineCall, .systemAudio] {
+            let fixture = try self.makeFixture(mode: mode, protection: .unfiltered)
+            let words = ["quick", "brown", "fox", "jumps"]
+            var units: [MeetingFinalTextUnit] = []
+            for (index, word) in words.enumerated() {
+                let start = 0.2 + Double(index) * 0.25
+                units.append(self.unit(
+                    "app-word-\(index)",
+                    trackID: fixture.appTrackID,
+                    epoch: fixture.appEpochs[0],
+                    text: word,
+                    analysisStart: start,
+                    analysisEnd: start + 0.2
+                ))
+                units.append(self.unit(
+                    "mic-word-\(index)",
+                    trackID: fixture.micTrackID,
+                    epoch: fixture.micEpoch,
+                    text: word,
+                    analysisStart: start + 0.05,
+                    analysisEnd: start + 0.25
+                ))
+            }
             units.append(self.unit(
-                "app-word-\(index)",
-                trackID: fixture.appTrackID,
-                epoch: fixture.appEpochs[0],
-                text: word,
-                analysisStart: start,
-                analysisEnd: start + 0.2
-            ))
-            units.append(self.unit(
-                "mic-word-\(index)",
+                "mic-local",
                 trackID: fixture.micTrackID,
                 epoch: fixture.micEpoch,
-                text: word,
-                analysisStart: start + 0.05,
-                analysisEnd: start + 0.25
+                text: "lunch",
+                analysisStart: 1.3,
+                analysisEnd: 1.5
             ))
-        }
-        units.append(self.unit(
-            "mic-local",
-            trackID: fixture.micTrackID,
-            epoch: fixture.micEpoch,
-            text: "lunch",
-            analysisStart: 1.3,
-            analysisEnd: 1.5
-        ))
-        let evidence = MeetingFinalTranscriptEvidence(
-            backendID: .parakeetNemotron,
-            attemptID: fixture.plan.attemptID,
-            units: units
-        )
+            let evidence = MeetingFinalTranscriptEvidence(
+                backendID: .parakeetNemotron,
+                attemptID: fixture.plan.attemptID,
+                units: units
+            )
 
-        let verdicts = try await MeetingTextOverlapEchoVerdictProvider().echoVerdicts(
-            for: evidence, manifest: fixture.manifest, plan: fixture.plan
-        )
+            let verdicts = try await MeetingTextOverlapEchoVerdictProvider().echoVerdicts(
+                for: evidence, manifest: fixture.manifest, plan: fixture.plan
+            )
 
-        for index in words.indices {
-            guard case .echoSuppressed? = verdicts["mic-word-\(index)"] else {
-                return XCTFail("word-level echo \(index) should be suppressed using phrase context")
+            for index in words.indices {
+                guard case .echoSuppressed? = verdicts["mic-word-\(index)"] else {
+                    return XCTFail("word-level echo \(index) should be suppressed using phrase context")
+                }
             }
+            XCTAssertEqual(verdicts["mic-local"], .notEcho)
         }
-        XCTAssertEqual(verdicts["mic-local"], .notEcho)
     }
 
     func testRecoveredApplicationEndingRemainsAnEchoTarget() async throws {
@@ -302,29 +306,31 @@ final class MeetingTextOverlapEchoVerdictProviderTests: XCTestCase {
     }
 
     func testEchoTextWithoutTemporalOverlapIsNotSuppressed() async throws {
-        let fixture = try self.makeFixture()
-        let echoText = "the quick brown fox jumps over the lazy dog"
-        let farEpoch = fixture.appEpochs[1]
-        let evidence = MeetingFinalTranscriptEvidence(
-            backendID: .parakeetNemotron,
-            attemptID: fixture.plan.attemptID,
-            units: [
-                // Same words, ten seconds later: text match alone must not suppress.
-                self.unit(
-                    "app-far",
-                    trackID: fixture.appTrackID,
-                    epoch: farEpoch,
-                    text: echoText,
-                    analysisStart: farEpoch.analysisInterval.start + 0.2,
-                    analysisEnd: farEpoch.analysisInterval.start + 1.8
-                ),
-                self.unit("mic-0", trackID: fixture.micTrackID, epoch: fixture.micEpoch, text: echoText, analysisStart: 0.4, analysisEnd: 1.9),
-            ]
-        )
-        let verdicts = try await MeetingTextOverlapEchoVerdictProvider().echoVerdicts(
-            for: evidence, manifest: fixture.manifest, plan: fixture.plan
-        )
-        XCTAssertEqual(verdicts["mic-0"], .notEcho)
+        for mode in [MeetingCaptureMode.onlineCall, .systemAudio] {
+            let fixture = try self.makeFixture(mode: mode, protection: .unfiltered)
+            let echoText = "the quick brown fox jumps over the lazy dog"
+            let farEpoch = fixture.appEpochs[1]
+            let evidence = MeetingFinalTranscriptEvidence(
+                backendID: .parakeetNemotron,
+                attemptID: fixture.plan.attemptID,
+                units: [
+                    // Same words, ten seconds later: text match alone must not suppress.
+                    self.unit(
+                        "app-far",
+                        trackID: fixture.appTrackID,
+                        epoch: farEpoch,
+                        text: echoText,
+                        analysisStart: farEpoch.analysisInterval.start + 0.2,
+                        analysisEnd: farEpoch.analysisInterval.start + 1.8
+                    ),
+                    self.unit("mic-0", trackID: fixture.micTrackID, epoch: fixture.micEpoch, text: echoText, analysisStart: 0.4, analysisEnd: 1.9),
+                ]
+            )
+            let verdicts = try await MeetingTextOverlapEchoVerdictProvider().echoVerdicts(
+                for: evidence, manifest: fixture.manifest, plan: fixture.plan
+            )
+            XCTAssertEqual(verdicts["mic-0"], .notEcho)
+        }
     }
 
     func testFutureRemoteRepetitionCannotSuppressEarlierMicrophoneWords() async throws {
@@ -407,41 +413,43 @@ final class MeetingTextOverlapEchoVerdictProviderTests: XCTestCase {
     }
 
     func testAssemblySuppressesTheEchoAndKeepsTheApplicationCopy() async throws {
-        let fixture = try self.makeFixture()
-        let echoText = "the quick brown fox jumps over the lazy dog"
-        let evidence = MeetingFinalTranscriptEvidence(
-            backendID: .parakeetNemotron,
-            attemptID: fixture.plan.attemptID,
-            units: [
-                self.unit("app-0", trackID: fixture.appTrackID, epoch: fixture.appEpochs[0], text: echoText, analysisStart: 0.2, analysisEnd: 1.8),
-                self.unit("mic-0", trackID: fixture.micTrackID, epoch: fixture.micEpoch, text: echoText, analysisStart: 0.4, analysisEnd: 1.9),
-            ]
-        )
-        let verdicts = try await MeetingTextOverlapEchoVerdictProvider().echoVerdicts(
-            for: evidence, manifest: fixture.manifest, plan: fixture.plan
-        )
-        let receipts = fixture.manifest.allSpans.map { span in
-            MeetingSpanCoverageReceipt(
-                id: "receipt:\(span.id)",
-                spanID: span.id,
-                analysisStart: span.analysisInterval.start,
-                analysisEnd: span.analysisInterval.end,
-                status: .processed
+        for mode in [MeetingCaptureMode.onlineCall, .systemAudio] {
+            let fixture = try self.makeFixture(mode: mode, protection: .unfiltered)
+            let echoText = "the quick brown fox jumps over the lazy dog"
+            let evidence = MeetingFinalTranscriptEvidence(
+                backendID: .parakeetNemotron,
+                attemptID: fixture.plan.attemptID,
+                units: [
+                    self.unit("app-0", trackID: fixture.appTrackID, epoch: fixture.appEpochs[0], text: echoText, analysisStart: 0.2, analysisEnd: 1.8),
+                    self.unit("mic-0", trackID: fixture.micTrackID, epoch: fixture.micEpoch, text: echoText, analysisStart: 0.4, analysisEnd: 1.9),
+                ]
             )
+            let verdicts = try await MeetingTextOverlapEchoVerdictProvider().echoVerdicts(
+                for: evidence, manifest: fixture.manifest, plan: fixture.plan
+            )
+            let receipts = fixture.manifest.allSpans.map { span in
+                MeetingSpanCoverageReceipt(
+                    id: "receipt:\(span.id)",
+                    spanID: span.id,
+                    analysisStart: span.analysisInterval.start,
+                    analysisEnd: span.analysisInterval.end,
+                    status: .processed
+                )
+            }
+            let assembly = try MeetingTranscriptAssembler().assemble(MeetingAssemblyInput(
+                plan: fixture.plan,
+                manifest: fixture.manifest,
+                evidence: evidence,
+                coverageReceipts: receipts,
+                echoVerdicts: verdicts
+            ))
+            let dispositions = Dictionary(
+                assembly.sidecar.dispositions.map { ($0.unitID, $0.disposition) },
+                uniquingKeysWith: { first, _ in first }
+            )
+            XCTAssertEqual(dispositions["mic-0"], .echoSuppressed)
+            XCTAssertEqual(dispositions["app-0"], .emitted)
+            XCTAssertEqual(assembly.segments.map(\.text), [echoText], "the microphone copy is ledger-only")
         }
-        let assembly = try MeetingTranscriptAssembler().assemble(MeetingAssemblyInput(
-            plan: fixture.plan,
-            manifest: fixture.manifest,
-            evidence: evidence,
-            coverageReceipts: receipts,
-            echoVerdicts: verdicts
-        ))
-        let dispositions = Dictionary(
-            assembly.sidecar.dispositions.map { ($0.unitID, $0.disposition) },
-            uniquingKeysWith: { first, _ in first }
-        )
-        XCTAssertEqual(dispositions["mic-0"], .echoSuppressed)
-        XCTAssertEqual(dispositions["app-0"], .emitted)
-        XCTAssertEqual(assembly.segments.map(\.text), [echoText], "the microphone copy is ledger-only")
     }
 }

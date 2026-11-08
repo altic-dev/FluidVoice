@@ -1024,7 +1024,7 @@ struct MeetingTranscriptionView: View {
             return nil
         }
         var application: MeetingApplicationIdentity?
-        if session.mode.capturesComputerAudio {
+        if session.mode == .onlineCall {
             guard let bundleIdentifier = session.capturedApplication?.bundleIdentifier,
                   let resolved = self.applications.first(where: { $0.identity.bundleIdentifier == bundleIdentifier })
             else {
@@ -1034,7 +1034,7 @@ struct MeetingTranscriptionView: View {
             application = resolved.identity
         }
         return MeetingCaptureConfiguration(
-            mode: session.mode,
+            mode: session.mode == .inRoom ? .systemAudio : session.mode,
             title: session.defaultTitleBase ?? session.title,
             languageCode: session.languageCode,
             platform: session.platform,

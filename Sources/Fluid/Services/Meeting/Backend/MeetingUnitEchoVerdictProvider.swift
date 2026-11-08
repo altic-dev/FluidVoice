@@ -53,7 +53,7 @@ nonisolated struct MeetingTextOverlapEchoVerdictProvider: MeetingUnitEchoVerdict
         manifest: MeetingAnalysisManifest,
         plan _: MeetingBackendPlan
     ) async throws -> [String: MeetingUnitEchoVerdict] {
-        guard manifest.captureMode == .onlineCall else { return [:] }
+        guard manifest.captureMode.capturesComputerAudio else { return [:] }
 
         struct PositionedUnit {
             let unit: MeetingFinalTextUnit
