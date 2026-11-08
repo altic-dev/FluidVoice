@@ -627,27 +627,37 @@ private struct MeetingDetectionPromptContent: View {
     }
 }
 
-/// "Meeting ended?" nudge — passive, pill-adjacent, shown while the meeting behind our own
-/// recording looks over. It stays until the user answers, the call resumes, or the recording stops:
-/// someone who walked away should still find it when they come back.
+/// A short, session-bound chance to keep recording after the call appears to end.
 @MainActor
 final class MeetingStillRecordingNudgeController: ObservableObject {
     static let shared = MeetingStillRecordingNudgeController()
 
-    static let panelSize = NSSize(width: 332, height: 56)
+    static let panelSize = NSSize(width: 500, height: 76)
 
     @Published private(set) var isPresented = false
-    var onStop: (() -> Void)?
+    @Published private(set) var secondsRemaining = Int(MeetingEndCountdown.duration)
+    var onStop: ((MeetingSessionID) -> Void)?
     /// The user closed the question without stopping.
-    var onDismiss: (() -> Void)?
+    var onDismiss: ((MeetingSessionID) -> Void)?
+    var shouldContinueCountdown: ((MeetingSessionID) -> Bool)?
 
     private var panel: MeetingFloatingCaptionsPanel?
+    private var countdown = MeetingEndCountdown()
+    private var countdownTask: Task<Void, Never>?
+    private let now: () -> TimeInterval
 
-    private init() {}
+    var presentationID: UUID? { self.countdown.ticket?.generation }
 
-    func present() {
-        guard SettingsStore.shared.fluidMeetEnabled else { return }
-        guard !self.isPresented else { return }
+    init(now: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }) {
+        self.now = now
+    }
+
+    func present(sessionID: MeetingSessionID) {
+        guard SettingsStore.shared.fluidMeetEnabled, self.shouldContinueCountdown?(sessionID) == true else { return }
+        guard self.countdown.ticket?.sessionID != sessionID || !self.isPresented else { return }
+        self.hide()
+        let ticket = self.countdown.begin(sessionID: sessionID, now: self.now())
+        self.secondsRemaining = Int(MeetingEndCountdown.duration)
         self.isPresented = true
         let panel = self.panelOrCreate()
         if let pillFrame = MeetingRecordingPillController.shared.currentOverlayFrame ?? self.pillFrameFallback() {
@@ -655,7 +665,42 @@ final class MeetingStillRecordingNudgeController: ObservableObject {
             panel.setFrame(Self.frame(abovePill: pillFrame, within: screen), display: false)
         }
         panel.orderFrontRegardless()
+        self.countdownTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                do { try await Task.sleep(nanoseconds: 1_000_000_000) } catch { return }
+                guard let self, !Task.isCancelled, self.advanceCountdown(ticket) else { return }
+            }
+        }
         DebugLogger.shared.log("end-of-meeting-prompt-shown", source: "MeetingAutoDetector")
+    }
+
+    /// Uses the current coordinator snapshot, including rapid stop/start transitions.
+    func synchronizeRecording(sessionID: MeetingSessionID?) {
+        guard self.countdown.ticket?.sessionID != sessionID else { return }
+        self.hide()
+    }
+
+    @discardableResult
+    private func advanceCountdown(_ ticket: MeetingEndCountdown.Ticket, stopNow: Bool = false) -> Bool {
+        let eligible = SettingsStore.shared.fluidMeetEnabled && self.shouldContinueCountdown?(ticket.sessionID) == true
+        switch self.countdown.advance(ticket, now: self.now(), isEligible: eligible, stopNow: stopNow) {
+        case let .waiting(seconds):
+            if self.secondsRemaining != seconds { self.secondsRemaining = seconds }
+            return true
+        case let .stop(sessionID):
+            self.hide()
+            self.onStop?(sessionID)
+        case .cancelled:
+            self.hide()
+        case .stale:
+            break
+        }
+        return false
+    }
+
+    func stopNow(presentationID: UUID? = nil) {
+        guard let ticket = self.countdown.ticket, ticket.generation == presentationID else { return }
+        self.advanceCountdown(ticket, stopNow: true)
     }
 
     /// Centered just above the recording pill, pulled back inside the screen when the pill sits
@@ -674,6 +719,9 @@ final class MeetingStillRecordingNudgeController: ObservableObject {
     }
 
     func hide() {
+        self.countdownTask?.cancel()
+        self.countdownTask = nil
+        self.countdown.cancel()
         if self.isPresented {
             DebugLogger.shared.log("end-of-meeting-prompt-hidden", source: "MeetingAutoDetector")
         }
@@ -681,9 +729,10 @@ final class MeetingStillRecordingNudgeController: ObservableObject {
         self.panel?.orderOut(nil)
     }
 
-    func dismiss() {
-        self.onDismiss?()
+    func dismiss(presentationID: UUID? = nil) {
+        guard let ticket = self.countdown.ticket, ticket.generation == presentationID else { return }
         self.hide()
+        self.onDismiss?(ticket.sessionID)
     }
 
     private func pillFrameFallback() -> NSRect? {
@@ -700,7 +749,7 @@ final class MeetingStillRecordingNudgeController: ObservableObject {
                 MeetingStillRecordingNudgeContent(controller: self)
             }
         )
-        let panel = MeetingFloatingPanelFactory.make(size: Self.panelSize, resizable: false, content: content)
+        let panel = MeetingFloatingPanelFactory.make(size: Self.panelSize, resizable: false, content: content, allowsKeyboardFocus: true)
         self.panel = panel
         return panel
     }
@@ -721,34 +770,38 @@ private struct MeetingStillRecordingNudgeContent: View {
     @ObservedObject var controller: MeetingStillRecordingNudgeController
 
     @Environment(\.theme) private var theme
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     var body: some View {
+        let presentationID = self.controller.presentationID
         HStack(spacing: 10) {
-            Image(systemName: "questionmark.circle.fill")
+            Image(systemName: "clock.badge.exclamationmark")
                 .foregroundStyle(self.theme.palette.warning)
-            Text("Meeting ended?")
-                .font(self.theme.typography.bodySmall)
-                .foregroundStyle(self.theme.palette.primaryText)
-                .lineLimit(1)
-                .fixedSize()
-            Spacer(minLength: 0)
-            Button("Stop & Transcribe") {
-                self.controller.onStop?()
-                self.controller.hide()
-            }
-            .fluidButton(.compact, size: .small)
-            Button {
-                self.controller.dismiss()
-            } label: {
-                Image(systemName: "xmark")
-                    .font(.system(size: 10, weight: .semibold))
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Meeting ended")
+                    .font(self.theme.typography.bodySmallStrong)
+                    .foregroundStyle(self.theme.palette.primaryText)
+                Text("Stopping in \(self.controller.secondsRemaining) seconds")
+                    .font(self.theme.typography.caption)
+                    .monospacedDigit()
                     .foregroundStyle(self.theme.palette.secondaryText)
-                    .frame(width: 20, height: 20)
-                    .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
-            .help("Keep recording")
-            .accessibilityLabel("Keep recording")
+            .lineLimit(1)
+            .fixedSize(horizontal: true, vertical: false)
+            Spacer(minLength: 0)
+            FluidGlassControlGroup {
+                HStack(spacing: 6) {
+                    Button { self.controller.dismiss(presentationID: presentationID) } label: {
+                        Text("Keep recording").foregroundStyle(self.theme.palette.primaryText)
+                    }
+                    .fluidGlassAction()
+                    .accessibilityIdentifier("meeting-end-keep-recording")
+                    Button("Stop now") { self.controller.stopNow(presentationID: presentationID) }
+                        .fluidGlassAction(quiet: true)
+                        .help("Stop recording and transcribe this meeting")
+                        .accessibilityIdentifier("meeting-end-stop-now")
+                }
+            }
         }
         .padding(.leading, 12)
         .padding(.trailing, 8)
@@ -756,7 +809,7 @@ private struct MeetingStillRecordingNudgeContent: View {
         .frame(width: MeetingStillRecordingNudgeController.panelSize.width, height: MeetingStillRecordingNudgeController.panelSize.height)
         .background(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(self.theme.palette.contentBackground.opacity(0.96))
+                .fill(self.theme.palette.contentBackground.opacity(self.reduceTransparency ? 1 : 0.96))
         )
         .overlay(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
@@ -764,6 +817,6 @@ private struct MeetingStillRecordingNudgeContent: View {
         )
         .shadow(color: .black.opacity(0.3), radius: 12, x: 0, y: 4)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("Meeting may have ended. Stop and transcribe?")
+        .accessibilityLabel("Meeting ended. Stopping and transcribing in \(self.controller.secondsRemaining) seconds.")
     }
 }

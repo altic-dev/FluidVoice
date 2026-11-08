@@ -1966,7 +1966,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         var microphoneSkippedChunkIDs: [MeetingAudioChunkID] = []
         var coverageGaps: [MeetingTranscriptCoverageGap] = []
         if let microphoneTrack = session.audioTracks.first(where: { $0.kind == .microphone }) {
-            if session.mode == .onlineCall {
+            if session.mode.capturesComputerAudio {
                 coverageGaps = Self.microphoneCoverageGaps(
                     track: microphoneTrack,
                     origin: context.origin
@@ -2304,7 +2304,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
                 try await self.processMicrophoneChunk(
                     chunk,
                     track: track,
-                    requiresEchoProtection: session.mode == .onlineCall,
+                    requiresEchoProtection: session.mode.capturesComputerAudio,
                     eras: eras,
                     era0AnchorRelative: era0AnchorRelative,
                     diarizer: diarizer,
@@ -2329,7 +2329,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
             }
         }
 
-        let admittedTurns = session.mode == .onlineCall
+        let admittedTurns = session.mode.capturesComputerAudio
             ? stagedTurns.filter {
                 Self.microphoneIntervalIsAdmitted(
                     start: $0.rawStart ?? $0.start,

@@ -4,7 +4,7 @@ extension AppServices {
     /// Starts the same coordinator used by FluidMeet without posting a navigation request.
     func startMeetingRecordingFromMenuBar() async throws {
         guard SettingsStore.shared.fluidMeetEnabled else { throw MeetingCoordinatorError.featureDisabled }
-        let defaults = SettingsStore.shared.meetingRecordingDefaults
+        let defaults = SettingsStore.shared.meetingRecordingDefaults.preferringLastPickedApplication(SettingsStore.shared.meetingRecentApplication)
         let target = defaults.mode == .onlineCall ? self.meetingAutomaticTarget : nil
         let preferredInputUID = SettingsStore.shared.preferredInputDeviceUID
         let microphones = await MeetingCaptureSourceCatalog.microphoneSnapshot()

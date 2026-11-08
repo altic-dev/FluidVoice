@@ -1494,12 +1494,12 @@ final class MeetingAutoDetectorTests: XCTestCase {
         XCTAssertEqual(h.nudges, 2)
     }
 
-    func testAnUnreadableAudioQueryDoesNotTakeTheQuestionBack() async throws {
+    func testAnUnreadableAudioQueryWithdrawsTheAutomaticStop() async throws {
         let h = try self.teamsRecordingThatAsked()
         h.audioProcessActivity.snapshotOverride = AudioProcessActivitySnapshot(processes: [], owners: [], queryState: .unknown)
         await h.detector.pollAudioProcessActivity(at: h.clock.now())
         h.detector.tick(at: h.clock.now())
-        XCTAssertEqual(h.withdrawals, 0)
+        XCTAssertEqual(h.withdrawals, 1)
     }
 
     func testAQuitAppIsNotBroughtBackByAnotherAppWithItsProcessID() throws {
@@ -1519,12 +1519,12 @@ final class MeetingAutoDetectorTests: XCTestCase {
         XCTAssertEqual(h.nudges, 1)
     }
 
-    func testScreenLockLeavesAQuestionAlreadyAskedOnScreen() throws {
+    func testScreenLockWithdrawsTheAutomaticStop() throws {
         let h = try self.teamsRecordingThatAsked()
         h.detector.disarmAndClearTransientState()
         h.advance(120)
         h.detector.tick(at: h.clock.now())
-        XCTAssertEqual(h.withdrawals, 0)
+        XCTAssertEqual(h.withdrawals, 1)
         XCTAssertEqual(h.nudges, 1)
     }
 
@@ -1546,17 +1546,17 @@ final class MeetingAutoDetectorTests: XCTestCase {
         XCTAssertEqual(unknownScreen.midX, 46)
     }
 
-    func testADismissedQuestionTellsTheDetectorAndStopDoesNot() {
+    func testHidingOrDismissingAnInactiveQuestionHasNoEffects() {
         let controller = MeetingStillRecordingNudgeController.shared
         let earlierDismiss = controller.onDismiss
         defer { controller.onDismiss = earlierDismiss }
         var dismissals = 0
-        controller.onDismiss = { dismissals += 1 }
+        controller.onDismiss = { _ in dismissals += 1 }
 
         controller.hide()
         XCTAssertEqual(dismissals, 0, "taking the question down is not the user closing it")
         controller.dismiss()
-        XCTAssertEqual(dismissals, 1)
+        XCTAssertEqual(dismissals, 0, "a stale dismissal must not silence a later recording")
         XCTAssertFalse(controller.isPresented)
     }
 

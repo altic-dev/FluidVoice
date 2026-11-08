@@ -8,7 +8,11 @@ typealias MeetingTranscriptSegmentID = UUID
 
 nonisolated enum MeetingCaptureMode: String, Codable, CaseIterable, Sendable {
     case onlineCall
+    case systemAudio
+    /// Retained only to read and process older microphone-only recordings.
     case inRoom
+
+    var capturesComputerAudio: Bool { self != .inRoom }
 }
 
 nonisolated enum MeetingSessionState: String, Codable, Sendable {
@@ -146,7 +150,7 @@ nonisolated struct MeetingRecordingDefaults: Codable, Equatable, Sendable {
 
     static let unconfigured = Self(
         isConfigured: false,
-        mode: .onlineCall,
+        mode: .systemAudio,
         applicationBundleIdentifier: nil,
         microphoneCaptureDeviceID: nil,
         microphoneCoreAudioUID: nil,
@@ -178,6 +182,8 @@ nonisolated struct MeetingApplicationIdentity: Codable, Equatable, Sendable {
     /// Optional properties). `MeetingWindowSelector` prefers it when set and it still exists —
     /// prevents recording a different foreground window than the one that was actually detected.
     var windowID: UInt32?
+    /// Explicit app-wide choice; nil retains the exact-process meaning of older sessions.
+    var capturesAllInstances: Bool? = nil
 
     init(
         bundleIdentifier: String,
@@ -307,7 +313,9 @@ nonisolated struct MeetingCaptureConfiguration: Codable, Equatable, Sendable {
             throw MeetingModelValidationError.missingOnlineApplication
         case (.inRoom, .some):
             throw MeetingModelValidationError.unexpectedInRoomApplication
-        case (.onlineCall, .some), (.inRoom, .none):
+        case (.systemAudio, .some):
+            throw MeetingModelValidationError.unexpectedSystemApplication
+        case (.onlineCall, .some), (.inRoom, .none), (.systemAudio, .none):
             break
         }
     }
@@ -988,7 +996,7 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
     }
 
     var microphoneEchoWarning: String? {
-        guard self.mode == .onlineCall else { return nil }
+        guard self.mode.capturesComputerAudio else { return nil }
         switch self.state {
         case .preparing, .recording, .recordingDegraded, .stopping:
             guard self.events.last(where: { $0.kind == .echoFilteringUnavailable || $0.kind == .echoFilteringRestored })?.kind == .echoFilteringUnavailable else { return nil }
@@ -1159,7 +1167,9 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
             throw MeetingModelValidationError.missingOnlineApplication
         case (.inRoom, .some):
             throw MeetingModelValidationError.unexpectedInRoomApplication
-        case (.onlineCall, .some), (.inRoom, .none):
+        case (.systemAudio, .some):
+            throw MeetingModelValidationError.unexpectedSystemApplication
+        case (.onlineCall, .some), (.inRoom, .none), (.systemAudio, .none):
             break
         }
 
@@ -1174,7 +1184,7 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
         if [.recording, .recordingDegraded, .stopping, .processing, .completed, .interrupted]
             .contains(self.state)
         {
-            let expectedKinds: Set<MeetingAudioTrackKind> = self.mode == .onlineCall
+            let expectedKinds: Set<MeetingAudioTrackKind> = self.mode.capturesComputerAudio
                 ? [.applicationAudio, .microphone]
                 : [.microphone]
             guard Set(trackKinds) == expectedKinds else {
@@ -1339,6 +1349,7 @@ nonisolated enum MeetingModelValidationError: LocalizedError, Equatable {
     case missingMicrophone
     case missingOnlineApplication
     case unexpectedInRoomApplication
+    case unexpectedSystemApplication
     case duplicateTrackID
     case duplicateTrackKind
     case invalidTrackSet
@@ -1365,6 +1376,8 @@ nonisolated enum MeetingModelValidationError: LocalizedError, Equatable {
             return "A microphone must be selected."
         case .missingOnlineApplication:
             return "An online meeting application must be selected."
+        case .unexpectedSystemApplication:
+            return "Computer-audio recordings cannot be restricted to one application."
         case .unexpectedInRoomApplication:
             return "In-room meetings cannot include an application-audio source."
         case .duplicateTrackID, .duplicateTrackKind, .invalidTrackSet:

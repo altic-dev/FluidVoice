@@ -106,7 +106,7 @@ struct MeetingRecordingCanvas: View {
 
     @ViewBuilder
     private var sourceHealth: some View {
-        if self.session.mode == .onlineCall {
+        if self.session.mode.capturesComputerAudio {
             MeetingTrackHealthRow(title: "Meeting audio", systemImage: "macwindow", health: self.trackHealth[.applicationAudio] ?? .waiting)
         }
         MeetingTrackHealthRow(title: "Microphone", systemImage: "mic", health: self.trackHealth[.microphone] ?? .waiting)
@@ -114,7 +114,7 @@ struct MeetingRecordingCanvas: View {
 
     private var sourceSummary: String {
         let microphoneName = self.session.selectedMicrophone.displayName
-        guard self.session.mode == .onlineCall else { return microphoneName }
+        guard self.session.mode.capturesComputerAudio else { return microphoneName }
         let applicationName = self.session.capturedApplication?.displayName ?? "Meeting audio"
         return "\(applicationName) · \(microphoneName)"
     }
@@ -805,7 +805,7 @@ struct MeetingResultCanvas: View {
             Label(Self.durationText(self.session.duration), systemImage: "clock")
                 .fixedSize()
             Text("·").accessibilityHidden(true)
-            Label(self.sourceName, systemImage: self.session.mode == .onlineCall ? "macwindow" : "person.2")
+            Label(self.sourceName, systemImage: self.session.mode.capturesComputerAudio ? "macwindow" : "person.2")
                 .lineLimit(1)
                 .help("\(self.sourceName)\nMicrophone: \(self.session.selectedMicrophone.displayName)")
             Text("·").accessibilityHidden(true)

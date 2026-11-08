@@ -393,7 +393,7 @@ actor MeetingSessionStore: MeetingSessionStoring {
             return session
         }
 
-        let expectedKinds: Set<MeetingAudioTrackKind> = session.mode == .onlineCall
+        let expectedKinds: Set<MeetingAudioTrackKind> = session.mode.capturesComputerAudio
             ? [.applicationAudio, .microphone]
             : [.microphone]
         let sessionDirectory = self.sessionDirectoryURL(for: session.id)

@@ -67,7 +67,7 @@ final class MeetingAutoDetector {
 
     var onPromptRequested: ((PromptRequest) -> Void)?
     var onStillRecordingNudge: (() -> Void)?
-    /// The call came back after we asked whether it ended. Take the question down.
+    /// End evidence was withdrawn or its recording ended. Cancel the prompt and pending stop.
     var onStillRecordingNudgeWithdrawn: (() -> Void)?
     var onSuggestDisablingAutoDetect: (() -> Void)?
     var onEpisodeInvalidated: ((UUID) -> Void)?
@@ -218,6 +218,7 @@ final class MeetingAutoDetector {
     }
 
     func stop() {
+        self.recordingStopped(reason: "detector-stopped")
         self.automaticTarget = nil
         self.onAutomaticTargetChanged?(nil)
         self.runGeneration &+= 1
@@ -664,6 +665,7 @@ final class MeetingAutoDetector {
         let key = "url:\(url.host)\(url.path)"
         if watched.browserCallEvidenceKey == nil, url.callState == .inCall { watched.browserCallEvidenceKey = key }
         guard watched.browserCallEvidenceKey == key else { return }
+        var shouldWithdraw = false
         switch url.callState {
         case .ended:
             if watched.browserCallEndedAt == nil {
@@ -671,11 +673,18 @@ final class MeetingAutoDetector {
                 DebugLogger.shared.log("browser-call-state=ended evidence=post-call-page bundle=\(bundleIdentifier)", source: "MeetingAutoDetector")
             }
         case .inCall:
+            if watched.browserCallEndedAt != nil {
+                // A positive rejoin overrides the previous call's microphone-release edge.
+                watched.browserMicReleasedAt = nil
+                shouldWithdraw = watched.asked && !watched.silenced
+                watched.asked = false
+            }
             watched.browserCallEndedAt = nil
         case .unknown:
             break // A failed read or a tab switch cannot undo a positive post-call observation.
         }
         self.watchedRecording = watched
+        if shouldWithdraw { self.onStillRecordingNudgeWithdrawn?() }
     }
 
     // MARK: - Confirm + episode lifecycle
@@ -842,6 +851,9 @@ final class MeetingAutoDetector {
             watched.sessionID = sessionID
             self.watchedRecording = watched
         } else {
+            if self.watchedRecording?.asked == true, self.watchedRecording?.silenced == false {
+                self.onStillRecordingNudgeWithdrawn?()
+            }
             self.watchedRecording = WatchedRecording(
                 sessionID: sessionID,
                 pid: pid,
@@ -858,15 +870,30 @@ final class MeetingAutoDetector {
 
     /// Our recording is over, however it ended. Nothing is left to ask about.
     func recordingStopped(reason: String = "recording-stopped") {
+        let shouldWithdraw = self.watchedRecording?.asked == true && self.watchedRecording?.silenced == false
         if let watched = self.watchedRecording {
             DebugLogger.shared.log("end-of-meeting-watch-stopped reason=\(reason) bundle=\(watched.bundleIdentifier)", source: "MeetingAutoDetector")
         }
         self.watchedRecording = nil
         self.lastEndWatchStatus = nil
+        if shouldWithdraw { self.onStillRecordingNudgeWithdrawn?() }
+    }
+
+    var pendingEndConfirmationSessionID: MeetingSessionID? {
+        guard let watched = self.watchedRecording, watched.asked, !watched.silenced else { return nil }
+        return watched.sessionID
+    }
+
+    /// Re-evaluate observed evidence at expiry; never perform hardware queries from the countdown.
+    func canStopAfterEndConfirmation(sessionID: MeetingSessionID) -> Bool {
+        guard self.pendingEndConfirmationSessionID == sessionID else { return false }
+        self.evaluateEndOfMeeting(at: self.clock.now())
+        return self.pendingEndConfirmationSessionID == sessionID
     }
 
     /// The user closed the "Meeting ended?" question without stopping.
-    func stillRecordingNudgeDismissed() {
+    func stillRecordingNudgeDismissed(sessionID: MeetingSessionID? = nil) {
+        if let sessionID, self.watchedRecording?.sessionID != sessionID { return }
         self.watchedRecording?.silenced = true
         if let watched = self.watchedRecording {
             self.logEndWatchStatus("dismissed-by-user", bundleIdentifier: watched.bundleIdentifier)
@@ -1033,10 +1060,11 @@ final class MeetingAutoDetector {
         // explicit end; its question still leaves capture running until the user chooses Stop.
         let hasExplicitBrowserEnd = watched.tier == .browserTier2 && watched.browserCallEndedAt != nil
         let stillTalking = !hasExplicitBrowserEnd && self.lastSpeechAt().map { now.timeIntervalSince($0) < Self.speechQuietSeconds } == true
-        let shouldAsk = askAt.map { now >= $0 } == true && !stillTalking && !watched.asked
-        // Every sign of the end is gone again: the call resumed. An audio query we cannot read is
-        // not that, so it changes nothing. The question can then come back at the next real end.
-        let shouldWithdraw = askAt == nil && watched.asked && !(audioUnknown && watched.sawProcessAudio)
+        let evidenceUncertain = audioUnknown && !hasExplicitBrowserEnd && watched.appGoneAt == nil
+        let shouldAsk = askAt.map { now >= $0 } == true && !stillTalking && !evidenceUncertain && !watched.asked
+        // An automatic stop requires continued evidence. Resume, fresh speech, or an unreadable
+        // query cancels it; valid end evidence can offer a new full countdown later.
+        let shouldWithdraw = watched.asked && (askAt == nil || stillTalking || evidenceUncertain)
         if shouldAsk { watched.asked = true }
         if shouldWithdraw { watched.asked = false }
         self.watchedRecording = watched
@@ -1075,7 +1103,7 @@ final class MeetingAutoDetector {
         self.episodesByKey = [:]
         self.activeConsumedEpisodeKey = nil
         // With the records gone the app would look like it quit. Stop watching instead of guessing.
-        // A question already on screen stays there for the user to answer.
+        // A pending automatic stop must not survive a lock, sleep, or user switch.
         self.recordingStopped(reason: "lock-sleep-or-session-switch")
         self.lastBrowserPollAt = [:]
         for episodeID in unconsumedIDs {
@@ -1088,17 +1116,20 @@ final class MeetingAutoDetector {
     private func installTransientDisarmObservers() {
         let center = NSWorkspace.shared.notificationCenter
         self.transientDisarmObservers = [
+            center.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.disarmAndClearTransientState() }
+            },
             center.addObserver(forName: NSWorkspace.screensDidSleepNotification, object: nil, queue: .main) { [weak self] _ in
-                self?.disarmAndClearTransientState()
+                MainActor.assumeIsolated { self?.disarmAndClearTransientState() }
             },
             center.addObserver(forName: NSWorkspace.sessionDidResignActiveNotification, object: nil, queue: .main) { [weak self] _ in
-                self?.disarmAndClearTransientState()
+                MainActor.assumeIsolated { self?.disarmAndClearTransientState() }
             },
         ]
         self.transientDisarmObservers.append(
             DistributedNotificationCenter.default().addObserver(
                 forName: Notification.Name("com.apple.screenIsLocked"), object: nil, queue: .main
-            ) { [weak self] _ in self?.disarmAndClearTransientState() }
+            ) { [weak self] _ in MainActor.assumeIsolated { self?.disarmAndClearTransientState() } }
         )
     }
 

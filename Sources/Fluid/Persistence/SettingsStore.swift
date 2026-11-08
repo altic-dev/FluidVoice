@@ -2080,7 +2080,11 @@ final class SettingsStore: ObservableObject {
             guard let data = try? JSONEncoder().encode(newValue) else {
                 return
             }
+            let oldValue = self.meetingRecordingDefaults
             self.defaults.set(data, forKey: Keys.meetingRecordingDefaults)
+            if oldValue.mode != newValue.mode || oldValue.applicationBundleIdentifier != newValue.applicationBundleIdentifier {
+                NotificationCenter.default.post(name: .meetingRecordingSourceChoiceDidChange, object: nil)
+            }
         }
     }
 
@@ -2092,13 +2096,17 @@ final class SettingsStore: ObservableObject {
         }
         set {
             guard var application = newValue else {
+                guard self.defaults.object(forKey: Keys.meetingRecentApplication) != nil else { return }
                 self.defaults.removeObject(forKey: Keys.meetingRecentApplication)
+                NotificationCenter.default.post(name: .meetingRecordingSourceChoiceDidChange, object: nil)
                 return
             }
             application.windowID = nil
             application.displayID = nil
-            guard let data = try? JSONEncoder().encode(application) else { return }
+            guard application != self.meetingRecentApplication,
+                  let data = try? JSONEncoder().encode(application) else { return }
             self.defaults.set(data, forKey: Keys.meetingRecentApplication)
+            NotificationCenter.default.post(name: .meetingRecordingSourceChoiceDidChange, object: nil)
         }
     }
 
