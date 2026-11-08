@@ -2088,6 +2088,35 @@ final class SettingsStore: ObservableObject {
         }
     }
 
+    /// Publish a source choice only after both preferences agree. Observers may synchronously
+    /// refresh a bound picker, so notifying between these writes can overwrite the user's choice.
+    func saveMeetingRecordingSource(_ configuration: MeetingRecordingDefaults, recentApplication: MeetingApplicationIdentity?) {
+        var application = recentApplication
+        application?.windowID = nil
+        application?.displayID = nil
+        guard let configurationData = try? JSONEncoder().encode(configuration) else { return }
+        let applicationData: Data?
+        if let application {
+            guard let data = try? JSONEncoder().encode(application) else { return }
+            applicationData = data
+        } else {
+            applicationData = nil
+        }
+        let previous = self.meetingRecordingDefaults
+        let sourceChanged = previous.mode != configuration.mode
+            || previous.applicationBundleIdentifier != configuration.applicationBundleIdentifier
+            || self.meetingRecentApplication != application
+        self.defaults.set(configurationData, forKey: Keys.meetingRecordingDefaults)
+        if let applicationData {
+            self.defaults.set(applicationData, forKey: Keys.meetingRecentApplication)
+        } else {
+            self.defaults.removeObject(forKey: Keys.meetingRecentApplication)
+        }
+        if sourceChanged {
+            NotificationCenter.default.post(name: .meetingRecordingSourceChoiceDidChange, object: nil)
+        }
+    }
+
     /// Picker recency is separate from the saved recording source.
     var meetingRecentApplication: MeetingApplicationIdentity? {
         get {

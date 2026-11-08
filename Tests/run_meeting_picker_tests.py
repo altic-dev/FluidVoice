@@ -37,7 +37,9 @@ def main():
     swift = '''import AppKit
 import Combine
 import SwiftUI
-struct Microphone: Sendable { var captureDeviceID = "mic" }
+struct Microphone: Sendable { var captureDeviceID = "mic"; var coreAudioUID: String? = "mic-uid" }
+struct MicOption { var id: String { identity.captureDeviceID }; let identity: Microphone }
+enum MicrophoneRole: String, Codable { case unknown }
 struct MeetingMicrophoneCatalogSnapshot: Sendable { var identities: [Microphone] = [.init()] }
 struct MeetingInstalledCallApplication: Sendable {}
 struct MeetingRecordingDefaults: Equatable, Sendable, Codable {
@@ -46,6 +48,8 @@ struct MeetingRecordingDefaults: Equatable, Sendable, Codable {
     var isConfigured = false
     var languageCode: String? = "en"
     var microphoneCaptureDeviceID = "mic"
+    var microphoneCoreAudioUID: String?
+    var microphoneRole = MicrophoneRole.unknown
     var applicationBundleIdentifier: String?
     var applicationDisplayName: String?
 }
@@ -53,14 +57,21 @@ enum MeetingCaptureError: Error { case applicationNotSelected, applicationUnavai
 enum MeetingAutoDetector { struct ResolvedTarget { var bundleIdentifier: String; var pid: Int32; var windowID: UInt32? } }
 @MainActor final class SettingsStore {
     static let shared = SettingsStore()
-    var meetingRecordingDefaults = MeetingRecordingDefaults()
+    let suite = "FluidVoicePickerShared." + UUID().uuidString
+    lazy var defaults = UserDefaults(suiteName: suite)!
+    enum Keys { static let meetingRecentApplication = "MeetingRecentApplication"; static let meetingRecordingDefaults = "MeetingRecordingDefaults" }
+    // PRODUCTION_PREFERENCES
     var fluidMeetEnabled = true
-    var meetingRecentApplication: MeetingApplicationIdentity?
     var meetingAutoDetectEnabled = true
     var meetingAutoDetectBrowserEnabled = true
 }
 class MeetingFloatingCaptionsPanel: NSPanel {}
 '''
+    preferences = (ROOT / 'Sources/Fluid/Persistence/SettingsStore.swift').read_text()
+    preference_declarations = '\n'.join(declaration(preferences, marker) for marker in [
+        'var meetingRecentApplication:', 'var meetingRecordingDefaults:', 'func saveMeetingRecordingSource('
+    ])
+    swift = swift.replace('// PRODUCTION_PREFERENCES', preference_declarations)
     # The microphone label is unrelated to source choice; its model is replaced above.
     snapshot = snapshot.replace(declaration(snapshot, 'var microphoneSelectionLabel:'), '')
     swift += declaration((ROOT / 'Sources/Fluid/Services/Meeting/MeetingInstalledCallApplications.swift').read_text(), 'nonisolated struct MeetingApplicationIcon:') + '\n'
@@ -78,16 +89,38 @@ class MeetingFloatingCaptionsPanel: NSPanel {}
     var setupDraft = MeetingTranscriptionSetupDraft()
     var applications: [MeetingApplicationOption] = []
     var titles = 0
+    var microphones = [MicOption(identity: .init(captureDeviceID: "custom-mic"))]
+    var actionErrorMessage: String?
+    func finishRestoredMeetingSettingsIfPending() -> Bool { false }
     let appServices = TargetServices()
     func regenerateDefaultTitleIfNeeded() { titles += 1 }
     func changed() { pendingSourceChoiceRefresh = true; applyPendingSourceChoiceRefresh() }
     func safe() { canRefreshSetupAfterBackupRestore = true; applyPendingSourceChoiceRefresh() }
 '''
     swift += declaration(page, 'private func selectPreferredApplication(') + '\n'
-    swift += declaration(page, 'private func applyPendingSourceChoiceRefresh()') + '\n}\n'
+    swift += declaration(page, 'private func applyPendingSourceChoiceRefresh()') + '\n'
+    # Exercise the complete source/microphone persistence path; retention and sheet dismissal
+    # are covered elsewhere and are unrelated to the source-write ordering regression.
+    save = declaration(page, 'private func saveMeetingSettings()').split('        let previousRetentionPolicy')[0]
+    swift += save.replace('private func', 'func', 1) + '}\n}\n'
     preferences = (ROOT / 'Sources/Fluid/Persistence/SettingsStore.swift').read_text()
     swift += '\n@MainActor final class ChoicePreferences {\nlet defaults: UserDefaults\ninit(_ defaults: UserDefaults) { self.defaults = defaults }\nenum Keys { static let meetingRecentApplication = "MeetingRecentApplication"; static let meetingRecordingDefaults = "MeetingRecordingDefaults" }\n'
     swift += declaration(preferences, 'var meetingRecentApplication:') + '\n' + declaration(preferences, 'var meetingRecordingDefaults:') + '\n}\n'
+    swift += '\n@MainActor final class MenuHarness {\n'
+    swift += """
+    let page: PageHarness
+    init(_ page: PageHarness) { self.page = page }
+    var draft: MeetingTranscriptionSetupDraft { get { page.setupDraft } set { page.setupDraft = newValue } }
+    var resolvedApplication: MeetingApplicationOption? { page.applications.first { $0.id == draft.selectedApplicationID } }
+    func choose(_ option: MeetingApplicationOption?) {
+        draft.mode = option == nil ? .systemAudio : .onlineCall
+        draft.usesAutomaticApplication = option == nil
+        draft.selectedApplicationID = option?.id
+        draft.preferredApplicationBundleIdentifier = option?.identity.bundleIdentifier
+        persistSourceChoice()
+    }
+"""
+    swift += declaration(page, 'private func persistSourceChoice()') + '\n}\n'
     swift += '\nfinal class EventCounter: @unchecked Sendable { var value = 0 }\n'
     swift += r'''
 final class TargetServices { var meetingAutomaticTarget: MeetingAutoDetector.ResolvedTarget? }
@@ -145,6 +178,7 @@ final class TargetServices { var meetingAutomaticTarget: MeetingAutoDetector.Res
         preferences.meetingRecordingDefaults = sourceDefaults
         check(events.value == 3, "Repeated source defaults do not broadcast")
         let settings = SettingsStore.shared
+        defer { settings.defaults.removePersistentDomain(forName: settings.suite) }
         var oldDefaults = MeetingRecordingDefaults()
         oldDefaults.isConfigured = true
         oldDefaults.applicationBundleIdentifier = "com.openai.codex"
@@ -176,6 +210,55 @@ final class TargetServices { var meetingAutomaticTarget: MeetingAutoDetector.Res
         check(page.setupDraft.selectedApplicationID == MeetingApplicationOption(identity: duplicate).id, "same-app processes restore the exact explicit process choice")
         let titles = page.titles; page.safe()
         check(page.titles == titles, "completed source refresh cannot replay")
+        // Wire the real synchronous preference publisher back to the bound page, then use
+        // the production menu save. Separate setter and refresh tests miss reentrant writes.
+        page.applications = [.init(identity: zoom), .init(identity: browser)]
+        page.changed()
+        let sourceEvents = EventCounter()
+        let subscription = NotificationCenter.default.publisher(for: .meetingRecordingSourceChoiceDidChange).sink { _ in
+            sourceEvents.value += 1
+            let saved = settings.meetingRecordingDefaults
+            check(saved.applicationBundleIdentifier == settings.meetingRecentApplication?.bundleIdentifier, "observer always sees a complete source choice")
+            page.changed()
+        }
+        let menu = MenuHarness(page)
+        for option in [page.applications[0], page.applications[1], page.applications[0], page.applications[1]] {
+            let before = sourceEvents.value
+            menu.choose(option)
+            check(sourceEvents.value == before + 1, "one source event per app change")
+            check(page.setupDraft.selectedApplicationID == option.id, "synchronous refresh keeps the newly picked app")
+            check(settings.meetingRecentApplication?.bundleIdentifier == option.identity.bundleIdentifier, "last picked app matches the user's choice")
+            check(settings.meetingRecordingDefaults.applicationBundleIdentifier == option.identity.bundleIdentifier, "default matches last pick")
+        }
+        let sameCount = sourceEvents.value
+        menu.choose(page.applications[1])
+        check(sourceEvents.value == sameCount, "reselecting the same source does not notify")
+        menu.choose(nil)
+        check(page.setupDraft.mode == .systemAudio && settings.meetingRecentApplication == nil, "Automatic clears both app preferences before refreshing")
+        check(page.setupDraft.selectedMicrophoneID == "custom-mic" && page.setupDraft.languageCode == "fr" && page.setupDraft.title == "My custom title", "source switching preserves microphone language and custom title")
+        page.canRefreshSetupAfterBackupRestore = false
+        menu.choose(page.applications[0]); menu.choose(page.applications[1])
+        check(page.pendingSourceChoiceRefresh, "busy page defers source refresh")
+        page.safe()
+        check(page.setupDraft.selectedApplicationID == page.applications[1].id, "deferred refresh keeps latest complete choice")
+        // Keep a sheet on Browser while another control selects Automatic. Saving its
+        // microphone/language must not restore the stale Browser source.
+        page.canRefreshSetupAfterBackupRestore = false
+        page.setupDraft.applicationSelectionWasEdited = false
+        var automaticDefaults = settings.meetingRecordingDefaults
+        automaticDefaults.mode = .systemAudio
+        automaticDefaults.applicationBundleIdentifier = nil; automaticDefaults.applicationDisplayName = nil
+        settings.saveMeetingRecordingSource(automaticDefaults, recentApplication: nil)
+        let beforeSheetSave = sourceEvents.value
+        page.saveMeetingSettings()
+        check(settings.meetingRecordingDefaults.mode == .systemAudio && settings.meetingRecentApplication == nil, "unmodified sheet source cannot overwrite a newer Automatic choice")
+        check(sourceEvents.value == beforeSheetSave, "microphone and language save emits no source event")
+        check(settings.meetingRecordingDefaults.microphoneCaptureDeviceID == "custom-mic" && settings.meetingRecordingDefaults.languageCode == "fr", "sheet still saves the requested microphone and language")
+        page.setupDraft.applicationSelectionWasEdited = true
+        page.saveMeetingSettings()
+        check(settings.meetingRecordingDefaults.applicationBundleIdentifier == browser.bundleIdentifier && settings.meetingRecentApplication?.bundleIdentifier == browser.bundleIdentifier, "explicit sheet source edit wins as one complete choice")
+        page.safe()
+        subscription.cancel()
         settings.meetingRecordingDefaults = .init(); settings.meetingRecentApplication = nil
         page.changed()
         check(page.setupDraft.usesAutomaticApplication && page.setupDraft.preferredApplicationBundleIdentifier == nil, "explicit Automatic choice clears old app")

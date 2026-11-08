@@ -156,6 +156,7 @@ final class MeetingAutoDetector {
 
     private var activeConsumedEpisodeKey: String?
     private var watchedRecording: WatchedRecording?
+    private var recordingAwaitingCall: (sessionID: MeetingSessionID, bundleIdentifier: String?)?
     private var dismissedBundleUntil: [String: Date] = [:]
     private var dismissalTimestamps: [Date] = []
     private var pollTask: Task<Void, Never>?
@@ -260,7 +261,10 @@ final class MeetingAutoDetector {
         !Task.isCancelled && self.runGeneration == generation && self.pollTask != nil
     }
 
-    private var shouldPollAudio: Bool { self.isNativeDetectionEnabled() || self.watchedRecording != nil }
+    private var shouldPollAudio: Bool {
+        self.isNativeDetectionEnabled() || self.watchedRecording != nil
+            || (self.recordingAwaitingCall != nil && self.isBrowserDetectionEnabled())
+    }
 
     private func shouldObserve(_ record: CandidateRecord) -> Bool {
         if record.tier == .nativeTier1 ? self.isNativeDetectionEnabled() : self.isBrowserDetectionEnabled() { return true }
@@ -269,7 +273,7 @@ final class MeetingAutoDetector {
     }
 
     private func shouldCollectEvidence(at now: Date) -> Bool {
-        if self.watchedRecording != nil { return true }
+        if self.watchedRecording != nil || self.recordingAwaitingCall != nil { return true }
         if !self.episodesByKey.isEmpty { return true }
         return self.records.values.contains { record in
             record.hasLiveWindow || record.windowLostAt != nil
@@ -379,6 +383,8 @@ final class MeetingAutoDetector {
               expectedRunGeneration.map({ self.isCurrentRun($0) && self.shouldPollAudio }) ?? true
         else { return }
         let candidates = self.records.filter { $0.value.tier == .nativeTier1 && self.shouldObserve($0.value) }
+        let waiting = self.recordingAwaitingCall
+        let waitingBrowsers = waiting == nil ? [:] : self.records.filter { $0.value.tier == .browserTier2 && self.shouldObserve($0.value) }
         let snapshot = await self.audioProcessActivity.snapshot()
         guard !Task.isCancelled,
               expectedRunGeneration.map({ self.isCurrentRun($0) && self.shouldPollAudio }) ?? true
@@ -398,6 +404,27 @@ final class MeetingAutoDetector {
             DebugLogger.shared.info("audio-query-recovered native activity reconciliation resumed", source: "MeetingAutoDetector")
         }
         self.audioQueryUnknown = false
+        // Our own microphone is already open. A browser joining later may produce no new
+        // device-wide edge, so use the existing process snapshot to attribute its input.
+        let browserInputByPID = waitingBrowsers.isEmpty ? nil : MeetingAudioProcessResolver.activeOwnerInputByPID(
+            snapshot: snapshot, owning: MeetingAppRegistry.isBrowserApp(bundleIdentifier:)
+        )
+        for (pid, record) in waitingBrowsers {
+            guard let waiting, self.recordingAwaitingCall?.sessionID == waiting.sessionID,
+                  self.records[pid]?.incarnation == record.incarnation,
+                  self.shouldObserve(record)
+            else { continue }
+            let active = browserInputByPID.map {
+                Self.browserHoldsMicrophone(bundleIdentifier: record.bundleIdentifier, pid: pid, owners: snapshot.owners, inputByPID: $0) == true
+            } == true
+            self.records[pid]?.processAudioWasActive = active
+            self.records[pid]?.processAudioInactiveAt = active ? nil : now
+            if active {
+                self.records[pid]?.audioEvidenceAt = now
+                self.records[pid]?.audioEvidenceSource = .process
+                if self.workspaceEvents.frontmostProcessID == pid { self.records[pid]?.lastFrontmostAt = now }
+            }
+        }
         for (pid, record) in candidates {
             guard !Task.isCancelled,
                   expectedRunGeneration.map({ self.isCurrentRun($0) && self.shouldObserve(record) }) ?? true,
@@ -417,10 +444,18 @@ final class MeetingAutoDetector {
             // raise a start prompt.
             let isBehindOurRecording = self.watchedRecording.map { $0.pid == pid && $0.incarnation == record.incarnation } == true
             if isActive, !hasInput, record.bundleIdentifier != "us.zoom.xos", !hasEstablishedEpisode, !isBehindOurRecording {
-                self.handleAudioProcessActivity(false, pid: pid, at: now)
+                self.handleAudioProcessActivity(false, pid: pid, at: now, confirm: waiting == nil)
                 continue
             }
-            self.handleAudioProcessActivity(isActive, pid: pid, at: now)
+            self.handleAudioProcessActivity(isActive, pid: pid, at: now, confirm: waiting == nil)
+        }
+        // Consider the complete snapshot before choosing an end watch. Iteration order must
+        // not select the first of two simultaneous calls.
+        if let waiting, self.recordingAwaitingCall?.sessionID == waiting.sessionID {
+            for pid in Array(candidates.keys) + Array(waitingBrowsers.keys) {
+                guard self.recordingAwaitingCall != nil else { break }
+                self.attemptConfirm(pid: pid, at: now)
+            }
         }
     }
 
@@ -494,7 +529,7 @@ final class MeetingAutoDetector {
         DebugLogger.shared.log("end-of-meeting-watch-followed bundle=\(record.bundleIdentifier)", source: "MeetingAutoDetector")
     }
 
-    func handleAudioProcessActivity(_ isActive: Bool, pid: Int32, at now: Date) {
+    func handleAudioProcessActivity(_ isActive: Bool, pid: Int32, at now: Date, confirm: Bool = true) {
         guard var record = self.records[pid], record.tier == .nativeTier1 else { return }
         record.processAudioObserved = true
         if isActive, self.watchedRecording?.pid == pid, self.watchedRecording?.incarnation == record.incarnation {
@@ -507,7 +542,7 @@ final class MeetingAutoDetector {
             record.audioEvidenceSource = .process
             record.processAudioInactiveAt = nil
             self.records[pid] = record
-            self.attemptConfirm(pid: pid, at: now)
+            if confirm { self.attemptConfirm(pid: pid, at: now) }
             return
         }
         if !isActive, !record.processAudioWasActive {
@@ -523,7 +558,7 @@ final class MeetingAutoDetector {
             record.audioEvidenceSource = .process
             self.records[pid] = record
             DebugLogger.shared.log("audio-evidence-begin path=process bundle=\(record.bundleIdentifier)", source: "MeetingAutoDetector")
-            self.attemptConfirm(pid: pid, at: now)
+            if confirm { self.attemptConfirm(pid: pid, at: now) }
         } else {
             record.processAudioInactiveAt = now
             if record.audioEvidenceSource == .process {
@@ -714,6 +749,24 @@ final class MeetingAutoDetector {
             return
         }
 
+        // A manually started recording can precede the call. Attach its end observation
+        // independently of prompt admission: recording itself makes the activity gate busy.
+        if let waiting = self.recordingAwaitingCall {
+            guard !self.audioQueryUnknown, record.processAudioWasActive else { return }
+            let candidates = self.records.values.filter {
+                (waiting.bundleIdentifier == nil || $0.bundleIdentifier == waiting.bundleIdentifier)
+                    && ($0.tier == .nativeTier1 ? self.isNativeDetectionEnabled() : self.isBrowserDetectionEnabled())
+                    && $0.hasLiveWindow && $0.windowEvidenceKey != nil
+                    && $0.processAudioWasActive && $0.audioEvidenceAt != nil && $0.processAudioInactiveAt == nil
+            }
+            if candidates.count == 1, candidates.first?.pid == pid {
+                self.recordingStarted(sessionID: waiting.sessionID, application: MeetingApplicationIdentity(
+                    bundleIdentifier: record.bundleIdentifier, processID: pid, displayName: record.bundleIdentifier
+                ))
+            }
+            return
+        }
+
         let readiness = self.activityGate.preflightState()
         guard readiness != .busy else {
             self.logConfirmRejected("busy", record: record)
@@ -829,10 +882,26 @@ final class MeetingAutoDetector {
         DebugLogger.shared.log("end-of-meeting-watch-started path=prompt bundle=\(episode.bundleIdentifier)", source: "MeetingAutoDetector")
     }
 
+    /// Wait for positive call evidence while preserving the recording's chosen capture scope.
+    func awaitDetectedCall(sessionID: MeetingSessionID, applicationBundleIdentifier: String?) {
+        guard self.watchedRecording?.sessionID != sessionID else { return }
+        if let waiting = self.recordingAwaitingCall,
+           waiting.sessionID == sessionID, waiting.bundleIdentifier == applicationBundleIdentifier { return }
+        self.recordingStopped()
+        if let applicationBundleIdentifier, MeetingAppRegistry.tier(forBundleIdentifier: applicationBundleIdentifier) == nil { return }
+        self.recordingAwaitingCall = (sessionID, applicationBundleIdentifier)
+        let now = self.clock.now()
+        for pid in Array(self.records.keys) {
+            guard self.recordingAwaitingCall != nil else { break }
+            self.attemptConfirm(pid: pid, at: now)
+        }
+    }
+
     /// Called for every real recording, including manual and menu-bar starts. This observes
     /// the explicitly captured app; it never confirms an episode or changes capture/source state.
     func recordingStarted(sessionID: MeetingSessionID, application: MeetingApplicationIdentity?) {
         guard self.watchedRecording?.sessionID != sessionID else { return }
+        self.recordingAwaitingCall = nil
         guard let application, let pid = application.processID, pid > 0,
               let tier = MeetingAppRegistry.tier(forBundleIdentifier: application.bundleIdentifier)
         else {
@@ -875,6 +944,7 @@ final class MeetingAutoDetector {
             DebugLogger.shared.log("end-of-meeting-watch-stopped reason=\(reason) bundle=\(watched.bundleIdentifier)", source: "MeetingAutoDetector")
         }
         self.watchedRecording = nil
+        self.recordingAwaitingCall = nil
         self.lastEndWatchStatus = nil
         if shouldWithdraw { self.onStillRecordingNudgeWithdrawn?() }
     }

@@ -201,14 +201,8 @@ final class MeetingRecordingSourcePromptController: ObservableObject {
         defaults.isConfigured = true
         defaults.applicationBundleIdentifier = application?.bundleIdentifier
         defaults.applicationDisplayName = application?.displayName
-        SettingsStore.shared.meetingRecordingDefaults = defaults
-        if let application {
-            SettingsStore.shared.meetingRecentApplication = application
-            self.snapshot?.recentApplication = application
-        } else {
-            SettingsStore.shared.meetingRecentApplication = nil
-            self.snapshot?.recentApplication = nil
-        }
+        self.snapshot?.recentApplication = application
+        SettingsStore.shared.saveMeetingRecordingSource(defaults, recentApplication: application)
         self.errorMessage = nil
     }
 

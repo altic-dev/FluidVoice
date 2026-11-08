@@ -105,6 +105,8 @@ struct MeetingStillRecordingNudgeContent: View {
         self.deadlinesAndStaleTasks()
         self.sessionGate()
         self.systemAudioEndWatch()
+        await self.callJoinedAfterRecordingStarts()
+        await self.lateCallEvidenceMustBeUnambiguous()
         self.targetWithdrawalCannotRearmShutdown()
         await self.detectorEvidence()
         await self.controllerActions()
@@ -174,6 +176,117 @@ struct MeetingStillRecordingNudgeContent: View {
         self.check(!h.detector.canStopAfterEndConfirmation(sessionID: id), "Keep recording cancels system audio auto-stop")
         AppServices.synchronizeMeetingEndWatch(state: .completed(id), session: session, detector: h.detector)
         self.check(h.detector.pendingEndConfirmationSessionID == nil, "Finishing system audio tears down its watch")
+    }
+
+    static func callJoinedAfterRecordingStarts() async {
+        for selectedApp in [nil, "com.google.Chrome"] as [String?] {
+            let h = DetectorHarness()
+            let id = UUID()
+            let session = MeetingSession(
+                id: id,
+                mode: selectedApp == nil ? .systemAudio : .onlineCall,
+                capturedApplication: selectedApp.map {
+                    .init(bundleIdentifier: $0, processID: nil, displayName: "Chrome", capturesAllInstances: true)
+                }
+            )
+            h.gate.isIdle = false
+            AppServices.synchronizeMeetingEndWatch(state: .recording(id), session: session, detector: h.detector)
+            // No device-wide microphone edge: FluidVoice already owns an open mic.
+            h.workspace.frontmostProcessID = 8
+            h.detector.handleBackfill([.init(kind: .launched, bundleIdentifier: "com.google.Chrome", processID: 8)])
+            h.detector.handleBrowserTabURL(.init(host: "meet.google.com", path: "/abc-defg-hij", callState: .inCall), pid: 8, bundleIdentifier: "com.google.Chrome", at: h.clock.now())
+            await h.pollChrome(microphoneInUse: true)
+            self.check(h.prompts.isEmpty && h.detector.automaticTarget == nil, "Late call observation cannot prompt or change the capture source")
+            h.detector.handleWorkspaceEvent(.init(kind: .terminated, bundleIdentifier: "com.google.Chrome", processID: 8), at: h.clock.now())
+            h.detector.tick(at: h.clock.now())
+            h.advance(MeetingAutoDetector.endSignalGraceSeconds + 1)
+            h.detector.tick(at: h.clock.now())
+            self.check(h.detector.pendingEndConfirmationSessionID == id, "Recording before joining still offers the call-end countdown")
+            h.detector.stillRecordingNudgeDismissed(sessionID: id)
+            self.check(!h.detector.canStopAfterEndConfirmation(sessionID: id), "Keep recording silences a late-attached watch")
+        }
+        for teardown in 0..<3 {
+            let h = DetectorHarness()
+            let id = UUID()
+            h.gate.isIdle = false
+            AppServices.synchronizeMeetingEndWatch(state: .recording(id), session: .init(id: id, mode: .systemAudio), detector: h.detector)
+            switch teardown {
+            case 0: h.detector.stop()
+            case 1: h.detector.disarmAndClearTransientState()
+            default: AppServices.synchronizeMeetingEndWatch(state: .completed(id), session: .init(id: id, mode: .systemAudio), detector: h.detector)
+            }
+            _ = h.confirmChromeMeet()
+            await h.pollChrome(microphoneInUse: true)
+            h.detector.handleWorkspaceEvent(.init(kind: .terminated, bundleIdentifier: "com.google.Chrome", processID: 8), at: h.clock.now())
+            h.detector.tick(at: h.clock.now())
+            h.advance(MeetingAutoDetector.endSignalGraceSeconds + 1)
+            h.detector.tick(at: h.clock.now())
+            self.check(h.nudges == 0 && h.detector.pendingEndConfirmationSessionID == nil, "Teardown clears pending observation before a late call appears")
+        }
+        let other = DetectorHarness()
+        let id = UUID()
+        other.gate.isIdle = false
+        let session = MeetingSession(id: id, mode: .onlineCall, capturedApplication: .init(bundleIdentifier: "us.zoom.xos", processID: nil, displayName: "Zoom", capturesAllInstances: true))
+        AppServices.synchronizeMeetingEndWatch(state: .recording(id), session: session, detector: other.detector)
+        _ = other.confirmChromeMeet()
+        await other.pollChrome(microphoneInUse: true)
+        other.detector.handleWorkspaceEvent(.init(kind: .terminated, bundleIdentifier: "com.google.Chrome", processID: 8), at: other.clock.now())
+        other.detector.tick(at: other.clock.now())
+        other.advance(MeetingAutoDetector.endSignalGraceSeconds + 1)
+        other.detector.tick(at: other.clock.now())
+        self.check(other.nudges == 0, "A call in another app cannot end the selected app's recording")
+    }
+
+    static func lateCallEvidenceMustBeUnambiguous() async {
+        let h = DetectorHarness()
+        h.nativeEnabled = false
+        h.gate.isIdle = false
+        let oldID = UUID(), id = UUID()
+        AppServices.synchronizeMeetingEndWatch(state: .recording(oldID), session: .init(id: oldID, mode: .systemAudio), detector: h.detector)
+        AppServices.synchronizeMeetingEndWatch(state: .recording(id), session: .init(id: id, mode: .systemAudio), detector: h.detector)
+        h.workspace.frontmostProcessID = 8
+        for (pid, bundle) in [(Int32(8), "com.google.Chrome"), (Int32(9), "com.apple.Safari")] {
+            h.detector.handleBackfill([.init(kind: .launched, bundleIdentifier: bundle, processID: pid)])
+            h.detector.handleBrowserTabURL(.init(host: "meet.google.com", path: "/abc-defg-hij", callState: .inCall), pid: pid, bundleIdentifier: bundle, at: h.clock.now())
+        }
+        await h.pollChrome(microphoneInUse: true, readable: false)
+        h.detector.tick(at: h.clock.now())
+        self.check(h.detector.pendingEndConfirmationSessionID == nil && h.prompts.isEmpty, "Unknown audio cannot attach a late watch or raise a prompt")
+        let owners = [
+            MeetingProcessOwner(processID: 8, bundleIdentifier: "com.google.Chrome", bundlePath: "/Applications/Chrome.app"),
+            MeetingProcessOwner(processID: 9, bundleIdentifier: "com.apple.Safari", bundlePath: "/Applications/Safari.app"),
+        ]
+        let processes = [
+            AudioProcessDescriptor(processID: 80, bundleIdentifier: "com.google.Chrome.helper", executablePath: "/Applications/Chrome.app/Contents/Helpers/audio", isInputRunning: true, isOutputRunning: true),
+            AudioProcessDescriptor(processID: 90, bundleIdentifier: "com.apple.Safari", executablePath: "/Applications/Safari.app/Contents/MacOS/Safari", isInputRunning: true, isOutputRunning: true),
+        ]
+        h.audioProcessActivity.snapshotOverride = .init(processes: processes, owners: owners, queryState: .valid)
+        await h.detector.pollAudioProcessActivity(at: h.clock.now())
+        // Ending Chrome would offer a countdown if dictionary iteration chose it arbitrarily.
+        h.detector.handleBrowserTabURL(.init(host: "meet.google.com", path: "/abc-defg-hij", callState: .ended), pid: 8, bundleIdentifier: "com.google.Chrome", at: h.clock.now())
+        h.advance(MeetingAutoDetector.browserPostCallGraceSeconds + 1)
+        h.detector.tick(at: h.clock.now())
+        self.check(h.nudges == 0, "Two live calls cannot arbitrarily select one for automatic stop")
+        h.detector.handleBrowserTabURL(.init(host: "meet.google.com", path: "/abc-defg-hij", callState: .inCall), pid: 8, bundleIdentifier: "com.google.Chrome", at: h.clock.now())
+        h.audioProcessActivity.snapshotOverride = .init(processes: [processes[0]], owners: owners, queryState: .valid)
+        await h.detector.pollAudioProcessActivity(at: h.clock.now())
+        h.detector.handleBrowserTabURL(.init(host: "meet.google.com", path: "/abc-defg-hij", callState: .ended), pid: 8, bundleIdentifier: "com.google.Chrome", at: h.clock.now())
+        h.advance(MeetingAutoDetector.browserPostCallGraceSeconds + 1)
+        h.detector.tick(at: h.clock.now())
+        self.check(h.detector.pendingEndConfirmationSessionID == id, "A single attributable browser call attaches to the latest session with native detection disabled")
+        self.check(!h.detector.canStopAfterEndConfirmation(sessionID: oldID), "Replaced pending session cannot receive the end countdown")
+        self.check(h.prompts.isEmpty && h.detector.automaticTarget == nil, "Late watch never changes automatic source or admits a start prompt")
+
+        let native = DetectorHarness()
+        native.gate.isIdle = false
+        let nativeID = UUID()
+        AppServices.synchronizeMeetingEndWatch(state: .recording(nativeID), session: .init(id: nativeID, mode: .systemAudio), detector: native.detector)
+        _ = native.confirmTeams()
+        native.detector.handleAudioProcessActivity(true, pid: 300, at: native.clock.now())
+        native.detector.handleAudioProcessActivity(false, pid: 300, at: native.clock.now())
+        native.advance(MeetingAutoDetector.endSignalGraceSeconds + 1)
+        native.detector.tick(at: native.clock.now())
+        self.check(native.detector.pendingEndConfirmationSessionID == nativeID && native.prompts.isEmpty, "Late native call uses attributed process audio without a start prompt")
     }
 
     static func targetWithdrawalCannotRearmShutdown() {

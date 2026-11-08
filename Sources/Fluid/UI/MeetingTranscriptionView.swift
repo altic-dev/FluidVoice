@@ -1328,20 +1328,27 @@ struct MeetingTranscriptionView: View {
         // Save only the explicitly chosen app; automatic suggestions stay temporary.
         let settings = SettingsStore.shared
         let application = self.applications.first(where: { $0.id == self.setupDraft.selectedApplicationID })
-        if self.setupDraft.mode == .onlineCall, !self.setupDraft.usesAutomaticApplication, application == nil {
+        if self.setupDraft.applicationSelectionWasEdited,
+           self.setupDraft.mode == .onlineCall, !self.setupDraft.usesAutomaticApplication, application == nil
+        {
             self.actionErrorMessage = "Choose an available audio source or Automatic before saving."
             return
         }
 
-        var defaults = self.setupDraft.applyingSource(to: settings.meetingRecordingDefaults, application: application?.identity)
+        // A source chosen elsewhere while this sheet is open wins unless this sheet edited it.
+        var defaults = settings.meetingRecordingDefaults.preferringLastPickedApplication(settings.meetingRecentApplication)
+        if self.setupDraft.applicationSelectionWasEdited {
+            defaults = self.setupDraft.applyingSource(to: defaults, application: application?.identity)
+        }
+        defaults.isConfigured = true
         defaults.microphoneCaptureDeviceID = microphone.identity.captureDeviceID
         defaults.microphoneCoreAudioUID = microphone.identity.coreAudioUID
         defaults.microphoneRole = .unknown
         defaults.languageCode = self.setupDraft.languageCode
-        settings.meetingRecordingDefaults = defaults
-        if self.setupDraft.applicationSelectionWasEdited, self.setupDraft.mode.capturesComputerAudio {
-            settings.meetingRecentApplication = self.setupDraft.usesAutomaticApplication ? nil : application?.identity
-        }
+        let recentApplication = self.setupDraft.applicationSelectionWasEdited
+            ? (self.setupDraft.usesAutomaticApplication ? nil : application?.identity)
+            : settings.meetingRecentApplication
+        settings.saveMeetingRecordingSource(defaults, recentApplication: recentApplication)
 
         let previousRetentionPolicy = settings.meetingAudioRetentionPolicy
         // A detection prompt can change these preferences while this sheet is open.
@@ -2349,15 +2356,12 @@ private struct MeetingSetupCanvas: View {
     }
 
     private func persistSourceChoice() {
-        SettingsStore.shared.meetingRecordingDefaults = self.draft.applyingSource(
+        let application = self.draft.mode == .onlineCall && !self.draft.usesAutomaticApplication ? self.resolvedApplication?.identity : nil
+        let defaults = self.draft.applyingSource(
             to: SettingsStore.shared.meetingRecordingDefaults,
-            application: self.resolvedApplication?.identity
+            application: application
         )
-        if self.draft.mode == .onlineCall, !self.draft.usesAutomaticApplication, let application = self.resolvedApplication {
-            SettingsStore.shared.meetingRecentApplication = application.identity
-        } else if self.draft.mode == .systemAudio {
-            SettingsStore.shared.meetingRecentApplication = nil
-        }
+        SettingsStore.shared.saveMeetingRecordingSource(defaults, recentApplication: application)
     }
 
     private func sourceEntry(_ title: String, systemImage: String, selected: Bool, action: @escaping () -> Void) -> some View {

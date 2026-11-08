@@ -761,7 +761,8 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
     private static func buildStream(
         application: MeetingApplicationIdentity?,
         microphone: MeetingMicrophoneIdentity,
-        includeMicrophone: Bool
+        includeMicrophone: Bool,
+        allowApplicationRelaunch: Bool = false
     ) async throws -> BuiltStream {
         let content: SCShareableContent
         do {
@@ -781,18 +782,28 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
             let candidates = content.applications.map {
                 MeetingApplicationIdentity(bundleIdentifier: $0.bundleIdentifier, processID: $0.processID, displayName: $0.applicationName)
             }
+            var requested = application
+            // Only recovery may follow a relaunched app, and the resolver still requires one
+            // unambiguous replacement. Initial capture must keep the confirmed process.
+            if allowApplicationRelaunch, !candidates.contains(where: {
+                $0.processID == application.processID && $0.bundleIdentifier == application.bundleIdentifier
+            }) {
+                requested.processID = nil
+                requested.windowID = nil
+                requested.displayID = nil
+            }
             let resolved = try MeetingRecordingSourceResolver.resolve(
-                mode: .onlineCall, source: MeetingRecordingSource(application: application), target: nil, applications: candidates
+                mode: .onlineCall, source: MeetingRecordingSource(application: requested), target: nil, applications: candidates
             )
             guard let runningApplication = content.applications.first(where: { $0.processID == resolved?.processID }) else {
                 throw MeetingCaptureError.applicationUnavailable(application.displayName)
             }
 
-            if let window = Self.selectWindow(for: runningApplication, in: content, preferredWindowID: application.windowID) {
+            if let window = Self.selectWindow(for: runningApplication, in: content, preferredWindowID: requested.windowID) {
                 filter = SCContentFilter(desktopIndependentWindow: window)
                 scope = .window
             } else {
-                let display = application.displayID.flatMap { displayID in
+                let display = requested.displayID.flatMap { displayID in
                     content.displays.first(where: { $0.displayID == displayID })
                 } ?? content.displays.first
                 guard let display else { throw MeetingCaptureError.noCaptureDisplay }
@@ -1655,7 +1666,8 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
             built = try await Self.buildStream(
                 application: self.application,
                 microphone: resolved,
-                includeMicrophone: self.includeMicrophone
+                includeMicrophone: self.includeMicrophone,
+                allowApplicationRelaunch: true
             )
         } catch {
             guard self.isCurrentRouteRevision(revision) else { return .superseded }
@@ -1846,7 +1858,7 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
                 do {
                     let microphone = self.stateLock.withLock { self.activeMicrophone }
                     let built = try await Self.buildStream(
-                        application: self.application, microphone: microphone, includeMicrophone: self.includeMicrophone
+                        application: self.application, microphone: microphone, includeMicrophone: self.includeMicrophone, allowApplicationRelaunch: true
                     )
                     guard self.stateLock.withLock({ !self.stopping && self.rebuildOwner == owner }) else { return }
                     built.delegateProxy.owner = self

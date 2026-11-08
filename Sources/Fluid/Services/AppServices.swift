@@ -322,10 +322,17 @@ final class AppServices: ObservableObject {
                 detector.recordingStopped()
                 return
             }
-            detector.recordingStarted(
-                sessionID: id,
-                application: Self.meetingEndWatchApplication(session: session, target: detector.automaticTarget)
-            )
+            let application = Self.meetingEndWatchApplication(session: session, target: detector.automaticTarget)
+            if application == nil,
+               session.mode == .systemAudio || (session.mode == .onlineCall && session.capturedApplication?.capturesAllInstances == true)
+            {
+                detector.awaitDetectedCall(
+                    sessionID: id,
+                    applicationBundleIdentifier: session.mode == .systemAudio ? nil : session.capturedApplication?.bundleIdentifier
+                )
+            } else {
+                detector.recordingStarted(sessionID: id, application: application)
+            }
         default:
             detector.recordingStopped()
         }

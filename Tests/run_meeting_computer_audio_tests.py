@@ -150,6 +150,22 @@ struct MeetingAudioTrack {
         check(group.stream.filter.kind == .applications([10, 20]), "All Chrome instances included, other app excluded")
         let exact = try await Runtime.buildStream(application: second, microphone: mic, includeMicrophone: true)
         check(exact.stream.filter.kind == .applications([20]), "Detected call keeps exact process")
+        let unchanged = try await Runtime.buildStream(application: second, microphone: mic, includeMicrophone: true, allowApplicationRelaunch: true)
+        check(unchanged.stream.filter.kind == .applications([20]), "Recovery keeps the original process while it is available")
+        SCShareableContent.fixture = .init(applications: [.init(bundleIdentifier: "chrome", processID: 99, applicationName: "Chrome")], displays: [.init(displayID: 1)])
+        do { _ = try await Runtime.buildStream(application: second, microphone: mic, includeMicrophone: true); preconditionFailure("Initial capture cannot follow an unconfirmed process") }
+        catch MeetingCaptureError.applicationUnavailable { count += 1 }
+        let recovered = try await Runtime.buildStream(application: second, microphone: mic, includeMicrophone: true, allowApplicationRelaunch: true)
+        check(recovered.stream.filter.kind == .applications([99]), "Recovery follows the sole relaunched instance of the chosen app")
+        SCShareableContent.fixture = .init(applications: [
+            .init(bundleIdentifier: "chrome", processID: 98, applicationName: "Chrome"),
+            .init(bundleIdentifier: "chrome", processID: 99, applicationName: "Chrome")
+        ], displays: [.init(displayID: 1)])
+        do { _ = try await Runtime.buildStream(application: second, microphone: mic, includeMicrophone: true, allowApplicationRelaunch: true); preconditionFailure("Recovery cannot guess between replacements") }
+        catch MeetingCaptureError.applicationUnavailable { count += 1 }
+        SCShareableContent.fixture = .init(applications: [.init(bundleIdentifier: "other", processID: 20, applicationName: "Other")], displays: [.init(displayID: 1)])
+        do { _ = try await Runtime.buildStream(application: second, microphone: mic, includeMicrophone: true, allowApplicationRelaunch: true); preconditionFailure("Reused PID cannot capture another app") }
+        catch MeetingCaptureError.applicationUnavailable { count += 1 }
         SCShareableContent.fixture = .init(applications: [], displays: [.init(displayID: 1)])
         let empty = try await Runtime.buildStream(application: nil, microphone: mic, includeMicrophone: true)
         check(empty.stream.filter.kind == .all, "No open app is required for Automatic")
