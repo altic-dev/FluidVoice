@@ -790,7 +790,7 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
                 spy.requests.append(request)
                 return runtime
             },
-            preferredASRModelProvider: { .parakeetTDTv2 }
+            preferredASRModelProvider: { .fluidParakeetPro }
         )
         runtime.asrSession.responses = [
             .init(text: "", words: []), .init(text: "", words: []), .init(text: "", words: []),

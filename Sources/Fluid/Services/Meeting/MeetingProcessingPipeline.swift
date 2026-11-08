@@ -1329,7 +1329,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
     private let serializationGate: MeetingProcessingSerializationGate
     private let backendRegistry: MeetingTranscriptionBackendRegistry
     private let backendIDProvider: @MainActor (String) -> MeetingBackendID
-    private let preferredASRModelProvider: @MainActor () -> SettingsStore.SpeechModel
+    private let preferredASRModelProvider: @MainActor () async throws -> SettingsStore.SpeechModel
     /// Canonical path only: observes chunk files for the analysis manifest. `nil` uses the real
     /// filesystem observer; tests inject fixture observations instead of writing audio.
     private let chunkObserver: (any MeetingChunkAudioObserving)?
@@ -1360,7 +1360,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         meetingRuntimeFactory: MeetingParakeetNemotronRuntimeFactory? = nil,
         prepareDiarizationModel: @escaping @MainActor () async throws -> Void = {},
         canonicalSidecarVerifiedProbe: ((MeetingResultSidecarReference) -> Void)? = nil,
-        preferredASRModelProvider: @escaping @MainActor () -> SettingsStore.SpeechModel = { SettingsStore.shared.selectedSpeechModel }
+        preferredASRModelProvider: @escaping @MainActor () async throws -> SettingsStore.SpeechModel = MeetingProcessingPipeline.defaultPreferredASRModel
     ) {
         self.asrServiceProvider = asrServiceProvider
         self.preferredASRModelProvider = preferredASRModelProvider
@@ -1390,12 +1390,21 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
             let registryDefault = backendRegistry.defaultBackendID
             self.backendIDProvider = { _ in registryDefault }
         } else {
-            self.backendIDProvider = { languageCode in
-                let saved = SettingsStore.shared.meetingTranscriptionBackendID
-                // Preserve English rollback settings; non-English recordings need the current backend.
-                return saved == .legacyCompatibility && languageCode != "en" ? .productionDefault : saved
+            self.backendIDProvider = { _ in
+                SettingsStore.shared.meetingTranscriptionBackendID.forNewMeetingAttempt
             }
         }
+    }
+
+    /// Fresh, bounded installation check off the main actor. Dictation preferences and
+    /// UI snapshot refreshes do not influence an in-flight meeting transcription.
+    static func defaultPreferredASRModel() async throws -> SettingsStore.SpeechModel {
+        let descriptors = [ParakeetSpeechModelCatalog.pro, ParakeetSpeechModelCatalog.v3]
+        let installed = try await SpeechModelInstallationSnapshot.scan(descriptors.map {
+            .init(modelID: $0.modelID, kind: .parakeet($0))
+        })
+        try Task.checkCancellation()
+        return MeetingProviderOptions.defaultModel(installedModelIDs: installed)
     }
 
     func process(
@@ -1425,12 +1434,14 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         //
         // The request is frozen first, so the host capability handed to the factory can be bound to
         // this exact value.
+        let preferredModel = try await backendID == .parakeetNemotron ? self.preferredASRModelProvider() : nil
+        try Task.checkCancellation()
         let request = MeetingBackendRequest(
             attemptID: Self.resolvedAttemptID(session: session),
             session: session,
             sessionDirectory: sessionDirectory,
             configuration: MeetingFinalProcessingConfiguration(
-                preferredASRModel: backendID == .parakeetNemotron ? self.preferredASRModelProvider() : nil,
+                preferredASRModel: preferredModel,
                 languageCode: session.languageCode
             )
         )
@@ -1836,6 +1847,9 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         guard !asrService.isRunning else { throw MeetingProcessingError.dictationActive }
 
         let selectedModel = SettingsStore.shared.selectedSpeechModel
+        guard selectedModel != .parakeetTDTv2 else {
+            throw MeetingProviderOptionsError.unsupportedASRModel(selectedModel.rawValue)
+        }
         guard let languagePin = MeetingProviderLanguagePin(
             languageCode: session.languageCode,
             model: selectedModel,

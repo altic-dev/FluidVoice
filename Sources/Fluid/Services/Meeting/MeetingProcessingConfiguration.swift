@@ -21,7 +21,7 @@ nonisolated enum MeetingConfigFingerprintEncoding {
 /// once per attempt and the meeting preparation owner constructs a fixed provider from it, so an
 /// active run never follows later dictation-setting changes.
 nonisolated struct MeetingFinalProcessingConfiguration: Equatable, Sendable {
-    static let defaultASRModel = "parakeet-tdt-v2"
+    static let defaultASRModel = "fluid-parakeet-pro"
     static let defaultLanguageCode = "en"
     /// One shared immutable version keeps frozen requests and saved attempts consistent.
     static let defaultPipelineVersion = MeetingProcessingPipeline.pipelineVersion
@@ -72,8 +72,8 @@ nonisolated struct MeetingFinalProcessingConfiguration: Equatable, Sendable {
     }
 }
 
-/// Languages a finished meeting can be transcribed in again. Final meeting transcription uses the
-/// multilingual Parakeet model, so the choice is that model's language set, not the dictation model
+/// Languages a finished meeting can be transcribed in again. Final meeting transcription uses
+/// Pro or its multilingual Parakeet fallback, so the choice is their language set, not the dictation model
 /// currently selected for live typing.
 enum MeetingRetranscriptionLanguage {
     static func canonicalCode(_ raw: String) -> String? {
