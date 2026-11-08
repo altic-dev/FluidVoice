@@ -1617,7 +1617,7 @@ final class MeetingAutoDetectorTests: XCTestCase {
         XCTAssertEqual(h.nudges, 0)
     }
 
-    func testAnUnreadableMicrophoneQueryNeitherAsksNorTakesTheQuestionBackForAWebMeeting() async throws {
+    func testAnUnreadableMicrophoneQueryCancelsAutomaticStopForAWebMeeting() async throws {
         let h = DetectorHarness()
         let episodeID = try XCTUnwrap(h.confirmChromeMeet())
         XCTAssertTrue(h.detector.startTapped(episodeID: episodeID))
@@ -1638,7 +1638,7 @@ final class MeetingAutoDetectorTests: XCTestCase {
 
         await h.pollChrome(microphoneInUse: false, readable: false)
         h.detector.tick(at: h.clock.now())
-        XCTAssertEqual(h.withdrawals, 0)
+        XCTAssertEqual(h.withdrawals, 1, "An unreadable source cannot authorize automatic stop")
     }
 
     func testQuittingTheBrowserStillAsks() async throws {
