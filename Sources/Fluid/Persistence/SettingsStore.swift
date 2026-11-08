@@ -3935,7 +3935,9 @@ final class SettingsStore: ObservableObject {
             MeetingBackendID(rawValue: $0)
         } ?? .productionDefault
         if let meetingRecordingDefaults = payload.meetingRecordingDefaults {
-            self.meetingRecordingDefaults = meetingRecordingDefaults
+            // The restored source supersedes this Mac's previous pick. Backups do not contain
+            // process identities, so the restored app will be resolved afresh at recording start.
+            self.saveMeetingRecordingSource(meetingRecordingDefaults, recentApplication: nil)
         }
         self.primaryDictationShortcuts = payload.primaryDictationShortcuts ?? [payload.hotkeyShortcut]
         self.promptModeHotkeyShortcut = payload.promptModeHotkeyShortcut
