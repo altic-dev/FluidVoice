@@ -197,6 +197,8 @@ final class AppServices: ObservableObject {
         )
         detector.onAutomaticTargetChanged = { [weak self, weak detector] target in
             self?.meetingAutomaticTarget = target
+            // A cleared target may be detector teardown; never re-arm a watch from it.
+            guard target != nil else { return }
             Self.synchronizeMeetingEndWatch(
                 state: self?._meetingSessionCoordinator?.state,
                 session: self?._meetingSessionCoordinator?.activeSession,
