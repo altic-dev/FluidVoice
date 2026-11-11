@@ -84,6 +84,7 @@ if [ "${GITHUB_ACTIONS:-false}" != "true" ]; then
     run_check formatting swiftformat --lint --config .swiftformat Sources
     run_check lint swiftlint --strict --config .swiftlint.yml Sources Tests Package.swift
 fi
+run_check text-normalization sh Tests/TextNormalization/run.sh
 run_check clipboard sh Tests/run_clipboard_backup_reproduction.sh
 run_check clipboard-read-receipts sh Tests/run_paste_read_receipt_tests.sh
 run_check paste-events sh Tests/run_paste_command_event_tests.sh
