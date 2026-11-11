@@ -43,10 +43,34 @@ nonisolated struct FluidTextNormalizer: Sendable {
 
 /// Shared exclusions keep quantities and emoji out of code, links and email addresses.
 nonisolated enum TextNormalizationProtection {
-    private static let expression = expression("`{3}[\\s\\S]*?(?:`{3}|$)|`[^`]*(?:`|$)|https?://[^\\s]+|[\\w.+-]+@[^\\s]+")
+    private static let expression = expression("https?://[^\\s]+|[\\w.+-]+@[^\\s]+")
+    private static let backticks = expression("`+")
 
     static func ranges(in text: String) -> [NSRange] {
-        self.expression.matches(in: text, range: NSRange(location: 0, length: (text as NSString).length)).map(\.range)
+        let fullRange = NSRange(location: 0, length: (text as NSString).length)
+        var protected = self.expression.matches(in: text, range: fullRange).map(\.range)
+        let delimiters = self.backticks.matches(in: text, range: fullRange).map(\.range)
+        // Index matching delimiter lengths once, so many unmatched runs cannot
+        // cause repeated scans. Shorter runs inside a code span are literal text.
+        var nextByLength: [Int: Int] = [:]
+        var closingIndices = [Int?](repeating: nil, count: delimiters.count)
+        for index in delimiters.indices.reversed() {
+            let length = delimiters[index].length
+            closingIndices[index] = nextByLength[length]
+            nextByLength[length] = index
+        }
+        var index = 0
+        while index < delimiters.count {
+            let opening = delimiters[index]
+            guard let closing = closingIndices[index] else {
+                // Keep incomplete dictated code unchanged through the end.
+                protected.append(NSRange(location: opening.location, length: fullRange.length - opening.location))
+                break
+            }
+            protected.append(NSRange(location: opening.location, length: NSMaxRange(delimiters[closing]) - opening.location))
+            index = closing + 1
+        }
+        return protected
     }
 
     static func expression(_ pattern: String) -> NSRegularExpression {

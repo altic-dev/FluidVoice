@@ -847,6 +847,126 @@
       "input": "five billion parameters, please",
       "expected": "5B parameters, please",
       "category": "quantity-punctuation"
+    },
+    {
+      "input": "``five euros``",
+      "expected": "``five euros``",
+      "category": "code-delimiters",
+      "phase": "beforeCleanup"
+    },
+    {
+      "input": "``heart emoji``",
+      "expected": "``heart emoji``",
+      "category": "code-delimiters",
+      "phase": "beforeCleanup"
+    },
+    {
+      "input": "``five euros ` heart emoji``",
+      "expected": "``five euros ` heart emoji``",
+      "category": "code-delimiters",
+      "phase": "beforeCleanup"
+    },
+    {
+      "input": "``five euros ``` heart emoji``",
+      "expected": "``five euros ``` heart emoji``",
+      "category": "code-delimiters",
+      "phase": "beforeCleanup"
+    },
+    {
+      "input": "``five euros`` and five euros",
+      "expected": "``five euros`` and €5",
+      "category": "code-delimiters",
+      "phase": "beforeCleanup"
+    },
+    {
+      "input": "``heart emoji`` and heart emoji",
+      "expected": "``heart emoji`` and ❤️",
+      "category": "code-delimiters",
+      "phase": "beforeCleanup"
+    },
+    {
+      "input": "``five euros`` then `heart emoji`",
+      "expected": "``five euros`` then `heart emoji`",
+      "category": "code-delimiters",
+      "phase": "beforeCleanup"
+    },
+    {
+      "input": "````five euros ``` heart emoji````",
+      "expected": "````five euros ``` heart emoji````",
+      "category": "code-delimiters",
+      "phase": "beforeCleanup"
+    },
+    {
+      "input": "``five euros",
+      "expected": "``five euros",
+      "category": "code-delimiters",
+      "phase": "beforeCleanup"
+    },
+    {
+      "input": "``five euros\nheart emoji``",
+      "expected": "``five euros\nheart emoji``",
+      "category": "code-delimiters",
+      "phase": "beforeCleanup"
+    },
+    {
+      "input": "``five euros``",
+      "expected": "``five euros``",
+      "category": "code-delimiters",
+      "phase": "afterCleanup"
+    },
+    {
+      "input": "``heart emoji``",
+      "expected": "``heart emoji``",
+      "category": "code-delimiters",
+      "phase": "afterCleanup"
+    },
+    {
+      "input": "``five euros ` heart emoji``",
+      "expected": "``five euros ` heart emoji``",
+      "category": "code-delimiters",
+      "phase": "afterCleanup"
+    },
+    {
+      "input": "``five euros ``` heart emoji``",
+      "expected": "``five euros ``` heart emoji``",
+      "category": "code-delimiters",
+      "phase": "afterCleanup"
+    },
+    {
+      "input": "``five euros`` and five euros",
+      "expected": "``five euros`` and €5",
+      "category": "code-delimiters",
+      "phase": "afterCleanup"
+    },
+    {
+      "input": "``heart emoji`` and heart emoji",
+      "expected": "``heart emoji`` and ❤️",
+      "category": "code-delimiters",
+      "phase": "afterCleanup"
+    },
+    {
+      "input": "``five euros`` then `heart emoji`",
+      "expected": "``five euros`` then `heart emoji`",
+      "category": "code-delimiters",
+      "phase": "afterCleanup"
+    },
+    {
+      "input": "````five euros ``` heart emoji````",
+      "expected": "````five euros ``` heart emoji````",
+      "category": "code-delimiters",
+      "phase": "afterCleanup"
+    },
+    {
+      "input": "``five euros",
+      "expected": "``five euros",
+      "category": "code-delimiters",
+      "phase": "afterCleanup"
+    },
+    {
+      "input": "``five euros\nheart emoji``",
+      "expected": "``five euros\nheart emoji``",
+      "category": "code-delimiters",
+      "phase": "afterCleanup"
     }
   ]
 }
