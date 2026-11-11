@@ -580,11 +580,15 @@ final class OverlayCaptionPresentationTests: XCTestCase {
     }
 
     func testWindowAndControlsStayStillThroughWrappingAndCorrections() async throws {
+        let hostASR = AppServices.shared.asr
         let startupDeadline = ProcessInfo.processInfo.systemUptime + 10
-        while !MenuBarManager.initialASRStateDeliveredForTests, ProcessInfo.processInfo.systemUptime < startupDeadline {
+        while !hostASR.initialMenuBarStateDeliveredForTests, ProcessInfo.processInfo.systemUptime < startupDeadline {
             try await Task.sleep(for: .milliseconds(20))
         }
-        XCTAssertTrue(MenuBarManager.initialASRStateDeliveredForTests, "The test host must finish delivering its initial ASR state")
+        guard hostASR.initialMenuBarStateDeliveredForTests else {
+            XCTFail("The test host must finish delivering its initial ASR state")
+            return
+        }
         let settings = SettingsStore.shared
         let state = NotchContentState.shared
         let previousSize = settings.overlaySize
@@ -594,8 +598,8 @@ final class OverlayCaptionPresentationTests: XCTestCase {
         let previousAIFailure = state.isAIProcessingFailureVisible
         let previousDeliveryFailure = state.isTextDeliveryFailureVisible
         let controller = BottomOverlayWindowController.shared
-        defer {
-            controller.hideImmediately()
+        self.addTeardownBlock { @MainActor in
+            try await Self.hideBottomOverlayAndDrainCleanup()
             settings.overlaySize = previousSize
             settings.enableStreamingPreview = previousPreview
             state.updateTranscription(previousText)
@@ -639,8 +643,45 @@ final class OverlayCaptionPresentationTests: XCTestCase {
                 XCTAssertEqual(rect.minX, inset, accuracy: 0.5, "\(size): captions must retain the leading inset")
                 XCTAssertEqual(host.bounds.width - rect.maxX, inset, accuracy: 0.5, "\(size): captions must retain the trailing inset")
             }
-            controller.hideImmediately()
+            try await Self.hideBottomOverlayAndDrainCleanup()
         }
+    }
+
+    private static func hideBottomOverlayAndDrainCleanup() async throws {
+        let state = NotchContentState.shared
+        guard state.isBottomOverlayPresented else { return }
+        BottomOverlayWindowController.shared.hideImmediately()
+        let deadline = ProcessInfo.processInfo.systemUptime + 2
+        while state.isBottomOverlayPresented, ProcessInfo.processInfo.systemUptime < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertFalse(state.isBottomOverlayPresented, "Finish deferred hide cleanup before restoring shared state")
+    }
+
+    func testStartupReadinessBelongsToTheConfiguredASR() async {
+        let configured = ASRService()
+        let unrelated = ASRService()
+        let manager = MenuBarManager()
+        manager.configure(asrService: configured)
+        await withCheckedContinuation { continuation in
+            DispatchQueue.main.async { continuation.resume() }
+        }
+        withExtendedLifetime(manager) {
+            XCTAssertTrue(configured.initialMenuBarStateDeliveredForTests)
+            XCTAssertFalse(unrelated.initialMenuBarStateDeliveredForTests)
+        }
+    }
+
+    func testRestoredProcessingStateSurvivesDeferredHideCleanup() async throws {
+        let state = NotchContentState.shared
+        let previousProcessing = state.isProcessing
+        defer { state.isProcessing = previousProcessing }
+        BottomOverlayWindowController.shared.show(audioPublisher: Just(CGFloat.zero).eraseToAnyPublisher(), mode: .dictation)
+        state.isProcessing = true
+        try await Self.hideBottomOverlayAndDrainCleanup()
+        state.isProcessing = true
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertTrue(state.isProcessing, "Deferred hide cleanup must not overwrite the restored flag")
     }
 
     func testHiddenBottomOverlayStopsPendingWordsWithoutClearingTheTranscript() async throws {
