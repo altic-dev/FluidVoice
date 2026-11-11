@@ -767,6 +767,86 @@
       "input": "five euroś",
       "expected": "five euroś",
       "category": "quantity-preservation"
+    },
+    {
+      "input": "five dollars.txt",
+      "expected": "five dollars.txt",
+      "category": "quantity-suffix"
+    },
+    {
+      "input": "five euros/backup",
+      "expected": "five euros/backup",
+      "category": "quantity-suffix"
+    },
+    {
+      "input": "five dollars and fifty cents.txt",
+      "expected": "five dollars and fifty cents.txt",
+      "category": "quantity-suffix"
+    },
+    {
+      "input": "five British pounds and fifty pence/backup",
+      "expected": "five British pounds and fifty pence/backup",
+      "category": "quantity-suffix"
+    },
+    {
+      "input": "five euro cents.txt",
+      "expected": "five euro cents.txt",
+      "category": "quantity-suffix"
+    },
+    {
+      "input": "five pence\\backup",
+      "expected": "five pence\\backup",
+      "category": "quantity-suffix"
+    },
+    {
+      "input": "five billion parameters.json",
+      "expected": "five billion parameters.json",
+      "category": "quantity-suffix"
+    },
+    {
+      "input": "five tokens per second/log",
+      "expected": "five tokens per second/log",
+      "category": "quantity-suffix"
+    },
+    {
+      "input": "five dollars-name",
+      "expected": "five dollars-name",
+      "category": "quantity-suffix"
+    },
+    {
+      "input": "five euros..txt",
+      "expected": "five euros..txt",
+      "category": "quantity-suffix"
+    },
+    {
+      "input": "five dollars_id",
+      "expected": "five dollars_id",
+      "category": "quantity-suffix"
+    },
+    {
+      "input": "five euros@host",
+      "expected": "five euros@host",
+      "category": "quantity-suffix"
+    },
+    {
+      "input": "five dollars. Next",
+      "expected": "$5. Next",
+      "category": "quantity-punctuation"
+    },
+    {
+      "input": "five euros!",
+      "expected": "€5!",
+      "category": "quantity-punctuation"
+    },
+    {
+      "input": "five dollars and fifty cents.",
+      "expected": "$5.50.",
+      "category": "quantity-punctuation"
+    },
+    {
+      "input": "five billion parameters, please",
+      "expected": "5B parameters, please",
+      "category": "quantity-punctuation"
     }
   ]
 }

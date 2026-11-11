@@ -5,10 +5,12 @@ import Foundation
 nonisolated enum DictationQuantityFormatter {
     private static let number = DictationNumberParser.phrasePattern
     private static let boundary = "(?<![\\p{L}\\p{M}\\p{N}_.,€£$+/@#\\\\−-])"
-    private static let ending = "(?![\\p{L}\\p{M}\\p{N}_])"
+    private static let ending = "(?![\\p{L}\\p{M}\\p{N}_/@#\\\\-]|\\.+[\\p{L}\\p{M}\\p{N}_]|['’][\\p{L}\\p{M}\\p{N}_])"
+    // Keep a recognized minor amount attached when rejecting a filename suffix;
+    // otherwise regex backtracking could rewrite only the major amount.
     private static let money = regex(
         boundary + "(" + number + ")[ \\t]+(euros?|dollars?|British pounds?|pounds? sterling|pounds?)"
-            + "(?![ \\t]+cents?\\b)(?:[ \\t]+and[ \\t]+(" + number + ")[ \\t]+(cents?|pence|penny))?" + ending
+            + "(?![ \\t]+cents?\\b)(?:[ \\t]+and[ \\t]+(" + number + ")[ \\t]+(cents?|pence|penny))?+" + ending
     )
     private static let minorMoney = regex(boundary + "(" + number + ")[ \\t]+(euro cents?|US cents?|pence|penny)" + ending)
     private static let parameters = regex(boundary + "(" + number + ")[ \\t]*(b|m)?[ \\t]+parameters?" + ending)
