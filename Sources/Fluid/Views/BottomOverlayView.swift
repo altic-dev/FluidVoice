@@ -70,6 +70,14 @@ final class BottomOverlayWindowController {
 
     var contentViewForTests: NSView? { self.hostingView }
 
+    var visibleSurfaceWidthForTests: CGFloat {
+        switch SettingsStore.shared.overlaySize {
+        case .pill: PillShadowMetrics.visibleWidth
+        case .small: SmallOverlayMetrics.visibleWidth
+        default: BottomOverlayView.LayoutConstants.get(for: SettingsStore.shared.overlaySize).containerWidth
+        }
+    }
+
     private init() {
         NotificationCenter.default.addObserver(forName: NSNotification.Name("OverlayOffsetChanged"), object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor [weak self] in
