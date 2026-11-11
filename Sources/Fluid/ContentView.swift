@@ -3281,7 +3281,8 @@ struct ContentView: View {
             wasArmed: self.spokenSendArming.wasArmed
         )
         self.updateSpokenSendIndicatorForFinalParse(shouldSend: spokenSendParse.shouldSend)
-        let normalizedTranscribedText = spokenSendParse.text
+        let textNormalizer = await DictationTextNormalizationService.shared.formatter(for: spokenSendParse.text)
+        let normalizedTranscribedText = textNormalizer.normalize(spokenSendParse.text, phase: .beforeCleanup)
         var sendsExistingDraft = spokenSendParse.shouldSend &&
             normalizedTranscribedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
 
@@ -3360,6 +3361,7 @@ struct ContentView: View {
             finalText = normalizedTranscribedText
         }
 
+        finalText = textNormalizer.preservingLiteralCommands(in: finalText, from: normalizedTranscribedText)
         // Normalize literal command and mention syntax after AI cleanup and before final user preferences.
         finalText = ASRService.applyDictationLiteralFormatting(
             finalText,
@@ -3373,6 +3375,8 @@ struct ContentView: View {
         // Apply Continuous Dictation Mode after GAAV so smart caps use the field
         // context captured at recording start, and the trailing space enables chaining.
         finalText = ASRService.applyContinuousDictationFormatting(finalText, precedingText: stopSnapshot?.precedingText ?? self.recordingPrecedingText)
+        // Run after smart capitalization too: a continued sentence must not turn 5B into 5b.
+        finalText = textNormalizer.normalize(finalText, phase: .afterCleanup)
         finalText = ASRService.applyTerminalLiteralAutocompleteSpacing(
             finalText,
             appName: appInfo.name,
@@ -3689,8 +3693,10 @@ struct ContentView: View {
             if promptTest.sessionID == sessionID { promptTest.isProcessing = false }
         }
         do {
+            let textNormalizer = await DictationTextNormalizationService.shared.formatter(for: transcribedText)
+            let preparedText = textNormalizer.normalize(transcribedText, phase: .beforeCleanup)
             let result = try await self.processTextWithAI(
-                transcribedText,
+                preparedText,
                 overrideSystemPrompt: promptTest.usesBuiltInPrompt ? nil : promptTest.draftPromptText,
                 overrideProviderID: promptTest.draftProviderID,
                 overrideModel: promptTest.draftModel,
@@ -3698,7 +3704,7 @@ struct ContentView: View {
             )
             let appInfo = self.recordingAppInfo ?? self.getCurrentAppInfo()
             let literalFormattedResult = ASRService.applyDictationLiteralFormatting(
-                result,
+                textNormalizer.normalize(textNormalizer.preservingLiteralCommands(in: result, from: preparedText), phase: .afterCleanup),
                 appName: appInfo.name,
                 bundleID: appInfo.bundleId,
                 windowTitle: appInfo.windowTitle
@@ -4433,12 +4439,14 @@ struct ContentView: View {
         var aiTokensPerSecond: Double?
         var aiFallbackNotificationError: String?
         let appInfo = self.getCurrentAppInfo()
-        let normalizedTranscribedText = ASRService.applySpokenPunctuationFormatting(
+        let punctuationFormattedText = ASRService.applySpokenPunctuationFormatting(
             transcribedText,
             appName: appInfo.name,
             bundleID: appInfo.bundleId,
             windowTitle: appInfo.windowTitle
         )
+        let textNormalizer = await DictationTextNormalizationService.shared.formatter(for: punctuationFormattedText)
+        let normalizedTranscribedText = textNormalizer.normalize(punctuationFormattedText, phase: .beforeCleanup)
         var finalText = normalizedTranscribedText
         let shouldUseAI = DictationAIPostProcessingGate.isConfigured(for: .primary, appBundleID: appInfo.bundleId)
         if shouldUseAI {
@@ -4468,6 +4476,7 @@ struct ContentView: View {
             )
         }
 
+        finalText = textNormalizer.preservingLiteralCommands(in: finalText, from: normalizedTranscribedText)
         finalText = ASRService.applyDictationLiteralFormatting(
             finalText,
             appName: appInfo.name,
@@ -4479,6 +4488,7 @@ struct ContentView: View {
             ? TypingService.textBeforeCursorInFocusedField()
             : ""
         finalText = ASRService.applyContinuousDictationFormatting(finalText, precedingText: precedingText)
+        finalText = textNormalizer.normalize(finalText, phase: .afterCleanup)
         finalText = ASRService.applyTerminalLiteralAutocompleteSpacing(
             finalText,
             appName: appInfo.name,

@@ -1,0 +1,972 @@
+{
+  "schemaVersion": 1,
+  "cases": [
+    {
+      "input": "It costs five euros.",
+      "expected": "It costs €5.",
+      "category": "quantity"
+    },
+    {
+      "input": "five euros and fifty cents",
+      "expected": "€5.50",
+      "category": "quantity"
+    },
+    {
+      "input": "twenty-five euros",
+      "expected": "€25",
+      "category": "quantity"
+    },
+    {
+      "input": "one hundred and twenty euros",
+      "expected": "€120",
+      "category": "quantity"
+    },
+    {
+      "input": "one thousand two hundred euros",
+      "expected": "€1200",
+      "category": "quantity"
+    },
+    {
+      "input": "five point five euros",
+      "expected": "€5.50",
+      "category": "quantity"
+    },
+    {
+      "input": "5.5 euros",
+      "expected": "€5.50",
+      "category": "quantity"
+    },
+    {
+      "input": "1,250 euros",
+      "expected": "€1250",
+      "category": "quantity"
+    },
+    {
+      "input": "five dollars and one cent",
+      "expected": "$5.01",
+      "category": "quantity"
+    },
+    {
+      "input": "five British pounds",
+      "expected": "£5",
+      "category": "quantity"
+    },
+    {
+      "input": "five pounds sterling",
+      "expected": "£5",
+      "category": "quantity"
+    },
+    {
+      "input": "five pounds and fifty pence",
+      "expected": "£5.50",
+      "category": "quantity"
+    },
+    {
+      "input": "fifty pence",
+      "expected": "50p",
+      "category": "quantity"
+    },
+    {
+      "input": "fifty euro cents",
+      "expected": "€0.50",
+      "category": "quantity"
+    },
+    {
+      "input": "fifty US cents",
+      "expected": "$0.50",
+      "category": "quantity"
+    },
+    {
+      "input": "zero euros and five cents",
+      "expected": "€0.05",
+      "category": "quantity"
+    },
+    {
+      "input": "five euros and zero cents",
+      "expected": "€5.00",
+      "category": "quantity"
+    },
+    {
+      "input": "five billion parameters",
+      "expected": "5B parameters",
+      "category": "quantity"
+    },
+    {
+      "input": "seven million parameters",
+      "expected": "7M parameters",
+      "category": "quantity"
+    },
+    {
+      "input": "one parameter",
+      "expected": "1 parameter",
+      "category": "quantity"
+    },
+    {
+      "input": "seven million dollars",
+      "expected": "$7000000",
+      "category": "quantity"
+    },
+    {
+      "input": "one point five billion parameters",
+      "expected": "1.5B parameters",
+      "category": "quantity"
+    },
+    {
+      "input": "1.5 billion parameters",
+      "expected": "1.5B parameters",
+      "category": "quantity"
+    },
+    {
+      "input": "5000000000 parameters",
+      "expected": "5B parameters",
+      "category": "quantity"
+    },
+    {
+      "input": "5b parameters",
+      "expected": "5B parameters",
+      "category": "quantity"
+    },
+    {
+      "input": " 5b parameters ",
+      "expected": " 5B parameters ",
+      "category": "quantity"
+    },
+    {
+      "input": " 7m parameters ",
+      "expected": " 7M parameters ",
+      "category": "quantity"
+    },
+    {
+      "input": "five B parameters",
+      "expected": "5B parameters",
+      "category": "quantity"
+    },
+    {
+      "input": "seven m parameters",
+      "expected": "7M parameters",
+      "category": "quantity"
+    },
+    {
+      "input": "one hundred twenty tokens per second",
+      "expected": "120 tokens per second",
+      "category": "quantity"
+    },
+    {
+      "input": "one token per second",
+      "expected": "1 token per second",
+      "category": "quantity"
+    },
+    {
+      "input": "120 tokens/s",
+      "expected": "120 tokens per second",
+      "category": "quantity"
+    },
+    {
+      "input": "120 tokens/sec",
+      "expected": "120 tokens per second",
+      "category": "quantity"
+    },
+    {
+      "input": "120 tokens/second",
+      "expected": "120 tokens per second",
+      "category": "quantity"
+    },
+    {
+      "input": "five point five tokens per second",
+      "expected": "5.5 tokens per second",
+      "category": "quantity"
+    },
+    {
+      "input": "I paid five euros and three dollars.",
+      "expected": "I paid €5 and $3.",
+      "category": "quantity"
+    },
+    {
+      "input": "And five euros.",
+      "expected": "And €5.",
+      "category": "quantity"
+    },
+    {
+      "input": "The model has seven billion parameters at one hundred twenty tokens per second.",
+      "expected": "The model has 7B parameters at 120 tokens per second.",
+      "category": "quantity"
+    },
+    {
+      "input": "😀 five euros café",
+      "expected": "😀 €5 café",
+      "category": "quantity"
+    },
+    {
+      "input": "",
+      "expected": "",
+      "category": "unchanged"
+    },
+    {
+      "input": "120 tokens per second",
+      "expected": "120 tokens per second",
+      "category": "unchanged"
+    },
+    {
+      "input": "5B parameters",
+      "expected": "5B parameters",
+      "category": "unchanged"
+    },
+    {
+      "input": "7M parameters",
+      "expected": "7M parameters",
+      "category": "unchanged"
+    },
+    {
+      "input": "€5.50 and £5.50 and $5.50",
+      "expected": "€5.50 and £5.50 and $5.50",
+      "category": "unchanged"
+    },
+    {
+      "input": "I lost five pounds",
+      "expected": "I lost five pounds",
+      "category": "unchanged"
+    },
+    {
+      "input": "five pounds of flour",
+      "expected": "five pounds of flour",
+      "category": "unchanged"
+    },
+    {
+      "input": "fifty cents",
+      "expected": "fifty cents",
+      "category": "unchanged"
+    },
+    {
+      "input": "five billion people",
+      "expected": "five billion people",
+      "category": "unchanged"
+    },
+    {
+      "input": "Wait a second. This period matters.",
+      "expected": "Wait a second. This period matters.",
+      "category": "unchanged"
+    },
+    {
+      "input": "slash help",
+      "expected": "slash help",
+      "category": "unchanged"
+    },
+    {
+      "input": "at the store",
+      "expected": "at the store",
+      "category": "unchanged"
+    },
+    {
+      "input": "one two euros",
+      "expected": "one two euros",
+      "category": "unchanged"
+    },
+    {
+      "input": "five euros and one hundred cents",
+      "expected": "five euros and one hundred cents",
+      "category": "unchanged"
+    },
+    {
+      "input": "five point five euros and fifty cents",
+      "expected": "five point five euros and fifty cents",
+      "category": "unchanged"
+    },
+    {
+      "input": "five euros and five pence",
+      "expected": "five euros and five pence",
+      "category": "unchanged"
+    },
+    {
+      "input": "five British pounds and five cents",
+      "expected": "five British pounds and five cents",
+      "category": "unchanged"
+    },
+    {
+      "input": "minus five euros",
+      "expected": "minus five euros",
+      "category": "unchanged"
+    },
+    {
+      "input": "negative five euros",
+      "expected": "negative five euros",
+      "category": "unchanged"
+    },
+    {
+      "input": "-5 euros",
+      "expected": "-5 euros",
+      "category": "unchanged"
+    },
+    {
+      "input": "$5 dollars",
+      "expected": "$5 dollars",
+      "category": "unchanged"
+    },
+    {
+      "input": "99999999999999999999999999999999999999999 euros",
+      "expected": "99999999999999999999999999999999999999999 euros",
+      "category": "unchanged"
+    },
+    {
+      "input": "1.234 euros",
+      "expected": "1.234 euros",
+      "category": "unchanged"
+    },
+    {
+      "input": "1,23 euros",
+      "expected": "1,23 euros",
+      "category": "unchanged"
+    },
+    {
+      "input": "1,234,56 euros",
+      "expected": "1,234,56 euros",
+      "category": "unchanged"
+    },
+    {
+      "input": "123.4.5 euros",
+      "expected": "123.4.5 euros",
+      "category": "unchanged"
+    },
+    {
+      "input": "one thousand and euros",
+      "expected": "one thousand and euros",
+      "category": "unchanged"
+    },
+    {
+      "input": "five million B parameters",
+      "expected": "five million B parameters",
+      "category": "unchanged"
+    },
+    {
+      "input": "five-million B parameters",
+      "expected": "five-million B parameters",
+      "category": "unchanged"
+    },
+    {
+      "input": "one hundred and euros",
+      "expected": "one hundred and euros",
+      "category": "unchanged"
+    },
+    {
+      "input": "one thousand thousand euros",
+      "expected": "one thousand thousand euros",
+      "category": "unchanged"
+    },
+    {
+      "input": "five point point five euros",
+      "expected": "five point point five euros",
+      "category": "unchanged"
+    },
+    {
+      "input": "`five euros",
+      "expected": "`five euros",
+      "category": "unchanged"
+    },
+    {
+      "input": "```swift\nfive euros\n```",
+      "expected": "```swift\nfive euros\n```",
+      "category": "unchanged"
+    },
+    {
+      "input": "`five euros`",
+      "expected": "`five euros`",
+      "category": "unchanged"
+    },
+    {
+      "input": "```five euros```",
+      "expected": "```five euros```",
+      "category": "unchanged"
+    },
+    {
+      "input": "https://example.com/5euros",
+      "expected": "https://example.com/5euros",
+      "category": "unchanged"
+    },
+    {
+      "input": "x5 euros",
+      "expected": "x5 euros",
+      "category": "unchanged"
+    },
+    {
+      "input": "5 eurosX",
+      "expected": "5 eurosX",
+      "category": "unchanged"
+    },
+    {
+      "input": "cinq euros",
+      "expected": "cinq euros",
+      "category": "unchanged"
+    },
+    {
+      "input": "fünf Euro",
+      "expected": "fünf Euro",
+      "category": "unchanged"
+    },
+    {
+      "input": "cinco euros",
+      "expected": "cinco euros",
+      "category": "unchanged"
+    },
+    {
+      "input": "五欧元",
+      "expected": "五欧元",
+      "category": "unchanged"
+    },
+    {
+      "input": "five\neu ros",
+      "expected": "five\neu ros",
+      "category": "unchanged"
+    },
+    {
+      "input": "heart emoji",
+      "expected": "❤️",
+      "category": "emoji"
+    },
+    {
+      "input": "green heart emoji",
+      "expected": "💚",
+      "category": "emoji"
+    },
+    {
+      "input": "thumbs up emoji",
+      "expected": "👍",
+      "category": "emoji"
+    },
+    {
+      "input": "Thumbs-up emoji.",
+      "expected": "👍.",
+      "category": "emoji"
+    },
+    {
+      "input": "nice fire emoji fire emoji",
+      "expected": "nice 🔥 🔥",
+      "category": "emoji"
+    },
+    {
+      "input": "laughing emoji",
+      "expected": "😂",
+      "category": "emoji"
+    },
+    {
+      "input": "crying emoji",
+      "expected": "😭",
+      "category": "emoji"
+    },
+    {
+      "input": "wink emoji",
+      "expected": "😉",
+      "category": "emoji"
+    },
+    {
+      "input": "face with tears of joy emoji",
+      "expected": "😂",
+      "category": "emoji"
+    },
+    {
+      "input": "big red heart emoji",
+      "expected": "big ❤️",
+      "category": "emoji"
+    },
+    {
+      "input": "heart eyes emoji",
+      "expected": "😍",
+      "category": "emoji"
+    },
+    {
+      "input": "happy birthday party emoji cake emoji",
+      "expected": "happy birthday 🎉 🎂",
+      "category": "emoji"
+    },
+    {
+      "input": "five euro banknote emoji",
+      "expected": "five 💶",
+      "category": "emoji"
+    },
+    {
+      "input": "five euros heart emoji",
+      "expected": "€5 ❤️",
+      "category": "emoji"
+    },
+    {
+      "input": "5b parameters rocket emoji",
+      "expected": "5B parameters 🚀",
+      "category": "emoji"
+    },
+    {
+      "input": "Send me some emoji.",
+      "expected": "Send me some emoji.",
+      "category": "emoji"
+    },
+    {
+      "input": "green heart",
+      "expected": "green heart",
+      "category": "emoji"
+    },
+    {
+      "input": "unknown quux emoji",
+      "expected": "unknown quux emoji",
+      "category": "emoji"
+    },
+    {
+      "input": "fire emojis everywhere",
+      "expected": "fire emojis everywhere",
+      "category": "emoji"
+    },
+    {
+      "input": "`heart emoji`",
+      "expected": "`heart emoji`",
+      "category": "emoji"
+    },
+    {
+      "input": "`heart emoji",
+      "expected": "`heart emoji",
+      "category": "emoji"
+    },
+    {
+      "input": "```text\nheart emoji\n```",
+      "expected": "```text\nheart emoji\n```",
+      "category": "emoji"
+    },
+    {
+      "input": "https://example.com/heart emoji",
+      "expected": "https://example.com/heart emoji",
+      "category": "emoji"
+    },
+    {
+      "input": "heart@example.com emoji",
+      "expected": "heart@example.com emoji",
+      "category": "emoji"
+    },
+    {
+      "input": "green\nheart emoji",
+      "expected": "green\n❤️",
+      "category": "emoji"
+    },
+    {
+      "input": "🧑🏽‍💻 heart emoji café",
+      "expected": "🧑🏽‍💻 ❤️ café",
+      "category": "emoji"
+    },
+    {
+      "input": "face with open eyes and hand over mouth emoji",
+      "expected": "face with open eyes and hand over mouth emoji",
+      "category": "emoji"
+    },
+    {
+      "input": "literal fire emoji",
+      "expected": "literal fire emoji",
+      "phase": "beforeCleanup",
+      "category": "escape"
+    },
+    {
+      "input": "literal fire emoji",
+      "expected": "fire emoji",
+      "phase": "afterCleanup",
+      "repeatable": false,
+      "category": "escape"
+    },
+    {
+      "input": "five euros heart emoji",
+      "expected": "five euros heart emoji",
+      "languageCode": "fr",
+      "category": "language"
+    },
+    {
+      "input": "five euros heart emoji",
+      "expected": "€5 ❤️",
+      "languageCode": "en-GB",
+      "category": "language"
+    },
+    {
+      "input": "🔥",
+      "preparedText": "literal fire emoji",
+      "expected": "fire emoji",
+      "repeatable": false,
+      "category": "cleanup-escape"
+    },
+    {
+      "input": "Great job literal fire emoji",
+      "preparedText": "great job literal fire emoji",
+      "expected": "Great job fire emoji",
+      "repeatable": false,
+      "category": "cleanup-escape"
+    },
+    {
+      "input": "Great job 🔥",
+      "preparedText": "great job literal fire emoji",
+      "expected": "great job fire emoji",
+      "repeatable": false,
+      "category": "cleanup-escape"
+    },
+    {
+      "input": "literal fire emoji 🔥",
+      "preparedText": "literal fire emoji literal fire emoji",
+      "expected": "fire emoji fire emoji",
+      "repeatable": false,
+      "category": "cleanup-escape"
+    },
+    {
+      "input": "Thanks 🔥",
+      "preparedText": "thanks 🔥",
+      "expected": "Thanks 🔥",
+      "category": "cleanup-escape"
+    },
+    {
+      "input": "Code simplified",
+      "preparedText": "`literal fire emoji`",
+      "expected": "Code simplified",
+      "category": "cleanup-escape"
+    },
+    {
+      "input": "🔥",
+      "preparedText": "literal fire emoji",
+      "expected": "🔥",
+      "languageCode": "fr",
+      "category": "cleanup-escape"
+    },
+    {
+      "input": "my_heart emoji",
+      "expected": "my_heart emoji",
+      "category": "identifier"
+    },
+    {
+      "input": "foo/heart emoji",
+      "expected": "foo/heart emoji",
+      "category": "identifier"
+    },
+    {
+      "input": "@heart emoji",
+      "expected": "@heart emoji",
+      "category": "identifier"
+    },
+    {
+      "input": "#heart emoji",
+      "expected": "#heart emoji",
+      "category": "identifier"
+    },
+    {
+      "input": "foo.heart emoji",
+      "expected": "foo.heart emoji",
+      "category": "identifier"
+    },
+    {
+      "input": "heart emoji_id",
+      "expected": "heart emoji_id",
+      "category": "identifier"
+    },
+    {
+      "input": "C:\\heart emoji",
+      "expected": "C:\\heart emoji",
+      "category": "identifier"
+    },
+    {
+      "input": "my-heart emoji",
+      "expected": "my-heart emoji",
+      "category": "word-boundary"
+    },
+    {
+      "input": "heart emoji-name",
+      "expected": "heart emoji-name",
+      "category": "word-boundary"
+    },
+    {
+      "input": "heart emoji.file",
+      "expected": "heart emoji.file",
+      "category": "word-boundary"
+    },
+    {
+      "input": "heart emoji’s",
+      "expected": "heart emoji’s",
+      "category": "word-boundary"
+    },
+    {
+      "input": "my_literal heart emoji",
+      "expected": "my_literal heart emoji",
+      "category": "word-boundary"
+    },
+    {
+      "input": "heárt emoji",
+      "expected": "heárt emoji",
+      "category": "word-boundary"
+    },
+    {
+      "input": "heart́ emoji",
+      "expected": "heart́ emoji",
+      "category": "word-boundary"
+    },
+    {
+      "input": "myheart emoji",
+      "expected": "myheart emoji",
+      "category": "word-boundary"
+    },
+    {
+      "input": "heart emoji2",
+      "expected": "heart emoji2",
+      "category": "word-boundary"
+    },
+    {
+      "input": "heart emoji.",
+      "expected": "❤️.",
+      "category": "word-boundary"
+    },
+    {
+      "input": "Say heart emoji!",
+      "expected": "Say ❤️!",
+      "category": "word-boundary"
+    },
+    {
+      "input": "“heart emoji”",
+      "expected": "“❤️”",
+      "category": "word-boundary"
+    },
+    {
+      "input": "'heart emoji'",
+      "expected": "'❤️'",
+      "category": "word-boundary"
+    },
+    {
+      "input": "red-heart emoji",
+      "expected": "❤️",
+      "category": "word-boundary"
+    },
+    {
+      "input": "one trillion five dollars",
+      "expected": "one trillion five dollars",
+      "category": "quantity-preservation"
+    },
+    {
+      "input": "two quadrillion seven euros",
+      "expected": "two quadrillion seven euros",
+      "category": "quantity-preservation"
+    },
+    {
+      "input": "one quintillion five million parameters",
+      "expected": "one quintillion five million parameters",
+      "category": "quantity-preservation"
+    },
+    {
+      "input": "−five euros",
+      "expected": "−five euros",
+      "category": "quantity-preservation"
+    },
+    {
+      "input": "@five euros",
+      "expected": "@five euros",
+      "category": "quantity-preservation"
+    },
+    {
+      "input": "#five dollars",
+      "expected": "#five dollars",
+      "category": "quantity-preservation"
+    },
+    {
+      "input": "C:\\five euros",
+      "expected": "C:\\five euros",
+      "category": "quantity-preservation"
+    },
+    {
+      "input": "five euroś",
+      "expected": "five euroś",
+      "category": "quantity-preservation"
+    },
+    {
+      "input": "five dollars.txt",
+      "expected": "five dollars.txt",
+      "category": "quantity-suffix"
+    },
+    {
+      "input": "five euros/backup",
+      "expected": "five euros/backup",
+      "category": "quantity-suffix"
+    },
+    {
+      "input": "five dollars and fifty cents.txt",
+      "expected": "five dollars and fifty cents.txt",
+      "category": "quantity-suffix"
+    },
+    {
+      "input": "five British pounds and fifty pence/backup",
+      "expected": "five British pounds and fifty pence/backup",
+      "category": "quantity-suffix"
+    },
+    {
+      "input": "five euro cents.txt",
+      "expected": "five euro cents.txt",
+      "category": "quantity-suffix"
+    },
+    {
+      "input": "five pence\\backup",
+      "expected": "five pence\\backup",
+      "category": "quantity-suffix"
+    },
+    {
+      "input": "five billion parameters.json",
+      "expected": "five billion parameters.json",
+      "category": "quantity-suffix"
+    },
+    {
+      "input": "five tokens per second/log",
+      "expected": "five tokens per second/log",
+      "category": "quantity-suffix"
+    },
+    {
+      "input": "five dollars-name",
+      "expected": "five dollars-name",
+      "category": "quantity-suffix"
+    },
+    {
+      "input": "five euros..txt",
+      "expected": "five euros..txt",
+      "category": "quantity-suffix"
+    },
+    {
+      "input": "five dollars_id",
+      "expected": "five dollars_id",
+      "category": "quantity-suffix"
+    },
+    {
+      "input": "five euros@host",
+      "expected": "five euros@host",
+      "category": "quantity-suffix"
+    },
+    {
+      "input": "five dollars. Next",
+      "expected": "$5. Next",
+      "category": "quantity-punctuation"
+    },
+    {
+      "input": "five euros!",
+      "expected": "€5!",
+      "category": "quantity-punctuation"
+    },
+    {
+      "input": "five dollars and fifty cents.",
+      "expected": "$5.50.",
+      "category": "quantity-punctuation"
+    },
+    {
+      "input": "five billion parameters, please",
+      "expected": "5B parameters, please",
+      "category": "quantity-punctuation"
+    },
+    {
+      "input": "``five euros``",
+      "expected": "``five euros``",
+      "category": "code-delimiters",
+      "phase": "beforeCleanup"
+    },
+    {
+      "input": "``heart emoji``",
+      "expected": "``heart emoji``",
+      "category": "code-delimiters",
+      "phase": "beforeCleanup"
+    },
+    {
+      "input": "``five euros ` heart emoji``",
+      "expected": "``five euros ` heart emoji``",
+      "category": "code-delimiters",
+      "phase": "beforeCleanup"
+    },
+    {
+      "input": "``five euros ``` heart emoji``",
+      "expected": "``five euros ``` heart emoji``",
+      "category": "code-delimiters",
+      "phase": "beforeCleanup"
+    },
+    {
+      "input": "``five euros`` and five euros",
+      "expected": "``five euros`` and €5",
+      "category": "code-delimiters",
+      "phase": "beforeCleanup"
+    },
+    {
+      "input": "``heart emoji`` and heart emoji",
+      "expected": "``heart emoji`` and ❤️",
+      "category": "code-delimiters",
+      "phase": "beforeCleanup"
+    },
+    {
+      "input": "``five euros`` then `heart emoji`",
+      "expected": "``five euros`` then `heart emoji`",
+      "category": "code-delimiters",
+      "phase": "beforeCleanup"
+    },
+    {
+      "input": "````five euros ``` heart emoji````",
+      "expected": "````five euros ``` heart emoji````",
+      "category": "code-delimiters",
+      "phase": "beforeCleanup"
+    },
+    {
+      "input": "``five euros",
+      "expected": "``five euros",
+      "category": "code-delimiters",
+      "phase": "beforeCleanup"
+    },
+    {
+      "input": "``five euros\nheart emoji``",
+      "expected": "``five euros\nheart emoji``",
+      "category": "code-delimiters",
+      "phase": "beforeCleanup"
+    },
+    {
+      "input": "``five euros``",
+      "expected": "``five euros``",
+      "category": "code-delimiters",
+      "phase": "afterCleanup"
+    },
+    {
+      "input": "``heart emoji``",
+      "expected": "``heart emoji``",
+      "category": "code-delimiters",
+      "phase": "afterCleanup"
+    },
+    {
+      "input": "``five euros ` heart emoji``",
+      "expected": "``five euros ` heart emoji``",
+      "category": "code-delimiters",
+      "phase": "afterCleanup"
+    },
+    {
+      "input": "``five euros ``` heart emoji``",
+      "expected": "``five euros ``` heart emoji``",
+      "category": "code-delimiters",
+      "phase": "afterCleanup"
+    },
+    {
+      "input": "``five euros`` and five euros",
+      "expected": "``five euros`` and €5",
+      "category": "code-delimiters",
+      "phase": "afterCleanup"
+    },
+    {
+      "input": "``heart emoji`` and heart emoji",
+      "expected": "``heart emoji`` and ❤️",
+      "category": "code-delimiters",
+      "phase": "afterCleanup"
+    },
+    {
+      "input": "``five euros`` then `heart emoji`",
+      "expected": "``five euros`` then `heart emoji`",
+      "category": "code-delimiters",
+      "phase": "afterCleanup"
+    },
+    {
+      "input": "````five euros ``` heart emoji````",
+      "expected": "````five euros ``` heart emoji````",
+      "category": "code-delimiters",
+      "phase": "afterCleanup"
+    },
+    {
+      "input": "``five euros",
+      "expected": "``five euros",
+      "category": "code-delimiters",
+      "phase": "afterCleanup"
+    },
+    {
+      "input": "``five euros\nheart emoji``",
+      "expected": "``five euros\nheart emoji``",
+      "category": "code-delimiters",
+      "phase": "afterCleanup"
+    }
+  ]
+}
