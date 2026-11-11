@@ -14,6 +14,9 @@ enum MenuBarNavigationDestination: String {
 
 @MainActor
 final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
+    #if DEBUG
+    private(set) static var initialASRStateDeliveredForTests = false
+    #endif
     private enum MeetingMenuActivity: Equatable {
         case inactive
         case preparing
@@ -212,6 +215,11 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
                 }
             }
             .store(in: &self.cancellables)
+        #if DEBUG
+        // Queue behind the initial Combine values so app-hosted layout tests do
+        // not race startup's empty transcript or stopped-recording notification.
+        DispatchQueue.main.async { Self.initialASRStateDeliveredForTests = true }
+        #endif
     }
 
     func configure(meetingCoordinator: MeetingSessionCoordinator) {

@@ -580,19 +580,33 @@ final class OverlayCaptionPresentationTests: XCTestCase {
     }
 
     func testWindowAndControlsStayStillThroughWrappingAndCorrections() async throws {
+        let startupDeadline = ProcessInfo.processInfo.systemUptime + 10
+        while !MenuBarManager.initialASRStateDeliveredForTests, ProcessInfo.processInfo.systemUptime < startupDeadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertTrue(MenuBarManager.initialASRStateDeliveredForTests, "The test host must finish delivering its initial ASR state")
         let settings = SettingsStore.shared
         let state = NotchContentState.shared
         let previousSize = settings.overlaySize
         let previousPreview = settings.enableStreamingPreview
         let previousText = state.transcriptionText
+        let previousProcessing = state.isProcessing
+        let previousAIFailure = state.isAIProcessingFailureVisible
+        let previousDeliveryFailure = state.isTextDeliveryFailureVisible
         let controller = BottomOverlayWindowController.shared
         defer {
             controller.hideImmediately()
             settings.overlaySize = previousSize
             settings.enableStreamingPreview = previousPreview
             state.updateTranscription(previousText)
+            state.isProcessing = previousProcessing
+            state.isAIProcessingFailureVisible = previousAIFailure
+            state.isTextDeliveryFailureVisible = previousDeliveryFailure
         }
         settings.enableStreamingPreview = true
+        state.isProcessing = false
+        state.isAIProcessingFailureVisible = false
+        state.isTextDeliveryFailureVisible = false
         func caption(in view: NSView) -> OverlayCaptionNSView? {
             if let caption = view as? OverlayCaptionNSView { return caption }
             return view.subviews.lazy.compactMap { caption(in: $0) }.first
@@ -614,9 +628,14 @@ final class OverlayCaptionPresentationTests: XCTestCase {
                 guard !text.isEmpty else { continue }
                 let host = try XCTUnwrap(controller.contentViewForTests)
                 host.layoutSubtreeIfNeeded()
-                let view = try XCTUnwrap(caption(in: host))
+                let view = try XCTUnwrap(caption(in: host), "Expected a caption for \(size) after updating its text")
                 let rect = view.convert(view.bounds, to: host)
-                let inset = layout.hPadding + (host.bounds.width - layout.containerWidth) / 2
+                // Hover can expand Small without resizing its fixed window. Measure
+                // padding from the visible surface, not its collapsed-only width.
+                let surfaceWidth = controller.visibleSurfaceWidthForTests
+                XCTAssertGreaterThanOrEqual(surfaceWidth, layout.containerWidth)
+                XCTAssertLessThanOrEqual(surfaceWidth, host.bounds.width)
+                let inset = layout.hPadding + (host.bounds.width - surfaceWidth) / 2
                 XCTAssertEqual(rect.minX, inset, accuracy: 0.5, "\(size): captions must retain the leading inset")
                 XCTAssertEqual(host.bounds.width - rect.maxX, inset, accuracy: 0.5, "\(size): captions must retain the trailing inset")
             }
