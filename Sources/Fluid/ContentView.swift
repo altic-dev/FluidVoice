@@ -5182,6 +5182,8 @@ struct ContentView: View {
                 )
                 await self.awaitCaptureStart(self.beginDictationRecording(for: .primary, mode: .dictate))
             },
+            isAgentPromptActiveProvider: { AgentBridgeService.shared.phase != .idle },
+            agentPromptSendCallback: { AgentBridgeService.shared.finishRecordingAndReply() },
             stopAndProcessCallback: { toggleStopRequestedAt in
                 let route = self.currentDictationOutputRouteForHotkeyStop()
                 DebugLogger.shared.info("Hotkey stop callback using route: \(route.rawValue)", source: "ContentView")
@@ -5278,7 +5280,7 @@ struct ContentView: View {
     }
 
     private func handleCancelShortcutResult() -> GlobalHotkeyManager.CancelHandlingResult {
-        if self.asr.activeExclusiveActivity == .agentPrompt {
+        if AgentBridgeService.shared.phase != .idle {
             AgentBridgeService.shared.cancelActivePrompt()
             return .cancelled
         }

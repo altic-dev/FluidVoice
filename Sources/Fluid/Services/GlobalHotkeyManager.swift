@@ -295,6 +295,9 @@ final class GlobalHotkeyManager: NSObject {
     private var rewriteModeShortcutEnabled: Bool
     private var startRecordingCallback: (() async -> Void)?
     private var dictationModeCallback: (() async -> Void)?
+    private let isAgentPromptActiveProvider: () -> Bool
+    private let agentPromptSendCallback: (() -> Void)?
+    private var agentPromptOwnsPrimaryPress = false
     private var stopAndProcessCallback: ((TimeInterval?) async -> Void)?
     private var promptModeCallback: (() async -> Void)?
     private var promptSelectionCallback: ((SettingsStore.DictationPromptSelection) async -> Void)?
@@ -539,6 +542,8 @@ final class GlobalHotkeyManager: NSObject {
         rewriteModeShortcutEnabled: Bool,
         startRecordingCallback: (() async -> Void)? = nil,
         dictationModeCallback: (() async -> Void)? = nil,
+        isAgentPromptActiveProvider: @escaping () -> Bool = { false },
+        agentPromptSendCallback: (() -> Void)? = nil,
         stopAndProcessCallback: ((TimeInterval?) async -> Void)? = nil,
         promptModeCallback: (() async -> Void)? = nil,
         promptSelectionCallback: ((SettingsStore.DictationPromptSelection) async -> Void)? = nil,
@@ -563,6 +568,8 @@ final class GlobalHotkeyManager: NSObject {
         self.rewriteModeShortcutEnabled = rewriteModeShortcutEnabled
         self.startRecordingCallback = startRecordingCallback
         self.dictationModeCallback = dictationModeCallback
+        self.isAgentPromptActiveProvider = isAgentPromptActiveProvider
+        self.agentPromptSendCallback = agentPromptSendCallback
         self.stopAndProcessCallback = stopAndProcessCallback
         self.promptModeCallback = promptModeCallback
         self.promptSelectionCallback = promptSelectionCallback
@@ -1288,7 +1295,8 @@ final class GlobalHotkeyManager: NSObject {
                self.activePrimaryShortcutPress?.keyboardKeyCode == keyCode
             { self.activePrimaryShortcutPress = nil }
             // The application owns cancellation output; fallback managers only discard capture.
-            if SettingsStore.shared.cancelRecordingHotkeyShortcut?.matches(keyCode: keyCode, modifiers: eventModifiers) == true {
+            let isAgentEscape = keyCode == 53 && self.isAgentPromptActiveProvider()
+            if isAgentEscape || SettingsStore.shared.cancelRecordingHotkeyShortcut?.matches(keyCode: keyCode, modifiers: eventModifiers) == true {
                 let result = self.cancelCallback?() ?? .unhandled
                 // Closing a suggestion must preserve the held shortcut and capture.
                 if result == .dismissedOverlay {
@@ -1736,6 +1744,10 @@ final class GlobalHotkeyManager: NSObject {
     }
 
     private func handlePrimaryDictationTriggerDown() {
+        // Agent capture starts automatically. Its shortcut is a one-shot Send in every mode.
+        self.agentPromptOwnsPrimaryPress = self.isAgentPromptActiveProvider()
+        if self.agentPromptOwnsPrimaryPress { return }
+
         switch self.hotkeyMode {
         case .hold:
             if !self.isKeyPressed {
@@ -1793,6 +1805,8 @@ final class GlobalHotkeyManager: NSObject {
     }
 
     private func handlePrimaryDictationTriggerUp(shortcut: HotkeyShortcut) {
+        if self.finishAgentPromptShortcut() { return }
+
         switch self.hotkeyMode {
         case .hold:
             self.isKeyPressed = false
@@ -1888,6 +1902,10 @@ final class GlobalHotkeyManager: NSObject {
     }
 
     private func scheduleModifierOnlyStart(for behavior: ModifierOnlyShortcutBehavior) {
+        if behavior.holdModeType == .transcription {
+            self.agentPromptOwnsPrimaryPress = self.isAgentPromptActiveProvider()
+            if self.agentPromptOwnsPrimaryPress { return }
+        }
         guard self.hotkeyMode != .toggle, !behavior.isModeKeyPressed() else { return }
 
         self.cancelPendingReleaseStop(for: behavior.holdModeType)
@@ -1914,6 +1932,10 @@ final class GlobalHotkeyManager: NSObject {
         for behavior: ModifierOnlyShortcutBehavior,
         wasCleanPress: Bool
     ) {
+        if behavior.holdModeType == .transcription,
+           self.finishAgentPromptShortcut(wasCleanPress: wasCleanPress)
+        { return }
+
         switch self.hotkeyMode {
         case .hold:
             if behavior.isModeKeyPressed() {
@@ -1953,6 +1975,7 @@ final class GlobalHotkeyManager: NSObject {
     }
 
     func resetModifierOnlyShortcutTracking(reason: ModifierTrackingResetReason = .shortcutCapture) {
+        self.agentPromptOwnsPrimaryPress = false
         self.meetingShortcutPressedKey = nil
         self.invalidateAllRecordingActions()
         self.modifierPressReceivedAt = nil
@@ -2337,6 +2360,16 @@ final class GlobalHotkeyManager: NSObject {
 
     func enablePressAndHoldMode(_ enable: Bool) {
         self.setHotkeyMode(enable ? .hold : .toggle)
+    }
+
+    /// Consume the paired release even if the prompt was cancelled while the key was held.
+    private func finishAgentPromptShortcut(wasCleanPress: Bool = true) -> Bool {
+        guard self.agentPromptOwnsPrimaryPress else { return false }
+        self.agentPromptOwnsPrimaryPress = false
+        if wasCleanPress, self.isAgentPromptActiveProvider(), self.canTriggerRecordingAction("Agent reply hotkey") {
+            self.agentPromptSendCallback?()
+        }
+        return true
     }
 
     private func canTriggerRecordingAction(_ label: String) -> Bool {

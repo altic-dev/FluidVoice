@@ -2509,12 +2509,140 @@ final class HotkeyShortcutTests: XCTestCase {
     }
 
     @MainActor
+    func testAgentReplyHotkeySendsOnceOnReleaseInEveryActivationMode() async throws {
+        let mouseDown = try XCTUnwrap(CGEvent(mouseEventSource: nil, mouseType: .otherMouseDown, mouseCursorPosition: .zero, mouseButton: .center))
+        let mouseUp = try XCTUnwrap(CGEvent(mouseEventSource: nil, mouseType: .otherMouseUp, mouseCursorPosition: .zero, mouseButton: .center))
+        mouseDown.flags = []
+        mouseUp.flags = []
+        let inputs = [
+            (HotkeyShortcut(keyCode: 2, modifierFlags: [.control, .command]),
+             try self.primaryReleaseTestEvent(type: .keyDown), try self.primaryReleaseTestEvent(type: .keyUp, modifiers: [])),
+            (HotkeyShortcut(keyCode: 61, modifierFlags: []),
+             try self.primaryReleaseTestEvent(type: .flagsChanged, keyCode: 61, modifiers: .maskAlternate),
+             try self.primaryReleaseTestEvent(type: .flagsChanged, keyCode: 61, modifiers: [])),
+            (HotkeyShortcut(mouseButton: 2, modifierFlags: []), mouseDown, mouseUp),
+        ]
+        for mode: HotkeyActivationMode in [.toggle, .hold, .automatic] {
+            for (shortcut, down, up) in inputs {
+                let asr = ASRService()
+                var starts = 0
+                var stops = 0
+                var sends = 0
+                let manager = self.makePrimaryReleaseTestManager(
+                    asr: asr,
+                    onStart: { starts += 1 },
+                    onStop: { stops += 1 },
+                    isAgentPromptActive: { true },
+                    onAgentSend: { sends += 1 }
+                )
+                manager.updatePrimaryShortcuts([shortcut])
+                manager.setHotkeyMode(mode)
+                if shortcut.isMouseShortcut {
+                    XCTAssertNil(manager.handleMouseShortcutEvent(type: down.type, event: down))
+                } else {
+                    XCTAssertNil(manager.handleKeyEvent(type: down.type, event: down))
+                }
+                for _ in 0..<20 { await Task.yield() }
+                XCTAssertEqual(sends, 0, "Wait for the matching release")
+                if shortcut.isMouseShortcut {
+                    XCTAssertNil(manager.handleMouseShortcutEvent(type: up.type, event: up))
+                    _ = manager.handleMouseShortcutEvent(type: up.type, event: up)
+                } else {
+                    XCTAssertNil(manager.handleKeyEvent(type: up.type, event: up))
+                    _ = manager.handleKeyEvent(type: up.type, event: up)
+                }
+                for _ in 0..<20 { await Task.yield() }
+                XCTAssertEqual(sends, 1, "\(mode) / \(shortcut.displayString)")
+                XCTAssertEqual(starts, 0, "An agent reply must never start ordinary dictation")
+                XCTAssertEqual(stops, 0, "The bridge owns agent capture finalization")
+            }
+        }
+    }
+
+    @MainActor
+    func testAgentReplyModifierUsedForTypingDoesNotSend() async throws {
+        for mode: HotkeyActivationMode in [.toggle, .hold, .automatic] {
+            let asr = ASRService()
+            var sends = 0
+            var starts = 0
+            let manager = self.makePrimaryReleaseTestManager(
+                asr: asr,
+                onStart: { starts += 1 },
+                isAgentPromptActive: { true },
+                onAgentSend: { sends += 1 }
+            )
+            manager.updatePrimaryShortcuts([HotkeyShortcut(keyCode: 61, modifierFlags: [])])
+            manager.setHotkeyMode(mode)
+            _ = try manager.handleKeyEvent(type: .flagsChanged, event: self.primaryReleaseTestEvent(type: .flagsChanged, keyCode: 61, modifiers: .maskAlternate))
+            _ = try manager.handleKeyEvent(type: .keyDown, event: self.primaryReleaseTestEvent(type: .keyDown, keyCode: 7, modifiers: .maskAlternate))
+            _ = try manager.handleKeyEvent(type: .flagsChanged, event: self.primaryReleaseTestEvent(type: .flagsChanged, keyCode: 61, modifiers: []))
+            for _ in 0..<20 { await Task.yield() }
+            XCTAssertEqual(sends, 0)
+            XCTAssertEqual(starts, 0)
+        }
+    }
+
+    @MainActor
+    func testAgentReplyHotkeyDoesNotSendWhileSessionIsLocked() throws {
+        let asr = ASRService()
+        var sends = 0
+        let manager = self.makePrimaryReleaseTestManager(
+            asr: asr,
+            onStart: {},
+            isSessionLocked: { true },
+            isAgentPromptActive: { true },
+            onAgentSend: { sends += 1 }
+        )
+        _ = try manager.handleKeyEvent(type: .keyDown, event: self.primaryReleaseTestEvent(type: .keyDown))
+        _ = try manager.handleKeyEvent(type: .keyUp, event: self.primaryReleaseTestEvent(type: .keyUp))
+        XCTAssertEqual(sends, 0)
+    }
+
+    @MainActor
+    func testAgentEscapeCancelsPendingSendWithNoASRLeaseOrConfiguredCancelShortcut() async throws {
+        let settings = SettingsStore.shared
+        let previous = settings.cancelRecordingHotkeyShortcut
+        defer { settings.cancelRecordingHotkeyShortcut = previous }
+        settings.cancelRecordingHotkeyShortcut = nil
+        let asr = ASRService()
+        var agentActive = true
+        var cancels = 0
+        var starts = 0
+        var sends = 0
+        let manager = self.makePrimaryReleaseTestManager(
+            asr: asr,
+            onStart: { starts += 1 },
+            isAgentPromptActive: { agentActive },
+            onAgentSend: { sends += 1 }
+        )
+        manager.setCancelCallback {
+            cancels += 1
+            agentActive = false
+            return .cancelled
+        }
+        // A held Send shortcut must not start dictation when released after cancellation.
+        _ = try manager.handleKeyEvent(type: .keyDown, event: self.primaryReleaseTestEvent(type: .keyDown))
+        let escape = try self.primaryReleaseTestEvent(type: .keyDown, keyCode: 53, modifiers: [])
+        XCTAssertNil(manager.handleKeyEvent(type: .keyDown, event: escape))
+        _ = try manager.handleKeyEvent(type: .keyUp, event: self.primaryReleaseTestEvent(type: .keyUp))
+        for _ in 0..<20 { await Task.yield() }
+        XCTAssertFalse(asr.isRunningOrStarting)
+        XCTAssertEqual(cancels, 1)
+        XCTAssertEqual(sends, 0)
+        XCTAssertEqual(starts, 0)
+        XCTAssertNotNil(manager.handleKeyEvent(type: .keyDown, event: escape), "Leave Escape alone once the agent prompt is idle")
+        XCTAssertEqual(cancels, 1)
+    }
+
+    @MainActor
     private func makePrimaryReleaseTestManager(
         asr: ASRService,
         onStart: @escaping () async -> Void,
         onStop: @escaping () async -> Void = {},
         isShortcutCaptureActive: @escaping () -> Bool = { false },
-        isSessionLocked: @escaping () -> Bool = { false }
+        isSessionLocked: @escaping () -> Bool = { false },
+        isAgentPromptActive: @escaping () -> Bool = { false },
+        onAgentSend: (() -> Void)? = nil
     ) -> GlobalHotkeyManager {
         let manager = GlobalHotkeyManager(
             asrService: asr,
@@ -2527,6 +2655,8 @@ final class HotkeyShortcutTests: XCTestCase {
             rewriteModeShortcutEnabled: false,
             startRecordingCallback: onStart,
             dictationModeCallback: onStart,
+            isAgentPromptActiveProvider: isAgentPromptActive,
+            agentPromptSendCallback: onAgentSend,
             stopAndProcessCallback: { _ in await onStop() },
             isDictateRecordingProvider: { true },
             isShortcutCaptureActiveProvider: isShortcutCaptureActive,

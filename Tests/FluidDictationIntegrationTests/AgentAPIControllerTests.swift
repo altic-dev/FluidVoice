@@ -182,6 +182,60 @@ final class AgentBridgeServiceTests: XCTestCase {
         }
     }
 
+    func testHUDHeaderDragMovesTheWindowAndSurvivesTranscriptUpdates() async throws {
+        let recorder = FakeAgentRecorder()
+        let bridge = self.makeBridge(recorder: recorder)
+        defer { bridge.cancelActivePrompt() }
+        let task = Task { await bridge.prompt(id: UUID(), message: "Drag check", status: .completed) }
+        try await self.waitUntil { bridge.phase == .recording }
+        let panel = try XCTUnwrap(NSApp.windows.first {
+            $0.identifier == AgentPromptPanelController.windowIdentifier && $0.isVisible
+        })
+        let root = try XCTUnwrap(panel.contentView)
+        root.layoutSubtreeIfNeeded()
+
+        func findDragHandle(in view: NSView) -> NSView? {
+            if view.toolTip == "Drag to move" { return view }
+            return view.subviews.lazy.compactMap { findDragHandle(in: $0) }.first
+        }
+        let handle = try XCTUnwrap(findDragHandle(in: root))
+        let center = NSPoint(x: handle.bounds.midX, y: handle.bounds.midY)
+        XCTAssertTrue(root.hitTest(handle.convert(center, to: root.superview)) === handle)
+        XCTAssertTrue(handle.acceptsFirstMouse(for: nil), "Dragging must work while FluidVoice is inactive")
+        let startOrigin = panel.frame.origin
+        let grabPoint = panel.convertPoint(toScreen: handle.convert(center, to: nil))
+        var eventNumber = 0
+        func sendMouse(_ type: NSEvent.EventType, at screenPoint: NSPoint) throws {
+            eventNumber += 1
+            let event = try XCTUnwrap(NSEvent.mouseEvent(
+                with: type,
+                location: panel.convertPoint(fromScreen: screenPoint),
+                modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: panel.windowNumber,
+                context: nil,
+                eventNumber: eventNumber,
+                clickCount: 1,
+                pressure: type == .leftMouseUp ? 0 : 1
+            ))
+            panel.sendEvent(event)
+        }
+        try sendMouse(.leftMouseDown, at: grabPoint)
+        try sendMouse(.leftMouseDragged, at: NSPoint(x: grabPoint.x + 80, y: grabPoint.y + 40))
+        try sendMouse(.leftMouseDragged, at: NSPoint(x: grabPoint.x + 120, y: grabPoint.y + 60))
+        try sendMouse(.leftMouseUp, at: NSPoint(x: grabPoint.x + 120, y: grabPoint.y + 60))
+        let expected = NSPoint(x: startOrigin.x + 120, y: startOrigin.y + 60)
+        XCTAssertEqual(panel.frame.origin.x, expected.x, accuracy: 0.5)
+        XCTAssertEqual(panel.frame.origin.y, expected.y, accuracy: 0.5)
+        recorder.transcript.send("Still listening after moving")
+        for _ in 0..<10 { await Task.yield() }
+        XCTAssertEqual(panel.frame.origin, expected)
+        XCTAssertEqual(bridge.phase, .recording)
+        bridge.cancelActivePrompt()
+        let result = await task.value
+        XCTAssertEqual(result, .cancelled)
+    }
+
     func testCancellationDuringStartupIsScopedToTheRequest() async throws {
         let recorder = FakeAgentRecorder()
         recorder.pauseStart = true

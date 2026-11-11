@@ -40,6 +40,7 @@ final class AgentPromptPanelController {
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.hasShadow = true
+        panel.isMovableByWindowBackground = false
         panel.hidesOnDeactivate = false
         panel.animationBehavior = .none
         panel.identifier = Self.windowIdentifier
@@ -92,6 +93,38 @@ private final class AgentPromptHostingView: NSHostingView<AgentPromptView> {
     }
 }
 
+private struct AgentPromptDragHandle: NSViewRepresentable {
+    func makeNSView(context: Context) -> AgentPromptDragView {
+        let view = AgentPromptDragView()
+        view.toolTip = "Drag to move"
+        return view
+    }
+
+    func updateNSView(_ nsView: AgentPromptDragView, context: Context) {}
+}
+
+private final class AgentPromptDragView: NSView {
+    private var grabOffset: NSPoint?
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    override var mouseDownCanMoveWindow: Bool { false }
+
+    override func mouseDown(with event: NSEvent) {
+        self.grabOffset = event.locationInWindow
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard let window, let grabOffset else { return }
+        // Convert each event through the current window frame so moving it never shifts the grab point.
+        let pointer = window.convertPoint(toScreen: event.locationInWindow)
+        window.setFrameOrigin(NSPoint(x: pointer.x - grabOffset.x, y: pointer.y - grabOffset.y))
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        self.grabOffset = nil
+    }
+}
+
 private struct AgentPromptView: View {
     @ObservedObject var bridge: AgentBridgeService
     @ObservedObject private var settings = SettingsStore.shared
@@ -120,16 +153,20 @@ private struct AgentPromptView: View {
 
     private var header: some View {
         HStack(spacing: 8) {
-            Image(systemName: self.statusStyle.icon)
-                .font(.fluidSystem(size: 11, weight: .semibold))
-                .foregroundStyle(self.statusStyle.color)
-                .accessibilityHidden(true)
+            HStack(spacing: 8) {
+                Image(systemName: self.statusStyle.icon)
+                    .font(.fluidSystem(size: 11, weight: .semibold))
+                    .foregroundStyle(self.statusStyle.color)
+                    .accessibilityHidden(true)
 
-            Text(self.statusStyle.label)
-                .font(.fluidSystem(size: 12, weight: .medium))
-                .foregroundStyle(.secondary)
+                Text(self.statusStyle.label)
+                    .font(.fluidSystem(size: 12, weight: .medium))
+                    .foregroundStyle(.secondary)
 
-            Spacer(minLength: 8)
+                Spacer(minLength: 8)
+            }
+            .frame(maxWidth: .infinity, minHeight: 32, alignment: .leading)
+            .overlay { AgentPromptDragHandle().accessibilityHidden(true) }
 
             Button(action: { self.bridge.cancelActivePrompt() }) {
                 Image(systemName: "xmark")
@@ -191,15 +228,23 @@ private struct AgentPromptView: View {
                     self.bridge.cancelActivePrompt()
                 }
                 .fluidGlassAction()
+                .keyboardShortcut(.cancelAction)
+                .help("Cancel reply (Esc)")
 
                 Spacer()
+
+                Text(self.settings.primaryDictationShortcuts.first?.displayString ?? "Return")
+                    .font(.fluidSystem(size: 11, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
 
                 Button("Send") {
                     self.bridge.finishRecordingAndReply()
                 }
                 .fluidGlassAction(prominent: true, tone: self.settings.accentColor)
                 .disabled(self.bridge.phase != .recording)
-                .keyboardShortcut(.return)
+                .keyboardShortcut(.return, modifiers: [])
+                .help("Send reply using your dictation hotkey or Return")
             }
         }
     }
