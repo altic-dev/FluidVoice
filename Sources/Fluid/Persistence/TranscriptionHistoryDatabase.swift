@@ -220,6 +220,18 @@ final class TranscriptionHistoryWriter: @unchecked Sendable {
             try snapshot.1.write(to: file, options: .atomic)
             try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
         }
+        // The normal export only includes loaded rows. Preserve the entire shared audio folder,
+        // including files whose references are trapped in unreadable legacy data, before cleanup resumes.
+        let audioDirectory = self.url.deletingLastPathComponent().appendingPathComponent("DictationAudioHistory", isDirectory: true)
+        var hasAudioDirectory = true
+        do {
+            _ = try FileManager.default.attributesOfItem(atPath: audioDirectory.path)
+        } catch let error as CocoaError where error.code == .fileNoSuchFile || error.code == .fileReadNoSuchFile {
+            hasAudioDirectory = false
+        }
+        if hasAudioDirectory {
+            try FileManager.default.copyItem(at: audioDirectory, to: directory.appendingPathComponent("audio", isDirectory: true))
+        }
         guard snapshots.allSatisfy({ $0.0.data(forKey: self.legacyKey) == $0.1 }) else {
             throw NSError(domain: "HistoryRecovery", code: 2, userInfo: [
                 NSLocalizedDescriptionKey: "Older history changed while saving its recovery copy. Close other FluidVoice builds and try again. No history was removed.",

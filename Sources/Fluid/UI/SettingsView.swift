@@ -3403,9 +3403,9 @@ private struct LegacyHistoryRecoveryControls: View {
         let alert = NSAlert()
         alert.messageText = "Resume audio cleanup?"
         alert.informativeText = """
-        Restart FluidVoice first to import any readable older history. If this warning remains, save the unreadable history to a recovery folder and resume cleanup.
+        Restart FluidVoice first to import any readable older history. If this warning remains, save the unreadable history and all saved audio to a recovery folder and resume cleanup.
 
-        Saved transcripts stay intact. Audio linked only to unreadable history may be deleted to enforce your storage budget. Export Audio first if you want to keep every recording.
+        Saved transcripts stay intact. Cleanup may remove older audio from the app, but the recovery copy keeps every saved recording and stays outside your audio budget.
         """
         alert.alertStyle = .warning
         alert.addButton(withTitle: "Cancel")
