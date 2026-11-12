@@ -1121,7 +1121,11 @@ final class MeetingAutoDetector {
                 }
             } else {
                 audioUnknown = self.audioQueryUnknown
-                if record.windowEvidenceAt == nil, let windowLostAt = record.windowLostAt {
+                // A meeting window can disappear while the call is still active (for example,
+                // when it is minimized). Only consider that loss after observing app audio stop.
+                if record.processAudioObserved, !record.processAudioWasActive, !self.audioQueryUnknown,
+                   record.windowEvidenceAt == nil, let windowLostAt = record.windowLostAt
+                {
                     moments.append(windowLostAt.addingTimeInterval(Self.micReleaseEpisodeEndSeconds))
                 }
                 // An unknown audio query is not a release, and an app whose audio we never saw running

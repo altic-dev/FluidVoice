@@ -109,6 +109,7 @@ struct MeetingStillRecordingNudgeContent: View {
         await self.lateCallEvidenceMustBeUnambiguous()
         await self.replacementBrowserCallCancelsCountdown()
         await self.replacementCallAfterMicrophoneResumes()
+        self.nativeWindowLossRequiresStoppedAudio()
         self.targetWithdrawalCannotRearmShutdown()
         await self.detectorEvidence()
         await self.controllerActions()
@@ -457,6 +458,34 @@ struct MeetingStillRecordingNudgeContent: View {
         h.advance(MeetingAutoDetector.browserPostCallGraceSeconds + 1)
         h.detector.tick(at: h.clock.now())
         self.check(h.detector.canStopAfterEndConfirmation(sessionID: session), "Replacement call can start its own countdown after ending")
+    }
+
+    static func nativeWindowLossRequiresStoppedAudio() {
+        let h = DetectorHarness()
+        _ = h.confirmZoom()
+        let session = UUID()
+        h.gate.isIdle = false
+        h.detector.recordingStarted(sessionID: session, application: .init(bundleIdentifier: "us.zoom.xos", processID: 100, displayName: "Zoom"))
+        h.detector.handleAudioProcessActivity(true, pid: 100, at: h.clock.now())
+        h.detector.handleWindowSnapshot([], at: h.clock.now())
+        h.advance(MeetingAutoDetector.micReleaseEpisodeEndSeconds + 1)
+        h.detector.tick(at: h.clock.now())
+        self.check(!h.detector.canStopAfterEndConfirmation(sessionID: session), "A missing window cannot stop active call audio")
+        self.check(h.nudges == 0, "A missing window alone does not offer an automatic stop")
+        h.detector.handleAudioProcessActivity(false, pid: 100, at: h.clock.now())
+        h.advance(MeetingAutoDetector.endSignalGraceSeconds + 1)
+        h.detector.tick(at: h.clock.now())
+        self.check(h.detector.canStopAfterEndConfirmation(sessionID: session), "Observed audio ending still offers a countdown")
+
+        let unknown = DetectorHarness()
+        _ = unknown.confirmZoom()
+        let unknownSession = UUID()
+        unknown.gate.isIdle = false
+        unknown.detector.recordingStarted(sessionID: unknownSession, application: .init(bundleIdentifier: "us.zoom.xos", processID: 100, displayName: "Zoom"))
+        unknown.detector.handleWindowSnapshot([], at: unknown.clock.now())
+        unknown.advance(MeetingAutoDetector.micReleaseEpisodeEndSeconds + 1)
+        unknown.detector.tick(at: unknown.clock.now())
+        self.check(!unknown.detector.canStopAfterEndConfirmation(sessionID: unknownSession), "Missing audio evidence cannot authorize automatic stop")
     }
 
     static func controllerActions() async {
