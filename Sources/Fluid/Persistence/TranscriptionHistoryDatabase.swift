@@ -147,16 +147,17 @@ final class TranscriptionHistoryWriter: @unchecked Sendable {
                     self.database = database
                     // The database is shared by every build, while legacy history lives in each
                     // bundle's defaults and older versions write it again after a downgrade.
-                    var imported: Data?
-                    if let data = self.defaults.data(forKey: self.legacyKey) {
+                    var imported: [(UserDefaults, Data)] = []
+                    for source in [self.defaults] + self.otherInstallDefaults {
+                        guard let data = source.data(forKey: self.legacyKey) else { continue }
                         do {
                             let legacy = try JSONDecoder().decode([TranscriptionHistoryEntry].self, from: data)
                             try database.importLegacy(legacy.map { try self.record($0) })
-                            imported = data
-                        } catch let error as DecodingError {
+                            imported.append((source, data))
+                        } catch is DecodingError {
                             // Keep the bytes for recovery, but never let them block saved history.
                             DebugLogger.shared.warning(
-                                "Skipped unreadable legacy history (\(data.count) bytes); it was left in place: \(error)",
+                                "Skipped unreadable legacy history (\(data.count) bytes); recovery is available in Settings",
                                 source: "TranscriptionHistoryStore"
                             )
                         }
@@ -168,8 +169,8 @@ final class TranscriptionHistoryWriter: @unchecked Sendable {
                     // An older app instance may rewrite the key meanwhile, so only retire the bytes that were
                     // imported and leave newer ones for the next load. This narrows the window; it is not
                     // atomic across processes.
-                    if let imported, self.defaults.data(forKey: self.legacyKey) == imported {
-                        self.defaults.removeObject(forKey: self.legacyKey)
+                    for (source, data) in imported where source.data(forKey: self.legacyKey) == data {
+                        source.removeObject(forKey: self.legacyKey)
                     }
                     DebugLogger.shared.debug("HISTORY_BENCH loaded entries=\(entries.count) storage=sqlite", source: "TranscriptionHistoryStore")
                     continuation.resume(returning: entries)
@@ -178,6 +179,56 @@ final class TranscriptionHistoryWriter: @unchecked Sendable {
                 }
             }
         }
+    }
+
+    func pendingLegacyHistory() async -> Bool {
+        await withCheckedContinuation { continuation in
+            self.queue.async { continuation.resume(returning: self.hasUnimportedLegacyHistory) }
+        }
+    }
+
+    /// Only called after the user agrees to resume cleanup of potentially unrecoverable old audio.
+    /// Save every original byte before retiring any key; failed copies and concurrent rewrites leave keys intact.
+    func archiveUnreadableLegacyHistory() async throws -> URL {
+        try await withCheckedThrowingContinuation { continuation in
+            self.queue.async {
+                continuation.resume(with: Result { try self.archiveUnreadableLegacyHistoryOnQueue() })
+            }
+        }
+    }
+
+    private func archiveUnreadableLegacyHistoryOnQueue() throws -> URL {
+        let snapshots = ([self.defaults] + self.otherInstallDefaults).compactMap { source in
+            source.data(forKey: self.legacyKey).map { (source, $0) }
+        }
+        for (_, data) in snapshots {
+            do {
+                _ = try JSONDecoder().decode([TranscriptionHistoryEntry].self, from: data)
+                throw NSError(domain: "HistoryRecovery", code: 1, userInfo: [
+                    NSLocalizedDescriptionKey: "Older history can be imported. Restart FluidVoice before resuming audio cleanup.",
+                ])
+            } catch is DecodingError {
+                // Only unreadable data takes this explicit recovery path. Valid history is imported at startup.
+            }
+        }
+        let directory = self.url.deletingLastPathComponent()
+            .appendingPathComponent("History Recovery", isDirectory: true)
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        for (index, snapshot) in snapshots.enumerated() {
+            let file = directory.appendingPathComponent("legacy-\(index).json")
+            try snapshot.1.write(to: file, options: .atomic)
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
+        }
+        guard snapshots.allSatisfy({ $0.0.data(forKey: self.legacyKey) == $0.1 }) else {
+            throw NSError(domain: "HistoryRecovery", code: 2, userInfo: [
+                NSLocalizedDescriptionKey: "Older history changed while saving its recovery copy. Close other FluidVoice builds and try again. No history was removed.",
+            ])
+        }
+        for (source, _) in snapshots {
+            source.removeObject(forKey: self.legacyKey)
+        }
+        return directory
     }
 
     /// Audio referenced by the database, including rows another running install added after this load.
