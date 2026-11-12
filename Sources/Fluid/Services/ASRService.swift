@@ -493,6 +493,9 @@ nonisolated enum ASRHardwareListenerPolicy {
 /// Models are cached locally to avoid repeated downloads.
 @MainActor
 final class ASRService: ObservableObject {
+    #if DEBUG
+    var initialMenuBarStateDeliveredForTests = false
+    #endif
     // Below this the Transcribing status only adds a main-thread overlay re-render
     // that delays the result it is announcing; final ASR on short audio is ~40 ms.
     private static let finalTranscriptionStatusDelayNanoseconds: UInt64 = 250_000_000
