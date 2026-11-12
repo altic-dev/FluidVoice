@@ -107,6 +107,8 @@ struct MeetingStillRecordingNudgeContent: View {
         self.systemAudioEndWatch()
         await self.callJoinedAfterRecordingStarts()
         await self.lateCallEvidenceMustBeUnambiguous()
+        await self.replacementBrowserCallCancelsCountdown()
+        await self.replacementCallAfterMicrophoneResumes()
         self.targetWithdrawalCannotRearmShutdown()
         await self.detectorEvidence()
         await self.controllerActions()
@@ -393,6 +395,68 @@ struct MeetingStillRecordingNudgeContent: View {
             self.check(h.withdrawals == 1, "Positive rejoin immediately cancels countdown")
             self.check(!h.detector.canStopAfterEndConfirmation(sessionID: session), "Old microphone-release evidence cannot stop a rejoined call")
         }
+    }
+
+    static func replacementBrowserCallCancelsCountdown() async {
+        let h = DetectorHarness()
+        _ = h.confirmChromeMeet()
+        let session = UUID()
+        h.gate.isIdle = false
+        h.detector.recordingStarted(sessionID: session, application: .init(bundleIdentifier: "com.google.Chrome", processID: 8, displayName: "Chrome"))
+        func report(_ state: MeetingBrowserCallState, path: String, pid: Int32 = 8) {
+            h.detector.handleBrowserTabURL(.init(host: "meet.google.com", path: path, callState: state), pid: pid, bundleIdentifier: "com.google.Chrome", at: h.clock.now())
+        }
+        await h.pollChrome(microphoneInUse: true)
+        await h.pollChrome(microphoneInUse: false)
+        report(.ended, path: "/abc-defg-hij")
+        h.advance(MeetingAutoDetector.browserPostCallGraceSeconds + 1)
+        h.detector.tick(at: h.clock.now())
+        self.check(h.detector.canStopAfterEndConfirmation(sessionID: session), "Call A's positive end offers the countdown")
+        report(.unknown, path: "/xyz-abcd-uvw")
+        self.check(h.detector.canStopAfterEndConfirmation(sessionID: session), "Opening another meeting URL alone does not prove a joined call")
+        report(.inCall, path: "/xyz-abcd-uvw", pid: 99)
+        self.check(h.detector.canStopAfterEndConfirmation(sessionID: session), "Another browser process cannot change an exact-process recording's watch")
+        report(.inCall, path: "/xyz-abcd-uvw")
+        self.check(h.withdrawals == 1 && !h.detector.canStopAfterEndConfirmation(sessionID: session), "Joining call B cancels A's countdown immediately")
+        report(.ended, path: "/abc-defg-hij")
+        h.advance(60)
+        self.check(!h.detector.canStopAfterEndConfirmation(sessionID: session), "A's old post-call tab and release time cannot stop call B")
+        report(.inCall, path: "/xyz-abcd-uvw")
+        self.check(h.withdrawals == 1 && h.prompts.count == 1, "Repeated connected evidence neither rewithdraws nor starts another recording")
+        report(.ended, path: "/xyz-abcd-uvw")
+        self.check(!h.detector.canStopAfterEndConfirmation(sessionID: session), "Call B starts with fresh end evidence")
+        h.advance(MeetingAutoDetector.browserPostCallGraceSeconds + 1)
+        h.detector.tick(at: h.clock.now())
+        self.check(h.detector.canStopAfterEndConfirmation(sessionID: session) && h.nudges == 2, "Call B can offer its own new countdown after ending")
+    }
+
+    static func replacementCallAfterMicrophoneResumes() async {
+        let h = DetectorHarness()
+        _ = h.confirmChromeMeet()
+        let session = UUID()
+        h.gate.isIdle = false
+        h.detector.recordingStarted(sessionID: session, application: .init(bundleIdentifier: "com.google.Chrome", processID: 8, displayName: "Chrome"))
+        func report(_ state: MeetingBrowserCallState, path: String, pid: Int32 = 8) {
+            h.detector.handleBrowserTabURL(.init(host: "meet.google.com", path: path, callState: state), pid: pid, bundleIdentifier: "com.google.Chrome", at: h.clock.now())
+        }
+        await h.pollChrome(microphoneInUse: true)
+        await h.pollChrome(microphoneInUse: false)
+        h.advance(MeetingAutoDetector.endSignalGraceSeconds + 1)
+        h.detector.tick(at: h.clock.now())
+        self.check(h.detector.canStopAfterEndConfirmation(sessionID: session), "Microphone release offers a countdown")
+        await h.pollChrome(microphoneInUse: true)
+        await h.pollChrome(microphoneInUse: true, readable: false)
+        report(.unknown, path: "/xyz-abcd-uvw")
+        report(.inCall, path: "/xyz-abcd-uvw", pid: 99)
+        report(.inCall, path: "/xyz-abcd-uvw")
+        report(.ended, path: "/abc-defg-hij")
+        h.advance(MeetingAutoDetector.browserPostCallGraceSeconds + 1)
+        h.detector.tick(at: h.clock.now())
+        self.check(!h.detector.canStopAfterEndConfirmation(sessionID: session), "Old call cannot stop the replacement when microphone resumes first")
+        report(.ended, path: "/xyz-abcd-uvw")
+        h.advance(MeetingAutoDetector.browserPostCallGraceSeconds + 1)
+        h.detector.tick(at: h.clock.now())
+        self.check(h.detector.canStopAfterEndConfirmation(sessionID: session), "Replacement call can start its own countdown after ending")
     }
 
     static func controllerActions() async {

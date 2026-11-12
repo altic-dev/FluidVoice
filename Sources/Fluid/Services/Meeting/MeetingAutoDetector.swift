@@ -124,6 +124,8 @@ final class MeetingAutoDetector {
         var appGoneAt: Date?
         /// Browser meetings only: when the browser was first seen without the microphone.
         var browserMicReleasedAt: Date?
+        /// Keep a confirmed resume until the connected browser tab can be identified.
+        var browserMicResumedAfterRelease = false
         var browserMicUnknown = false
         var browserCallEvidenceKey: String?
         var browserCallEndedAt: Date?
@@ -485,9 +487,11 @@ final class MeetingAutoDetector {
         case true?:
             watched.browserMicUnknown = false
             watched.sawProcessAudio = true
+            if watched.browserMicReleasedAt != nil { watched.browserMicResumedAfterRelease = true }
             watched.browserMicReleasedAt = nil
         case false?:
             watched.browserMicUnknown = false
+            watched.browserMicResumedAfterRelease = false
             if watched.sawProcessAudio, watched.browserMicReleasedAt == nil { watched.browserMicReleasedAt = now }
         case nil:
             // Not readable is not a release. The quiet has to be seen again from the start.
@@ -698,7 +702,12 @@ final class MeetingAutoDetector {
               watched.pid == pid, watched.bundleIdentifier == bundleIdentifier, self.isStillRunning(watched)
         else { return }
         let key = "url:\(url.host)\(url.path)"
-        if watched.browserCallEvidenceKey == nil, url.callState == .inCall { watched.browserCallEvidenceKey = key }
+        let joinedReplacementCall = url.callState == .inCall && watched.browserCallEvidenceKey != key
+        if url.callState == .inCall,
+           watched.browserCallEvidenceKey == nil || watched.browserCallEndedAt != nil || watched.browserMicReleasedAt != nil || watched.browserMicResumedAfterRelease
+        {
+            watched.browserCallEvidenceKey = key
+        }
         guard watched.browserCallEvidenceKey == key else { return }
         var shouldWithdraw = false
         switch url.callState {
@@ -708,8 +717,10 @@ final class MeetingAutoDetector {
                 DebugLogger.shared.log("browser-call-state=ended evidence=post-call-page bundle=\(bundleIdentifier)", source: "MeetingAutoDetector")
             }
         case .inCall:
-            if watched.browserCallEndedAt != nil {
-                // A positive rejoin overrides the previous call's microphone-release edge.
+            watched.browserMicResumedAfterRelease = false
+            if watched.browserCallEndedAt != nil || joinedReplacementCall {
+                // A rejoin or connected replacement call invalidates the previous call's
+                // countdown and microphone-release edge. Its old post-call tab cannot rearm it.
                 watched.browserMicReleasedAt = nil
                 shouldWithdraw = watched.asked && !watched.silenced
                 watched.asked = false

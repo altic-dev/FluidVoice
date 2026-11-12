@@ -2351,7 +2351,7 @@ final class MeetingBrowserPostCallTests: XCTestCase {
         self.report(h, state: .ended)
         self.report(h)
         h.detector.handleBrowserTabURL(nil, pid: self.safariPID, bundleIdentifier: "com.apple.Safari", at: h.clock.now())
-        self.report(h, state: .inCall, path: "/xyz-abcd-uvw")
+        self.report(h, state: .unknown, path: "/xyz-abcd-uvw")
         h.advance(1.1)
         h.detector.tick(at: h.clock.now())
         XCTAssertEqual(h.nudges, 1)
