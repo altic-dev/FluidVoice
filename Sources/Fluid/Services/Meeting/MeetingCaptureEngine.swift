@@ -97,9 +97,10 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
 
         let runtime: any MeetingCaptureRuntime
         switch configuration.mode {
-        case .onlineCall:
-            guard let application = configuration.application,
-                  let applicationWriter = writersByKind[.applicationAudio],
+        case .onlineCall, .systemAudio:
+            let application = configuration.application
+            guard configuration.mode == .systemAudio || application != nil else { throw MeetingCaptureError.applicationNotSelected }
+            guard let applicationWriter = writersByKind[.applicationAudio],
                   let microphoneWriter = writersByKind[.microphone]
             else { throw MeetingCaptureError.applicationNotSelected }
 
@@ -335,12 +336,13 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
         configuration: MeetingCaptureConfiguration
     ) -> [MeetingAudioTrack] {
         var tracks: [MeetingAudioTrack] = []
-        if let application = configuration.application {
+        if configuration.mode.capturesComputerAudio {
+            let application = configuration.application
             tracks.append(MeetingAudioTrack(
                 id: UUID(),
                 kind: .applicationAudio,
-                sourceIdentifier: application.bundleIdentifier,
-                sourceDisplayName: application.displayName,
+                sourceIdentifier: application?.bundleIdentifier ?? "system-audio",
+                sourceDisplayName: application?.displayName ?? "Computer audio",
                 format: nil,
                 timebase: session.timebase,
                 health: .waiting,
@@ -357,7 +359,7 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
             timebase: session.timebase,
             health: .waiting,
             chunks: [],
-            captureMethod: configuration.mode == .onlineCall ? .screenCaptureKit : .avCaptureSession
+            captureMethod: configuration.mode.capturesComputerAudio ? .screenCaptureKit : .avCaptureSession
         ))
         return tracks
     }
@@ -609,7 +611,7 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
     /// Delays before each of the (up to 3) rebuild attempts following an unexpected stream stop.
     private static let rebuildDelays: [TimeInterval] = [0.5, 1.0, 2.0]
 
-    private let application: MeetingApplicationIdentity
+    private let application: MeetingApplicationIdentity?
     private let requestedMicrophone: MeetingMicrophoneIdentity
     /// Immutable for the runtime's lifetime: a rebuild never drops/adds the mic.
     private let includeMicrophone: Bool
@@ -672,7 +674,7 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
     private init(
         stream: SCStream,
         scope: MeetingCaptureScope,
-        application: MeetingApplicationIdentity,
+        application: MeetingApplicationIdentity?,
         requestedMicrophone: MeetingMicrophoneIdentity,
         activeMicrophone: MeetingMicrophoneIdentity,
         includeMicrophone: Bool,
@@ -705,7 +707,7 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
     }
 
     static func make(
-        application: MeetingApplicationIdentity,
+        application: MeetingApplicationIdentity?,
         microphone: MeetingMicrophoneIdentity,
         includeMicrophone: Bool = true,
         comparisonProbe: MeetingAudioComparisonProbe? = nil,
@@ -757,7 +759,7 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
     /// Resolves the shareable content, filter, configuration and stream. Re-invoked both for the
     /// initial `make` and for every rebuild attempt after an unexpected stream stop.
     private static func buildStream(
-        application: MeetingApplicationIdentity,
+        application: MeetingApplicationIdentity?,
         microphone: MeetingMicrophoneIdentity,
         includeMicrophone: Bool,
         allowApplicationRelaunch: Bool = false
@@ -768,36 +770,51 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
         } catch {
             throw MeetingCaptureError.screenCapturePermissionDenied(error.localizedDescription)
         }
-        let candidates = content.applications.map {
-            MeetingApplicationIdentity(bundleIdentifier: $0.bundleIdentifier, processID: $0.processID, displayName: $0.applicationName)
-        }
-        var requested = application
-        // Only an already-running recording may recover after the app relaunches.
-        // Initial capture must use exactly the process the user confirmed.
-        if allowApplicationRelaunch, !candidates.contains(where: { $0.processID == application.processID && $0.bundleIdentifier == application.bundleIdentifier }) {
-            requested.processID = nil
-        }
-        let resolved = try MeetingRecordingSourceResolver.resolve(
-            mode: .onlineCall, source: MeetingRecordingSource(application: requested), target: nil, applications: candidates
-        )
-        guard let runningApplication = content.applications.first(where: { $0.processID == resolved?.processID }) else {
-            throw MeetingCaptureError.applicationUnavailable(application.displayName)
-        }
-
         let filter: SCContentFilter
         let scope: MeetingCaptureScope
-        if let window = Self.selectWindow(for: runningApplication, in: content, preferredWindowID: application.windowID) {
-            filter = SCContentFilter(desktopIndependentWindow: window)
-            scope = .window
+        if let application, application.capturesAllInstances == true {
+            let matching = content.applications.filter { $0.bundleIdentifier == application.bundleIdentifier && $0.processID > 0 }
+            guard !matching.isEmpty else { throw MeetingCaptureError.applicationUnavailable(application.displayName) }
+            guard let display = content.displays.first else { throw MeetingCaptureError.noCaptureDisplay }
+            filter = SCContentFilter(display: display, including: matching, exceptingWindows: [])
+            scope = .display
+        } else if let application {
+            let candidates = content.applications.map {
+                MeetingApplicationIdentity(bundleIdentifier: $0.bundleIdentifier, processID: $0.processID, displayName: $0.applicationName)
+            }
+            var requested = application
+            // Only recovery may follow a relaunched app, and the resolver still requires one
+            // unambiguous replacement. Initial capture must keep the confirmed process.
+            if allowApplicationRelaunch, !candidates.contains(where: {
+                $0.processID == application.processID && $0.bundleIdentifier == application.bundleIdentifier
+            }) {
+                requested.processID = nil
+                requested.windowID = nil
+                requested.displayID = nil
+            }
+            let resolved = try MeetingRecordingSourceResolver.resolve(
+                mode: .onlineCall, source: MeetingRecordingSource(application: requested), target: nil, applications: candidates
+            )
+            guard let runningApplication = content.applications.first(where: { $0.processID == resolved?.processID }) else {
+                throw MeetingCaptureError.applicationUnavailable(application.displayName)
+            }
+
+            if let window = Self.selectWindow(for: runningApplication, in: content, preferredWindowID: requested.windowID) {
+                filter = SCContentFilter(desktopIndependentWindow: window)
+                scope = .window
+            } else {
+                let display = requested.displayID.flatMap { displayID in
+                    content.displays.first(where: { $0.displayID == displayID })
+                } ?? content.displays.first
+                guard let display else { throw MeetingCaptureError.noCaptureDisplay }
+                filter = SCContentFilter(display: display, including: [runningApplication], exceptingWindows: [])
+                scope = .display
+            }
         } else {
-            let display = application.displayID.flatMap { displayID in
-                content.displays.first(where: { $0.displayID == displayID })
-            } ?? content.displays.first
-            guard let display else { throw MeetingCaptureError.noCaptureDisplay }
-            filter = SCContentFilter(display: display, including: [runningApplication], exceptingWindows: [])
+            guard let display = content.displays.first else { throw MeetingCaptureError.noCaptureDisplay }
+            filter = SCContentFilter(display: display, excludingApplications: [], exceptingWindows: [])
             scope = .display
         }
-
         let configuration = SCStreamConfiguration()
         configuration.width = 2
         configuration.height = 2
@@ -2608,13 +2625,16 @@ nonisolated enum MeetingCaptureSourceCatalog {
     static func resolveApplication(
         from applications: [MeetingApplicationIdentity],
         preferredBundleIdentifier: String?,
+        preferredProcessID: Int32? = nil,
         requirePreferredApplication: Bool
     ) throws -> MeetingApplicationIdentity {
         if requirePreferredApplication {
             guard let preferredBundleIdentifier else {
                 throw MeetingCaptureError.applicationNotSelected
             }
-            guard let match = applications.first(where: { $0.bundleIdentifier == preferredBundleIdentifier }) else {
+            guard let match = applications.first(where: {
+                $0.bundleIdentifier == preferredBundleIdentifier && (preferredProcessID == nil || $0.processID == preferredProcessID)
+            }) else {
                 throw MeetingCaptureError.applicationUnavailable(preferredBundleIdentifier)
             }
             return match
@@ -3152,7 +3172,7 @@ nonisolated enum MeetingCapturePathDecider {
         forcePairedScreenCaptureKit: Bool = false,
         preferDirectAEC3: Bool = false
     ) -> MeetingCapturePathDecision {
-        guard mode == .onlineCall else {
+        guard mode.capturesComputerAudio else {
             return .screenCaptureKit(reason: "Voice-processing capture only applies to online-call recordings.")
         }
         guard let coreAudioUID = microphone.coreAudioUID, !coreAudioUID.isEmpty else {
@@ -4074,7 +4094,7 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
         case failed(String)
     }
 
-    private let application: MeetingApplicationIdentity
+    private let application: MeetingApplicationIdentity?
     private let originalMicrophone: MeetingMicrophoneIdentity
     private let applicationWriter: MeetingAudioChunkWriter
     private let microphoneWriter: MeetingAudioChunkWriter
@@ -4117,7 +4137,7 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
     }
 
     private init(
-        application: MeetingApplicationIdentity,
+        application: MeetingApplicationIdentity?,
         microphone: MeetingMicrophoneIdentity,
         applicationWriter: MeetingAudioChunkWriter,
         microphoneWriter: MeetingAudioChunkWriter,
@@ -4139,7 +4159,7 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
     #endif
 
     static func make(
-        application: MeetingApplicationIdentity,
+        application: MeetingApplicationIdentity?,
         microphone: MeetingMicrophoneIdentity,
         applicationWriter: MeetingAudioChunkWriter,
         microphoneWriter: MeetingAudioChunkWriter,

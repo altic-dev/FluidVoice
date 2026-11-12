@@ -383,7 +383,7 @@ final class MeetingMenuBarStartTests: XCTestCase {
         let windows = NSApp.windows.count
         MeetingFloatingCaptionsController.shared.show(from: nil)
         MeetingRecordingPillController.shared.expand()
-        MeetingStillRecordingNudgeController.shared.present()
+        MeetingStillRecordingNudgeController.shared.present(sessionID: UUID())
         MeetingDetectionPromptController.shared.present(.init(
             episodeID: UUID(), bundleIdentifier: "us.zoom.xos", pid: 42, tier: .nativeTier1
         ))
@@ -827,19 +827,29 @@ final class MeetingPageActionAvailabilityTests: XCTestCase {
 
 @MainActor
 extension MeetingMenuBarStartTests {
+    func testAutomaticCapturesComputerAudioWithoutARecognizedCall() throws {
+        let config = try self.savedSourceConfiguration(defaults: .unconfigured, applications: [])
+        XCTAssertEqual(config.mode, .systemAudio)
+        XCTAssertNil(config.application)
+        XCTAssertEqual(config.microphone.captureDeviceID, "mic")
+    }
+
     func testSavedOnlineApplicationIsUsedWithoutAutomaticDetection() throws {
         var defaults = MeetingRecordingDefaults.unconfigured
+        defaults.mode = .onlineCall
         defaults.isConfigured = true
         defaults.applicationBundleIdentifier = "us.zoom.xos"
         let app = MeetingApplicationIdentity(bundleIdentifier: "us.zoom.xos", processID: 42, displayName: "Zoom")
         let config = try self.savedSourceConfiguration(defaults: defaults, applications: [app])
         XCTAssertEqual(config.mode, .onlineCall)
-        XCTAssertEqual(config.application, app)
+        XCTAssertEqual(config.application?.bundleIdentifier, app.bundleIdentifier)
+        XCTAssertEqual(config.application?.capturesAllInstances, true)
         XCTAssertEqual(config.platform?.identifier, app.bundleIdentifier)
     }
 
     func testUnavailableSavedApplicationCannotSilentlyBecomeMicrophoneOnly() {
         var defaults = MeetingRecordingDefaults.unconfigured
+        defaults.mode = .onlineCall
         defaults.isConfigured = true
         defaults.applicationBundleIdentifier = "us.zoom.xos"
         XCTAssertThrowsError(try self.savedSourceConfiguration(defaults: defaults, applications: [

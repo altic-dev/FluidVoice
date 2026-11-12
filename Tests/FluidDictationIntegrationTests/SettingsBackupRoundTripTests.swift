@@ -51,12 +51,33 @@ final class SettingsBackupRoundTripTests: XCTestCase {
             let meeting = self.meetingDefaults()
             let configurations = self.configurations(profileID: profile.id)
             settings.meetingRecordingDefaults = meeting
+            let recentApplication = MeetingApplicationIdentity(bundleIdentifier: "fixture.recent", processID: 55, displayName: "Recent")
+            settings.meetingRecentApplication = recentApplication
             settings.privateAIIdleUnload = .thirtyMinutes
             settings.dictationPromptConfigurations = configurations
             settings.restore(from: payload, promptProfiles: [profile], appPromptBindings: [])
             XCTAssertEqual(settings.meetingRecordingDefaults, meeting)
+            XCTAssertEqual(settings.meetingRecentApplication, recentApplication)
             XCTAssertEqual(settings.privateAIIdleUnload, .thirtyMinutes)
             XCTAssertEqual(settings.dictationPromptConfigurations, configurations)
+        }
+    }
+
+    func testRestoredMeetingSourceSupersedesPreviousAppChoice() throws {
+        try self.withSavedDefaults {
+            let settings = SettingsStore.shared
+            var meeting = self.meetingDefaults()
+            meeting.mode = .onlineCall
+            settings.meetingRecordingDefaults = meeting
+            let payload = settings.makeBackupPayload()
+            settings.meetingRecentApplication = MeetingApplicationIdentity(bundleIdentifier: "fixture.stale", processID: 55, displayName: "Old app")
+            settings.restore(from: payload)
+            XCTAssertNil(settings.meetingRecentApplication)
+            XCTAssertEqual(settings.meetingRecordingDefaults, meeting)
+            let effective = settings.meetingRecordingDefaults.preferringLastPickedApplication(settings.meetingRecentApplication)
+            XCTAssertEqual(effective.applicationBundleIdentifier, meeting.applicationBundleIdentifier)
+            XCTAssertEqual(effective.microphoneCaptureDeviceID, meeting.microphoneCaptureDeviceID)
+            XCTAssertEqual(effective.languageCode, meeting.languageCode)
         }
     }
 

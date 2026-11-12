@@ -97,6 +97,10 @@ run_check history-decode sh Tests/run_history_decode_recovery_tests.sh
 run_check dictionary-correction-timing python3 Tests/run_dictionary_correction_timing_tests.py
 run_check settings-backup python3 Tests/run_settings_backup_concurrency_tests.py
 run_check meeting-backup python3 Tests/run_meeting_backup_refresh_tests.py
+run_check meeting-end-countdown python3 Tests/run_meeting_end_countdown_tests.py
+run_check meeting-picker python3 Tests/run_meeting_picker_tests.py
+run_check meeting-model-policy python3 Tests/run_meeting_model_policy_tests.py
+run_check meeting-computer-audio python3 Tests/run_meeting_computer_audio_tests.py
 
 task_phase="Xcode build and tests"
 task_build_args=(test -project Fluid.xcodeproj -scheme Fluid

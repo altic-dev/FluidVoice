@@ -16,12 +16,19 @@ nonisolated struct MeetingBackendID: RawRepresentable, Hashable, Codable, Sendab
     /// Compatibility/rollback backend for sessions that explicitly select the pre-composite path.
     static let legacyCompatibility = MeetingBackendID(rawValue: "legacy-compatibility-v1")
 
-    /// Local Parakeet TDT v2 ASR + Nemotron-3 diarization composite.
+    /// Pro/v3 ASR + Nemotron-3 diarization. Keep the historical identifier so saved
+    /// attempts remain readable; the request records the actual speech model.
     static let parakeetNemotron = MeetingBackendID(rawValue: "local-parakeet-tdt-v2-nemotron-3-v1")
 
     /// Single source of truth for new meeting-processing attempts. Keep explicit stored selections
     /// untouched; this value applies only when no preference has been recorded.
     static let productionDefault: MeetingBackendID = .parakeetNemotron
+
+    /// New attempts use the current model policy, even when an old rollback setting
+    /// is restored from backup. Historical attempts and the saved preference are untouched.
+    var forNewMeetingAttempt: Self {
+        self == .legacyCompatibility ? .productionDefault : self
+    }
 
     var description: String {
         self.rawValue

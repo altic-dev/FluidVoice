@@ -1027,6 +1027,8 @@ final class MeetingAutoDetectorTests: XCTestCase {
         XCTAssertFalse(h.detector.canStart(episodeID: timedOut))
         h.detector.adoptStartedEpisode(episodeID: timedOut)
 
+        h.detector.handleAudioProcessActivity(true, pid: 3, at: h.clock.now())
+        h.detector.handleAudioProcessActivity(false, pid: 3, at: h.clock.now())
         h.detector.handleWindowSnapshot([], at: h.clock.now())
         h.advance(65)
         h.detector.tick(at: h.clock.now())
@@ -1289,11 +1291,13 @@ final class MeetingAutoDetectorTests: XCTestCase {
 
     // MARK: - Still-recording nudge
 
-    func testStillRecordingNudgeFiresOnceAfterWindowGoneSixtySeconds() throws {
+    func testStillRecordingNudgeFiresOnceAfterWindowAndAudioEnd() throws {
         let h = DetectorHarness()
         let episodeID = try XCTUnwrap(h.confirmZoom())
         XCTAssertTrue(h.detector.startTapped(episodeID: episodeID))
 
+        h.detector.handleAudioProcessActivity(true, pid: 100, at: h.clock.now())
+        h.detector.handleAudioProcessActivity(false, pid: 100, at: h.clock.now())
         h.detector.handleWindowSnapshot([], at: h.clock.now())
         h.advance(65)
         h.detector.tick(at: h.clock.now())
@@ -1458,16 +1462,19 @@ final class MeetingAutoDetectorTests: XCTestCase {
         XCTAssertEqual(h.nudges, 2)
     }
 
-    func testAZoomWindowComingBackTakesTheQuestionBack() throws {
+    func testAZoomCallComingBackTakesTheQuestionBack() throws {
         let h = DetectorHarness()
         let episodeID = try XCTUnwrap(h.confirmZoom())
         XCTAssertTrue(h.detector.startTapped(episodeID: episodeID))
+        h.detector.handleAudioProcessActivity(true, pid: 100, at: h.clock.now())
+        h.detector.handleAudioProcessActivity(false, pid: 100, at: h.clock.now())
         h.detector.handleWindowSnapshot([], at: h.clock.now())
         h.advance(65)
         h.detector.tick(at: h.clock.now())
         XCTAssertEqual(h.nudges, 1)
 
         h.detector.handleWindowSnapshot([.init(processID: 100, windowID: 900, title: "Zoom Meeting", layer: 0)], at: h.clock.now())
+        h.detector.handleAudioProcessActivity(true, pid: 100, at: h.clock.now())
         h.detector.tick(at: h.clock.now())
         XCTAssertEqual(h.withdrawals, 1)
     }
@@ -1494,12 +1501,12 @@ final class MeetingAutoDetectorTests: XCTestCase {
         XCTAssertEqual(h.nudges, 2)
     }
 
-    func testAnUnreadableAudioQueryDoesNotTakeTheQuestionBack() async throws {
+    func testAnUnreadableAudioQueryWithdrawsTheAutomaticStop() async throws {
         let h = try self.teamsRecordingThatAsked()
         h.audioProcessActivity.snapshotOverride = AudioProcessActivitySnapshot(processes: [], owners: [], queryState: .unknown)
         await h.detector.pollAudioProcessActivity(at: h.clock.now())
         h.detector.tick(at: h.clock.now())
-        XCTAssertEqual(h.withdrawals, 0)
+        XCTAssertEqual(h.withdrawals, 1)
     }
 
     func testAQuitAppIsNotBroughtBackByAnotherAppWithItsProcessID() throws {
@@ -1519,12 +1526,12 @@ final class MeetingAutoDetectorTests: XCTestCase {
         XCTAssertEqual(h.nudges, 1)
     }
 
-    func testScreenLockLeavesAQuestionAlreadyAskedOnScreen() throws {
+    func testScreenLockWithdrawsTheAutomaticStop() throws {
         let h = try self.teamsRecordingThatAsked()
         h.detector.disarmAndClearTransientState()
         h.advance(120)
         h.detector.tick(at: h.clock.now())
-        XCTAssertEqual(h.withdrawals, 0)
+        XCTAssertEqual(h.withdrawals, 1)
         XCTAssertEqual(h.nudges, 1)
     }
 
@@ -1546,17 +1553,17 @@ final class MeetingAutoDetectorTests: XCTestCase {
         XCTAssertEqual(unknownScreen.midX, 46)
     }
 
-    func testADismissedQuestionTellsTheDetectorAndStopDoesNot() {
+    func testHidingOrDismissingAnInactiveQuestionHasNoEffects() {
         let controller = MeetingStillRecordingNudgeController.shared
         let earlierDismiss = controller.onDismiss
         defer { controller.onDismiss = earlierDismiss }
         var dismissals = 0
-        controller.onDismiss = { dismissals += 1 }
+        controller.onDismiss = { _ in dismissals += 1 }
 
         controller.hide()
         XCTAssertEqual(dismissals, 0, "taking the question down is not the user closing it")
         controller.dismiss()
-        XCTAssertEqual(dismissals, 1)
+        XCTAssertEqual(dismissals, 0, "a stale dismissal must not silence a later recording")
         XCTAssertFalse(controller.isPresented)
     }
 
@@ -1617,7 +1624,7 @@ final class MeetingAutoDetectorTests: XCTestCase {
         XCTAssertEqual(h.nudges, 0)
     }
 
-    func testAnUnreadableMicrophoneQueryNeitherAsksNorTakesTheQuestionBackForAWebMeeting() async throws {
+    func testAnUnreadableMicrophoneQueryCancelsAutomaticStopForAWebMeeting() async throws {
         let h = DetectorHarness()
         let episodeID = try XCTUnwrap(h.confirmChromeMeet())
         XCTAssertTrue(h.detector.startTapped(episodeID: episodeID))
@@ -1638,7 +1645,7 @@ final class MeetingAutoDetectorTests: XCTestCase {
 
         await h.pollChrome(microphoneInUse: false, readable: false)
         h.detector.tick(at: h.clock.now())
-        XCTAssertEqual(h.withdrawals, 0)
+        XCTAssertEqual(h.withdrawals, 1, "An unreadable source cannot authorize automatic stop")
     }
 
     func testQuittingTheBrowserStillAsks() async throws {
@@ -2351,7 +2358,7 @@ final class MeetingBrowserPostCallTests: XCTestCase {
         self.report(h, state: .ended)
         self.report(h)
         h.detector.handleBrowserTabURL(nil, pid: self.safariPID, bundleIdentifier: "com.apple.Safari", at: h.clock.now())
-        self.report(h, state: .inCall, path: "/xyz-abcd-uvw")
+        self.report(h, state: .unknown, path: "/xyz-abcd-uvw")
         h.advance(1.1)
         h.detector.tick(at: h.clock.now())
         XCTAssertEqual(h.nudges, 1)

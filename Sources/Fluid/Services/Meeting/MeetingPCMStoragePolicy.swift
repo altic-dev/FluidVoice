@@ -14,7 +14,7 @@ nonisolated enum MeetingPCMStoragePolicy {
     static let stagingHeadroomBytes: Int64 = 512 * 1024 * 1024
 
     static func trackCount(for mode: MeetingCaptureMode) -> Int {
-        mode == .onlineCall ? 2 : 1
+        mode.capturesComputerAudio ? 2 : 1
     }
 
     /// Worst-case PCM bytes per second for the capture topology.

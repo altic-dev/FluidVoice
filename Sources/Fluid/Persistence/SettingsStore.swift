@@ -2080,7 +2080,40 @@ final class SettingsStore: ObservableObject {
             guard let data = try? JSONEncoder().encode(newValue) else {
                 return
             }
+            let oldValue = self.meetingRecordingDefaults
             self.defaults.set(data, forKey: Keys.meetingRecordingDefaults)
+            if oldValue.mode != newValue.mode || oldValue.applicationBundleIdentifier != newValue.applicationBundleIdentifier {
+                NotificationCenter.default.post(name: .meetingRecordingSourceChoiceDidChange, object: nil)
+            }
+        }
+    }
+
+    /// Publish a source choice only after both preferences agree. Observers may synchronously
+    /// refresh a bound picker, so notifying between these writes can overwrite the user's choice.
+    func saveMeetingRecordingSource(_ configuration: MeetingRecordingDefaults, recentApplication: MeetingApplicationIdentity?) {
+        var application = recentApplication
+        application?.windowID = nil
+        application?.displayID = nil
+        guard let configurationData = try? JSONEncoder().encode(configuration) else { return }
+        let applicationData: Data?
+        if let application {
+            guard let data = try? JSONEncoder().encode(application) else { return }
+            applicationData = data
+        } else {
+            applicationData = nil
+        }
+        let previous = self.meetingRecordingDefaults
+        let sourceChanged = previous.mode != configuration.mode
+            || previous.applicationBundleIdentifier != configuration.applicationBundleIdentifier
+            || self.meetingRecentApplication != application
+        self.defaults.set(configurationData, forKey: Keys.meetingRecordingDefaults)
+        if let applicationData {
+            self.defaults.set(applicationData, forKey: Keys.meetingRecentApplication)
+        } else {
+            self.defaults.removeObject(forKey: Keys.meetingRecentApplication)
+        }
+        if sourceChanged {
+            NotificationCenter.default.post(name: .meetingRecordingSourceChoiceDidChange, object: nil)
         }
     }
 
@@ -2092,13 +2125,17 @@ final class SettingsStore: ObservableObject {
         }
         set {
             guard var application = newValue else {
+                guard self.defaults.object(forKey: Keys.meetingRecentApplication) != nil else { return }
                 self.defaults.removeObject(forKey: Keys.meetingRecentApplication)
+                NotificationCenter.default.post(name: .meetingRecordingSourceChoiceDidChange, object: nil)
                 return
             }
             application.windowID = nil
             application.displayID = nil
-            guard let data = try? JSONEncoder().encode(application) else { return }
+            guard application != self.meetingRecentApplication,
+                  let data = try? JSONEncoder().encode(application) else { return }
             self.defaults.set(data, forKey: Keys.meetingRecentApplication)
+            NotificationCenter.default.post(name: .meetingRecordingSourceChoiceDidChange, object: nil)
         }
     }
 
@@ -3898,7 +3935,9 @@ final class SettingsStore: ObservableObject {
             MeetingBackendID(rawValue: $0)
         } ?? .productionDefault
         if let meetingRecordingDefaults = payload.meetingRecordingDefaults {
-            self.meetingRecordingDefaults = meetingRecordingDefaults
+            // The restored source supersedes this Mac's previous pick. Backups do not contain
+            // process identities, so the restored app will be resolved afresh at recording start.
+            self.saveMeetingRecordingSource(meetingRecordingDefaults, recentApplication: nil)
         }
         self.primaryDictationShortcuts = payload.primaryDictationShortcuts ?? [payload.hotkeyShortcut]
         self.promptModeHotkeyShortcut = payload.promptModeHotkeyShortcut

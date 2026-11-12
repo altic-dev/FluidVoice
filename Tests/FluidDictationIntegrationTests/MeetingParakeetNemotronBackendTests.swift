@@ -642,7 +642,7 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
         session.languageCode = "de"
         let runtime = FakeRuntime()
         let backend = self.makeBackend(runtime: runtime)
-        let configuration = MeetingFinalProcessingConfiguration(languageCode: "de")
+        let configuration = MeetingFinalProcessingConfiguration(preferredASRModel: .parakeetTDT, languageCode: "de")
         let request = try self.makeRequest(session: session, directory: self.makeTempSessionDirectory(), configuration: configuration)
         let plan = try backend.plan(request)
         let manifest = try self.makeManifest(plan: plan, observations: fixture.observations)
@@ -790,7 +790,7 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
                 spy.requests.append(request)
                 return runtime
             },
-            preferredASRModelProvider: { .parakeetTDTv2 }
+            preferredASRModelProvider: { .fluidParakeetPro }
         )
         runtime.asrSession.responses = [
             .init(text: "", words: []), .init(text: "", words: []), .init(text: "", words: []),

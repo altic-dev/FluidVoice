@@ -104,7 +104,7 @@ final nonisolated class MeetingLiveTranscriptionCoordinator: @unchecked Sendable
         self.stateLock.withLock { self.microphoneEngine = microphone }
         self.launch(microphone)
 
-        if mode == .onlineCall {
+        if mode.capturesComputerAudio {
             let application = MeetingLiveTrackEngine(kind: .applicationAudio)
             self.stateLock.withLock { self.applicationEngine = application }
             self.launch(application)

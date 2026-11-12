@@ -53,3 +53,25 @@ nonisolated enum MeetingInstalledCallApplications {
         }.value
     }
 }
+
+/// Created off the main thread, then shared read-only for one source snapshot.
+/// NSImage is never mutated after publication.
+nonisolated struct MeetingApplicationIcon: @unchecked Sendable, Equatable {
+    let image: NSImage
+
+    static func == (lhs: Self, rhs: Self) -> Bool { lhs.image === rhs.image }
+
+    static func snapshot(bundleIdentifiers: [String]) async -> [String: Self] {
+        await Task.detached(priority: .utility) {
+            var icons: [String: Self] = [:]
+            for bundle in Set(bundleIdentifiers) {
+                guard !Task.isCancelled else { return [:] }
+                guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundle) else { continue }
+                let image = NSWorkspace.shared.icon(forFile: url.path)
+                image.size = NSSize(width: 16, height: 16)
+                icons[bundle] = Self(image: image)
+            }
+            return icons
+        }.value
+    }
+}

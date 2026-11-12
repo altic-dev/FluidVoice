@@ -58,15 +58,20 @@ def main() -> None:
         "private func applyPendingBackupSetupRefresh()",
         "private func finishRestoredMeetingSettingsIfPending()",
     ))
+    detection_save = "\n".join(declaration(source, marker) for marker in (
+        "if self.setupDraft.autoDetectEnabled != self.setupDraftBeforeEditing.autoDetectEnabled",
+        "if self.setupDraft.browserDetectionEnabled != self.setupDraftBeforeEditing.browserDetectionEnabled",
+    ))
     swift = r'''
 import Foundation
 
-enum MeetingCaptureMode { case onlineCall, inRoom }
+enum MeetingCaptureMode { case onlineCall, inRoom, systemAudio }
 typealias MeetingRecordingDefaults = Defaults
 struct Defaults { var languageCode: String? = "en"; var mode: MeetingCaptureMode = .onlineCall; var isConfigured = false; var applicationBundleIdentifier: String?; var applicationDisplayName: String? }
 final class SettingsStore {
     static let shared = SettingsStore()
     var meetingRecordingDefaults = Defaults()
+    var meetingRecentApplication: Identity?
     var meetingAutoDetectEnabled = true
     var meetingAutoDetectBrowserEnabled = true
     var meetingAudioRetentionPolicy = 7
@@ -75,7 +80,7 @@ typealias MeetingApplicationIdentity = Identity
 struct Identity { let id: String; var bundleIdentifier: String { id }; var displayName: String { id } }
 struct Option { let identity: Identity }
 final class Coordinator { var isQuiescent = true; var activeLanguage = "en" }
-''' + draft + r'''
+''' + declaration((ROOT / 'Sources/Fluid/Services/Meeting/MeetingRecordingSource.swift').read_text(), 'nonisolated extension MeetingRecordingDefaults').replace('nonisolated ', '') + '\n' + draft + r'''
 final class Harness {
     let coordinator = Coordinator()
     var setupDraft = MeetingTranscriptionSetupDraft()
@@ -104,6 +109,10 @@ final class Harness {
         }
     }
 ''' + members + r'''
+    func saveDetection() {
+        let settings = SettingsStore.shared
+''' + detection_save + r'''
+    }
     func notifyRestore() { pendingBackupSetupRefresh = true; applyPendingBackupSetupRefresh() }
     func reachSafePoint() { if canRefreshSetupAfterBackupRestore { applyPendingBackupSetupRefresh() } }
     func closeSheetSaving() {
@@ -133,14 +142,32 @@ func fresh() -> Harness {
 }
 @main enum Tests {
  static func main() {
+    let stale = fresh()
+    SettingsStore.shared.meetingAutoDetectEnabled = false
+    SettingsStore.shared.meetingAutoDetectBrowserEnabled = false
+    stale.saveDetection()
+    check(!SettingsStore.shared.meetingAutoDetectEnabled && !SettingsStore.shared.meetingAutoDetectBrowserEnabled,
+          "saving an unchanged sheet preserves newer detection choices")
+    let edited = fresh()
+    edited.setupDraft.autoDetectEnabled = false
+    edited.setupDraft.browserDetectionEnabled = false
+    edited.saveDetection()
+    check(!SettingsStore.shared.meetingAutoDetectEnabled && !SettingsStore.shared.meetingAutoDetectBrowserEnabled,
+          "explicit switch edits are saved")
+    let mixed = fresh()
+    mixed.setupDraft.autoDetectEnabled = false
+    SettingsStore.shared.meetingAutoDetectBrowserEnabled = false
+    mixed.saveDetection()
+    check(!SettingsStore.shared.meetingAutoDetectEnabled && !SettingsStore.shared.meetingAutoDetectBrowserEnabled,
+          "editing one switch does not overwrite a newer choice for the other")
     // Reproduce pre-fix: real production draft is a value snapshot, not a settings binding.
     let baseline = fresh()
     restored()
-    check(baseline.setupDraft.languageCode == "en" && baseline.setupDraft.mode == .onlineCall,
+    check(baseline.setupDraft.languageCode == "en" && baseline.setupDraft.mode == .systemAudio,
           "baseline hidden page keeps stale language/mode after defaults import")
     print("PASS: setup draft is a snapshot; restore notification must refresh it")
     baseline.notifyRestore()
-    check(baseline.setupDraft.languageCode == "fr" && baseline.setupDraft.mode == .inRoom, "idle restore refreshes language/mode")
+    check(baseline.setupDraft.languageCode == "fr" && baseline.setupDraft.mode == .systemAudio, "idle restore refreshes language/mode")
     check(baseline.setupDraftBeforeEditing == baseline.setupDraft, "cancel snapshot follows restored setup")
     check(baseline.hardwareQueries == 0 && baseline.persistedWrites == 0, "restore handler performs neither synchronous source queries nor persistence")
     check(baseline.setupDraft.selectedMicrophoneID == "cached-mic" && baseline.setupDraft.selectedApplicationID == "cached-app", "cached identities populate restored setup")
@@ -187,7 +214,7 @@ func fresh() -> Harness {
     let rapid = fresh()
     restored(); rapid.notifyRestore()
     restored("de", .onlineCall); rapid.notifyRestore()
-    check(rapid.setupDraft.languageCode == "de" && rapid.setupDraft.mode == .onlineCall, "rapid change-back restore keeps latest values")
+    check(rapid.setupDraft.languageCode == "de" && rapid.setupDraft.mode == .systemAudio, "rapid change-back restore keeps latest values")
     restored("fr", .inRoom); rapid.notifyRestore(); restored("de", .inRoom); rapid.notifyRestore()
     check(rapid.setupDraft.languageCode == "de" && !rapid.pendingBackupSetupRefresh, "same-mode repeated restores consume latest language without stale pending state")
     let legacy = fresh(); SettingsStore.shared.meetingRecordingDefaults.languageCode = nil

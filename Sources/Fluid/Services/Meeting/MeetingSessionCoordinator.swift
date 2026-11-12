@@ -286,7 +286,7 @@ final class MeetingSessionCoordinator: ObservableObject {
 
     var sourceDisplayName: String {
         self.currentSession?.capturedApplication?.displayName
-            ?? (self.currentSession?.mode == .inRoom ? "In-room meeting" : "Meeting audio")
+            ?? (self.currentSession?.mode == .inRoom ? "In-room meeting" : "Computer audio")
     }
 
     var microphoneDisplayName: String {
@@ -309,6 +309,7 @@ final class MeetingSessionCoordinator: ObservableObject {
         title: String,
         preferredBundleIdentifier: String?,
         preferredWindowID: UInt32?,
+        preferredProcessID: Int32? = nil,
         requirePreferredApplication: Bool = false
     ) async throws -> MeetingCaptureConfiguration {
         let microphone = try await MeetingCaptureSourceCatalog.defaultMicrophone(
@@ -320,6 +321,7 @@ final class MeetingSessionCoordinator: ObservableObject {
             var resolved = try MeetingCaptureSourceCatalog.resolveApplication(
                 from: applications,
                 preferredBundleIdentifier: preferredBundleIdentifier,
+                preferredProcessID: preferredProcessID,
                 requirePreferredApplication: requirePreferredApplication
             )
             if let preferredWindowID, resolved.bundleIdentifier == preferredBundleIdentifier {
@@ -1459,7 +1461,7 @@ final class MeetingSessionCoordinator: ObservableObject {
                 }
                 continue
             }
-            let expectedKinds: Set<MeetingAudioTrackKind> = session.mode == .onlineCall
+            let expectedKinds: Set<MeetingAudioTrackKind> = session.mode.capturesComputerAudio
                 ? [.applicationAudio, .microphone]
                 : [.microphone]
             let hasExpectedTracks = Set(session.audioTracks.map(\.kind)) == expectedKinds

@@ -1,7 +1,7 @@
 import Foundation
 
 // Stage E of `MEETING_TRANSCRIPTION_IMPLEMENTATION_PLAN.md`: the local composite backend.
-// Parakeet TDT v2/v3 produce word-timed ASR; Nemotron-3 produces per-epoch speaker activity. The
+// Fluid Speech Pro/Parakeet v3 produce word-timed ASR; Nemotron-3 produces per-epoch speaker activity. The
 // backend owns orchestration — per-epoch materialization, unit construction, slot assignment and
 // exactly-tiling coverage receipts — while the host-injected runtime owns the two model
 // capabilities. It never touches the filesystem outside the frozen request's session directory,
@@ -25,7 +25,7 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
         knownLimits: [
             "Nemotron-3 has 8 speaker slots per analysis epoch; a ninth voice is not reliably announced or separated.",
             "Speaker slots are epoch-scoped; conservative local voice matching can reconnect identities across epochs of the same track.",
-            "Parakeet v2 handles English; v3 and Fluid Speech Pro handle the supported European languages.",
+            "Fluid Speech Pro and Parakeet v3 handle the supported European languages with automatic language recognition.",
             "When ASR returns text without usable word timings, one utterance covering the epoch is emitted instead of fabricated words.",
             "Local Nemotron model must be installed before planning. Voice matching downloads its local embedding model on first use.",
         ],

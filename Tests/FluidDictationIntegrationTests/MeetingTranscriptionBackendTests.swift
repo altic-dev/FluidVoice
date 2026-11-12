@@ -714,7 +714,7 @@ final class MeetingTranscriptionBackendTests: XCTestCase {
         XCTAssertEqual(backend.lastPlan?.request.configuration.asrModel, "fluid-parakeet-pro")
     }
 
-    func testSavedLegacyBackendUsesProductionForFrenchWithoutChangingPreference() async {
+    func testSavedLegacyBackendUsesProductionForEnglishAndFrenchWithoutChangingPreference() async {
         let settings = SettingsStore.shared
         let previous = settings.meetingTranscriptionBackendID
         defer { settings.meetingTranscriptionBackendID = previous }
@@ -724,19 +724,22 @@ final class MeetingTranscriptionBackendTests: XCTestCase {
         let pipeline = MeetingProcessingPipeline(
             asrServiceProvider: { XCTFail("Routing must happen before ASR loading"); return ASRService() },
             managesModelResidency: false,
-            prepareDiarizationModel: { productionPreparations += 1; throw marker }
+            prepareDiarizationModel: { productionPreparations += 1; throw marker },
+            preferredASRModelProvider: { .fluidParakeetPro }
         )
-        do {
-            _ = try await pipeline.process(
-                session: self.makeSession(languageCode: "fr"),
-                sessionDirectory: FileManager.default.temporaryDirectory,
-                progress: { _ in }
-            )
-            XCTFail("Expected the production preparation marker")
-        } catch {
-            XCTAssertEqual(error as? CocoaError, marker)
+        for language in ["en", "fr"] {
+            do {
+                _ = try await pipeline.process(
+                    session: self.makeSession(languageCode: language),
+                    sessionDirectory: FileManager.default.temporaryDirectory,
+                    progress: { _ in }
+                )
+                XCTFail("Expected the production preparation marker")
+            } catch {
+                XCTAssertEqual(error as? CocoaError, marker)
+            }
         }
-        XCTAssertEqual(productionPreparations, 1)
+        XCTAssertEqual(productionPreparations, 2)
         XCTAssertEqual(settings.meetingTranscriptionBackendID, .legacyCompatibility)
     }
 

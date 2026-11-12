@@ -120,13 +120,21 @@ nonisolated enum MeetingProviderOptionsError: Error, Equatable {
     case unsupportedFeature(String)
 }
 
-/// Immutable provider options for the opt-in meeting post-processing path. Only the fixed
-/// Parakeet v2 and Fluid Speech Pro handle English; v3 handles its supported languages.
+/// Immutable provider options for meeting post-processing. Pro is the default;
+/// v3 is the installed fallback. Other models are not supported for meetings.
 /// Unsupported model/language combinations and enhancement features are rejected.
 nonisolated struct MeetingProviderOptions: Equatable, Sendable {
     private static let supportedModels: Set<SettingsStore.SpeechModel> = [
-        .parakeetTDTv2, .parakeetTDT, .fluidParakeetPro,
+        .parakeetTDT, .fluidParakeetPro,
     ]
+
+    /// Choose once before freezing the processing request. An empty installation starts
+    /// Pro's normal download; an existing v3 installation can transcribe offline.
+    static func defaultModel(installedModelIDs: Set<String>) -> SettingsStore.SpeechModel {
+        if installedModelIDs.contains(SettingsStore.SpeechModel.fluidParakeetPro.rawValue) { return .fluidParakeetPro }
+        if installedModelIDs.contains(SettingsStore.SpeechModel.parakeetTDT.rawValue) { return .parakeetTDT }
+        return .fluidParakeetPro
+    }
 
     static func preferredModel(
         for languageCode: String,
@@ -135,7 +143,7 @@ nonisolated struct MeetingProviderOptions: Equatable, Sendable {
         if let selected, self.supportedModels.contains(selected),
            ParakeetSpeechModelCatalog.descriptor(forModelID: selected.rawValue)?.supportedLanguageCodes.contains(languageCode) == true
         { return selected }
-        return languageCode == "en" ? .parakeetTDTv2 : .parakeetTDT
+        return .fluidParakeetPro
     }
 
     let model: SettingsStore.SpeechModel

@@ -173,6 +173,7 @@ final class MeetingTranscriptAssemblerTests: XCTestCase {
 
     /// One online microphone chunk, presentation 100..<100+duration>, one admissible era.
     private func onlineMicFixture(
+        mode: MeetingCaptureMode = .onlineCall,
         duration: Double = 10,
         priming: MeetingCodecPriming = .measuredFrames(0),
         drift: MeetingClockDriftRecord? = nil
@@ -183,7 +184,7 @@ final class MeetingTranscriptAssemblerTests: XCTestCase {
             chunks: [chunk],
             eras: [self.era(protection: .voiceProcessed, start: 100, drift: drift)]
         )
-        let plan = self.plan(mode: .onlineCall, tracks: [track])
+        let plan = self.plan(mode: mode, tracks: [track])
         let manifest = try self.buildManifest(
             plan: plan,
             observations: [(track.id, chunk, self.observed(chunk, duration: duration, priming: priming))]
@@ -960,55 +961,59 @@ final class MeetingTranscriptAssemblerTests: XCTestCase {
     // MARK: - Echo
 
     func testOnlineMicrophoneWithoutEchoVerdictFailsAssembly() throws {
-        let (plan, manifest, span) = try self.onlineMicFixture()
-        let unit = self.unit(id: "u-0", span: span, analysisStart: 1, analysisEnd: 2)
-        XCTAssertThrowsError(try MeetingTranscriptAssembler().assemble(MeetingAssemblyInput(
-            plan: plan,
-            manifest: manifest,
-            evidence: self.evidence(plan: plan, units: [unit]),
-            coverageReceipts: self.receipts(for: manifest)
-        ))) { error in
-            XCTAssertEqual(error as? MeetingAssemblyError, .missingEchoVerdict(unitID: "u-0"))
+        for mode in [MeetingCaptureMode.onlineCall, .systemAudio] {
+            let (plan, manifest, span) = try self.onlineMicFixture(mode: mode)
+            let unit = self.unit(id: "u-0", span: span, analysisStart: 1, analysisEnd: 2)
+            XCTAssertThrowsError(try MeetingTranscriptAssembler().assemble(MeetingAssemblyInput(
+                plan: plan,
+                manifest: manifest,
+                evidence: self.evidence(plan: plan, units: [unit]),
+                coverageReceipts: self.receipts(for: manifest)
+            ))) { error in
+                XCTAssertEqual(error as? MeetingAssemblyError, .missingEchoVerdict(unitID: "u-0"))
+            }
         }
     }
 
     func testEchoSuppressedMicrophoneIsLedgerOnlyAndApplicationCopyIsRetained() throws {
-        let micChunk = self.chunk(sequence: 0, start: 100, end: 110)
-        let appChunk = self.chunk(sequence: 0, start: 100, end: 110)
-        let mic = self.track(
-            kind: .microphone,
-            chunks: [micChunk],
-            eras: [self.era(protection: .voiceProcessed, start: 100)]
-        )
-        let app = self.track(kind: .applicationAudio, chunks: [appChunk])
-        let plan = self.plan(mode: .onlineCall, tracks: [mic, app])
-        let manifest = try self.buildManifest(plan: plan, observations: [
-            (mic.id, micChunk, self.observed(micChunk, duration: 10)),
-            (app.id, appChunk, self.observed(appChunk, duration: 10)),
-        ])
-        let micSpan = try XCTUnwrap(manifest.track(mic.id)?.spans.first)
-        let appSpan = try XCTUnwrap(manifest.track(app.id)?.spans.first)
+        for mode in [MeetingCaptureMode.onlineCall, .systemAudio] {
+            let micChunk = self.chunk(sequence: 0, start: 100, end: 110)
+            let appChunk = self.chunk(sequence: 0, start: 100, end: 110)
+            let mic = self.track(
+                kind: .microphone,
+                chunks: [micChunk],
+                eras: [self.era(protection: .voiceProcessed, start: 100)]
+            )
+            let app = self.track(kind: .applicationAudio, chunks: [appChunk])
+            let plan = self.plan(mode: mode, tracks: [mic, app])
+            let manifest = try self.buildManifest(plan: plan, observations: [
+                (mic.id, micChunk, self.observed(micChunk, duration: 10)),
+                (app.id, appChunk, self.observed(appChunk, duration: 10)),
+            ])
+            let micSpan = try XCTUnwrap(manifest.track(mic.id)?.spans.first)
+            let appSpan = try XCTUnwrap(manifest.track(app.id)?.spans.first)
 
-        let micUnit = self.unit(id: "m-echo", span: micSpan, text: "remote words", analysisStart: 1, analysisEnd: 2)
-        let appUnit = self.unit(id: "a-0", span: appSpan, text: "remote words", analysisStart: 1, analysisEnd: 2)
-        let result = try MeetingTranscriptAssembler().assemble(MeetingAssemblyInput(
-            plan: plan,
-            manifest: manifest,
-            evidence: self.evidence(plan: plan, units: [micUnit, appUnit]),
-            coverageReceipts: self.receipts(for: manifest),
-            // The application track is remote evidence and needs no verdict; the microphone copy
-            // is suppressed by a real one.
-            echoVerdicts: ["m-echo": .echoSuppressed(duplicateOfUnitID: "a-0")]
-        ))
-        let ledger = self.dispositions(result)
-        XCTAssertEqual(ledger[micUnit.id]?.disposition, .echoSuppressed)
-        XCTAssertEqual(ledger[appUnit.id]?.disposition, .emitted)
-        XCTAssertEqual(result.segments.map(\.text), ["remote words"])
-        XCTAssertEqual(result.segments[0].sourceTrackID, app.id)
-        // Ledger-only still means ledger: the suppressed mic copy stays in the sidecar.
-        XCTAssertTrue(result.sidecar.units.contains { $0.id == micUnit.id })
-        XCTAssertEqual(result.speakers.count, 1)
-        XCTAssertEqual(result.speakers[0].trackKind, .applicationAudio)
+            let micUnit = self.unit(id: "m-echo", span: micSpan, text: "remote words", analysisStart: 1, analysisEnd: 2)
+            let appUnit = self.unit(id: "a-0", span: appSpan, text: "remote words", analysisStart: 1, analysisEnd: 2)
+            let result = try MeetingTranscriptAssembler().assemble(MeetingAssemblyInput(
+                plan: plan,
+                manifest: manifest,
+                evidence: self.evidence(plan: plan, units: [micUnit, appUnit]),
+                coverageReceipts: self.receipts(for: manifest),
+                // The application track is remote evidence and needs no verdict; the microphone copy
+                // is suppressed by a real one.
+                echoVerdicts: ["m-echo": .echoSuppressed(duplicateOfUnitID: "a-0")]
+            ))
+            let ledger = self.dispositions(result)
+            XCTAssertEqual(ledger[micUnit.id]?.disposition, .echoSuppressed)
+            XCTAssertEqual(ledger[appUnit.id]?.disposition, .emitted)
+            XCTAssertEqual(result.segments.map(\.text), ["remote words"])
+            XCTAssertEqual(result.segments[0].sourceTrackID, app.id)
+            // Ledger-only still means ledger: the suppressed mic copy stays in the sidecar.
+            XCTAssertTrue(result.sidecar.units.contains { $0.id == micUnit.id })
+            XCTAssertEqual(result.speakers.count, 1)
+            XCTAssertEqual(result.speakers[0].trackKind, .applicationAudio)
+        }
     }
 
     func testInRoomMicrophoneBypassesEchoAdmission() throws {

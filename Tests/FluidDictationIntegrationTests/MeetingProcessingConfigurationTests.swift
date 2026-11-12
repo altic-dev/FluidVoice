@@ -2,9 +2,9 @@
 import XCTest
 
 final class MeetingProcessingConfigurationTests: XCTestCase {
-    func testFinalConfigurationDefaultsAreParakeetTDTv2EnglishWithoutPostProcessing() {
+    func testFinalConfigurationDefaultsAreProEnglishWithoutPostProcessing() {
         let config = MeetingFinalProcessingConfiguration()
-        XCTAssertEqual(config.asrModel, "parakeet-tdt-v2")
+        XCTAssertEqual(config.asrModel, "fluid-parakeet-pro")
         XCTAssertEqual(config.languageCode, "en")
         XCTAssertFalse(config.vocabularyBoostingEnabled)
         XCTAssertFalse(config.pronunciationMatchingEnabled)

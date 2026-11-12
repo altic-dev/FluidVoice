@@ -10,9 +10,11 @@ final class MeetingRecordingSourceTests: XCTestCase {
     private let mic = MeetingMicrophoneIdentity(captureDeviceID: "mic", coreAudioUID: "mic", displayName: "Microphone")
     private var originalFeature: Any?
     private var originalRecentApplication: Any?
+    private var originalRecordingDefaults: Any?
 
     override func setUp() {
         super.setUp()
+        self.originalRecordingDefaults = UserDefaults.standard.object(forKey: "MeetingRecordingDefaults")
         self.originalFeature = UserDefaults.standard.object(forKey: "FluidMeetEnabled")
         self.originalRecentApplication = UserDefaults.standard.object(forKey: "MeetingRecentApplication")
         SettingsStore.shared.meetingRecentApplication = nil
@@ -22,12 +24,15 @@ final class MeetingRecordingSourceTests: XCTestCase {
     override func tearDown() {
         UserDefaults.standard.set(self.originalFeature, forKey: "FluidMeetEnabled")
         UserDefaults.standard.set(self.originalRecentApplication, forKey: "MeetingRecentApplication")
+        UserDefaults.standard.set(self.originalRecordingDefaults, forKey: "MeetingRecordingDefaults")
         super.tearDown()
     }
 
     private func snapshot() -> MeetingRecordingSourceSnapshot {
-        MeetingRecordingSourceSnapshot(
-            defaults: .unconfigured,
+        var defaults = MeetingRecordingDefaults.unconfigured
+        defaults.mode = .onlineCall
+        return MeetingRecordingSourceSnapshot(
+            defaults: defaults,
             applications: [self.zoom, self.browser],
             microphones: MeetingMicrophoneCatalogSnapshot(identities: [self.mic], defaultCoreAudioUID: "mic"),
             selectedApplication: self.zoom,
@@ -53,12 +58,12 @@ final class MeetingRecordingSourceTests: XCTestCase {
         XCTAssertTrue(MeetingAppPickerEntry.entries(applications: [], installed: []).isEmpty)
     }
 
-    func testPickerPreservesSeparateRunningProcessesForTheSameApp() {
+    func testPickerGroupsRunningProcessesByApp() {
         let first = MeetingApplicationIdentity(bundleIdentifier: "browser", processID: 1, displayName: "Browser")
         let second = MeetingApplicationIdentity(bundleIdentifier: "browser", processID: 2, displayName: "Browser")
-        let entries = MeetingAppPickerEntry.entries(applications: [first, second], installed: [])
-        XCTAssertEqual(entries.compactMap(\.application), [first, second])
-        XCTAssertEqual(Set(entries.map(\.id)).count, 2)
+        let entries = MeetingAppPickerEntry.entries(applications: MeetingRecordingSourceResolver.applicationChoices(from: [first, second]), installed: [])
+        XCTAssertEqual(entries.first?.application?.capturesAllInstances, true)
+        XCTAssertEqual(Set(entries.map(\.id)).count, 1)
     }
 
     func testMicrophoneLabelWhenNoDevicesAreAvailable() {
@@ -70,6 +75,7 @@ final class MeetingRecordingSourceTests: XCTestCase {
 
     func testDraftRestoresManualSourceWithoutPersistingAutomaticSuggestions() {
         var defaults = MeetingRecordingDefaults.unconfigured
+        defaults.mode = .onlineCall
         defaults.isConfigured = true
         defaults.applicationBundleIdentifier = "browser"
         let saved = MeetingTranscriptionSetupDraft(defaults: defaults, autoDetectEnabled: true, browserDetectionEnabled: true)
@@ -85,62 +91,56 @@ final class MeetingRecordingSourceTests: XCTestCase {
         XCTAssertTrue(MeetingTranscriptionSetupDraft(defaults: defaults, autoDetectEnabled: true, browserDetectionEnabled: true).usesAutomaticApplication)
     }
 
-    func testAutomaticPrefersDetectedCallThenExactForegroundApp() {
-        let defaults = MeetingRecordingDefaults.unconfigured
+    func testAutomaticDoesNotChooseADetectedOrForegroundApp() {
         let target = MeetingAutoDetector.ResolvedTarget(bundleIdentifier: "zoom", pid: 42, windowID: 7)
-        let detected = MeetingRecordingSourceSnapshot.suggestedApplication(defaults: defaults, target: target, foreground: self.browser, applications: [self.zoom, self.browser])
-        XCTAssertEqual(detected?.processID, 42)
-        XCTAssertEqual(detected?.windowID, 7)
-        let fallback = MeetingRecordingSourceSnapshot.suggestedApplication(defaults: defaults, target: nil, foreground: self.browser, applications: [self.zoom, self.browser])
-        XCTAssertEqual(fallback, self.browser)
-        XCTAssertNil(MeetingRecordingSourceSnapshot.suggestedApplication(defaults: defaults, target: nil, foreground: nil, applications: [self.zoom]))
-        var restarted = self.browser
-        restarted.processID = 99
-        XCTAssertNil(MeetingRecordingSourceSnapshot.suggestedApplication(defaults: defaults, target: nil, foreground: self.browser, applications: [restarted]))
+        XCTAssertNil(MeetingRecordingSourceSnapshot.suggestedApplication(defaults: .unconfigured, target: target, foreground: self.browser, applications: [self.zoom, self.browser]))
     }
 
-    func testInPersonSettingsKeepTheRememberedAppWithoutRunningApplications() {
+    func testLastPickOverridesOldSourceWithoutChangingMicrophoneOrLanguage() {
         var defaults = MeetingRecordingDefaults.unconfigured
+        defaults.mode = .onlineCall
         defaults.isConfigured = true
-        defaults.applicationBundleIdentifier = self.browser.bundleIdentifier
-        defaults.applicationDisplayName = self.browser.displayName
+        defaults.applicationBundleIdentifier = "com.openai.codex"
+        defaults.applicationDisplayName = "ChatGPT"
         defaults.microphoneCaptureDeviceID = "chosen-mic"
         defaults.languageCode = "fr"
-        var draft = MeetingTranscriptionSetupDraft(defaults: defaults, autoDetectEnabled: true, browserDetectionEnabled: true)
-        draft.mode = .inRoom
-        let inPerson = draft.applyingSource(to: defaults, application: nil)
-        XCTAssertEqual(inPerson.mode, .inRoom)
-        XCTAssertEqual(inPerson.applicationBundleIdentifier, self.browser.bundleIdentifier)
-        XCTAssertEqual(inPerson.applicationDisplayName, self.browser.displayName)
-        XCTAssertEqual(inPerson.microphoneCaptureDeviceID, "chosen-mic")
-        XCTAssertEqual(inPerson.languageCode, "fr")
+        let resolved = defaults.preferringLastPickedApplication(self.browser)
+        XCTAssertEqual(resolved.applicationBundleIdentifier, self.browser.bundleIdentifier)
+        XCTAssertEqual(resolved.applicationDisplayName, self.browser.displayName)
+        XCTAssertEqual(resolved.microphoneCaptureDeviceID, "chosen-mic")
+        XCTAssertEqual(resolved.languageCode, "fr")
+        XCTAssertEqual(defaults.applicationBundleIdentifier, "com.openai.codex")
+        XCTAssertEqual(defaults.preferringLastPickedApplication(nil), defaults)
+        let arbitrary = MeetingApplicationIdentity(bundleIdentifier: "com.openai.codex", processID: 100, displayName: "ChatGPT")
+        XCTAssertNil(MeetingRecordingSourceSnapshot.suggestedApplication(defaults: .unconfigured, target: nil, foreground: arbitrary, applications: [arbitrary]))
+        let explicit = defaults.preferringLastPickedApplication(arbitrary)
+        XCTAssertEqual(MeetingRecordingSourceSnapshot.suggestedApplication(defaults: explicit, target: nil, foreground: nil, applications: [arbitrary])?.bundleIdentifier, arbitrary.bundleIdentifier)
+    }
 
-        var reopened = MeetingTranscriptionSetupDraft(defaults: inPerson, autoDetectEnabled: true, browserDetectionEnabled: true)
-        let saved = reopened.applyingSource(to: inPerson, application: nil)
-        XCTAssertEqual(saved.applicationBundleIdentifier, self.browser.bundleIdentifier)
-        XCTAssertEqual(saved.applicationDisplayName, self.browser.displayName)
-        reopened.mode = .onlineCall
-        XCTAssertEqual(MeetingRecordingSourceSnapshot.suggestedApplication(defaults: reopened.applyingSource(to: saved, application: nil), target: nil, foreground: nil, applications: [self.browser]), self.browser)
-
-        let changed = reopened.applyingSource(to: saved, application: self.zoom)
-        XCTAssertEqual(changed.applicationBundleIdentifier, self.zoom.bundleIdentifier)
-        XCTAssertEqual(changed.applicationDisplayName, self.zoom.displayName)
-        reopened.usesAutomaticApplication = true
-        let automatic = reopened.applyingSource(to: changed, application: self.zoom)
-        XCTAssertNil(automatic.applicationBundleIdentifier, "An explicit Automatic choice must still clear the saved app")
-        XCTAssertNil(automatic.applicationDisplayName)
+    func testOldMicOnlyDefaultsBecomeComputerAudioWithoutChangingSavedValues() {
+        var defaults = MeetingRecordingDefaults.unconfigured
+        defaults.mode = .inRoom
+        defaults.microphoneCaptureDeviceID = "chosen-mic"
+        defaults.languageCode = "fr"
+        let draft = MeetingTranscriptionSetupDraft(defaults: defaults, autoDetectEnabled: true, browserDetectionEnabled: true)
+        XCTAssertEqual(draft.mode, .systemAudio)
+        XCTAssertTrue(draft.usesAutomaticApplication)
+        XCTAssertEqual(draft.languageCode, "fr")
+        XCTAssertEqual(defaults.mode, .inRoom)
+        XCTAssertEqual(defaults.microphoneCaptureDeviceID, "chosen-mic")
     }
 
     func testSavedChoiceWinsAndMissingSavedAppCannotBecomeAnotherSource() {
         var defaults = MeetingRecordingDefaults.unconfigured
+        defaults.mode = .onlineCall
         defaults.isConfigured = true
         defaults.applicationBundleIdentifier = "browser"
         let target = MeetingAutoDetector.ResolvedTarget(bundleIdentifier: "zoom", pid: 42, windowID: nil)
-        XCTAssertEqual(MeetingRecordingSourceSnapshot.suggestedApplication(defaults: defaults, target: target, foreground: self.zoom, applications: [self.zoom, self.browser]), self.browser)
+        XCTAssertEqual(MeetingRecordingSourceSnapshot.suggestedApplication(defaults: defaults, target: target, foreground: self.zoom, applications: [self.zoom, self.browser])?.bundleIdentifier, self.browser.bundleIdentifier)
         XCTAssertNil(MeetingRecordingSourceSnapshot.suggestedApplication(defaults: defaults, target: target, foreground: self.zoom, applications: [self.zoom]))
         var duplicate = self.browser
         duplicate.processID = 99
-        XCTAssertNil(MeetingRecordingSourceSnapshot.suggestedApplication(defaults: defaults, target: nil, foreground: self.zoom, applications: [self.browser, duplicate]))
+        XCTAssertEqual(MeetingRecordingSourceSnapshot.suggestedApplication(defaults: defaults, target: nil, foreground: self.zoom, applications: [self.browser, duplicate])?.capturesAllInstances, true)
     }
 
     func testConfirmationCannotChangeAppProcessOrMicrophone() throws {
@@ -236,14 +236,14 @@ final class MeetingRecordingSourceTests: XCTestCase {
         XCTAssertEqual(starts, 2)
     }
 
-    func testRefreshKeepsAnExplicitInPersonChoice() async {
+    func testRefreshKeepsAnExplicitComputerAudioChoice() async {
         let controller = MeetingRecordingSourcePromptController(showsPanel: false, load: { _ in self.snapshot() }, start: { _ in XCTFail("Refreshing must not record") })
         controller.handleShortcut()
         await self.waitUntil { !controller.isLoading }
         controller.selectApplication(nil)
         controller.refresh()
         await self.waitUntil { !controller.isLoading }
-        XCTAssertEqual(controller.snapshot?.defaults.mode, .inRoom)
+        XCTAssertEqual(controller.snapshot?.defaults.mode, .systemAudio)
         XCTAssertNil(controller.snapshot?.selectedApplication)
         controller.cancel()
     }
@@ -432,14 +432,14 @@ final class MeetingRecordingSourceTests: XCTestCase {
         await self.waitUntil { !controller.isLoading }
         XCTAssertNil(controller.snapshot?.availableRecentApplication, "An automatic suggestion is not a recent explicit choice")
         controller.selectApplication(self.browser)
-        XCTAssertEqual(controller.snapshot?.applicationLabel(self.browser), "Browser (Recent)")
+        XCTAssertEqual(controller.snapshot?.applicationLabel(self.browser), "Browser (Last picked)")
         XCTAssertEqual(controller.snapshot?.applicationLabel(self.zoom), "Zoom")
         XCTAssertEqual(SettingsStore.shared.meetingRecentApplication, self.browser)
         controller.selectApplication(self.zoom)
-        XCTAssertEqual(controller.snapshot?.applicationLabel(self.zoom), "Zoom (Recent)")
+        XCTAssertEqual(controller.snapshot?.applicationLabel(self.zoom), "Zoom (Last picked)")
         XCTAssertEqual(controller.snapshot?.applicationLabel(self.browser), "Browser")
         controller.selectApplication(nil)
-        XCTAssertEqual(SettingsStore.shared.meetingRecentApplication, self.zoom, "In person does not replace the most recent app")
+        XCTAssertNil(SettingsStore.shared.meetingRecentApplication, "Automatic clears the previous app choice")
         controller.selectApplication(self.browser)
         controller.cancel()
 
@@ -447,30 +447,52 @@ final class MeetingRecordingSourceTests: XCTestCase {
         reopened.handleShortcut()
         await self.waitUntil { !reopened.isLoading }
         XCTAssertEqual(reopened.snapshot?.availableRecentApplication, self.browser)
-        XCTAssertEqual(reopened.snapshot?.selectedApplication, self.zoom, "Recency must not replace the detected or foreground suggestion")
-        XCTAssertEqual(reopened.snapshot?.applicationLabel(self.browser), "Browser (Recent)")
-        XCTAssertEqual(SettingsStore.shared.meetingRecordingDefaults, defaultsBefore)
+        XCTAssertEqual(reopened.snapshot?.selectedApplication, self.browser, "The last explicit pick wins over the detected or foreground suggestion")
+        XCTAssertEqual(reopened.snapshot?.applicationLabel(self.browser), "Browser (Last picked)")
+        XCTAssertEqual(SettingsStore.shared.meetingRecordingDefaults.applicationBundleIdentifier, self.browser.bundleIdentifier)
+        XCTAssertEqual(SettingsStore.shared.meetingRecordingDefaults.languageCode, defaultsBefore.languageCode)
+        XCTAssertEqual(SettingsStore.shared.meetingRecordingDefaults.microphoneCaptureDeviceID, defaultsBefore.microphoneCaptureDeviceID)
         XCTAssertEqual(starts, 0)
         reopened.cancel()
     }
 
-    func testRecentTagFollowsARelaunchedAppWithoutChoosingAmongDuplicateCopies() {
+    func testMissingLastPickCannotBecomeTheDetectedAppOnOpenOrRefresh() async {
+        SettingsStore.shared.meetingRecentApplication = self.browser
+        var loaded = self.snapshot()
+        loaded.applications = [self.zoom]
+        var starts = 0
+        let controller = MeetingRecordingSourcePromptController(showsPanel: false, load: { _ in loaded }, start: { _ in starts += 1 })
+        controller.handleShortcut(foreground: self.zoom)
+        await self.waitUntil { !controller.isLoading }
+        XCTAssertNil(controller.snapshot?.selectedApplication)
+        XCTAssertFalse(controller.canConfirm)
+        XCTAssertTrue(controller.errorMessage?.contains("Browser") == true)
+        controller.refresh()
+        await self.waitUntil { !controller.isLoading }
+        controller.confirm()
+        XCTAssertNil(controller.snapshot?.selectedApplication)
+        XCTAssertEqual(starts, 0)
+        XCTAssertEqual(SettingsStore.shared.meetingRecentApplication, self.browser)
+        controller.cancel()
+    }
+
+    func testRecentChoiceCoversRelaunchedAndDuplicateInstances() throws {
         var snapshot = self.snapshot()
         snapshot.recentApplication = self.browser
         var restarted = self.browser
         restarted.processID = 99
         snapshot.applications = [self.zoom, restarted]
-        XCTAssertEqual(snapshot.availableRecentApplication, restarted)
-        XCTAssertEqual(snapshot.applicationLabel(restarted), "Browser (Recent)")
+        XCTAssertEqual(snapshot.availableRecentApplication?.capturesAllInstances, true)
+        XCTAssertEqual(try snapshot.applicationLabel(XCTUnwrap(snapshot.availableRecentApplication)), "Browser (Last picked)")
         var duplicate = restarted
         duplicate.processID = 100
         snapshot.applications.append(duplicate)
-        XCTAssertNil(snapshot.availableRecentApplication)
+        XCTAssertEqual(snapshot.availableRecentApplication?.capturesAllInstances, true)
         XCTAssertEqual(snapshot.applicationLabel(restarted), "Browser")
         snapshot.recentApplication = duplicate
         XCTAssertEqual(snapshot.availableRecentApplication, duplicate)
         XCTAssertEqual(snapshot.applicationLabel(restarted), "Browser")
-        XCTAssertEqual(snapshot.applicationLabel(duplicate), "Browser (Recent)")
+        XCTAssertEqual(snapshot.applicationLabel(duplicate), "Browser (Last picked)")
         snapshot.applications = [self.zoom]
         XCTAssertNil(snapshot.availableRecentApplication)
         XCTAssertEqual(snapshot.selectedApplication, self.zoom)
