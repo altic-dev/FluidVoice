@@ -1027,6 +1027,8 @@ final class MeetingAutoDetectorTests: XCTestCase {
         XCTAssertFalse(h.detector.canStart(episodeID: timedOut))
         h.detector.adoptStartedEpisode(episodeID: timedOut)
 
+        h.detector.handleAudioProcessActivity(true, pid: 3, at: h.clock.now())
+        h.detector.handleAudioProcessActivity(false, pid: 3, at: h.clock.now())
         h.detector.handleWindowSnapshot([], at: h.clock.now())
         h.advance(65)
         h.detector.tick(at: h.clock.now())
@@ -1289,11 +1291,13 @@ final class MeetingAutoDetectorTests: XCTestCase {
 
     // MARK: - Still-recording nudge
 
-    func testStillRecordingNudgeFiresOnceAfterWindowGoneSixtySeconds() throws {
+    func testStillRecordingNudgeFiresOnceAfterWindowAndAudioEnd() throws {
         let h = DetectorHarness()
         let episodeID = try XCTUnwrap(h.confirmZoom())
         XCTAssertTrue(h.detector.startTapped(episodeID: episodeID))
 
+        h.detector.handleAudioProcessActivity(true, pid: 100, at: h.clock.now())
+        h.detector.handleAudioProcessActivity(false, pid: 100, at: h.clock.now())
         h.detector.handleWindowSnapshot([], at: h.clock.now())
         h.advance(65)
         h.detector.tick(at: h.clock.now())
@@ -1458,16 +1462,19 @@ final class MeetingAutoDetectorTests: XCTestCase {
         XCTAssertEqual(h.nudges, 2)
     }
 
-    func testAZoomWindowComingBackTakesTheQuestionBack() throws {
+    func testAZoomCallComingBackTakesTheQuestionBack() throws {
         let h = DetectorHarness()
         let episodeID = try XCTUnwrap(h.confirmZoom())
         XCTAssertTrue(h.detector.startTapped(episodeID: episodeID))
+        h.detector.handleAudioProcessActivity(true, pid: 100, at: h.clock.now())
+        h.detector.handleAudioProcessActivity(false, pid: 100, at: h.clock.now())
         h.detector.handleWindowSnapshot([], at: h.clock.now())
         h.advance(65)
         h.detector.tick(at: h.clock.now())
         XCTAssertEqual(h.nudges, 1)
 
         h.detector.handleWindowSnapshot([.init(processID: 100, windowID: 900, title: "Zoom Meeting", layer: 0)], at: h.clock.now())
+        h.detector.handleAudioProcessActivity(true, pid: 100, at: h.clock.now())
         h.detector.tick(at: h.clock.now())
         XCTAssertEqual(h.withdrawals, 1)
     }
