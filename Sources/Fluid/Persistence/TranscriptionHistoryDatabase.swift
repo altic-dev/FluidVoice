@@ -214,6 +214,11 @@ final class TranscriptionHistoryWriter: @unchecked Sendable {
         let directory = self.url.deletingLastPathComponent()
             .appendingPathComponent("History Recovery", isDirectory: true)
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        var completed = false
+        defer {
+            // Only this attempt's copies are disposable; originals are untouched on every failure.
+            if !completed { try? FileManager.default.removeItem(at: directory) }
+        }
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         for (index, snapshot) in snapshots.enumerated() {
             let file = directory.appendingPathComponent("legacy-\(index).json")
@@ -240,6 +245,7 @@ final class TranscriptionHistoryWriter: @unchecked Sendable {
         for (source, _) in snapshots {
             source.removeObject(forKey: self.legacyKey)
         }
+        completed = true
         return directory
     }
 

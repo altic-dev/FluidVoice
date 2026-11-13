@@ -298,6 +298,11 @@ final class ImportingDefaults: UserDefaults {
         precondition(store.audioPruningDeferred && audio.deletedFileNames.count == deletions)
         try FileManager.default.removeItem(at: recoveryRoot)
 
+        let audioDirectory = url.deletingLastPathComponent().appendingPathComponent("DictationAudioHistory")
+        try FileManager.default.createDirectory(at: audioDirectory, withIntermediateDirectories: true)
+        let unknownAudio = Data([1, 2, 3, 4])
+        try unknownAudio.write(to: audioDirectory.appendingPathComponent("unknown-old.wav"))
+
         // A concurrent old app save is never removed by an archive of earlier bytes.
         let newer = Data("newer unreadable history".utf8)
         own.replacement = newer
@@ -308,10 +313,10 @@ final class ImportingDefaults: UserDefaults {
         precondition(own.data(forKey: key) == newer && other.data(forKey: key) == bad)
         precondition(audio.deletedFileNames.count == deletions)
 
-        let audioDirectory = url.deletingLastPathComponent().appendingPathComponent("DictationAudioHistory")
-        try FileManager.default.createDirectory(at: audioDirectory, withIntermediateDirectories: true)
-        let unknownAudio = Data([1, 2, 3, 4])
-        try unknownAudio.write(to: audioDirectory.appendingPathComponent("unknown-old.wav"))
+        let failedCopies = try FileManager.default.contentsOfDirectory(at: recoveryRoot, includingPropertiesForKeys: nil)
+        precondition(failedCopies.isEmpty, "Failed recovery must remove its audio copy before a retry")
+        let originalAudio = try Data(contentsOf: audioDirectory.appendingPathComponent("unknown-old.wav"))
+        precondition(originalAudio == unknownAudio, "Failed recovery must retain the original audio")
         let directory = try await store.archiveLegacyHistoryAndResumeAudioCleanup()
         let files = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
         let copies = try Set(files.filter { $0.pathExtension == "json" }.map { try Data(contentsOf: $0) })
