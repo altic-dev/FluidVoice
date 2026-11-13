@@ -30,6 +30,7 @@ value = block(tracker, '    func handleObservedValueChange()')
 delay = block(settings, '    enum AutomaticDictionaryPromptDelay:')
 swift = r'''
 import Foundation
+struct DictionaryCorrectionExample {}
 struct DictionaryLearningAudioEvidence {}
 struct DictionaryNegativeCorrection {}
 DETECTOR

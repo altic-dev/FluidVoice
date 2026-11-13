@@ -701,6 +701,9 @@ private struct AutomaticDictionaryCorrectionOverlayView: View {
     }
 
     private var correctionChoiceDescription: String {
+        if self.session.candidate.trainingExample != nil, self.session.candidate.negativeCorrection == nil {
+            return "Saves this correction and its dictation audio on this Mac."
+        }
         if self.session.candidate.negativeCorrection != nil {
             return "Confirm only if you said a different word, not a spelling change."
         }

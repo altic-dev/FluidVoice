@@ -496,6 +496,15 @@ final class AutomaticDictionaryTrainingSession: ObservableObject {
         }
 
         SettingsStore.shared.customDictionaryEntries = mergedEntries
+        if let example = self.candidate.trainingExample {
+            Task(priority: .utility) {
+                do {
+                    try await DictionaryCorrectionArchive.shared.saveAccepted(example)
+                } catch {
+                    DebugLogger.shared.warning("Accepted correction example could not be saved locally: \(error)", source: "DictionaryCorrectionArchive")
+                }
+            }
+        }
         ASRService.invalidateDictionaryCache()
         NotificationCenter.default.post(name: .parakeetVocabularyDidChange, object: nil)
         self.completeSave(title: updatedExisting ? "Dictionary Updated" : "Added to Dictionary")
