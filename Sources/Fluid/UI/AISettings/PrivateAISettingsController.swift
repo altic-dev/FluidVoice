@@ -419,7 +419,9 @@ final class PrivateAISettingsController: ObservableObject {
             }
             do {
                 try await PrivateAIIntegrationService.shared.unloadAndRemoveInstalledModel(model, reason: "settings-delete")
-                if self.privateAISelectedModelID == model.id {
+                let key = self.viewModel.providerKey(for: PrivateAIProviderFeature.shared.providerID)
+                let selected = self.settings.selectedModelByProvider[key] ?? PrivateAIIntegrationService.configuredModelID
+                if PrivateAIModelRegistry.canonicalModelID(for: selected) == model.id {
                     self.viewModel.resetVerification(for: PrivateAIProviderFeature.shared.providerID)
                 }
                 self.privateAILoadState = .idle
