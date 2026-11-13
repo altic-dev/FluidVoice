@@ -29,6 +29,7 @@ final class AutomaticDictionaryTrainingSession: ObservableObject {
     @Published private(set) var statusMessage = ""
     @Published private(set) var hasError = false
     @Published private(set) var successTitle = "Added to Dictionary"
+    @Published private(set) var archiveWarning: String?
     @Published private(set) var isAutomaticCaptureEnabled = false
 
     var onInteraction: (() -> Void)?
@@ -36,6 +37,7 @@ final class AutomaticDictionaryTrainingSession: ObservableObject {
 
     private let asr: ASRService
     private let audioLearning: DictionaryAudioLearningService
+    private let archiveExample: @Sendable (DictionaryCorrectionExample) async throws -> Void
     private var stopRequestedDuringStart = false
     private var didStartAudioCapture = false
     private var discardCurrentCapture = false
@@ -52,11 +54,15 @@ final class AutomaticDictionaryTrainingSession: ObservableObject {
     init(
         candidate: AutomaticDictionaryCorrectionCandidate,
         asr: ASRService,
-        audioLearning: DictionaryAudioLearningService = .shared
+        audioLearning: DictionaryAudioLearningService = .shared,
+        archiveExample: @escaping @Sendable (DictionaryCorrectionExample) async throws -> Void = {
+            try await DictionaryCorrectionArchive.shared.saveAccepted($0)
+        }
     ) {
         self.candidate = candidate
         self.asr = asr
         self.audioLearning = audioLearning
+        self.archiveExample = archiveExample
 
         let replacement = CustomDictionaryTrainingMerge.normalizedReplacement(candidate.correctedText)
         let savedVariants = SettingsStore.shared.customDictionaryEntries
@@ -496,18 +502,35 @@ final class AutomaticDictionaryTrainingSession: ObservableObject {
         }
 
         SettingsStore.shared.customDictionaryEntries = mergedEntries
-        if let example = self.candidate.trainingExample {
-            Task(priority: .utility) {
-                do {
-                    try await DictionaryCorrectionArchive.shared.saveAccepted(example)
-                } catch {
-                    DebugLogger.shared.warning("Accepted correction example could not be saved locally: \(error)", source: "DictionaryCorrectionArchive")
-                }
-            }
-        }
         ASRService.invalidateDictionaryCache()
         NotificationCenter.default.post(name: .parakeetVocabularyDidChange, object: nil)
-        self.completeSave(title: updatedExisting ? "Dictionary Updated" : "Added to Dictionary")
+        self.archiveThenCompleteSave(title: updatedExisting ? "Dictionary Updated" : "Added to Dictionary")
+    }
+
+    private func archiveThenCompleteSave(title: String) {
+        guard let example = self.candidate.trainingExample else {
+            self.completeSave(title: title)
+            return
+        }
+        self.capturePhase = .processing
+        self.statusMessage = "Saving audio locally…"
+        let archive = self.archiveExample
+        // Acceptance already saved the dictionary text. Finish its archive even if the prompt closes.
+        Task(priority: .utility) { [weak self] in
+            var warning: String?
+            do {
+                try await archive(example)
+            } catch DictionaryCorrectionArchive.ArchiveError.capacityReached {
+                warning = "Audio collection is paused: the local archive is full."
+            } catch {
+                warning = "The correction is saved, but its audio example could not be stored."
+            }
+            if let warning { DebugLogger.shared.warning(warning, source: "DictionaryCorrectionArchive") }
+            guard let self, !self.isCancelled else { return }
+            self.capturePhase = .idle
+            self.archiveWarning = warning
+            self.completeSave(title: title)
+        }
     }
 
     private func completeSave(title: String) {

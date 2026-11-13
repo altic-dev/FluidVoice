@@ -155,8 +155,9 @@ final class DictionaryCorrectionOverlayController {
     private func scheduleSuccessDismissal() {
         self.keepVisible()
         let successGeneration = self.generation
+        let duration = self.session?.archiveWarning == nil ? Self.successDurationNanoseconds : Self.displayDurationNanoseconds
         self.dismissTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: Self.successDurationNanoseconds)
+            try? await Task.sleep(nanoseconds: duration)
             guard !Task.isCancelled,
                   let self,
                   self.generation == successGeneration
@@ -918,6 +919,12 @@ private struct AutomaticDictionaryCorrectionOverlayView: View {
                     .font(.fluidSystem(size: 11))
                     .foregroundStyle(.white.opacity(0.6))
                     .lineLimit(1)
+                if let warning = self.session.archiveWarning {
+                    Text(warning)
+                        .font(.fluidSystem(size: 11))
+                        .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
 
             Spacer(minLength: 8)
