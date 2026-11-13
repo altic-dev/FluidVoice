@@ -39,9 +39,27 @@ private struct EditableTitleModifier: ViewModifier {
                         self.focused = true
                     }
             } else {
-                if self.doubleClickEnabled || self.singleClickEnabled {
+                if self.singleClickEnabled {
+                    HStack(alignment: .center, spacing: 8) {
+                        content
+                            .highPriorityGesture(TapGesture().onEnded { self.begin() })
+                            .accessibilityAction(named: Text("Rename"), self.begin)
+                        if self.enabled && self.isEnabled {
+                            Button(action: self.begin) {
+                                FluidPencilShape()
+                                    .stroke(style: StrokeStyle(lineWidth: 1.7, lineCap: .round, lineJoin: .round))
+                                    .frame(width: 20, height: 20)
+                                    .frame(width: 24, height: 24)
+                            }
+                            .buttonStyle(FluidHoverIconButtonStyle())
+                            .help("Rename")
+                            .accessibilityLabel("Rename \(self.title)")
+                        }
+                    }
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { self.restingHeight = $0 }
+                } else if self.doubleClickEnabled {
                     content
-                        .highPriorityGesture(TapGesture(count: self.singleClickEnabled ? 1 : 2).onEnded { self.begin() })
+                        .highPriorityGesture(TapGesture(count: 2).onEnded { self.begin() })
                         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { self.restingHeight = $0 }
                         .accessibilityAction(named: Text("Rename"), self.begin)
                 } else {
