@@ -644,8 +644,8 @@ private final class MeetingProviderLanguagePin {
 final class MeetingProcessingPipeline: MeetingProcessingControlling {
     /// Bump whenever classification rules change so a resumed run can't mix rules mid-session.
     /// Era-awareness did NOT bump this: the mic pass re-runs every time, and multi-era tracks cannot predate this build.
-    /// Version 16: normalize quantities in completed turns before summary generation and saving.
-    nonisolated static let pipelineVersion = 16
+    /// Version 17: keep speaker inheritance on its source track and preserve cross-track replies.
+    nonisolated static let pipelineVersion = 17
     /// Per-turn engines starve on short turns, and an all-empty chunk collapses to unlabeled.
     static let perTurnTurnMergeGapSeconds = 5.0
 
@@ -1723,9 +1723,9 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         )
     }
 
-    /// Product policy: unresolved text belongs to the preceding visible speaker. Keep the
-    /// original word evidence in the sidecar; only the published transcript inherits a label.
-    /// An opening Unknown stays unresolved until there is a preceding speaker to inherit.
+    /// Unresolved text may inherit only the preceding visible speaker on its own audio track.
+    /// A microphone reply must never borrow a remote speaker from application audio. Keep raw
+    /// word evidence in the sidecar; a track's opening Unknown stays unresolved.
     nonisolated static func inheritPreviousSpeaker(
         _ segments: [MeetingTranscriptSegment]
     ) -> [MeetingTranscriptSegment] {
@@ -1733,7 +1733,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
             ($0.element.start, $0.element.end, $0.element.sourceTrackID.uuidString, $0.offset)
                 < ($1.element.start, $1.element.end, $1.element.sourceTrackID.uuidString, $1.offset)
         }.map(\.element)
-        var previousSpeakerID: SessionSpeakerID?
+        var previousSpeakerByTrack: [MeetingAudioTrackID: SessionSpeakerID] = [:]
         return ordered.map { segment in
             guard !segment.isEcho else { return segment }
             var updated = segment
@@ -1742,39 +1742,36 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
                 || segment.attributionState == .overlappingSpeakers
                 || segment.attributionState == .timingUncertain
             if unresolved {
-                if let previousSpeakerID {
+                if let previousSpeakerID = previousSpeakerByTrack[segment.sourceTrackID] {
                     updated.speakerID = previousSpeakerID
                     updated.attributionState = .assigned
                     updated.overlap = .none
                 }
             } else {
-                previousSpeakerID = segment.speakerID
+                previousSpeakerByTrack[segment.sourceTrackID] = segment.speakerID
             }
             return updated
         }
     }
 
     /// Canonical evidence remains word-granular in the sidecar, but product session JSON and UI
-    /// rows stay turn-granular. Folds each track chronologically and merges only a segment with
-    /// the immediately preceding turn on that same track — never across an intervening
-    /// different-key segment — so A → B → A stays three turns instead of collapsing the two A
-    /// segments around B. A merge additionally requires an identical full attribution/state key
-    /// and the named gap/duration turn bounds.
+    /// rows stay turn-granular. Merge only globally adjacent visible segments with the same full
+    /// attribution/state key, so a reply on either track splits the preceding speaker's turn.
+    /// Hidden echo evidence is folded separately so it cannot fragment the visible conversation.
+    /// Original timings remain intact, including genuine simultaneous speech.
     nonisolated static func mergeCanonicalSegments(
         _ segments: [MeetingTranscriptSegment],
         maximumGapSeconds: TimeInterval = MeetingProcessingPipeline.canonicalTurnMergeGapSeconds,
         maximumDurationSeconds: TimeInterval = MeetingProcessingPipeline.canonicalTurnMaximumDurationSeconds
     ) -> [MeetingTranscriptSegment] {
-        let byTrack = Dictionary(grouping: Self.inheritPreviousSpeaker(segments), by: \.sourceTrackID)
+        let ordered = Self.inheritPreviousSpeaker(segments)
         var merged: [MeetingTranscriptSegment] = []
-        for (_, members) in byTrack {
-            let ordered = members.enumerated().sorted {
-                ($0.element.start, $0.element.end, $0.offset) < ($1.element.start, $1.element.end, $1.offset)
-            }.map(\.element)
-            guard var current = ordered.first else { continue }
+        for isEcho in [false, true] {
+            let members = ordered.filter { $0.isEcho == isEcho }
+            guard var current = members.first else { continue }
             var currentKey = Self.canonicalSegmentMergeKey(current)
             var memberIDs = [current.id]
-            for next in ordered.dropFirst() {
+            for next in members.dropFirst() {
                 let nextKey = Self.canonicalSegmentMergeKey(next)
                 let gap = next.start.seconds - current.end.seconds
                 let combinedDuration = max(current.end.seconds, next.end.seconds) - current.start.seconds

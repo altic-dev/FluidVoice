@@ -409,7 +409,7 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
         XCTAssertNil(input[2].speakerID, "raw input evidence is unchanged")
     }
 
-    func testUnknownInheritanceUsesChronologicalSpeakerAcrossTracksWithoutMovingAudio() {
+    func testUnknownInheritanceUsesPreviousSpeakerOnItsOwnAudioTrack() {
         let mic = UUID()
         let app = UUID()
         let first = UUID()
@@ -420,10 +420,63 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
             self.canonicalSegment(trackID: mic, start: 2, end: 2.3, speakerID: nil, text: "tail"),
         ]
         let output = MeetingProcessingPipeline.inheritPreviousSpeaker(input)
-        XCTAssertEqual(output.last?.speakerID, second)
+        XCTAssertEqual(output.last?.speakerID, first, "A microphone reply must not inherit the remote speaker")
         XCTAssertEqual(output.last?.sourceTrackID, mic)
         let turns = MeetingProcessingPipeline.mergeCanonicalSegments(input)
         XCTAssertEqual(turns.count, 3, "separate audio tracks keep separate playback ranges")
+    }
+
+    func testOpeningUnknownOnOneTrackDoesNotBorrowAnotherTracksSpeaker() {
+        let app = UUID()
+        let mic = UUID()
+        let input = [
+            self.canonicalSegment(trackID: app, start: 0, end: 1, speakerID: UUID(), text: "Question"),
+            self.canonicalSegment(trackID: mic, start: 1.2, end: 1.5, speakerID: nil, text: "Yes"),
+        ]
+        let output = MeetingProcessingPipeline.inheritPreviousSpeaker(input)
+        XCTAssertEqual(output, input, "No microphone speaker evidence means the reply stays unknown")
+    }
+
+    func testCanonicalMergeKeepsCrossTrackQuestionAnswerQuestionInOrder() {
+        let app = UUID()
+        let mic = UUID()
+        let remoteSpeaker = UUID()
+        let localSpeaker = UUID()
+        let input = [
+            self.canonicalSegment(trackID: app, start: 0, end: 1, speakerID: remoteSpeaker, text: "Where?"),
+            self.canonicalSegment(trackID: mic, start: 1.2, end: 1.5, speakerID: localSpeaker, text: "Here"),
+            self.canonicalSegment(trackID: app, start: 1.6, end: 2, speakerID: remoteSpeaker, text: "How long?"),
+            self.canonicalSegment(trackID: mic, start: 2.1, end: 2.5, speakerID: localSpeaker, text: "Two years"),
+        ]
+        let turns = MeetingProcessingPipeline.mergeCanonicalSegments(input.reversed())
+        XCTAssertEqual(turns, input, "Never join all questions ahead of all answers")
+        XCTAssertEqual(MeetingProcessingPipeline.mergeCanonicalSegments(input), turns)
+    }
+
+    func testCrossTrackEchoDoesNotSplitVisibleSpeechOrSupplyASpeaker() {
+        let app = UUID()
+        let mic = UUID()
+        let speaker = UUID()
+        let input = [
+            self.canonicalSegment(trackID: app, start: 0, end: 1, speakerID: speaker, text: "Hello"),
+            self.canonicalSegment(trackID: mic, start: 0.1, end: 1.1, speakerID: UUID(), text: "Hello", isLikelyEcho: true),
+            self.canonicalSegment(trackID: app, start: 1.2, end: 2, speakerID: speaker, text: "there"),
+            self.canonicalSegment(trackID: mic, start: 2.1, end: 2.5, speakerID: nil, text: "Yes"),
+        ]
+        let turns = MeetingProcessingPipeline.mergeCanonicalSegments(input)
+        XCTAssertEqual(turns.filter { !$0.isEcho }.map(\.text), ["Hello there", "Yes"])
+        XCTAssertEqual(turns.filter(\.isEcho), [input[1]])
+        XCTAssertNil(turns.last?.speakerID, "An echo is not evidence of the microphone speaker")
+    }
+
+    func testRealSimultaneousSpeechKeepsItsOriginalTimingAndOverlap() {
+        let app = UUID()
+        let mic = UUID()
+        let input = [
+            self.canonicalSegment(trackID: app, start: 0, end: 2, speakerID: UUID(), text: "Question", overlap: .overlapsOtherTrack),
+            self.canonicalSegment(trackID: mic, start: 1, end: 1.5, speakerID: UUID(), text: "Reply", overlap: .overlapsOtherTrack),
+        ]
+        XCTAssertEqual(MeetingProcessingPipeline.mergeCanonicalSegments(input), input, "Do not invent word timing to remove real overlaps")
     }
 
     func testUnknownInheritanceSkipsEchoesAsBothTargetsAndAnchors() {
