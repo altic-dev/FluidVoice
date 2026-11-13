@@ -41,7 +41,6 @@ final class MeetingSessionStore: MeetingSessionStoring {
 }
 
 struct MeetingCoordinatorLiveTranscriptProvider: MeetingLiveTranscriptProviding {
-    init() {}
     func currentLiveTranscript() async -> MeetingLiveTranscriptReading { .idle }
 }
 
@@ -176,12 +175,12 @@ enum MeetingTranscriptMarkdownTests {
             }
         }
 
-        func jsonObject(_ response: LocalAPI.Response) -> [String: Any]? {
-            (try? JSONSerialization.jsonObject(with: response.body)) as? [String: Any]
+        func jsonObject(_ response: LocalAPI.Response) -> [String: Any] {
+            (try? JSONSerialization.jsonObject(with: response.body)) as? [String: Any] ?? [:]
         }
 
         func errorMessage(_ response: LocalAPI.Response) -> String {
-            jsonObject(response)?["error"] as? String ?? String(data: response.body, encoding: .utf8) ?? ""
+            jsonObject(response)["error"] as? String ?? String(data: response.body, encoding: .utf8) ?? ""
         }
 
         func request(
@@ -326,7 +325,7 @@ enum MeetingTranscriptMarkdownTests {
         } catch {
             check(false, "json exporter threw \(error)")
         }
-        let json = jsonObject(jsonResponse) ?? [:]
+        let json = jsonObject(jsonResponse)
         let jsonSegments = json["segments"] as? [[String: Any]] ?? []
         check(jsonSegments.count == 2, "JSON still includes echo segments, count=\(jsonSegments.count)")
         let echoFlags = jsonSegments.compactMap { $0["isLikelyEcho"] as? Bool }
