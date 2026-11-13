@@ -5,13 +5,8 @@ struct DashboardRecommendationsView: View {
     @ObservedObject private var settings = SettingsStore.shared
     @ObservedObject private var installations = SpeechModelInstallationSnapshot.shared
     @ObservedObject private var content = NotchContentState.shared
-    @StateObject private var controller: DashboardRecommendationsController
+    @ObservedObject var controller: DashboardRecommendationsController
     @Environment(\.theme) private var theme
-
-    init(asr: ASRService) {
-        self.asr = asr
-        _controller = StateObject(wrappedValue: DashboardRecommendationsController(asr: asr))
-    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -37,7 +32,6 @@ struct DashboardRecommendationsView: View {
             await self.controller.refresh()
         }
         .onAppear { self.installations.refresh() }
-        .onDisappear { self.controller.operation.cancel() }
     }
 
     private func card(_ recommendation: DashboardModelRecommendation) -> some View {

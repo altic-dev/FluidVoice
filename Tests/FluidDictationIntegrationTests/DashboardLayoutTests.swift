@@ -1,4 +1,5 @@
 @testable import FluidVoice_Debug
+import SwiftUI
 import XCTest
 
 @MainActor
@@ -140,6 +141,65 @@ final class DashboardLayoutTests: XCTestCase {
 
 @MainActor
 final class DashboardRecommendationTests: XCTestCase {
+    func testModelSetupSurvivesDashboardResizeButCancelsWhenLeaving() async throws {
+        let asr = ASRService()
+        let controller = DashboardRecommendationsController(asr: asr)
+        let preparing = expectation(description: "preparing")
+        let completed = expectation(description: "cancelled on exit")
+        var resume: CheckedContinuation<Void, Never>?
+        controller.operation.start(
+            id: "resize-test",
+            prepare: {
+                controller.operation.report("Downloading…", fraction: 0.4)
+                await withCheckedContinuation { resume = $0; preparing.fulfill() }
+            },
+            isCurrent: { true },
+            activate: { XCTFail("Leaving must not activate the model") },
+            finished: { completed.fulfill() }
+        )
+        await fulfillment(of: [preparing], timeout: 2)
+        let dashboard = DashboardView(
+            asr: asr,
+            selectedSidebarItem: .constant(nil),
+            accessibilityEnabled: true,
+            openAccessibilitySettings: {},
+            openFluidIntelligenceDemo: {},
+            openShortcutSettings: {},
+            recommendations: controller
+        )
+        let host = NSHostingView(rootView: AnyView(dashboard))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1200, height: 700), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        window.orderFront(nil)
+        defer {
+            controller.operation.cancel()
+            resume?.resume()
+            window.orderOut(nil)
+            window.contentView = nil
+            window.close()
+        }
+        for width in [1200, 800, 1200, 600] {
+            window.setContentSize(NSSize(width: width, height: 700))
+            host.layoutSubtreeIfNeeded()
+            try await Task.sleep(for: .milliseconds(100))
+            XCTAssertEqual(controller.operation.activeID, "resize-test")
+            XCTAssertEqual(controller.operation.fraction, 0.4)
+            XCTAssertFalse(controller.operation.cancelling)
+        }
+        host.rootView = AnyView(EmptyView())
+        host.layoutSubtreeIfNeeded()
+        let deadline = ContinuousClock.now + .seconds(2)
+        while !controller.operation.cancelling, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertTrue(controller.operation.cancelling)
+        resume?.resume()
+        resume = nil
+        await fulfillment(of: [completed], timeout: 2)
+        XCTAssertFalse(controller.operation.isBusy)
+    }
+
     func testSpeechRecommendationRespectsMemoryAvailabilityAndLanguage() {
         let gib: UInt64 = 1024 * 1024 * 1024
         let available: [SettingsStore.SpeechModel] = [.fluidParakeetPro, .fluidParakeetMini]

@@ -62,6 +62,7 @@ struct DashboardView: View {
     @ObservedObject private var contentState = NotchContentState.shared
     @Environment(\.theme) private var theme
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @StateObject private var recommendations: DashboardRecommendationsController
     @StateObject private var screenPermission = DictationScreenPermissionController()
     @State private var screenPermissionRequestTask: Task<Void, Never>?
     @State private var statsOwner = UUID()
@@ -69,6 +70,24 @@ struct DashboardView: View {
     @State private var statisticsHovered = false
     @FocusState private var statisticsFocused: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    init(
+        asr: ASRService,
+        selectedSidebarItem: Binding<SidebarItem?>,
+        accessibilityEnabled: Bool,
+        openAccessibilitySettings: @escaping () -> Void,
+        openFluidIntelligenceDemo: @escaping () -> Void,
+        openShortcutSettings: @escaping () -> Void,
+        recommendations: DashboardRecommendationsController? = nil
+    ) {
+        self.asr = asr
+        self._selectedSidebarItem = selectedSidebarItem
+        self.accessibilityEnabled = accessibilityEnabled
+        self.openAccessibilitySettings = openAccessibilitySettings
+        self.openFluidIntelligenceDemo = openFluidIntelligenceDemo
+        self.openShortcutSettings = openShortcutSettings
+        self._recommendations = StateObject(wrappedValue: recommendations ?? DashboardRecommendationsController(asr: asr))
+    }
 
     private var busy: Bool { self.asr.isRunning || self.asr.isStarting || self.contentState.isProcessing }
     private var shortcut: String { self.settings.primaryDictationShortcutDisplayString }
@@ -117,6 +136,7 @@ struct DashboardView: View {
             if busy { self.screenPermissionRequestTask?.cancel() }
         }
         .onDisappear {
+            self.recommendations.operation.cancel()
             self.stats.deactivate(self.statsOwner)
             self.screenPermissionRequestTask?.cancel()
         }
@@ -288,7 +308,7 @@ struct DashboardView: View {
     private func actionColumn(horizontal: Bool) -> some View {
         VStack(alignment: .leading, spacing: 24) {
             self.quickActions(horizontal: horizontal)
-            DashboardRecommendationsView(asr: self.asr)
+            DashboardRecommendationsView(asr: self.asr, controller: self.recommendations)
         }
     }
 
