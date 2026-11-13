@@ -118,7 +118,7 @@ final class ParakeetCompactModelSmokeTests: XCTestCase {
         ]
         for (model, bytes, oldHash) in fixtures {
             let latest = try XCTUnwrap(model.parakeetDescriptor)
-            let oldURL = try XCTUnwrap(URL(string: "https://models.fluidvoice.app/parakeet/fluid-\(latest.variant.rawValue)/1.0.0/\(latest.folderName).tar"))
+            let oldURL = try XCTUnwrap(URL(string: "https://models.fluidvoice.com/parakeet/fluid-\(latest.variant.rawValue)/1.0.0/\(latest.folderName).tar"))
             let old = latest.replacingArchive(url: oldURL, sha256: oldHash, byteCount: bytes)
             let directory = try await ParakeetArchiveDownloader.ensurePresent(descriptor: old, in: root)
             let probe = SpeechModelInstallationSnapshot.Probe(modelID: model.id, kind: .parakeet(latest))
