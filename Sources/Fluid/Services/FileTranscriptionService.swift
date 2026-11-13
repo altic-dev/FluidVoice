@@ -488,8 +488,7 @@ final class FileTranscriptionService: ObservableObject {
             // Speaker-labeled path: diarize first, then transcribe each speaker turn.
             // Any diarization failure falls back to the standard paths below.
             if SettingsStore.shared.fileTranscriptionSpeakerLabelsEnabled,
-               SpeakerDiarizationService.isSupported,
-               !isVideoContainer
+               SpeakerDiarizationService.isSupported
             {
                 if let labeledResult = await self.transcribeFileWithSpeakerLabels(
                     fileURL,
@@ -505,11 +504,6 @@ final class FileTranscriptionService: ObservableObject {
                 )
                 self.fallbackNotice = "Speaker labeling was unavailable for this file. The transcript was completed without speaker labels."
                 self.progress = 0.3
-            } else if SettingsStore.shared.fileTranscriptionSpeakerLabelsEnabled, isVideoContainer {
-                DebugLogger.shared.info(
-                    "Speaker labeling skipped for video container; using standard transcription",
-                    source: "FileTranscriptionService"
-                )
             }
 
             if provider.prefersNativeFileTranscription && !isVideoContainer {
