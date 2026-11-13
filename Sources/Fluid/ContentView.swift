@@ -3187,6 +3187,7 @@ struct ContentView: View {
         }
         let audioSnapshot = self.asr.consumeLastCompletedAudioSnapshot()
         let dictionaryLearningRecording = self.asr.consumeDictionaryLearningRecording()
+        let correctionRecording = self.asr.consumeCorrectionRecording()
         let transcriptionDurationMilliseconds = self.asr.consumeLastFinalTranscriptionDurationMs()
         let parakeetProcessingDurationMilliseconds = self.asr.consumeLastFinalParakeetProcessingMs()
         DebugLogger.shared.info(
@@ -3631,7 +3632,8 @@ struct ContentView: View {
                 AutomaticDictionaryCorrectionTracker.shared.beginObservingInsertion(
                     finalOutputPlan.plainText,
                     targetPID: typingTarget.pid,
-                    learningRecording: dictionaryLearningRecording
+                    learningRecording: dictionaryLearningRecording,
+                    correctionRecording: correctionRecording
                 )
                 self.appBench("dictionary_tracking_scheduled afterDeliveryUI=true")
             }

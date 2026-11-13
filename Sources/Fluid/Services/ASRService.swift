@@ -2101,6 +2101,8 @@ final class ASRService: ObservableObject {
     private var lastCompletedAudioSnapshot: DictationAudioSnapshot?
     private var lastDictionaryLearningRecording: DictionaryLearningRecording?
     private var dictionaryLearningExpiryTask: Task<Void, Never>?
+    private var lastCorrectionRecording: DictionaryCorrectionRecording?
+    private var correctionRecordingExpiryTask: Task<Void, Never>?
 
     // Streaming transcription state (no VAD)
     private let streamingTaskLifecycle = StreamingTaskLifecycle()
@@ -2153,6 +2155,24 @@ final class ASRService: ObservableObject {
             self.lastDictionaryLearningRecording = nil
             self.dictionaryLearningExpiryTask = nil
         }
+    }
+
+    private func retainCorrectionRecording(_ recording: DictionaryCorrectionRecording?) {
+        self.correctionRecordingExpiryTask?.cancel()
+        self.correctionRecordingExpiryTask = nil
+        self.lastCorrectionRecording = recording
+        guard let id = recording?.id else { return }
+        self.correctionRecordingExpiryTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(DictionaryCorrectionRecording.lifetime))
+            guard !Task.isCancelled, let self, self.lastCorrectionRecording?.id == id else { return }
+            self.lastCorrectionRecording = nil
+            self.correctionRecordingExpiryTask = nil
+        }
+    }
+
+    func consumeCorrectionRecording() -> DictionaryCorrectionRecording? {
+        defer { self.retainCorrectionRecording(nil) }
+        return self.lastCorrectionRecording
     }
 
     func originalAudioEnrollment(_ evidence: DictionaryLearningAudioEvidence) async throws -> PronunciationEnrollmentCapture {
@@ -2831,6 +2851,7 @@ final class ASRService: ObservableObject {
             return .failed
         }
         self.retainDictionaryLearningRecording(nil)
+        self.retainCorrectionRecording(nil)
         self.audioCaptureStartGeneration &+= 1
         let startGeneration = self.audioCaptureStartGeneration
         self.isStarting = true
@@ -3489,6 +3510,7 @@ final class ASRService: ObservableObject {
         }
         self.lastCompletedAudioSnapshot = nil
         self.retainDictionaryLearningRecording(nil)
+        self.retainCorrectionRecording(nil)
         let stopStartedAt = Date().timeIntervalSince1970
         let traceStartedAt = ProcessInfo.processInfo.systemUptime
         var tracePreviousAt = traceStartedAt
@@ -3829,6 +3851,14 @@ final class ASRService: ObservableObject {
                     alignment: alignment,
                     samples: capturedPCM,
                     retainAudio: SettingsStore.shared.automaticDictionaryLearningEnabled
+                ))
+            }
+
+            if !isolatedDictionaryCapture, SettingsStore.shared.automaticDictionaryLearningEnabled {
+                self.retainCorrectionRecording(DictionaryCorrectionRecording(
+                    model: result.dictionaryLearningAlignment?.modelKey ?? provider.name,
+                    rawTranscript: result.text,
+                    samples: capturedPCM
                 ))
             }
 

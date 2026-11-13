@@ -619,6 +619,89 @@ final class CustomDictionaryManualEntryTests: XCTestCase {
         }
     }
 
+    private func correctionArchiveCandidate() throws -> AutomaticDictionaryCorrectionCandidate {
+        let recording = try XCTUnwrap(DictionaryCorrectionRecording(model: "fixture", rawTranscript: "Nora", samples: [0.1]))
+        var candidate = AutomaticDictionaryCorrectionCandidate(heardText: "Nora", correctedText: "Norah")
+        candidate.trainingExample = DictionaryCorrectionExample.make(
+            id: candidate.id,
+            recording: recording,
+            before: "Nora",
+            after: "Norah",
+            insertedRange: NSRange(location: 0, length: 4),
+            heardWord: "Nora",
+            correctedWord: "Norah"
+        )
+        return candidate
+    }
+
+    func testArchiveFailureKeepsDictionaryCorrectionAndExplainsMissingAudio() async throws {
+        for error in [DictionaryCorrectionArchive.ArchiveError.capacityReached as Error, CocoaError(.fileWriteOutOfSpace)] {
+            let finished = expectation(description: "Archive failure is shown")
+            let session = try AutomaticDictionaryTrainingSession(
+                candidate: self.correctionArchiveCandidate(),
+                asr: AppServices.shared.asr,
+                archiveExample: { _ in throw error }
+            )
+            session.onSuccess = { finished.fulfill() }
+            self.withRestoredDictionary([]) {
+                session.addOnlyCorrection()
+                XCTAssertEqual(SettingsStore.shared.customDictionaryEntries.first?.replacement, "Norah")
+                XCTAssertEqual(session.capturePhase, .processing)
+                XCTAssertEqual(session.screen, .choice)
+            }
+            await fulfillment(of: [finished], timeout: 2)
+            XCTAssertEqual(session.screen, .success)
+            XCTAssertEqual(session.capturePhase, .idle)
+            XCTAssertNotNil(session.archiveWarning)
+            XCTAssertFalse(session.hasError, "The dictionary correction itself succeeded")
+            if case DictionaryCorrectionArchive.ArchiveError.capacityReached = error {
+                XCTAssertTrue(session.archiveWarning?.contains("archive is full") == true)
+            }
+        }
+    }
+
+    func testArchiveSuccessCompletesWithoutAWarning() async throws {
+        let finished = expectation(description: "Archive succeeded")
+        let session = try AutomaticDictionaryTrainingSession(
+            candidate: self.correctionArchiveCandidate(),
+                asr: AppServices.shared.asr,
+            archiveExample: { _ in }
+        )
+        session.onSuccess = { finished.fulfill() }
+        self.withRestoredDictionary([]) {
+            session.addOnlyCorrection()
+            let savedEntries = SettingsStore.shared.customDictionaryEntries
+            session.beginTraining()
+            session.addOnlyCorrection()
+            XCTAssertEqual(session.screen, .choice, "Training cannot interrupt an accepted audio save")
+            XCTAssertEqual(session.capturePhase, .processing)
+            XCTAssertEqual(session.statusMessage, "Saving audio locally…")
+            XCTAssertEqual(SettingsStore.shared.customDictionaryEntries, savedEntries)
+        }
+        await fulfillment(of: [finished], timeout: 2)
+        XCTAssertEqual(session.screen, .success)
+        XCTAssertEqual(session.capturePhase, .idle)
+        XCTAssertNil(session.archiveWarning)
+    }
+
+    func testClosingAcceptedCorrectionDoesNotCancelArchiveOrReopenPrompt() async throws {
+        let archived = expectation(description: "Accepted audio still saved")
+        let noPrompt = expectation(description: "Closed prompt stays closed")
+        noPrompt.isInverted = true
+        let session = try AutomaticDictionaryTrainingSession(
+            candidate: self.correctionArchiveCandidate(),
+                asr: AppServices.shared.asr,
+            archiveExample: { _ in archived.fulfill() }
+        )
+        session.onSuccess = { noPrompt.fulfill() }
+        self.withRestoredDictionary([]) {
+            session.addOnlyCorrection()
+            session.cancel()
+        }
+        await fulfillment(of: [archived, noPrompt], timeout: 2)
+        XCTAssertNotEqual(session.screen, .success)
+    }
+
     func testKeepsWhitespaceOnlyReplacements() {
         XCTAssertEqual(CustomDictionaryManualEntry.sanitizedReplacement("\n"), "\n")
         XCTAssertEqual(CustomDictionaryManualEntry.sanitizedReplacement(" "), " ")
