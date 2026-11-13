@@ -43,7 +43,6 @@ final class MeetingAEC3Tests: XCTestCase {
         }
         await committer.waitForPendingCommits()
         let snapshot = await writer.snapshot()
-        XCTAssertTrue(MeetingProcessingPipeline.microphoneCoverageGaps(track: snapshot, origin: 1).isEmpty)
         XCTAssertEqual(snapshot.captureEras?.last?.echoProtection, .unfiltered)
         XCTAssertNil(snapshot.captureEras?.last?.aecProvenance)
         XCTAssertEqual(live.presentationValues.first, 48_000)
@@ -54,6 +53,8 @@ final class MeetingAEC3Tests: XCTestCase {
         await committer.waitForPendingCommits()
         let track = await writer.stop()
         let chunk = try XCTUnwrap(track.chunks.first)
+        XCTAssertEqual(chunk.presentationStart.seconds, 1, accuracy: 0.000_001)
+        XCTAssertTrue(MeetingProcessingPipeline.microphoneCoverageGaps(track: track, origin: 1).isEmpty)
         let audio = try AVAudioFile(forReading: chunk.fileURL(relativeTo: directory))
         XCTAssertEqual(audio.length, 512 + 8 * 480, "first PCM must be stored once, without a delay or discarded prefix")
         let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: audio.processingFormat, frameCapacity: AVAudioFrameCount(audio.length)))
