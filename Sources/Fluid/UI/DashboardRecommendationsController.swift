@@ -59,7 +59,7 @@ final class DashboardRecommendationsController: ObservableObject {
         var result: [DashboardModelRecommendation] = []
         if let model = DashboardModelRecommendationPolicy.speechModel(
             memoryBytes: hardware.memoryBytes, language: selection.language, available: SettingsStore.SpeechModel.availableModels
-        ), DashboardModelRecommendationPolicy.shouldShow(targetID: model.id, selectedID: selection.speech.id, dismissedID: self.dismissals.modelID(for: .speech)) {
+        ), DashboardModelRecommendationPolicy.shouldSuggestSpeech(targetID: model.id, selectedID: selection.speech.id, dismissedID: self.dismissals.modelID(for: .speech)) {
             result.append(DashboardModelRecommendation(
                 kind: .speech,
                 modelID: model.id,

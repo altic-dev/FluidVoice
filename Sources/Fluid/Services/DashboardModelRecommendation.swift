@@ -47,6 +47,11 @@ enum DashboardModelRecommendationPolicy {
         return !enabled || !ready || !currentChoice
     }
 
+    static func shouldSuggestSpeech(targetID: String, selectedID: String, dismissedID: String?) -> Bool {
+        // A user already on Pro should not be nudged down to Mini on a smaller Mac.
+        selectedID != SettingsStore.SpeechModel.fluidParakeetPro.id && self.shouldShow(targetID: targetID, selectedID: selectedID, dismissedID: dismissedID)
+    }
+
     static func shouldShow(targetID: String, selectedID: String, dismissedID: String?) -> Bool {
         targetID != selectedID && targetID != dismissedID
     }

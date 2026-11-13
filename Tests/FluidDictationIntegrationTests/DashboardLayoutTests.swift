@@ -143,6 +143,9 @@ final class DashboardRecommendationTests: XCTestCase {
     func testSpeechRecommendationRespectsMemoryAvailabilityAndLanguage() {
         let gib: UInt64 = 1024 * 1024 * 1024
         let available: [SettingsStore.SpeechModel] = [.fluidParakeetPro, .fluidParakeetMini]
+        XCTAssertFalse(DashboardModelRecommendationPolicy.shouldSuggestSpeech(
+            targetID: SettingsStore.SpeechModel.fluidParakeetMini.id, selectedID: SettingsStore.SpeechModel.fluidParakeetPro.id, dismissedID: nil
+        ))
         XCTAssertEqual(DashboardModelRecommendationPolicy.speechModel(memoryBytes: 16 * gib, language: "en", available: available), .fluidParakeetPro)
         XCTAssertEqual(DashboardModelRecommendationPolicy.speechModel(memoryBytes: 8 * gib, language: "de", available: available), .fluidParakeetMini)
         XCTAssertNil(DashboardModelRecommendationPolicy.speechModel(memoryBytes: 4 * gib, language: "en", available: available))
