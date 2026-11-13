@@ -30,8 +30,8 @@ final class CompactSpeechModelReleaseCatalog: ObservableObject {
     private nonisolated enum CacheError: Error { case busy, invalidLock }
 
     static let shared = CompactSpeechModelReleaseCatalog()
-    nonisolated static let manifestURL = CompactSpeechModelReleaseCatalog.fixedURL("https://models.fluidvoice.app/feed/v1/speech-models.json")
-    nonisolated static let stagingURL = CompactSpeechModelReleaseCatalog.fixedURL("https://models.fluidvoice.app/feed/v1/speech-models-staging.json")
+    nonisolated static let manifestURL = CompactSpeechModelReleaseCatalog.fixedURL("https://models.fluidvoice.com/feed/v1/speech-models.json")
+    nonisolated static let stagingURL = CompactSpeechModelReleaseCatalog.fixedURL("https://models.fluidvoice.com/feed/v1/speech-models-staging.json")
     nonisolated static let publicKeys = [
         "etCg9rPWJ81mB3XdJfKs2Y6QeuJjIIqCYfbYy40LRY4=",
         "Lf4aPkJzkEbu7nUj2Oh+ltoCePbPGXQMEMh+KfqtJvw=",
@@ -208,8 +208,10 @@ final class CompactSpeechModelReleaseCatalog: ObservableObject {
         var result: [Variant: Descriptor] = [:]
         for variant in [Variant.mini, .pico] {
             let builtIn = ParakeetSpeechModelCatalog.descriptor(for: variant)
-            if let entry = SpeechModelFeed.entry(in: payload, model: variant.rawValue, platform: "macos", build: build, supportedFormat: self.supportedFormat) {
-                result[variant] = builtIn.replacingArchive(url: entry.url, sha256: entry.sha256, byteCount: entry.bytes, manifestSHA256: entry.manifestSHA256)
+            if let entry = SpeechModelFeed.entry(in: payload, model: variant.rawValue, platform: "macos", build: build, supportedFormat: self.supportedFormat),
+               let downloadURL = SpeechModelFeed.downloadURL(for: entry)
+            {
+                result[variant] = builtIn.replacingArchive(url: downloadURL, sha256: entry.sha256, byteCount: entry.bytes, manifestSHA256: entry.manifestSHA256)
             } else {
                 result[variant] = builtIn
             }

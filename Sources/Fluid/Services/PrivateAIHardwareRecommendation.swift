@@ -108,3 +108,12 @@ enum PrivateAIHardwareRecommendation {
         return (1...256).contains(count) ? count : nil
     }
 }
+
+/// Reuse the existing bounded, off-main hardware snapshot for provider recommendations.
+typealias PrivateAIMacHardware = PrivateAIHardwareRecommendation.Hardware
+
+extension PrivateAIHardwareRecommendation.Hardware {
+    static func current() async -> Self {
+        await PrivateAIHardwareRecommendation.currentHardware()
+    }
+}

@@ -92,6 +92,7 @@ run_check keyboard-layouts sh Tests/run_paste_key_cache_tests.sh
 run_check paste-recovery sh Tests/run_paste_recovery_policy_tests.sh
 run_check accessibility-preparation sh Tests/run_dictation_accessibility_preparation_tests.sh
 run_check onboarding sh Tests/run_onboarding_tests.sh
+run_check private-ai-settings sh Tests/run_private_ai_settings_tests.sh
 run_check release-highlights sh Tests/run_release_highlights_tests.sh
 run_check history-decode sh Tests/run_history_decode_recovery_tests.sh
 run_check dictionary-correction-timing python3 Tests/run_dictionary_correction_timing_tests.py

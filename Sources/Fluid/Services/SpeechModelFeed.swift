@@ -32,7 +32,8 @@ nonisolated enum SpeechModelFeed {
 
     static let schema = 1
     static let maximumEnvelopeBytes = 64 * 1024
-    static let host = "models.fluidvoice.app"
+    static let host = "models.fluidvoice.com"
+    private static let legacyHost = "models.fluidvoice.app"
     static let pathPrefix = "/parakeet/"
     static let byteRange: ClosedRange<Int64> = 20_000_000...1_000_000_000
 
@@ -78,6 +79,13 @@ nonisolated enum SpeechModelFeed {
         payload.models[model]?[platform]?.first { $0.format <= supportedFormat && $0.minBuild <= build }
     }
 
+    /// Signed historical feeds remain valid; only the trusted download host moves.
+    static func downloadURL(for entry: Entry) -> URL? {
+        guard self.isValid(entry), var components = URLComponents(url: entry.url, resolvingAgainstBaseURL: false) else { return nil }
+        components.host = self.host
+        return components.url
+    }
+
     static func isValid(_ entry: Entry) -> Bool {
         let releaseCharacters = CharacterSet(charactersIn: "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ.-")
         guard !entry.release.isEmpty, entry.release.count <= 32,
@@ -86,7 +94,7 @@ nonisolated enum SpeechModelFeed {
 
         let url = entry.url
         let pathComponents = url.path.split(separator: "/", omittingEmptySubsequences: false).dropFirst()
-        guard url.scheme == "https", url.host == self.host, url.port == nil, url.user == nil, url.password == nil,
+        guard url.scheme == "https", url.host == self.host || url.host == self.legacyHost, url.port == nil, url.user == nil, url.password == nil,
               url.query == nil, url.fragment == nil,
               url.path.hasPrefix(self.pathPrefix), url.path.hasSuffix(".tar"),
               pathComponents.allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." })

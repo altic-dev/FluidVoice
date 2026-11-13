@@ -151,7 +151,7 @@ final class ParakeetSpeechModelCatalogTests: XCTestCase {
             let descriptor = try XCTUnwrap(model.parakeetDescriptor)
             XCTAssertEqual(descriptor.expectedDownloadBytes, bytes)
             XCTAssertEqual(descriptor.archiveSHA256, hash)
-            XCTAssertEqual(descriptor.archiveURL?.absoluteString, "https://models.fluidvoice.app/parakeet/\(path)/1.1.1/\(descriptor.folderName).tar")
+            XCTAssertEqual(descriptor.archiveURL?.absoluteString, "https://models.fluidvoice.com/parakeet/\(path)/1.1.1/\(descriptor.folderName).tar")
             XCTAssertEqual(descriptor.archiveURL?.scheme, "https")
             XCTAssertEqual(descriptor.supportedLanguageCodes, ParakeetSpeechModelCatalog.v3.supportedLanguageCodes)
             XCTAssertFalse(descriptor.isEnglishOnly)
@@ -183,7 +183,7 @@ final class ParakeetSpeechModelCatalogTests: XCTestCase {
         let model = SettingsStore.SpeechModel.fluidParakeetPro
         XCTAssertEqual(model.parakeetDescriptor, descriptor)
         XCTAssertEqual(descriptor.asrModelVersion, .fluidParakeetPro)
-        XCTAssertEqual(descriptor.archiveURL?.absoluteString, "https://models.fluidvoice.app/parakeet/fluid-pro/1.0.0/fluid-parakeet-pro-coreml.tar")
+        XCTAssertEqual(descriptor.archiveURL?.absoluteString, "https://models.fluidvoice.com/parakeet/fluid-pro/1.0.0/fluid-parakeet-pro-coreml.tar")
         XCTAssertEqual(descriptor.archiveSHA256?.count, 64)
         XCTAssertEqual(descriptor.manifestSHA256?.count, 64)
         XCTAssertEqual(descriptor.expectedDownloadBytes, 652_482_560)

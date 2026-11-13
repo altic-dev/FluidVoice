@@ -181,7 +181,7 @@ struct FluidIntelligenceLiveSection<Management: View>: View {
                         Button("Update model") {
                             self.controller.updatePrivateAIModel(model)
                         }
-                        .disabled(!selected || self.controller.isBusy)
+                        .disabled(self.controller.isBusy)
                     }
                     Button("Verify model") {
                         self.controller.verifyPrivateAIConnection(model, onCompletion: { error in
@@ -190,20 +190,17 @@ struct FluidIntelligenceLiveSection<Management: View>: View {
                             self.showsVerificationResult = true
                         })
                     }
-                    .disabled(!selected || files?.installed != true || needsDownload || self.controller.isBusy)
+                    .disabled(files?.installed != true || needsDownload || self.controller.isBusy)
                     Button("Deactivate model") {
                         self.controller.deactivateSelectedModel()
                     }
                     .disabled(!active || self.controller.isBusy)
-                    if !selected {
-                        Text("Activate this model to manage it")
-                    }
                     Divider()
                     Button("Delete model…", role: .destructive) {
                         self.pendingDeletion = model
                         self.showsDeleteConfirmation = true
                     }
-                    .disabled(!selected || files?.removable != true || self.controller.isBusy)
+                    .disabled(files?.removable != true || self.controller.isBusy)
                 } label: {
                     Image(systemName: "ellipsis").frame(width: 32, height: 32)
                 }
