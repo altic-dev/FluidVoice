@@ -105,20 +105,24 @@ final class PrivateAIIntegrationService {
     static let selectedModelDefaultsKey = "test-selection"
     static let localModelPathDefaultsKey = "test-path"
     static let modelDirectoryURL = URL(fileURLWithPath: "/tmp/test-not-used")
-    static var installed = false
+    nonisolated(unsafe) static var installed = false
     static var downloads = 0
     static var loads = 0
     static var commits = 0
     static var rollbacks = 0
     static var removals = 0
     static var failDownload = false
+    static var failVerification = false
+    static var failRemoval = false
+    static var removedIDs: [String] = []
+    static var verifiedIDs: [String] = []
     static var lastProgress: (@Sendable (PrivateAIModelDownloadProgress) async -> Void)?
     static var readContinuation: CheckedContinuation<LoadedModelState?, Never>?
     static var suspendRead = false
     static var loadContinuation: CheckedContinuation<PrivateAIStatus, Never>?
     static var suspendLoad = false
-    static func isModelInstalled(_ model: PrivateAIRegisteredModel) -> Bool { self.installed }
-    static func canRemoveInstalledModel(_ model: PrivateAIRegisteredModel) -> Bool { self.installed }
+    nonisolated static func isModelInstalled(_ model: PrivateAIRegisteredModel) -> Bool { self.installed }
+    nonisolated static func canRemoveInstalledModel(_ model: PrivateAIRegisteredModel) -> Bool { self.installed }
     static func modelUpdateStatus(_ model: PrivateAIRegisteredModel) async -> PrivateAIModelUpdateStatus { .init(state: .current) }
     static func prepareModel(
         _ model: PrivateAIRegisteredModel,
@@ -153,17 +157,28 @@ final class PrivateAIIntegrationService {
     }
 
     func unloadCachedRuntime(reason: String) async {}
-    func unloadAndRemoveInstalledModel(_ model: PrivateAIRegisteredModel, reason: String) async throws { Self.removals += 1 }
+    func unloadAndRemoveInstalledModel(_ model: PrivateAIRegisteredModel, reason: String) async throws {
+        if Self.failRemoval { throw PrivateAISettingsBoundaryTests.Failure.expected }
+        Self.removals += 1
+        Self.removedIDs.append(model.id)
+    }
+
+    func verifyModel(_ model: PrivateAIRegisteredModel) async throws -> PrivateAIStatus {
+        Self.verifiedIDs.append(model.id)
+        if Self.failVerification { throw PrivateAISettingsBoundaryTests.Failure.expected }
+        return try await self.loadModel(model)
+    }
 }
 
 @MainActor
 enum PrivateAIControllerChecks {
-    static func eventually(_ predicate: () -> Bool) async {
-        for _ in 0..<10_000 {
+    static func eventually(_ predicate: () -> Bool, file: StaticString = #file, line: UInt = #line) async {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+        while ContinuousClock.now < deadline {
             if predicate() { return }
-            await Task.yield()
+            try? await Task.sleep(for: .milliseconds(1))
         }
-        preconditionFailure("Controlled task did not reach expected state")
+        preconditionFailure("Controlled task did not reach expected state", file: file, line: line)
     }
 
     static func run(check: (Bool, String) -> Void) async {
@@ -189,7 +204,8 @@ enum PrivateAIControllerChecks {
         check(controller.privateAISelectedModelID == "pico" && UserDefaults.standard.writes == writesBeforeCardRead, "Card update read never selects or persists another model")
         let verificationBeforeInactiveAction = vm.verificationCount
         controller.verifyPrivateAIConnection(PrivateAIRegisteredModel(id: "mini"))
-        check(!controller.isBusy && vm.verificationCount == verificationBeforeInactiveAction, "Inactive maintenance cannot run against the selected runtime")
+        await self.eventually { !controller.isBusy }
+        check(vm.verificationCount == verificationBeforeInactiveAction && controller.privateAILoadState.needsDownload("mini"), "Missing inactive model fails without verifying the selected provider")
 
         PrivateAIIntegrationService.failDownload = true
         let pico = PrivateAIRegisteredModel(id: "pico")
@@ -237,10 +253,11 @@ enum PrivateAIControllerChecks {
         controller.downloadPrivateAIModel(.init(id: "pico", canDownload: false))
         check(!controller.isBusy, "Missing download configuration releases operation slot")
         controller.deletePrivateAIModel(pico)
+        await self.eventually { !controller.isBusy }
         check(!controller.isBusy, "Non-removable model deletion releases operation slot")
         PrivateAIIntegrationService.installed = true
-        controller.deletePrivateAIModel(.init(id: "mini"))
-        check(!controller.isBusy && PrivateAIIntegrationService.removals == 0, "Stale deletion confirmation cannot delete another selection")
+        controller.deletePrivateAIModel(.init(id: "invalid"))
+        check(!controller.isBusy && PrivateAIIntegrationService.removals == 0, "Unknown model deletion cannot touch files")
         let writesBeforeDeletion = UserDefaults.standard.writes
         controller.deletePrivateAIModel(pico)
         controller.deletePrivateAIModel(pico)
@@ -308,8 +325,8 @@ enum PrivateAIControllerChecks {
         })
         await self.eventually { !controller.isBusy }
         check(completionCount == 2 && reportedError?.contains("test failure") == true, "Manual verification reports the actual failure")
-        controller.verifyPrivateAIConnection(.init(id: "pico"), onCompletion: { _ in completionCount += 100 })
-        check(completionCount == 2 && UserDefaults.standard.writes == writesBeforeVerification, "Inactive verification has no result or persistence side effects")
+        controller.verifyPrivateAIConnection(.init(id: "invalid"), onCompletion: { _ in completionCount += 100 })
+        check(completionCount == 2 && UserDefaults.standard.writes == writesBeforeVerification, "Unknown model verification has no result or persistence side effects")
         vm.verified = true
         controller.usePreviewModel(isInstalled: true) {}
         await self.eventually { !controller.isBusy }
@@ -351,5 +368,62 @@ enum PrivateAIControllerChecks {
                 "Non-missing failures retain their actual diagnostic"
             )
         }
+
+        PrivateAIIntegrationService.installed = true
+        PrivateAIIntegrationService.suspendLoad = false
+        PrivateAIIntegrationService.suspendRead = false
+        let inactive = PrivateAIRegisteredModel(id: "pico")
+        let selectedBeforeMaintenance = controller.privateAISelectedModelID
+        let writesBeforeMaintenance = UserDefaults.standard.writes
+        let resetsBeforeMaintenance = vm.resetCount
+        let verificationBeforeMaintenance = vm.verificationCount
+        let smartBeforeMaintenance = vm.smartSelected
+        let selectedModelsBeforeMaintenance = vm.selectedModelByProvider
+        var completed = false
+        controller.verifyPrivateAIConnection(inactive, onCompletion: { error in completed = error == nil })
+        await self.eventually { !controller.isBusy }
+        check(completed && PrivateAIIntegrationService.verifiedIDs.last == "pico", "Inactive model can be verified directly")
+        check(controller.privateAILoadState.isLoaded("pico"), "Verification status belongs to the inspected model")
+        let rollbacks = PrivateAIIntegrationService.rollbacks
+        PrivateAIIntegrationService.failVerification = true
+        controller.privateAIModelUpdateStatusByID["pico"] = .init(state: .updateAvailable)
+        controller.updatePrivateAIModel(inactive)
+        await self.eventually { !controller.isBusy }
+        check(PrivateAIIntegrationService.rollbacks == rollbacks + 1, "Inactive update rolls back when verification throws")
+        check(controller.privateAILoadState.failureMessage(for: "pico") != nil, "Inactive failure is visible on its own card")
+        PrivateAIIntegrationService.failVerification = false
+        let commits = PrivateAIIntegrationService.commits
+        controller.privateAIModelUpdateStatusByID["pico"] = .init(state: .updateAvailable)
+        controller.updatePrivateAIModel(inactive)
+        await self.eventually { !controller.isBusy }
+        check(PrivateAIIntegrationService.commits == commits + 1, "Inactive model update verifies and commits")
+        PrivateAIIntegrationService.suspendLoad = true
+        let configuredBeforeStale = PrivateAIIntegrationService.configuredModelID
+        var staleError: String?
+        controller.verifyPrivateAIConnection(inactive, onCompletion: { staleError = $0 })
+        await self.eventually { PrivateAIIntegrationService.loadContinuation != nil }
+        PrivateAIIntegrationService.configuredModelID = "changed-elsewhere"
+        PrivateAIIntegrationService.loadContinuation?.resume(returning: .init(state: .ready))
+        PrivateAIIntegrationService.loadContinuation = nil
+        await self.eventually { !controller.isBusy }
+        check(staleError == "Model settings changed. Please try again.", "Stale verification cannot report success for a newer configuration")
+        PrivateAIIntegrationService.configuredModelID = configuredBeforeStale
+        PrivateAIIntegrationService.suspendLoad = false
+        PrivateAIIntegrationService.failRemoval = true
+        controller.deletePrivateAIModel(inactive)
+        await self.eventually { !controller.isBusy }
+        check(controller.privateAILoadState.failureMessage(for: "pico") != nil, "Inactive deletion failure stays visible")
+        PrivateAIIntegrationService.failRemoval = false
+        let removed = PrivateAIIntegrationService.removals
+        controller.deletePrivateAIModel(inactive)
+        controller.deletePrivateAIModel(inactive)
+        controller.previewModel("mini")
+        controller.activatePreviewModel()
+        await self.eventually { !controller.isBusy }
+        check(PrivateAIIntegrationService.removals == removed + 1 && PrivateAIIntegrationService.removedIDs.last == "pico", "Deletion targets the confirmed inactive model once, even after browsing away")
+        check(controller.privateAISelectedModelID == selectedBeforeMaintenance, "Inactive actions never activate a model")
+        check(UserDefaults.standard.writes == writesBeforeMaintenance && vm.selectedModelByProvider == selectedModelsBeforeMaintenance, "Inactive actions do not rewrite model selections")
+        check(vm.resetCount == resetsBeforeMaintenance && vm.verificationCount == verificationBeforeMaintenance, "Inactive actions preserve active provider verification")
+        check(vm.smartSelected == smartBeforeMaintenance, "Inactive actions preserve cleanup routing")
     }
 }
