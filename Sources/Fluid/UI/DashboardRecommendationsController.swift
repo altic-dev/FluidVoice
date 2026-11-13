@@ -9,14 +9,21 @@ final class DashboardRecommendationsController: ObservableObject {
         let cleanupID: String
         let backend: String
         let prompt: SettingsStore.DictationPromptSelection
+        let verification: PrivateAIProviderPromptFormat.VerificationInput
+        let usesPrivateAI: Bool
 
-        init(settings: SettingsStore = .shared) {
+        init(settings: SettingsStore) {
             self.speech = settings.selectedSpeechModel
             self.language = DashboardModelRecommendationPolicy.speechLanguage(settings: settings)
             let stored = UserDefaults.standard.string(forKey: PrivateAIIntegrationService.selectedModelDefaultsKey) ?? PrivateAIModelRegistry.defaultModelID
-            self.cleanupID = PrivateAIModelRegistry.canonicalModelID(for: stored) ?? stored
+            self.verification = PrivateAIProviderPromptFormat.VerificationInput(settings: settings)
+            let selected = self.verification.selectedModelID ?? stored
+            self.cleanupID = PrivateAIModelRegistry.canonicalModelID(for: selected) ?? selected
             self.backend = settings.privateAIBackendPreference.rawValue
             self.prompt = settings.dictationPromptSelection(for: .primary, privateAIAvailable: true)
+            self.usesPrivateAI = SettingsStore.DictationShortcutSlot.allCases.contains {
+                DictationProviderRoute.privateAIWarmupVerification(settings: settings, slot: $0, appBundleID: nil) != nil
+            }
         }
     }
 
@@ -46,7 +53,7 @@ final class DashboardRecommendationsController: ObservableObject {
         guard !self.operation.isBusy else { return }
         self.refreshRevision += 1
         let revision = self.refreshRevision
-        let selection = Selection()
+        let selection = Selection(settings: self.settings)
         let hardware = await PrivateAIMacHardware.current()
         guard !Task.isCancelled else { return }
         var result: [DashboardModelRecommendation] = []
@@ -65,20 +72,32 @@ final class DashboardRecommendationsController: ObservableObject {
         if let cleanupID = PrivateAIModelRegistry.recommendedModelID(for: .dictation, on: hardware),
            CPUArchitecture.isAppleSilicon, PrivateAIProviderFeature.shared.isAvailable,
            let model = PrivateAIModelRegistry.model(id: cleanupID), model.isEnabled, model.canDownload,
-           hardware.memoryBytes >= UInt64(model.recommendedMemoryGB ?? 8) * 1024 * 1024 * 1024,
-           DashboardModelRecommendationPolicy.shouldShow(targetID: model.id, selectedID: selection.cleanupID, dismissedID: self.dismissals.modelID(for: .cleanup))
+           hardware.memoryBytes >= UInt64(max(0, model.recommendedMemoryGB ?? 8)) * 1024 * 1024 * 1024
         {
-            let installed = await Task.detached(priority: .utility) { PrivateAIIntegrationService.isModelInstalled(model) }.value
-            result.append(DashboardModelRecommendation(
-                kind: .cleanup,
-                modelID: model.id,
-                name: model.presentation?.shortName ?? model.displayName,
-                detail: model.presentation?.useCase ?? "Polish your words privately on your Mac.",
-                downloadSize: model.artifact.byteCount.map { ByteCountFormatter.string(fromByteCount: $0, countStyle: .file) } ?? "",
-                installed: installed
-            ))
+            let (installed, selectedReady) = await Task.detached(priority: .utility) {
+                (
+                    PrivateAIIntegrationService.isModelInstalled(model, useCache: false),
+                    selection.verification.verifiedModelID(recheckInstallation: true) != nil
+                )
+            }.value
+            if DashboardModelRecommendationPolicy.shouldSuggestCleanup(
+                targetID: model.id,
+                selectedID: selection.cleanupID,
+                enabled: selection.usesPrivateAI,
+                ready: selectedReady,
+                dismissedID: self.dismissals.modelID(for: .cleanup)
+            ) {
+                result.append(DashboardModelRecommendation(
+                    kind: .cleanup,
+                    modelID: model.id,
+                    name: model.presentation?.shortName ?? model.displayName,
+                    detail: model.presentation?.useCase ?? "Polish your words privately on your Mac.",
+                    downloadSize: model.artifact.byteCount.map { ByteCountFormatter.string(fromByteCount: $0, countStyle: .file) } ?? "",
+                    installed: installed
+                ))
+            }
         }
-        guard !Task.isCancelled, !self.operation.isBusy, revision == self.refreshRevision, selection == Selection() else { return }
+        guard !Task.isCancelled, !self.operation.isBusy, revision == self.refreshRevision, selection == Selection(settings: self.settings) else { return }
         self.recommendations = result
     }
 
@@ -90,7 +109,7 @@ final class DashboardRecommendationsController: ObservableObject {
 
     func use(_ recommendation: DashboardModelRecommendation) {
         guard !self.actionsBlocked, self.recommendations.contains(recommendation) else { return }
-        let selection = Selection()
+        let selection = Selection(settings: self.settings)
         self.operation.start(
             id: recommendation.id,
             prepare: {
@@ -102,8 +121,8 @@ final class DashboardRecommendationsController: ObservableObject {
                         self.operation.report("Downloading…")
                         try await self.asr.downloadModel(
                             model,
-                            progressHandler: { [weak self] fraction in
-                                self?.operation.report("Downloading…", fraction: fraction)
+                            progressHandler: { [weak controller = self] fraction in
+                                controller?.operation.report("Downloading…", fraction: fraction)
                             }
                         )
                     }
@@ -118,7 +137,7 @@ final class DashboardRecommendationsController: ObservableObject {
                         }
                     }
                     try Task.checkCancellation()
-                    guard selection == Selection() else { throw CancellationError() }
+                    guard selection == Selection(settings: self.settings) else { throw CancellationError() }
                     self.operation.report("Checking model…")
                     let status = try await PrivateAIIntegrationService.shared.verifyModel(model)
                     guard status.state == .ready else {
@@ -126,7 +145,7 @@ final class DashboardRecommendationsController: ObservableObject {
                     }
                 }
             },
-            isCurrent: { selection == Selection() },
+            isCurrent: { selection == Selection(settings: self.settings) },
             activate: {
                 switch recommendation.kind {
                 case .speech:

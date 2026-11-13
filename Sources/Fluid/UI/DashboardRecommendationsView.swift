@@ -70,6 +70,12 @@ struct DashboardRecommendationsView: View {
                 .font(self.theme.typography.bodySmall)
                 .foregroundStyle(self.theme.palette.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
+            if recommendation.kind == .cleanup {
+                Text("Research preview · Review your text before sending. Cleanup may make inaccurate changes.")
+                    .font(self.theme.typography.caption)
+                    .foregroundStyle(self.theme.palette.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             if working {
                 VStack(alignment: .leading, spacing: 8) {
                     ProgressView(value: operation.fraction)

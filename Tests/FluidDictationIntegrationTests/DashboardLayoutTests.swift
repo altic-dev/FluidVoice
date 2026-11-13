@@ -152,6 +152,73 @@ final class DashboardRecommendationTests: XCTestCase {
         }
     }
 
+    func testCleanupSuggestionRequiresEnabledAndVerifiedCurrentModel() {
+        let current = ["fluid-1.1-ripple", "fluid-1.1-splash"]
+        for target in current {
+            for selected in current + ["fluid-1-pico-96k-dflash", "unknown"] {
+                for enabled in [false, true] {
+                    for ready in [false, true] {
+                        let expected = !enabled || !ready || !current.contains(selected)
+                        XCTAssertEqual(DashboardModelRecommendationPolicy.shouldSuggestCleanup(
+                            targetID: target,
+                            selectedID: selected,
+                            enabled: enabled,
+                            ready: ready,
+                            dismissedID: nil
+                        ), expected)
+                        XCTAssertFalse(DashboardModelRecommendationPolicy.shouldSuggestCleanup(
+                            targetID: target,
+                            selectedID: selected,
+                            enabled: enabled,
+                            ready: ready,
+                            dismissedID: target
+                        ))
+                    }
+                }
+            }
+        }
+        XCTAssertTrue(DashboardModelRecommendationPolicy.shouldSuggestCleanup(
+            targetID: "future-model", selectedID: current[0], enabled: true, ready: true, dismissedID: current[0]
+        ))
+    }
+
+    func testCleanupActivationPreservesScreenContextAndOtherRoutes() {
+        let settings = SettingsStore.shared
+        let defaults = UserDefaults.standard
+        let keys = [PrivateAIIntegrationService.selectedModelDefaultsKey, PrivateAIIntegrationService.localModelPathDefaultsKey]
+        let savedDefaults = keys.map { defaults.object(forKey: $0) }
+        let models = settings.selectedModelByProvider
+        let verifiedModels = settings.verifiedPrivateAIModelFingerprints
+        let verifiedProviders = settings.verifiedProviderFingerprints
+        let primary = settings.dictationPromptSelection(for: .primary, privateAIAvailable: true)
+        let secondary = settings.dictationPromptSelection(for: .secondary, privateAIAvailable: true)
+        let context = settings.dictationScreenContextEnabled
+        let edit = settings.selectedEditPromptID
+        let bindings = settings.appPromptBindings
+        let provider = settings.selectedProviderID
+        defer {
+            for (key, value) in zip(keys, savedDefaults) {
+                if let value { defaults.set(value, forKey: key) } else { defaults.removeObject(forKey: key) }
+            }
+            settings.selectedModelByProvider = models
+            settings.verifiedPrivateAIModelFingerprints = verifiedModels
+            settings.verifiedProviderFingerprints = verifiedProviders
+            settings.setDictationPromptSelection(primary)
+            settings.dictationScreenContextEnabled = context
+        }
+        for contextEnabled in [false, true] {
+            settings.dictationScreenContextEnabled = contextEnabled
+            DashboardCleanupActivation.commit(modelID: "test-recommended", settings: settings, defaults: defaults)
+            XCTAssertEqual(settings.dictationPromptSelection(for: .primary, privateAIAvailable: true), .privateAI)
+            XCTAssertEqual(defaults.string(forKey: keys[0]), "test-recommended")
+            XCTAssertEqual(settings.dictationScreenContextEnabled, contextEnabled)
+            XCTAssertEqual(settings.dictationPromptSelection(for: .secondary, privateAIAvailable: true), secondary)
+            XCTAssertEqual(settings.selectedEditPromptID, edit)
+            XCTAssertEqual(settings.appPromptBindings, bindings)
+            XCTAssertEqual(settings.selectedProviderID, provider)
+        }
+    }
+
     func testDismissalPersistsWithoutChangingModelsAndNewModelCanAppear() throws {
         let suite = "DashboardRecommendations.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))

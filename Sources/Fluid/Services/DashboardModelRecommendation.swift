@@ -39,6 +39,14 @@ enum DashboardModelRecommendationPolicy {
         }
     }
 
+    /// Either current cleanup model is a valid choice. A saved ID alone is not activation.
+    static func shouldSuggestCleanup(targetID: String, selectedID: String, enabled: Bool, ready: Bool, dismissedID: String?) -> Bool {
+        guard targetID != dismissedID else { return false }
+        let currentModels: Set<String> = ["fluid-1.1-ripple", "fluid-1.1-splash"]
+        let currentChoice = selectedID == targetID || (currentModels.contains(targetID) && currentModels.contains(selectedID))
+        return !enabled || !ready || !currentChoice
+    }
+
     static func shouldShow(targetID: String, selectedID: String, dismissedID: String?) -> Bool {
         targetID != selectedID && targetID != dismissedID
     }
