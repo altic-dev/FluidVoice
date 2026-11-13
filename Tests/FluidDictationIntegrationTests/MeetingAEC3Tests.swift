@@ -64,6 +64,66 @@ final class MeetingAEC3Tests: XCTestCase {
         XCTAssertFalse(gate.admitsTranscript())
     }
 
+    func testDisappearingCallWindowPreservesBufferedTailButOtherFailuresStayConservative() async throws {
+        // The two live Zoom exits left 18 ms and 46 ms in the joiner. Preserve those bytes,
+        // not just the warning's visibility; the same tails must remain excluded on a route change.
+        for tailCount in [864, 2208] {
+            for scenario in [(true, true), (true, false), (false, true)] {
+                let (sourceDisappeared, routeUnchanged) = scenario
+                let preservesTail = sourceDisappeared && routeUnchanged
+                let directory = FileManager.default.temporaryDirectory.appendingPathComponent("aec-source-loss-\(UUID())")
+                defer { try? FileManager.default.removeItem(at: directory) }
+                let writer = try MeetingAudioChunkWriter(
+                    track: Self.microphoneTrack(), sessionDirectory: directory, chunkDuration: 60, eventHandler: { _ in }
+                )
+                let gate = MeetingMicrophoneTranscriptGate(.unprotected)
+                let failures = AECTerminalRecorder()
+                let committer = MeetingAECOutputCommitter(
+                    writer: writer,
+                    transcriptGate: gate,
+                    liveAudioHandler: nil,
+                    terminalFailure: { failures.append($0) }
+                )
+                let pipeline = MeetingAECPipeline(processor: AECFakeProcessor(), committer: committer)
+                for frame in 0..<250 {
+                    let sample = try XCTUnwrap(MeetingAECPCMAdapter.synthesize(
+                        samples: [Float](repeating: 0.125, count: 480),
+                        presentationTime: CMTime(value: Int64(48_000 + frame * 480), timescale: 48_000)
+                    ))
+                    pipeline.consumeRender(sample, stream: self.token)
+                    pipeline.consumeCapture(sample, stream: self.token)
+                }
+                await committer.waitForPendingCommits()
+                let tail = try XCTUnwrap(MeetingAECPCMAdapter.synthesize(
+                    samples: [Float](repeating: 0.125, count: tailCount),
+                    presentationTime: CMTime(value: 168_000, timescale: 48_000)
+                ))
+                pipeline.consumeCapture(tail, stream: self.token)
+                pipeline.retireStoppedStream(
+                    sourceDisappeared: sourceDisappeared,
+                    routeUnchanged: routeUnchanged,
+                    boundary: gate.invalidate()
+                )
+                await committer.waitForPendingCommits()
+                let track = await writer.stop()
+                XCTAssertFalse(gate.admitsTranscript(), "retiring a stream cannot reopen live capture")
+                XCTAssertTrue(failures.values.isEmpty)
+                XCTAssertEqual(track.captureEras?.last?.echoProtection, preservesTail ? .unfiltered : .unprotected)
+                XCTAssertNil(track.captureEras?.last?.aecProvenance, "raw tail must never claim echo cancellation")
+                XCTAssertEqual(MeetingProcessingPipeline.microphoneCoverageGaps(track: track, origin: 1).isEmpty, preservesTail)
+                let chunk = try XCTUnwrap(track.chunks.first)
+                let audio = try AVAudioFile(forReading: chunk.fileURL(relativeTo: directory))
+                XCTAssertEqual(audio.length, AVAudioFramePosition(250 * 480 + tailCount), "no PCM may be dropped or duplicated")
+                audio.framePosition = AVAudioFramePosition(250 * 480)
+                let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: audio.processingFormat, frameCapacity: AVAudioFrameCount(tailCount)))
+                try audio.read(into: buffer)
+                XCTAssertEqual(buffer.frameLength, AVAudioFrameCount(tailCount))
+                let channel = try XCTUnwrap(buffer.floatChannelData?[0])
+                XCTAssertTrue((0..<tailCount).allSatisfy { abs(channel[$0] - 0.125) < 0.000_001 })
+            }
+        }
+    }
+
     func testValidationBufferCannotReopenAfterRouteInvalidation() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("aec-validation-stale-\(UUID())")
         defer { try? FileManager.default.removeItem(at: directory) }

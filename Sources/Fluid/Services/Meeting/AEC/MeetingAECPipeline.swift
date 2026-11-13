@@ -83,6 +83,21 @@ final nonisolated class MeetingAECPipeline: @unchecked Sendable {
         self.committer.invalidateForExternalBoundary(boundary)
     }
 
+    /// Losing the captured window does not invalidate audio already buffered from the same
+    /// physical route. Drain it like Stop, including the raw tail without claiming AEC protection.
+    /// Route changes and all other stream failures retain conservative admission invalidation.
+    func retireStoppedStream(
+        sourceDisappeared: Bool,
+        routeUnchanged: Bool,
+        boundary: MeetingMicrophoneTranscriptGate.InvalidationBoundary?
+    ) {
+        if sourceDisappeared, routeUnchanged {
+            self.stop(boundary: boundary)
+        } else {
+            self.invalidate(reason: .streamChanged, boundary: boundary)
+        }
+    }
+
     func stop(boundary: MeetingMicrophoneTranscriptGate.InvalidationBoundary?) {
         guard !self.stopped else { return }
         self.handle(self.joiner.flush(reason: .stopped))

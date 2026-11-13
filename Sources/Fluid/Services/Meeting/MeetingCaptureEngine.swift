@@ -1795,16 +1795,20 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
             return owner
         }
         guard let rebuildOwner else { return }
-        self.invalidateAECForStreamRebuild()
+        self.invalidateAECForStreamRebuild(error: error)
         self.eventHandler(.interrupted(kind: .sourceLost, trackID: nil, detail: error.localizedDescription))
         self.runRebuildLoop(triggeringError: error, stoppedStream: stoppedStream, owner: rebuildOwner)
     }
 
-    private func invalidateAECForStreamRebuild() {
-        let shouldInvalidate = self.stateLock.withLock {
-            self.routeDisposition == .supportedSpeaker || self.aecPipeline != nil
+    private func invalidateAECForStreamRebuild(error: Error) {
+        let routeRevision = self.stateLock.withLock { () -> UInt64? in
+            guard self.routeDisposition == .supportedSpeaker || self.aecPipeline != nil else { return nil }
+            return self.outputRouteRevision
         }
-        guard shouldInvalidate else { return }
+        guard let routeRevision else { return }
+        let streamError = error as NSError
+        let sourceDisappeared = streamError.domain == SCStreamErrorDomain
+            && streamError.code == SCStreamError.noCaptureSource.rawValue
         let boundary = self.microphoneTranscriptGate.invalidate()
         self.stateLock.withLock {
             self.aecActivation.invalidate()
@@ -1815,7 +1819,16 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
                 return self.aecPipeline
             }
             if let detached {
-                detached.invalidate(reason: .streamChanged, boundary: boundary)
+                let routeUnchanged = self.stateLock.withLock {
+                    self.outputRouteRevision == routeRevision
+                        && self.routeDisposition == .supportedSpeaker
+                        && !self.routeListenerDegraded
+                }
+                detached.retireStoppedStream(
+                    sourceDisappeared: sourceDisappeared,
+                    routeUnchanged: routeUnchanged,
+                    boundary: boundary
+                )
                 self.retainRetiredCommitterIfPending(detached.committer)
             } else {
                 self.microphoneWriter.enqueueMetadata(
