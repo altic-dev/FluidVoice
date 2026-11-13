@@ -10,7 +10,8 @@ struct ReleaseFeaturePreview: View {
             switch self.kind {
             case .meeting: self.meeting
             case .dashboard: self.dashboard
-            case .models: self.models
+            case .ripple: self.cleanupModel("Fluid 1.1 Ripple", detail: "Fast & capable", symbol: "bolt")
+            case .splash: self.cleanupModel("Fluid 1.1 Splash", detail: "Higher quality", symbol: "sparkles")
             case .speech: self.speech
             }
         }
@@ -87,18 +88,13 @@ struct ReleaseFeaturePreview: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private var models: some View {
+    private func cleanupModel(_ name: String, detail: String, symbol: String) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            Label(PrivateAIProviderFeature.shared.isAvailable ? "Fluid Intelligence" : "AI Settings", systemImage: "sparkles")
+            Label("Fluid Intelligence", systemImage: "sparkles")
                 .font(.system(size: 11, weight: .semibold))
-            if PrivateAIProviderFeature.shared.isAvailable {
-                self.model("Fluid 1.1 Splash", detail: "Reads your screen", symbol: "text.viewfinder")
-                self.model("Fluid 1 Mini", detail: "Everyday writing", symbol: "text.alignleft")
-                self.model("Fluid 1 Pico", detail: "Light & quick", symbol: "bolt")
-            } else {
-                self.model("Your provider", detail: "Your choice", symbol: "sparkles")
-                self.model("Your model", detail: "Your workflow", symbol: "cpu")
-            }
+            self.model(name, detail: detail, symbol: symbol)
+            self.model("On-device", detail: "Private", symbol: "lock")
+            self.model("Research preview", detail: "Review text", symbol: "text.magnifyingglass")
         }
     }
 

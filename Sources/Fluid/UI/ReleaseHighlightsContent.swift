@@ -3,7 +3,7 @@ import Foundation
 /// Edit this definition for each release. The renderer and acknowledgement logic stay unchanged.
 struct ReleaseHighlightsContent {
     enum Destination { case meetings, dashboard, aiProviders, voiceEngine }
-    enum Preview { case meeting, dashboard, models, speech }
+    enum Preview { case meeting, dashboard, ripple, splash, speech }
 
     struct Feature: Identifiable {
         let id: String
@@ -22,13 +22,22 @@ struct ReleaseHighlightsContent {
     let features: [Feature]
 
     static func current(hasPrivateAI: Bool) -> Self {
+        let ripple = Feature(
+            id: "ripple",
+            preview: .ripple,
+            eyebrow: "FASTER CLEANUP",
+            title: "Fluid 1.1 Ripple",
+            detail: "Fast, multilingual cleanup on your Mac. Research preview: review your text before sending.",
+            action: "Explore Ripple",
+            destination: .aiProviders
+        )
         let splash = Feature(
             id: "splash",
-            preview: .models,
-            eyebrow: "NEW CLEANUP MODEL",
-            title: "Meet Fluid 1.1 Splash",
-            detail: "Our best cleanup model yet. Multilingual, and it reads what's on screen so names and terms come out right.",
-            action: "Try Splash",
+            preview: .splash,
+            eyebrow: "HIGHER-QUALITY CLEANUP",
+            title: "Fluid 1.1 Splash",
+            detail: "Our most capable multilingual cleanup model. Research preview: review your text before sending.",
+            action: "Explore Splash",
             destination: .aiProviders
         )
         let speechPro = Feature(
@@ -36,20 +45,20 @@ struct ReleaseHighlightsContent {
             preview: .speech,
             eyebrow: "NEW SPEECH MODEL",
             title: "Fluid Speech Pro",
-            detail: "Our most accurate speech model, built for clear dictation in noisy places. Runs on your Mac.",
-            action: "Open Voice Engine",
+            detail: "Our most accurate dictation model. Runs on Apple Silicon, with support for 25 languages.",
+            action: "Explore Speech Pro",
             destination: .voiceEngine
         )
         return Self(
             release: "1.6.13",
-            title: hasPrivateAI ? "Edit by voice, with sharper speech" : "Sharper speech",
+            title: hasPrivateAI ? "Better dictation. Smarter cleanup." : "Meet Fluid Speech Pro",
             subtitle: hasPrivateAI
-                ? "New on-device Edit Mode with its own Edit 1.1 model. Select text and say what to change, with optional on-screen context. Plus Fluid 1.1 Splash and Fluid Speech Pro."
-                : "Meet Fluid Speech Pro. Plus Qwen dictation and smoother live captions.",
+                ? "Explore our latest on-device models for dictation and cleanup."
+                : "On-device dictation in 25 languages, built for Apple Silicon.",
             officialSiteNotice: "**Help people find the real FluidVoice.** A site impersonating FluidVoice is appearing above us in search results, making it harder for people to find us. "
                 + "Our official websites are [fluidvoice.com](https://fluidvoice.com) and [altic.dev/fluid](https://altic.dev/fluid). "
                 + "If FluidVoice has helped you, please visit [fluidvoice.com](https://fluidvoice.com) and explore. Bookmark and share it to help others find the real app. Thank you for supporting us.",
-            features: hasPrivateAI ? [splash, speechPro] : [speechPro]
+            features: hasPrivateAI ? [speechPro, ripple, splash] : [speechPro]
         )
     }
 }

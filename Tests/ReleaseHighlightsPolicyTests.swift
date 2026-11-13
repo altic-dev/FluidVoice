@@ -101,6 +101,8 @@ struct ReleaseHighlightsPolicyTests {
             precondition(!content.release.isEmpty, "The displayed release label must be present")
             precondition((1...3).contains(content.features.count))
             precondition(Set(content.features.map(\.id)).count == content.features.count)
+            precondition(content.features.filter { $0.destination == .voiceEngine }.count == 1)
+            precondition(content.features.filter { $0.destination == .aiProviders }.count == (privateAI ? 2 : 0), "Only private builds should offer the two local cleanup models")
             for feature in content.features {
                 precondition(!feature.title.isEmpty && !feature.detail.isEmpty && !feature.action.isEmpty)
             }
