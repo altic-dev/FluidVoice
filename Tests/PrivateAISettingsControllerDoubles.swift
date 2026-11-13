@@ -114,6 +114,8 @@ final class PrivateAIIntegrationService {
     static var failDownload = false
     static var failVerification = false
     static var failRemoval = false
+    static var suspendRemoval = false
+    static var removalContinuation: CheckedContinuation<Void, Never>?
     static var removedIDs: [String] = []
     static var verifiedIDs: [String] = []
     static var lastProgress: (@Sendable (PrivateAIModelDownloadProgress) async -> Void)?
@@ -159,6 +161,7 @@ final class PrivateAIIntegrationService {
     func unloadCachedRuntime(reason: String) async {}
     func unloadAndRemoveInstalledModel(_ model: PrivateAIRegisteredModel, reason: String) async throws {
         if Self.failRemoval { throw PrivateAISettingsBoundaryTests.Failure.expected }
+        if Self.suspendRemoval { await withCheckedContinuation { Self.removalContinuation = $0 } }
         Self.removals += 1
         Self.removedIDs.append(model.id)
     }
@@ -425,5 +428,17 @@ enum PrivateAIControllerChecks {
         check(UserDefaults.standard.writes == writesBeforeMaintenance && vm.selectedModelByProvider == selectedModelsBeforeMaintenance, "Inactive actions do not rewrite model selections")
         check(vm.resetCount == resetsBeforeMaintenance && vm.verificationCount == verificationBeforeMaintenance, "Inactive actions preserve active provider verification")
         check(vm.smartSelected == smartBeforeMaintenance, "Inactive actions preserve cleanup routing")
+        let modelsBeforeSwitch = vm.settings.selectedModelByProvider
+        let resetsBeforeSwitch = vm.resetCount
+        PrivateAIIntegrationService.suspendRemoval = true
+        controller.deletePrivateAIModel(.init(id: selectedBeforeMaintenance))
+        await self.eventually { PrivateAIIntegrationService.removalContinuation != nil }
+        vm.settings.selectedModelByProvider["fi"] = "pico"
+        PrivateAIIntegrationService.removalContinuation?.resume()
+        PrivateAIIntegrationService.removalContinuation = nil
+        await self.eventually { !controller.isBusy }
+        check(vm.resetCount == resetsBeforeSwitch, "Deletion cannot clear verification for a model selected in another window")
+        vm.settings.selectedModelByProvider = modelsBeforeSwitch
+        PrivateAIIntegrationService.suspendRemoval = false
     }
 }
