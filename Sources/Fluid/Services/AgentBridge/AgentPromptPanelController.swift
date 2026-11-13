@@ -77,6 +77,8 @@ final class AgentPromptPanelController {
 
 private final class AgentPromptPanel: NSPanel {
     var onCancel: (() -> Void)?
+    weak var dragHandle: AgentPromptDragView?
+    private var grabOffset: NSPoint?
 
     override var canBecomeKey: Bool {
         true
@@ -84,6 +86,43 @@ private final class AgentPromptPanel: NSPanel {
 
     override func cancelOperation(_ sender: Any?) {
         self.onCancel?()
+    }
+
+    override func sendEvent(_ event: NSEvent) {
+        switch event.type {
+        case .leftMouseDown:
+            self.grabOffset = nil
+            if let dragHandle, dragHandle.window === self,
+               !dragHandle.bounds.isEmpty, let contentView {
+                let handleFrame = dragHandle.convert(dragHandle.bounds, to: nil)
+                let contentFrame = contentView.convert(contentView.bounds, to: nil)
+                // Include the top and left padding. The close button starts to the right.
+                let dragRegion = NSRect(
+                    x: contentFrame.minX,
+                    y: handleFrame.minY,
+                    width: handleFrame.maxX - contentFrame.minX,
+                    height: contentFrame.maxY - handleFrame.minY
+                )
+                if dragRegion.contains(event.locationInWindow) {
+                    self.grabOffset = event.locationInWindow
+                    return
+                }
+            }
+        case .leftMouseDragged:
+            if let grabOffset {
+                let pointer = self.convertPoint(toScreen: event.locationInWindow)
+                self.setFrameOrigin(NSPoint(x: pointer.x - grabOffset.x, y: pointer.y - grabOffset.y))
+                return
+            }
+        case .leftMouseUp:
+            if self.grabOffset != nil {
+                self.grabOffset = nil
+                return
+            }
+        default:
+            break
+        }
+        super.sendEvent(event)
     }
 }
 
@@ -104,24 +143,17 @@ private struct AgentPromptDragHandle: NSViewRepresentable {
 }
 
 private final class AgentPromptDragView: NSView {
-    private var grabOffset: NSPoint?
-
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     override var mouseDownCanMoveWindow: Bool { false }
 
-    override func mouseDown(with event: NSEvent) {
-        self.grabOffset = event.locationInWindow
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        (self.window as? AgentPromptPanel)?.dragHandle = self
     }
 
-    override func mouseDragged(with event: NSEvent) {
-        guard let window, let grabOffset else { return }
-        // Convert each event through the current window frame so moving it never shifts the grab point.
-        let pointer = window.convertPoint(toScreen: event.locationInWindow)
-        window.setFrameOrigin(NSPoint(x: pointer.x - grabOffset.x, y: pointer.y - grabOffset.y))
-    }
-
-    override func mouseUp(with event: NSEvent) {
-        self.grabOffset = nil
+    override func resetCursorRects() {
+        super.resetCursorRects()
+        self.addCursorRect(self.bounds, cursor: .openHand)
     }
 }
 

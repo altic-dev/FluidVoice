@@ -182,10 +182,14 @@ final class AgentBridgeServiceTests: XCTestCase {
         }
     }
 
-    func testHUDHeaderDragMovesTheWindowAndSurvivesTranscriptUpdates() async throws {
+    func testHUDHeaderDragMovesTheWindowWhileRecordingAndProcessing() async throws {
         let recorder = FakeAgentRecorder()
+        recorder.pauseStop = true
         let bridge = self.makeBridge(recorder: recorder)
-        defer { bridge.cancelActivePrompt() }
+        defer {
+            bridge.cancelActivePrompt()
+            recorder.resumeStop()
+        }
         let task = Task { await bridge.prompt(id: UUID(), message: "Drag check", status: .completed) }
         try await self.waitUntil { bridge.phase == .recording }
         let panel = try XCTUnwrap(NSApp.windows.first {
@@ -202,8 +206,6 @@ final class AgentBridgeServiceTests: XCTestCase {
         let center = NSPoint(x: handle.bounds.midX, y: handle.bounds.midY)
         XCTAssertTrue(root.hitTest(handle.convert(center, to: root.superview)) === handle)
         XCTAssertTrue(handle.acceptsFirstMouse(for: nil), "Dragging must work while FluidVoice is inactive")
-        let startOrigin = panel.frame.origin
-        let grabPoint = panel.convertPoint(toScreen: handle.convert(center, to: nil))
         var eventNumber = 0
         func sendMouse(_ type: NSEvent.EventType, at screenPoint: NSPoint) throws {
             eventNumber += 1
@@ -220,20 +222,38 @@ final class AgentBridgeServiceTests: XCTestCase {
             ))
             panel.sendEvent(event)
         }
-        try sendMouse(.leftMouseDown, at: grabPoint)
-        try sendMouse(.leftMouseDragged, at: NSPoint(x: grabPoint.x + 80, y: grabPoint.y + 40))
-        try sendMouse(.leftMouseDragged, at: NSPoint(x: grabPoint.x + 120, y: grabPoint.y + 60))
-        try sendMouse(.leftMouseUp, at: NSPoint(x: grabPoint.x + 120, y: grabPoint.y + 60))
-        let expected = NSPoint(x: startOrigin.x + 120, y: startOrigin.y + 60)
-        XCTAssertEqual(panel.frame.origin.x, expected.x, accuracy: 0.5)
-        XCTAssertEqual(panel.frame.origin.y, expected.y, accuracy: 0.5)
+        func dragHeader(from windowPoint: NSPoint) throws {
+            let startOrigin = panel.frame.origin
+            let grabPoint = panel.convertPoint(toScreen: windowPoint)
+            let endPoint = NSPoint(x: grabPoint.x + 120, y: grabPoint.y + 60)
+            try sendMouse(.leftMouseDown, at: grabPoint)
+            try sendMouse(.leftMouseDragged, at: NSPoint(x: grabPoint.x + 80, y: grabPoint.y + 40))
+            try sendMouse(.leftMouseDragged, at: endPoint)
+            try sendMouse(.leftMouseUp, at: endPoint)
+            XCTAssertEqual(panel.frame.origin.x, startOrigin.x + 120, accuracy: 0.5)
+            XCTAssertEqual(panel.frame.origin.y, startOrigin.y + 60, accuracy: 0.5)
+        }
+
+        try dragHeader(from: handle.convert(center, to: nil))
+        let movedOrigin = panel.frame.origin
         recorder.transcript.send("Still listening after moving")
         for _ in 0..<10 { await Task.yield() }
-        XCTAssertEqual(panel.frame.origin, expected)
+        XCTAssertEqual(panel.frame.origin, movedOrigin)
         XCTAssertEqual(bridge.phase, .recording)
+
+        bridge.finishRecordingAndReply()
+        try await self.waitUntil { recorder.stopWaiter != nil }
+        root.layoutSubtreeIfNeeded()
+        XCTAssertEqual(bridge.phase, .processing)
+        let contentFrame = root.convert(root.bounds, to: nil)
+        let headerFrame = handle.convert(handle.bounds, to: nil)
+        try dragHeader(from: NSPoint(x: headerFrame.midX, y: (headerFrame.maxY + contentFrame.maxY) / 2))
+
         bridge.cancelActivePrompt()
         let result = await task.value
         XCTAssertEqual(result, .cancelled)
+        recorder.resumeStop()
+        try await self.waitUntil { bridge.phase == .idle }
     }
 
     func testCancellationDuringStartupIsScopedToTheRequest() async throws {
