@@ -1141,6 +1141,9 @@ final class MeetingSessionCoordinator: ObservableObject {
     /// Not a transcript correction: does not push onto `correctionUndoStacks`.
     @discardableResult
     func renameSession(sessionID: MeetingSessionID, to title: String) async throws -> MeetingSession {
+        if self.activeSession?.id == sessionID, self.isRecording {
+            return try await self.renameRecordingSession(sessionID: sessionID, to: title)
+        }
         guard !self.isMutatingSession else { throw MeetingCoordinatorError.activityInProgress }
         self.isMutatingSession = true
         defer { self.releaseMutationGate() }
@@ -2392,5 +2395,36 @@ enum MeetingCoordinatorError: LocalizedError {
         case .unsupportedRetranscriptionLanguage:
             return "Choose a language the meeting transcription model supports."
         }
+    }
+}
+
+extension MeetingSessionCoordinator {
+    /// Change only title metadata before suspending, so every subsequent capture/stop snapshot keeps it.
+    /// The serialized persistence queue prevents a slow rename save from overwriting newer audio or state.
+    private func renameRecordingSession(sessionID: MeetingSessionID, to title: String) async throws -> MeetingSession {
+        guard !self.isMutatingSession, !self.hasBlockingActivityTask, !self.isDeleting,
+              var session = self.activeSession, session.id == sessionID, self.isRecording
+        else { throw MeetingCoordinatorError.activityInProgress }
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { throw MeetingDomainError.emptyMeetingTitle }
+        self.isMutatingSession = true
+        defer { self.releaseMutationGate() }
+        session.title = trimmed
+        session.defaultTitleBase = nil
+        session.updatedAt = Date()
+        self.activeSession = session
+        do {
+            try await self.persistence.save(session)
+        } catch {
+            // Keep the edited title in the live snapshot so capture updates and stopping can retry it.
+            throw NSError(domain: "MeetingTitle", code: 1, userInfo: [
+                NSLocalizedDescriptionKey: "The title could not be saved yet. Recording can continue; try renaming again to retry.",
+                NSUnderlyingErrorKey: error,
+            ])
+        }
+        // Capture or Stop may have advanced the session while its title was being saved.
+        if let current = self.activeSession, current.id == sessionID { return current }
+        if let completed = self.latestCompletedSession, completed.id == sessionID { return completed }
+        return session
     }
 }

@@ -1568,7 +1568,9 @@ struct MeetingTranscriptionCanvas: View {
                     trackHealth: trackHealth,
                     liveTranscript: liveTranscript,
                     isStopping: false,
-                    onStop: self.onStop
+                    onStop: self.onStop,
+                    onRename: { self.onRenameSession(session.id, $0) },
+                    errorMessage: self.errorMessage
                 )
             case let .stopping(session, trackHealth, liveTranscript):
                 MeetingRecordingCanvas(

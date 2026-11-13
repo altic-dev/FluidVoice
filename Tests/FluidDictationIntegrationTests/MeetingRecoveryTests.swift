@@ -5635,6 +5635,132 @@ final class MeetingRecoveryTests: XCTestCase {
 
     // MARK: - Rename session
 
+    func testAwaitedPersistenceSurvivesCoalescingAndFailure() async throws {
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let recorder = EventRecorder()
+        let store = GatedThrowingSaveStore(inner: MeetingSessionStore(rootDirectory: dir), recorder: recorder)
+        let queue = MeetingSessionPersistenceQueue(store: store)
+        var session = self.makeSession(state: .recording, audioTracks: [self.makeMicrophoneTrack(chunks: [])])
+        await store.closeGate()
+        queue.enqueue(session)
+        for _ in 0..<100 {
+            if await recorder.events.contains("store.save.start") { break }
+            await Task.yield()
+        }
+        session.title = "Renamed"
+        let titleSnapshot = session
+        let rename = Task { try await queue.save(titleSnapshot) }
+        for _ in 0..<20 {
+            await Task.yield()
+        }
+        session.events = [.init(id: UUID(), occurredAt: Date(timeIntervalSince1970: 1000), kind: .echoFilteringUnavailable, trackID: nil, detail: nil)]
+        queue.enqueue(session)
+        await store.openGate()
+        try await rename.value
+        await queue.flush()
+        let saved = try await store.load(id: session.id)
+        XCTAssertEqual(saved?.title, "Renamed")
+        XCTAssertEqual(saved?.events, session.events)
+        await store.throwOnNextSave()
+        await XCTAssertThrowsErrorAsync(try await queue.save(session))
+        try await queue.save(session)
+        let counts = await store.savedEventCounts
+        XCTAssertEqual(counts, [0, 1, 1], "Coalescing must retain the waiter and failure must not strand the worker")
+    }
+
+    func testRenameWhileRecordingPreservesCaptureAndFinalTitle() async throws {
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MeetingSessionStore(rootDirectory: dir)
+        let capture = StubCaptureController()
+        let microphone = self.makeMicrophoneTrack(chunks: [self.makeFinalizedChunk()])
+        capture.startResult = MeetingCaptureStartResult(tracks: [microphone], firstPresentationTime: nil)
+        let coordinator = MeetingSessionCoordinator(store: store, capture: capture, processing: StubProcessingController(), audioArbiter: StubArbiter())
+        let started = try await coordinator.startRecording(configuration: self.makeConfiguration())
+        try await Task.sleep(nanoseconds: 100_000_000) // Let startup retention maintenance finish before gating saves.
+        let renamed = try await coordinator.renameSession(sessionID: started.id, to: "  Weekly planning  ")
+        XCTAssertEqual(renamed.title, "Weekly planning")
+        XCTAssertNil(renamed.defaultTitleBase)
+        XCTAssertEqual(coordinator.state, .recording(started.id))
+        XCTAssertEqual(capture.startCount, 1)
+        XCTAssertEqual(capture.stopCount, 0)
+        XCTAssertEqual(renamed.audioTracks, started.audioTracks)
+        XCTAssertEqual(renamed.selectedMicrophone, started.selectedMicrophone)
+        XCTAssertEqual(renamed.events, started.events)
+        XCTAssertEqual(renamed.startedAt, started.startedAt)
+        XCTAssertFalse(coordinator.canUndoCorrection(sessionID: started.id))
+        let saved = try await store.load(id: started.id)
+        XCTAssertEqual(saved?.title, renamed.title)
+        capture.stopResult = MeetingCaptureStopResult(tracks: [microphone], stoppedAt: Date())
+        let completed = try await coordinator.stopAndTranscribe()
+        XCTAssertEqual(completed.title, renamed.title)
+        let reloaded = try await store.load(id: started.id)
+        XCTAssertEqual(reloaded?.title, renamed.title)
+        XCTAssertEqual(reloaded?.state, .completed)
+    }
+
+    func testRenameWhileRecordingRejectsBlankAndRecoversAfterSaveFailure() async throws {
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = GatedThrowingSaveStore(inner: MeetingSessionStore(rootDirectory: dir), recorder: EventRecorder())
+        let capture = StubCaptureController()
+        capture.startResult = MeetingCaptureStartResult(tracks: [self.makeMicrophoneTrack(chunks: [])], firstPresentationTime: nil)
+        let coordinator = MeetingSessionCoordinator(store: store, capture: capture, processing: StubProcessingController(), audioArbiter: StubArbiter())
+        let started = try await coordinator.startRecording(configuration: self.makeConfiguration())
+        try await Task.sleep(nanoseconds: 100_000_000) // Let startup retention maintenance finish before gating saves.
+        await XCTAssertThrowsErrorAsync(try await coordinator.renameSession(sessionID: started.id, to: " \n "))
+        XCTAssertEqual(coordinator.activeSession?.title, started.title)
+        await store.throwOnNextSave()
+        await XCTAssertThrowsErrorAsync(try await coordinator.renameSession(sessionID: started.id, to: "Planning"))
+        XCTAssertTrue(coordinator.isRecording)
+        XCTAssertEqual(capture.startCount, 1)
+        XCTAssertEqual(capture.stopCount, 0)
+        _ = try await coordinator.renameSession(sessionID: started.id, to: "Planning")
+        let reloaded = try await store.load(id: started.id)
+        XCTAssertEqual(reloaded?.title, "Planning")
+        await coordinator.shutdownForTermination()
+    }
+
+    func testRenameWhileRecordingKeepsIncomingEventsAndAllowsStopDuringSave() async throws {
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let recorder = EventRecorder()
+        let store = GatedThrowingSaveStore(inner: MeetingSessionStore(rootDirectory: dir), recorder: recorder)
+        let capture = StubCaptureController()
+        let microphone = self.makeMicrophoneTrack(chunks: [self.makeFinalizedChunk()])
+        capture.startResult = MeetingCaptureStartResult(tracks: [microphone], firstPresentationTime: nil)
+        let coordinator = MeetingSessionCoordinator(store: store, capture: capture, processing: StubProcessingController(), audioArbiter: StubArbiter())
+        let started = try await coordinator.startRecording(configuration: self.makeConfiguration())
+        try await Task.sleep(nanoseconds: 100_000_000) // Let startup retention maintenance finish before gating saves.
+        await store.closeGate()
+        let rename = Task { try await coordinator.renameSession(sessionID: started.id, to: "Live planning") }
+        for _ in 0..<200 where coordinator.activeSession?.title != "Live planning" {
+            try await Task.sleep(nanoseconds: 1_000_000)
+        }
+        XCTAssertEqual(coordinator.activeSession?.title, "Live planning")
+        await XCTAssertThrowsErrorAsync(try await coordinator.renameSession(sessionID: started.id, to: "Overlapping edit"))
+        capture.emit(.microphoneEchoProtectionChanged(.unfiltered))
+        await self.drainCaptureEvents()
+        let events = try XCTUnwrap(coordinator.activeSession).events
+        XCTAssertFalse(events.isEmpty)
+        capture.stopResult = MeetingCaptureStopResult(tracks: [microphone], stoppedAt: Date())
+        let stop = Task { try await coordinator.stopAndTranscribe() }
+        for _ in 0..<100 where coordinator.state != .stopping(started.id) {
+            await Task.yield()
+        }
+        XCTAssertEqual(coordinator.state, .stopping(started.id), "Stop must be accepted while the title save is pending")
+        await store.openGate()
+        _ = try await rename.value
+        let completed = try await stop.value
+        XCTAssertEqual(completed.title, "Live planning")
+        XCTAssertEqual(completed.events, events)
+        let saved = try await store.load(id: started.id)
+        XCTAssertEqual(saved?.state, .completed, "A queued rename must never overwrite terminal state")
+        XCTAssertEqual(saved?.events.map(\.id), events.map(\.id))
+        XCTAssertEqual(saved?.title, "Live planning")
+    }
+
     func testRenameSessionRejectsEmptyOrWhitespaceTitle() async throws {
         let dir = self.makeTempDirectory()
         defer { try? FileManager.default.removeItem(at: dir) }
@@ -5897,6 +6023,8 @@ private final class StubCaptureController: MeetingCaptureControlling, @unchecked
     var onPreflight: (@Sendable () async -> Void)?
     private(set) var preflightCount = 0
     private(set) var startCount = 0
+    private(set) var stopCount = 0
+    var stopResult: MeetingCaptureStopResult?
     private var eventHandler: (@Sendable (MeetingCaptureEvent) -> Void)?
 
     func emit(_ event: MeetingCaptureEvent) { self.eventHandler?(event) }
@@ -5925,7 +6053,8 @@ private final class StubCaptureController: MeetingCaptureControlling, @unchecked
     }
 
     func stop(sessionID: MeetingSessionID) async throws -> MeetingCaptureStopResult {
-        MeetingCaptureStopResult(tracks: [], stoppedAt: Date())
+        self.stopCount += 1
+        return self.stopResult ?? MeetingCaptureStopResult(tracks: [], stoppedAt: Date())
     }
 
     func shutdownForTermination() async {}

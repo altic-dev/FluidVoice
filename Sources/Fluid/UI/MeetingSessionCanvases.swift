@@ -7,6 +7,8 @@ struct MeetingRecordingCanvas: View {
     let liveTranscript: MeetingLiveTranscriptSnapshot
     let isStopping: Bool
     let onStop: () -> Void
+    var onRename: ((String) -> Void)? = nil
+    var errorMessage: String? = nil
 
     @Environment(\.theme) private var theme
 
@@ -35,12 +37,29 @@ struct MeetingRecordingCanvas: View {
             VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
                 MeetingDocumentTitle(title: self.session.title)
                     .lineLimit(2)
-                    .help(self.session.title)
+                    .editableTitle(
+                        self.session.title,
+                        id: String(describing: self.session.id),
+                        enabled: !self.isStopping && self.onRename != nil,
+                        editorFont: .system(.largeTitle, design: .serif).weight(.medium),
+                        singleClickEnabled: true,
+                        submitUnchanged: true,
+                        onRename: { self.onRename?($0) }
+                    )
+                    .accessibilityIdentifier("meeting-recording-title")
                 Text(self.sourceSummary)
                     .font(self.theme.typography.caption)
                     .foregroundStyle(self.theme.palette.secondaryText)
                     .lineLimit(1)
                     .help(self.sourceSummary)
+            }
+
+            if let errorMessage, !errorMessage.isEmpty {
+                Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
+                    .font(self.theme.typography.bodySmall)
+                    .foregroundStyle(self.theme.palette.warning)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("meeting-recording-action-error")
             }
 
             VStack(alignment: .leading, spacing: self.theme.metrics.spacing.md) {
