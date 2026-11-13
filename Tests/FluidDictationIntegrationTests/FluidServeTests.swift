@@ -96,13 +96,42 @@ final class FluidServeTests: XCTestCase {
         XCTAssertFalse(status.output.contains("Meetings available"))
     }
 
-    func testAccessSwitchIsOffUntilTheAppSetsIt() throws {
+    func testUnknownPermissionStaysClosedWithoutClaimingSharingIsOff() throws {
+        try self.save(self.session(title: "Private planning"))
+        for arguments in [["meet", "list"], ["meet", "show", "latest"], ["meet", "search", "merged"], ["meet", "summary", "latest"]] {
+            let result = FluidServeCommand.run(arguments: arguments, root: self.root, accessEnabled: nil)
+            XCTAssertEqual(result.exitCode, 2)
+            XCTAssertTrue(result.output.contains("Could not verify"))
+            XCTAssertTrue(result.output.contains("sandbox"))
+            XCTAssertFalse(result.output.contains("not sharing meetings"))
+            XCTAssertFalse(result.output.contains("Private planning"))
+            XCTAssertFalse(result.output.contains("merged speaker"))
+        }
+        let status = FluidServeCommand.run(arguments: ["status"], root: self.root, accessEnabled: nil)
+        XCTAssertTrue(status.output.contains("Meeting access: unknown"))
+        XCTAssertFalse(status.output.contains("Meetings available"))
+        let json = FluidServeCommand.run(arguments: ["status", "--json"], root: self.root, accessEnabled: nil)
+        let data = Data(json.output.utf8)
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertTrue(object["access"] is NSNull)
+        XCTAssertEqual(object["meetings"] as? Int, 0)
+        XCTAssertEqual(FluidServeSelfCheck.outcome(fromStatusJSON: data), .failed(FluidServeMeetings.ReadError.accessUnavailable.localizedDescription))
+        let skill = FluidServeSkill.document(toolPath: "/fixture/fv-serve")
+        XCTAssertTrue(skill.contains("normal permission-approval flow"))
+        XCTAssertTrue(skill.contains("Do not disable the sandbox"))
+    }
+
+    func testAccessSwitchDistinguishesUnknownFromExplicitConsent() throws {
         let suite = "FluidServeTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
-        XCTAssertFalse(FluidServeMeetings.isAccessEnabled(bundleIdentifier: suite))
+        XCTAssertNil(FluidServeMeetings.isAccessEnabled(bundleIdentifier: suite))
+        defaults.set(false, forKey: FluidServeMeetings.accessDefaultsKey)
+        XCTAssertEqual(FluidServeMeetings.isAccessEnabled(bundleIdentifier: suite), false)
         defaults.set(true, forKey: FluidServeMeetings.accessDefaultsKey)
-        XCTAssertTrue(FluidServeMeetings.isAccessEnabled(bundleIdentifier: suite))
+        XCTAssertEqual(FluidServeMeetings.isAccessEnabled(bundleIdentifier: suite), true)
+        defaults.set("invalid", forKey: FluidServeMeetings.accessDefaultsKey)
+        XCTAssertNil(FluidServeMeetings.isAccessEnabled(bundleIdentifier: suite))
     }
 
     func testCommandListsShowsSearchesAndReadsSavedSummaries() throws {
@@ -637,7 +666,8 @@ final class FluidServeTests: XCTestCase {
         CFPreferencesAppSynchronize(kCFPreferencesCurrentApplication)
         XCTAssertEqual(FluidServeSelfCheck.run(tool: tool), .accessOff)
         let sneaky = try self.output(of: tool, ["status", "-\(key)", "YES"])
-        XCTAssertTrue(sneaky.contains("Meeting access: off"), "A defaults-style argument must not switch access on: \(sneaky)")
+        XCTAssertFalse(sneaky.contains("Meeting access: on"), "A defaults-style argument must not switch access on: \(sneaky)")
+        XCTAssertFalse(sneaky.contains("Meetings available"), "An unverifiable argument override must not read meetings")
 
         UserDefaults.standard.set(true, forKey: key)
         CFPreferencesAppSynchronize(kCFPreferencesCurrentApplication)

@@ -554,6 +554,21 @@ final class MeetingAutoDetectorTests: XCTestCase {
         XCTAssertEqual(MeetingDetectionPromptController.remainingAutoDismissSeconds(2, after: -1), 2)
     }
 
+    func testPromptProgressTracksAndPausesTheDismissalBudget() {
+        let start = Date(timeIntervalSince1970: 1000)
+        func progress(_ remaining: TimeInterval, _ leg: Date?, _ elapsed: TimeInterval) -> Double {
+            MeetingDetectionPromptController.autoDismissProgress(
+                remaining: remaining, startedAt: leg, now: start.addingTimeInterval(elapsed)
+            )
+        }
+        XCTAssertEqual(progress(20, start, 0), 0, accuracy: 0.0001)
+        XCTAssertEqual(progress(20, start, 5), 0.25, accuracy: 0.0001)
+        XCTAssertEqual(progress(15, nil, 100), 0.25, accuracy: 0.0001, "Hover must keep progress still")
+        XCTAssertEqual(progress(15, start.addingTimeInterval(100), 105), 0.5, accuracy: 0.0001)
+        XCTAssertEqual(progress(15, start, 100), 1, accuracy: 0.0001)
+        XCTAssertEqual(progress(20, start, -10), 0, accuracy: 0.0001)
+    }
+
     func testPromptDefaultsToTopCenterOfVisibleFrame() {
         let visibleFrame = NSRect(x: 100, y: 50, width: 1200, height: 800)
         let frame = MeetingDetectionPromptController.defaultFrame(
@@ -1535,22 +1550,12 @@ final class MeetingAutoDetectorTests: XCTestCase {
         XCTAssertEqual(h.nudges, 1)
     }
 
-    func testTheQuestionSitsCenteredAboveThePillAndStaysOnScreen() {
-        let size = MeetingStillRecordingNudgeController.panelSize
+    func testMeetingPromptsUseTheSameSizeAndPosition() {
         let screen = NSRect(x: 0, y: 0, width: 1440, height: 900)
-
-        let middle = MeetingStillRecordingNudgeController.frame(abovePill: NSRect(x: 678, y: 64, width: 84, height: 32), within: screen)
-        XCTAssertEqual(middle.midX, 720)
-        XCTAssertEqual(middle.minY, 104)
-        XCTAssertEqual(middle.size, size)
-
-        let leftEdge = MeetingStillRecordingNudgeController.frame(abovePill: NSRect(x: 4, y: 64, width: 84, height: 32), within: screen)
-        XCTAssertEqual(leftEdge.minX, 0)
-        let rightEdge = MeetingStillRecordingNudgeController.frame(abovePill: NSRect(x: 1350, y: 64, width: 84, height: 32), within: screen)
-        XCTAssertEqual(rightEdge.maxX, 1440)
-
-        let unknownScreen = MeetingStillRecordingNudgeController.frame(abovePill: NSRect(x: 4, y: 64, width: 84, height: 32), within: nil)
-        XCTAssertEqual(unknownScreen.midX, 46)
+        XCTAssertEqual(MeetingStillRecordingNudgeController.panelSize, MeetingDetectionPromptController.panelSize)
+        let frame = MeetingDetectionPromptController.defaultFrame(panelSize: MeetingStillRecordingNudgeController.panelSize, visibleFrame: screen)
+        XCTAssertEqual(frame.midX, screen.midX)
+        XCTAssertEqual(frame.maxY, screen.maxY - 12)
     }
 
     func testHidingOrDismissingAnInactiveQuestionHasNoEffects() {

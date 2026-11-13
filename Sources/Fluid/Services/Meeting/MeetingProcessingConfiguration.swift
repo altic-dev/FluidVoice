@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 /// Versioned, length-framed key/value encoding so arbitrary string fields cannot collide on
@@ -31,6 +32,8 @@ nonisolated struct MeetingFinalProcessingConfiguration: Equatable, Sendable {
     let vocabularyBoostingEnabled: Bool
     let pronunciationMatchingEnabled: Bool
     let customDictionaryRewritingEnabled: Bool
+    let customDictionaryEntries: [SettingsStore.CustomDictionaryEntry]
+    private let dictionaryFingerprint: String
     let experimentalUnifiedFinalEnabled: Bool
     let diarizationFingerprint: String
     let pipelineVersion: Int
@@ -42,6 +45,7 @@ nonisolated struct MeetingFinalProcessingConfiguration: Equatable, Sendable {
         vocabularyBoostingEnabled: Bool = false,
         pronunciationMatchingEnabled: Bool = false,
         customDictionaryRewritingEnabled: Bool = false,
+        customDictionaryEntries: [SettingsStore.CustomDictionaryEntry] = [],
         experimentalUnifiedFinalEnabled: Bool = false,
         diarizationFingerprint: String = MeetingProcessingCheckpoint.currentDiarizationFingerprint,
         pipelineVersion: Int = Self.defaultPipelineVersion
@@ -51,6 +55,13 @@ nonisolated struct MeetingFinalProcessingConfiguration: Equatable, Sendable {
         self.vocabularyBoostingEnabled = vocabularyBoostingEnabled
         self.pronunciationMatchingEnabled = pronunciationMatchingEnabled
         self.customDictionaryRewritingEnabled = customDictionaryRewritingEnabled
+        self.customDictionaryEntries = customDictionaryRewritingEnabled ? customDictionaryEntries : []
+        // Resume identity must change with rule content without persisting private dictionary text.
+        let dictionaryIdentity = MeetingConfigFingerprintEncoding.encode(self.customDictionaryEntries.flatMap { entry in
+            [("id", entry.id.uuidString), ("replacement", entry.replacement)]
+                + entry.triggers.map { ("trigger", $0) }
+        })
+        self.dictionaryFingerprint = SHA256.hash(data: Data(dictionaryIdentity.utf8)).map { String(format: "%02x", $0) }.joined()
         self.experimentalUnifiedFinalEnabled = experimentalUnifiedFinalEnabled
         self.diarizationFingerprint = diarizationFingerprint
         self.pipelineVersion = pipelineVersion
@@ -65,6 +76,7 @@ nonisolated struct MeetingFinalProcessingConfiguration: Equatable, Sendable {
             ("vocabBoost", String(self.vocabularyBoostingEnabled)),
             ("pronunciationMatch", String(self.pronunciationMatchingEnabled)),
             ("dictionaryRewrite", String(self.customDictionaryRewritingEnabled)),
+            ("dictionaryRules", self.dictionaryFingerprint),
             ("unifiedFinal", String(self.experimentalUnifiedFinalEnabled)),
             ("diarizer", self.diarizationFingerprint),
             ("pipeline", String(self.pipelineVersion)),
@@ -90,10 +102,11 @@ enum MeetingRetranscriptionLanguage {
         self.choices.first { $0.id == languageCode }?.displayName ?? languageCode
     }
 
-    /// A same-language run replaces nothing and, if it fails, hides the transcript that is already there.
-    static func canRetranscribe(selection: String, currentLanguageCode: String) -> Bool {
+    /// Explicit redo can refresh saved replacements in the same language. Recovery suggestions
+    /// still distinguish a failed language change from an ordinary retry.
+    static func canRetranscribe(selection: String, currentLanguageCode: String, allowsSameLanguage: Bool = false) -> Bool {
         guard let code = canonicalCode(selection) else { return false }
-        return code != currentLanguageCode
+        return allowsSameLanguage || code != currentLanguageCode
     }
 
     /// The language an empty meeting should try again. Use the latest attempt that recorded a

@@ -995,6 +995,13 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
         (self.endedAt ?? Date()).timeIntervalSince(self.startedAt)
     }
 
+    /// Current coverage wins over historical diagnostic events after a successful retry.
+    var hasIncompleteTranscriptCoverage: Bool {
+        if let complete = self.transcriptIsComplete { return !complete }
+        return self.transcriptCoverageGaps?.isEmpty == false
+            || self.events.contains { $0.kind == .transcriptCoverageIncomplete }
+    }
+
     var microphoneEchoWarning: String? {
         guard self.mode.capturesComputerAudio else { return nil }
         switch self.state {

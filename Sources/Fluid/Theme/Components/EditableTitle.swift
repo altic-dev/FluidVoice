@@ -8,6 +8,8 @@ private struct EditableTitleModifier: ViewModifier {
     let enabled: Bool
     let editorFont: Font?
     let doubleClickEnabled: Bool
+    let singleClickEnabled: Bool
+    let submitUnchanged: Bool
     let onRename: (String) -> Void
 
     @State private var editing = false
@@ -37,7 +39,25 @@ private struct EditableTitleModifier: ViewModifier {
                         self.focused = true
                     }
             } else {
-                if self.doubleClickEnabled {
+                if self.singleClickEnabled {
+                    HStack(alignment: .center, spacing: 8) {
+                        content
+                            .highPriorityGesture(TapGesture().onEnded { self.begin() })
+                            .accessibilityAction(named: Text("Rename"), self.begin)
+                        if self.enabled && self.isEnabled {
+                            Button(action: self.begin) {
+                                FluidPencilShape()
+                                    .stroke(style: StrokeStyle(lineWidth: 1.7, lineCap: .round, lineJoin: .round))
+                                    .frame(width: 20, height: 20)
+                                    .frame(width: 24, height: 24)
+                            }
+                            .buttonStyle(FluidHoverIconButtonStyle())
+                            .help("Rename")
+                            .accessibilityLabel("Rename \(self.title)")
+                        }
+                    }
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { self.restingHeight = $0 }
+                } else if self.doubleClickEnabled {
                     content
                         .highPriorityGesture(TapGesture(count: 2).onEnded { self.begin() })
                         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { self.restingHeight = $0 }
@@ -49,7 +69,7 @@ private struct EditableTitleModifier: ViewModifier {
                 }
             }
         }
-        .help(self.enabled ? (self.doubleClickEnabled ? "Double-click to rename. Enter saves; Escape cancels." : "Right-click for Rename. Enter saves; Escape cancels.") : self.title)
+        .help(self.renameHelp)
         .contextMenu {
             Button("Rename…", systemImage: "pencil", action: self.begin)
                 .disabled(!self.enabled)
@@ -62,6 +82,12 @@ private struct EditableTitleModifier: ViewModifier {
         .onChange(of: self.enabled && self.isEnabled) { _, enabled in
             if !enabled { self.cancel() }
         }
+    }
+
+    private var renameHelp: String {
+        guard self.enabled else { return self.title }
+        let action = self.singleClickEnabled ? "Click to rename." : self.doubleClickEnabled ? "Double-click to rename." : "Right-click for Rename."
+        return "\(action) Enter saves; Escape cancels."
     }
 
     private func begin() {
@@ -80,12 +106,12 @@ private struct EditableTitleModifier: ViewModifier {
         let value = self.draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !value.isEmpty else { return }
         self.cancel()
-        if value != self.title { self.onRename(value) }
+        if self.submitUnchanged || value != self.title { self.onRename(value) }
     }
 }
 
 extension View {
-    func editableTitle(_ title: String, id: String, enabled: Bool = true, editorFont: Font? = nil, doubleClickEnabled: Bool = true, onRename: @escaping (String) -> Void) -> some View {
-        self.modifier(EditableTitleModifier(title: title, identity: id, enabled: enabled, editorFont: editorFont, doubleClickEnabled: doubleClickEnabled, onRename: onRename))
+    func editableTitle(_ title: String, id: String, enabled: Bool = true, editorFont: Font? = nil, doubleClickEnabled: Bool = true, singleClickEnabled: Bool = false, submitUnchanged: Bool = false, onRename: @escaping (String) -> Void) -> some View {
+        self.modifier(EditableTitleModifier(title: title, identity: id, enabled: enabled, editorFont: editorFont, doubleClickEnabled: doubleClickEnabled, singleClickEnabled: singleClickEnabled, submitUnchanged: submitUnchanged, onRename: onRename))
     }
 }
