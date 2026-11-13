@@ -885,7 +885,7 @@ struct CustomDictionaryView: View {
 
     private var voiceMatchingSettingsRow: some View {
         Text(self.pronunciationEnabled
-            ? "Pronunciation dictionary is on. Voice training uses the fast sound-order matcher."
+            ? "Pronunciation matching is on for dictation. Meetings use saved replacements."
             : "Voice training is off. Enable “Learn from your pronunciation” in Settings → Experimental.")
             .font(self.theme.typography.caption)
             .foregroundStyle(self.theme.palette.secondaryText)
@@ -1250,7 +1250,7 @@ struct CustomDictionaryView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Saved Replacements")
                         .font(self.theme.typography.captionStrong)
-                    Text("These run automatically after dictation.")
+                    Text("Applied to dictation and finished meeting transcripts.")
                         .font(self.theme.typography.caption)
                         .foregroundStyle(self.theme.palette.secondaryText)
                 }

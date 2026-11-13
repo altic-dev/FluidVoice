@@ -21,6 +21,43 @@ final class MeetingTranscriptNormalizerTests: XCTestCase {
         )
     }
 
+    func testSavedReplacementsPreserveMetadataAndUseLiteralWholeWordRules() async throws {
+        let rules: [SettingsStore.CustomDictionaryEntry] = [
+            .init(triggers: ["space fest", "spacefast"], replacement: "Spacefast"),
+            .init(triggers: ["codec"], replacement: "Codex"),
+            .init(triggers: ["fee"], replacement: "$30"),
+            .init(triggers: ["claude"], replacement: "Claude Code"),
+        ]
+        let input = [self.segment("SPACE FEST codec codecs fee Claude Code, claude; twenty dollars")]
+        let result = try await MeetingTranscriptNormalizer.normalize(input, languageCode: "en", dictionaryEntries: rules)
+        var expected = input
+        expected[0].text = "Spacefast Codex codecs $30 Claude Code, Claude Code; $20"
+        XCTAssertEqual(result, expected, "only final display text may change")
+        XCTAssertEqual(input[0].originalText, "original evidence")
+    }
+
+    func testDictionaryWorksInOtherLanguagesButDoesNotJoinSpeakersOrEditPartialCaptions() async throws {
+        let rules: [SettingsStore.CustomDictionaryEntry] = [.init(triggers: ["space fest"], replacement: "Spacefast")]
+        var provisional = self.segment("space fest")
+        provisional.status = .provisional
+        let input = [self.segment("space"), self.segment("fest"), self.segment("space fest"), provisional]
+        var expected = input
+        expected[2].text = "Spacefast"
+        let result = try await MeetingTranscriptNormalizer.normalize(input, languageCode: "de", dictionaryEntries: rules)
+        XCTAssertEqual(result, expected)
+    }
+
+    func testReplacementDeletionWhitespaceAndChainingMatchDictationRules() async throws {
+        let rules: [SettingsStore.CustomDictionaryEntry] = [
+            .init(triggers: ["first phrase"], replacement: "alias"),
+            .init(triggers: ["alias"], replacement: "Name"),
+            .init(triggers: ["remove"], replacement: ""),
+            .init(triggers: ["linebreak"], replacement: "\n"),
+        ]
+        let result = try await MeetingTranscriptNormalizer.normalize([self.segment("first phrase remove linebreak next")], languageCode: "de", dictionaryEntries: rules)
+        XCTAssertEqual(result[0].text, "Name \nnext")
+    }
+
     func testFormatsQuantitiesAndPreservesEveryOtherSegmentField() async throws {
         let segments = [self.segment("twenty dollars, five billion parameters, one hundred tokens per second")]
         let result = try await MeetingTranscriptNormalizer.normalize(segments, languageCode: "en-US")
@@ -59,9 +96,11 @@ final class MeetingTranscriptNormalizerTests: XCTestCase {
 
     func testUnsafeAndOversizedTurnsPassThroughWithoutBlockingOtherTurns() async throws {
         let segments = [self.segment("twenty dollars\0"), self.segment(String(repeating: "a", count: 65_537)), self.segment("twenty dollars")]
-        let result = try await MeetingTranscriptNormalizer.normalize(segments, languageCode: "en")
+        let result = try await MeetingTranscriptNormalizer.normalize(
+            segments, languageCode: "en", dictionaryEntries: [.init(triggers: ["twenty"], replacement: "thirty")]
+        )
         XCTAssertEqual(Array(result.prefix(2)), Array(segments.prefix(2)))
-        XCTAssertEqual(result[2].text, "$20")
+        XCTAssertEqual(result[2].text, "$30")
     }
 
     func testCancelledAttemptDoesNotPublishFormattedText() async {

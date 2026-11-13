@@ -645,7 +645,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
     /// Bump whenever classification rules change so a resumed run can't mix rules mid-session.
     /// Era-awareness did NOT bump this: the mic pass re-runs every time, and multi-era tracks cannot predate this build.
     /// Version 18: split sequential replies without fragmenting simultaneous word streams.
-    nonisolated static let pipelineVersion = 18
+    nonisolated static let pipelineVersion = 19
     /// Per-turn engines starve on short turns, and an all-empty chunk collapses to unlabeled.
     static let perTurnTurnMergeGapSeconds = 5.0
 
@@ -1329,6 +1329,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
     private let serializationGate: MeetingProcessingSerializationGate
     private let backendRegistry: MeetingTranscriptionBackendRegistry
     private let backendIDProvider: @MainActor (String) -> MeetingBackendID
+    private let dictionaryEntriesProvider: @MainActor () -> [SettingsStore.CustomDictionaryEntry]
     private let preferredASRModelProvider: @MainActor () async throws -> SettingsStore.SpeechModel
     /// Canonical path only: observes chunk files for the analysis manifest. `nil` uses the real
     /// filesystem observer; tests inject fixture observations instead of writing audio.
@@ -1360,10 +1361,12 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         meetingRuntimeFactory: MeetingParakeetNemotronRuntimeFactory? = nil,
         prepareDiarizationModel: @escaping @MainActor () async throws -> Void = {},
         canonicalSidecarVerifiedProbe: ((MeetingResultSidecarReference) -> Void)? = nil,
+        dictionaryEntriesProvider: @escaping @MainActor () -> [SettingsStore.CustomDictionaryEntry] = { SettingsStore.shared.customDictionaryEntries },
         preferredASRModelProvider: @escaping @MainActor () async throws -> SettingsStore.SpeechModel = MeetingProcessingPipeline.defaultPreferredASRModel
     ) {
         self.asrServiceProvider = asrServiceProvider
         self.preferredASRModelProvider = preferredASRModelProvider
+        self.dictionaryEntriesProvider = dictionaryEntriesProvider
         self.managesModelResidency = managesModelResidency
         self.serializationGate = serializationGate
         self.chunkObserver = chunkObserver
@@ -1434,6 +1437,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         //
         // The request is frozen first, so the host capability handed to the factory can be bound to
         // this exact value.
+        let dictionaryEntries = self.dictionaryEntriesProvider()
         let preferredModel = try await backendID == .parakeetNemotron ? self.preferredASRModelProvider() : nil
         try Task.checkCancellation()
         let request = MeetingBackendRequest(
@@ -1442,7 +1446,9 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
             sessionDirectory: sessionDirectory,
             configuration: MeetingFinalProcessingConfiguration(
                 preferredASRModel: preferredModel,
-                languageCode: session.languageCode
+                languageCode: session.languageCode,
+                customDictionaryRewritingEnabled: !dictionaryEntries.isEmpty,
+                customDictionaryEntries: dictionaryEntries
             )
         )
         let backend = try self.backendRegistry.makeBackend(
@@ -1519,7 +1525,9 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
                     processed = try await self.processCanonicalAttempt(plan: plan, backend: backend, progress: progress)
                 }
                 processed.segments = try await MeetingTranscriptNormalizer.normalize(
-                    processed.segments, languageCode: request.configuration.languageCode
+                    processed.segments,
+                    languageCode: request.configuration.languageCode,
+                    dictionaryEntries: request.configuration.customDictionaryEntries
                 )
                 if self.managesModelResidency, summaryProvider != nil {
                     processed.postProcessing = await MeetingPostProcessingRegistry.shared.process(

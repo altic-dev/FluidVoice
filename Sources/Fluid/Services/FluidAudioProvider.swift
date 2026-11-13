@@ -171,9 +171,8 @@ nonisolated struct MeetingProviderOptions: Equatable, Sendable {
         guard !configuration.pronunciationMatchingEnabled else {
             throw MeetingProviderOptionsError.unsupportedFeature("pronunciationMatching")
         }
-        guard !configuration.customDictionaryRewritingEnabled else {
-            throw MeetingProviderOptionsError.unsupportedFeature("customDictionaryRewriting")
-        }
+        // Saved replacements run on final speaker turns in the meeting pipeline, never inside
+        // ASR where they would disagree with raw word timings or read live dictation settings.
         guard !configuration.experimentalUnifiedFinalEnabled else {
             throw MeetingProviderOptionsError.unsupportedFeature("experimentalUnifiedFinal")
         }

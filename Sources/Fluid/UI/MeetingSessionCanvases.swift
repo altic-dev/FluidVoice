@@ -748,7 +748,7 @@ struct MeetingResultCanvas: View {
             .disabled(!hasText || self.documentSection != .transcript)
             Divider()
             self.renameMeetingAction
-            Button("Transcribe in another language…", systemImage: "globe") {
+            Button("Redo transcript…", systemImage: "arrow.clockwise") {
                 self.retranscriptionLanguageCode = self.session.languageCode
                 self.isChoosingRetranscriptionLanguage = true
             }
@@ -1343,9 +1343,9 @@ private struct MeetingRetranscriptionLanguageSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: self.theme.metrics.spacing.lg) {
-            Text("Transcribe in another language")
+            Text("Redo transcript")
                 .font(self.theme.typography.title)
-            Text("The saved audio is transcribed again and replaces this transcript. Choose a language the meeting model supports.")
+            Text("Transcribe saved audio again with your latest saved replacements. Keep the current language or choose another. This replaces the transcript.")
                 .font(self.theme.typography.body)
                 .foregroundStyle(self.theme.palette.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
@@ -1374,7 +1374,8 @@ private struct MeetingRetranscriptionLanguageSheet: View {
                     .disabled(
                         self.isBusy || !MeetingRetranscriptionLanguage.canRetranscribe(
                             selection: self.selection,
-                            currentLanguageCode: self.currentLanguageCode
+                            currentLanguageCode: self.currentLanguageCode,
+                            allowsSameLanguage: true
                         )
                     )
             }

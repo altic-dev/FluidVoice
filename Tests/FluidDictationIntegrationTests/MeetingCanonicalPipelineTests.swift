@@ -283,7 +283,8 @@ final class MeetingCanonicalPipelineTests: XCTestCase {
         backend: CanonicalFixtureBackend,
         observer: any MeetingChunkAudioObserving,
         echoProvider: (any MeetingUnitEchoVerdictProviding)? = nil,
-        probe: ((MeetingResultSidecarReference) -> Void)? = nil
+        probe: ((MeetingResultSidecarReference) -> Void)? = nil,
+        dictionaryEntriesProvider: @escaping @MainActor () -> [SettingsStore.CustomDictionaryEntry] = { [] }
     ) -> MeetingProcessingPipeline {
         let registry = MeetingTranscriptionBackendRegistry(defaultBackendID: Self.canonicalBackendID)
         registry.register(Self.canonicalBackendID) { _ in backend }
@@ -298,7 +299,8 @@ final class MeetingCanonicalPipelineTests: XCTestCase {
             backendID: nil,
             chunkObserver: observer,
             echoVerdictProvider: echoProvider,
-            canonicalSidecarVerifiedProbe: probe
+            canonicalSidecarVerifiedProbe: probe,
+            dictionaryEntriesProvider: dictionaryEntriesProvider
         )
     }
 
@@ -420,6 +422,36 @@ final class MeetingCanonicalPipelineTests: XCTestCase {
     }
 
     // MARK: - Canonical success and retry
+
+    func testCanonicalDictionaryIsFrozenDuringProcessingAndRefreshedForRedo() async throws {
+        let fixture = self.makeInRoomFixture()
+        let directory = try self.makeTempSessionDirectory()
+        var entries: [SettingsStore.CustomDictionaryEntry] = [.init(triggers: ["space fest"], replacement: "Spacefast")]
+        let backend = CanonicalFixtureBackend { plan, manifest in
+            entries[0].replacement = "New Name"
+            return self.standardBundle(plan: plan, manifest: manifest, text: "space fest costs twenty dollars")
+        }
+        let pipeline = self.makeCanonicalPipeline(
+            backend: backend,
+            observer: FixtureObserver(results: [
+                MeetingAnalysisChunkKey(trackID: fixture.track.id, chunkID: fixture.chunk.id): self.makeObserved(fixture.chunk, duration: 10),
+            ]),
+            dictionaryEntriesProvider: { entries }
+        )
+        let first = try await pipeline.process(session: fixture.session, sessionDirectory: directory, progress: { _ in })
+        XCTAssertEqual(first.segments.map(\.text), ["Spacefast costs $20"])
+        let reference = try XCTUnwrap(first.resultSidecarReference)
+        let sidecar = try MeetingResultSidecarStore(sessionDirectory: directory).read(
+            expectedAttemptID: first.attempt.id, expectedBackendID: Self.canonicalBackendID, reference: reference
+        )
+        XCTAssertEqual(sidecar.units.map(\.text), ["space fest costs twenty dollars"])
+        var redoSession = fixture.session
+        redoSession.processingAttempts = []
+        let redo = try await pipeline.process(session: redoSession, sessionDirectory: directory, progress: { _ in })
+        XCTAssertEqual(redo.segments.map(\.text), ["New Name costs $20"])
+        XCTAssertEqual(redo.coverageGaps, first.coverageGaps)
+        XCTAssertEqual(redo.isComplete, first.isComplete)
+    }
 
     func testCanonicalFormattingUsesTheRequestedTranscriptionLanguage() async throws {
         let fixture = self.makeInRoomFixture()

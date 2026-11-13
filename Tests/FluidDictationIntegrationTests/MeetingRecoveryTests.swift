@@ -3122,6 +3122,37 @@ final class MeetingRecoveryTests: XCTestCase {
         await restarted.shutdownForTermination()
     }
 
+    func testFailedSameLanguageRedoKeepsSavedTranscriptAndReleasesAudio() async throws {
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MeetingSessionStore(rootDirectory: dir)
+        let original = try self.completedEnglishRetranscriptionFixture()
+        try await store.create(original)
+        let arbiter = StubArbiter()
+        let coordinator = MeetingSessionCoordinator(
+            store: store,
+            capture: StubCaptureController(),
+            processing: DiagnosticFailingProcessingController(error: ProcessingFailure()),
+            audioArbiter: arbiter
+        )
+        await coordinator.ensureRestored()
+        do {
+            _ = try await coordinator.retryProcessing(sessionID: original.id, languageCode: "en")
+            XCTFail("Expected fixture failure")
+        } catch { XCTAssertTrue(error is ProcessingFailure) }
+        let saved = try await store.load(id: original.id)
+        let restored = try XCTUnwrap(saved)
+        XCTAssertEqual(restored.state, .completed)
+        XCTAssertEqual(restored.languageCode, original.languageCode)
+        XCTAssertEqual(restored.transcriptSegments, original.transcriptSegments)
+        XCTAssertEqual(restored.speakers, original.speakers)
+        XCTAssertEqual(restored.audioTracks, original.audioTracks)
+        XCTAssertEqual(restored.postProcessing, original.postProcessing)
+        XCTAssertEqual(arbiter.acquireCount, arbiter.releaseCount)
+        XCTAssertNil(MeetingRetranscriptionLanguage.failedAttemptLanguage(for: restored))
+        await coordinator.shutdownForTermination()
+    }
+
     func testFailedLanguageChangeRetryKeepsChosenLanguage() async throws {
         let dir = self.makeTempDirectory()
         defer { try? FileManager.default.removeItem(at: dir) }

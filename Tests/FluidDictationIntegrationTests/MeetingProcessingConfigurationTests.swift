@@ -1,7 +1,23 @@
 @testable import FluidVoice_Debug
+import Foundation
 import XCTest
 
 final class MeetingProcessingConfigurationTests: XCTestCase {
+    func testDictionarySnapshotAndFingerprintTrackEditsWithoutExposingPrivateWords() {
+        var entries: [SettingsStore.CustomDictionaryEntry] = [.init(triggers: ["private alias"], replacement: "Private Name")]
+        let frozen = MeetingFinalProcessingConfiguration(customDictionaryRewritingEnabled: true, customDictionaryEntries: entries)
+        XCTAssertEqual(frozen.identityFingerprint, MeetingFinalProcessingConfiguration(customDictionaryRewritingEnabled: true, customDictionaryEntries: entries).identityFingerprint)
+        entries[0].replacement = "Changed Name"
+        let changed = MeetingFinalProcessingConfiguration(customDictionaryRewritingEnabled: true, customDictionaryEntries: entries)
+        XCTAssertEqual(frozen.customDictionaryEntries[0].replacement, "Private Name")
+        XCTAssertNotEqual(frozen.identityFingerprint, changed.identityFingerprint)
+        XCTAssertFalse(frozen.identityFingerprint.contains("private alias"))
+        XCTAssertFalse(frozen.identityFingerprint.contains("Private Name"))
+        entries[0].triggers.append("another alias")
+        XCTAssertNotEqual(changed.identityFingerprint, MeetingFinalProcessingConfiguration(customDictionaryRewritingEnabled: true, customDictionaryEntries: entries).identityFingerprint)
+        XCTAssertTrue(MeetingFinalProcessingConfiguration(customDictionaryEntries: entries).customDictionaryEntries.isEmpty)
+    }
+
     func testFinalConfigurationDefaultsAreProEnglishWithoutPostProcessing() {
         let config = MeetingFinalProcessingConfiguration()
         XCTAssertEqual(config.asrModel, "fluid-parakeet-pro")
