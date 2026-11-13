@@ -751,6 +751,12 @@ private struct AutomaticDictionaryCorrectionOverlayView: View {
                     self.moreOptionsMenu
                 }
             }
+            .disabled(self.session.capturePhase != .idle)
+            if self.session.capturePhase == .processing {
+                Text(self.session.statusMessage)
+                    .font(.fluidSystem(size: 11))
+                    .foregroundStyle(.white.opacity(0.58))
+            }
             if self.session.hasError {
                 Text(self.session.statusMessage).font(.fluidSystem(size: 11)).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
             }

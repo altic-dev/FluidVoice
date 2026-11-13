@@ -142,7 +142,8 @@ final class AutomaticDictionaryTrainingSession: ObservableObject {
     }
 
     func beginTraining() {
-        guard DictionaryMatcherExperiment.sharedFeaturesEnabled, !self.isCancelled, self.screen == .choice else { return }
+        guard DictionaryMatcherExperiment.sharedFeaturesEnabled, !self.isCancelled,
+              self.screen == .choice, self.capturePhase == .idle else { return }
         self.onInteraction?()
         self.screen = .training
         self.statusMessage = ""

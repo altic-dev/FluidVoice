@@ -668,7 +668,16 @@ final class CustomDictionaryManualEntryTests: XCTestCase {
             archiveExample: { _ in }
         )
         session.onSuccess = { finished.fulfill() }
-        self.withRestoredDictionary([]) { session.addOnlyCorrection() }
+        self.withRestoredDictionary([]) {
+            session.addOnlyCorrection()
+            let savedEntries = SettingsStore.shared.customDictionaryEntries
+            session.beginTraining()
+            session.addOnlyCorrection()
+            XCTAssertEqual(session.screen, .choice, "Training cannot interrupt an accepted audio save")
+            XCTAssertEqual(session.capturePhase, .processing)
+            XCTAssertEqual(session.statusMessage, "Saving audio locally…")
+            XCTAssertEqual(SettingsStore.shared.customDictionaryEntries, savedEntries)
+        }
         await fulfillment(of: [finished], timeout: 2)
         XCTAssertEqual(session.screen, .success)
         XCTAssertEqual(session.capturePhase, .idle)
