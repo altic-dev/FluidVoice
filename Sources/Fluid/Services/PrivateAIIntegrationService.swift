@@ -553,3 +553,32 @@ private struct UnavailableAIIntegrationShim: PrivateAIIntegrationProviding {
         )
     }
 }
+
+// Accept the current provider bridge's name without changing existing callers or stored settings.
+extension PrivateAIIntegrationService.RuntimeConfiguration {
+    var usesBoost: Bool { self.usesFluid1Boost }
+
+    init(
+        selectedProviderID: String,
+        providerKey: String,
+        baseURL: String,
+        model: String,
+        apiKey: String,
+        localModelPath: String?,
+        usesStablePromptPrefixKVCache: Bool,
+        usesBoost: Bool,
+        contextTokenLimit: Int
+    ) {
+        self.init(
+            selectedProviderID: selectedProviderID,
+            providerKey: providerKey,
+            baseURL: baseURL,
+            model: model,
+            apiKey: apiKey,
+            localModelPath: localModelPath,
+            usesStablePromptPrefixKVCache: usesStablePromptPrefixKVCache,
+            usesFluid1Boost: usesBoost,
+            contextTokenLimit: contextTokenLimit
+        )
+    }
+}
