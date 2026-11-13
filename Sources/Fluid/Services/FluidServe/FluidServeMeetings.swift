@@ -88,6 +88,7 @@ nonisolated enum FluidServeMeetings {
 
     enum ReadError: LocalizedError, Equatable {
         case accessOff
+        case accessUnavailable
         case noMeetings
         case notFound(String)
         case ambiguous(String, Int)
@@ -96,6 +97,9 @@ nonisolated enum FluidServeMeetings {
             switch self {
             case .accessOff:
                 return "FluidVoice is not sharing meetings with any agent yet. In FluidVoice, open FluidMeet settings > Integrations and add your agent."
+            case .accessUnavailable:
+                return "Could not verify FluidVoice meeting-sharing permission. The setting may be unset or blocked by a sandbox. "
+                    + "Check FluidMeet settings > Integrations; if sharing is on, check the agent's sandbox permissions. No meeting data was read."
             case .noMeetings:
                 return "No finished meetings with a transcript were found."
             case let .notFound(reference):
@@ -118,8 +122,10 @@ nonisolated enum FluidServeMeetings {
     /// but through CFPreferences rather than `UserDefaults`, which would also honour a
     /// `-FluidServeMeetingAccessEnabled YES` argument and let a caller switch it on.
     /// This is a consent switch, not a lock: anything running as the user could read the files anyway.
-    static func isAccessEnabled(bundleIdentifier: String) -> Bool {
-        (CFPreferencesCopyAppValue(self.accessDefaultsKey as CFString, bundleIdentifier as CFString) as? Bool) ?? false
+    /// A missing value cannot distinguish an unset preference from a sandbox-denied read.
+    /// Only an explicit true grants access; nil is unknown, not proof that sharing is off.
+    static func isAccessEnabled(bundleIdentifier: String) -> Bool? {
+        CFPreferencesCopyAppValue(self.accessDefaultsKey as CFString, bundleIdentifier as CFString) as? Bool
     }
 
     static let customSummaryPromptDefaultsKey = "MeetingSummaryCustomPrompt"
