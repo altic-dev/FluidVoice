@@ -1344,7 +1344,8 @@ final class SettingsStore: ObservableObject {
 
     func effectiveSystemPrompt(for mode: PromptMode, appBundleID: String? = nil) -> String {
         self.applyingEnglishSpellingPreference(
-            to: self.promptResolution(for: mode, appBundleID: appBundleID).systemPrompt
+            to: self.promptResolution(for: mode, appBundleID: appBundleID).systemPrompt,
+            mode: mode
         )
     }
 

@@ -22,6 +22,15 @@ extension SettingsStore {
         }
         return self.englishSpellingPreference.applying(to: prompt)
     }
+
+    /// Append the stored English spelling instruction only for dictation cleanup.
+    /// Edit Mode prompts stay unchanged so translation requests keep working.
+    func applyingEnglishSpellingPreference(to prompt: String, mode: PromptMode) -> String {
+        guard mode.normalized == .dictate else {
+            return prompt
+        }
+        return self.applyingEnglishSpellingPreference(to: prompt)
+    }
 }
 
 private enum EnglishSpellingKeys {

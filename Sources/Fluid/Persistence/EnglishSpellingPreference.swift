@@ -2,7 +2,7 @@ import Foundation
 
 /// Regional English spelling for dictation cleanup / Fluid Intelligence.
 /// Apple Speech locale selection is separate; this only appends a prompt instruction.
-struct EnglishSpellingPreference: RawRepresentable, Equatable, Hashable, Codable {
+struct EnglishSpellingPreference: RawRepresentable, Equatable, Hashable, Codable, Sendable {
     let rawValue: String
 
     static let automatic = EnglishSpellingPreference(identifier: "automatic")
@@ -67,5 +67,19 @@ struct EnglishSpellingPreference: RawRepresentable, Equatable, Hashable, Codable
             return instruction
         }
         return "\(prompt)\n\n\(instruction)"
+    }
+
+    /// Append the spelling instruction only for dictation cleanup.
+    /// Edit Mode keeps its prompt so translation and rewrite requests still work.
+    func applyingToDictationCleanup(_ prompt: String, isDictation: Bool) -> String {
+        guard isDictation else {
+            return prompt
+        }
+        return self.applying(to: prompt)
+    }
+
+    /// Apply the stored spelling choice to a Fluid Intelligence / private dictation prompt.
+    func applyingToPrivateDictationPrompt(_ prompt: String) -> String {
+        self.applyingToDictationCleanup(prompt, isDictation: true)
     }
 }

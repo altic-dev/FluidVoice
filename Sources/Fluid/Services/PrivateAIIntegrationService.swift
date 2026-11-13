@@ -41,6 +41,14 @@ actor PrivateAIIntegrationService {
         var windowLines: [EditModeWindowLine]? = nil
         /// Signs what Edit Mode writes.
         var userDisplayName: String? = nil
+        /// Regional English spelling for Fluid Intelligence dictation cleanup.
+        /// Automatic leaves the model's built-in prompt unchanged. Edit Mode omits this.
+        var englishSpellingPreference: EnglishSpellingPreference = .automatic
+
+        /// Append the stored English spelling instruction to a private dictation prompt.
+        func applyingEnglishSpellingPreference(to prompt: String) -> String {
+            self.englishSpellingPreference.applyingToPrivateDictationPrompt(prompt)
+        }
     }
 
     struct EnhancementResult: Sendable, Equatable {

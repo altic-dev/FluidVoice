@@ -105,6 +105,62 @@ enum EnglishSpellingPreferenceTests {
             "Applying en-US twice does not duplicate the instruction"
         )
 
+        let editPrompt = "Translate the selected text into French. Output only the translation."
+        let gbOnEdit = EnglishSpellingPreference.enGB.applyingToDictationCleanup(editPrompt, isDictation: false)
+        let auOnEdit = EnglishSpellingPreference.enAU.applyingToDictationCleanup(editPrompt, isDictation: false)
+        let usOnEdit = EnglishSpellingPreference.enUS.applyingToDictationCleanup(editPrompt, isDictation: false)
+        check(gbOnEdit == editPrompt, "Edit Mode does not receive the en-GB spelling suffix")
+        check(auOnEdit == editPrompt, "Edit Mode does not receive the en-AU spelling suffix")
+        check(usOnEdit == editPrompt, "Edit Mode does not receive the en-US spelling suffix")
+        check(!gbOnEdit.contains("do not translate"), "Edit Mode is not told not to translate")
+        check(!auOnEdit.contains("Keep the original language"), "Edit Mode does not keep-original-language from spelling")
+        check(
+            EnglishSpellingPreference.enGB.applyingToDictationCleanup(samplePrompt, isDictation: true) == gbApplied,
+            "Dictation mode still appends the en-GB spelling suffix"
+        )
+        check(
+            EnglishSpellingPreference.enAU.applyingToDictationCleanup(samplePrompt, isDictation: true) == auApplied,
+            "Dictation mode still appends the en-AU spelling suffix"
+        )
+        check(
+            EnglishSpellingPreference.automatic.applyingToDictationCleanup(editPrompt, isDictation: false) == editPrompt,
+            "Automatic Edit Mode leaves the prompt unchanged"
+        )
+        check(
+            EnglishSpellingPreference.automatic.applyingToDictationCleanup(samplePrompt, isDictation: true) == samplePrompt,
+            "Automatic dictation leaves the prompt unchanged"
+        )
+        check(
+            EnglishSpellingPreference.enGB.applyingToDictationCleanup(editPrompt, isDictation: false)
+                != EnglishSpellingPreference.enGB.applying(to: editPrompt),
+            "Edit Mode gating differs from unconditional applying"
+        )
+
+        let privateBasePrompt = "Clean up the transcript. Return only the edited text."
+        let gbPrivate = EnglishSpellingPreference.enGB.applyingToPrivateDictationPrompt(privateBasePrompt)
+        let auPrivate = EnglishSpellingPreference.enAU.applyingToPrivateDictationPrompt(privateBasePrompt)
+        let usPrivate = EnglishSpellingPreference.enUS.applyingToPrivateDictationPrompt(privateBasePrompt)
+        let automaticPrivate = EnglishSpellingPreference.automatic.applyingToPrivateDictationPrompt(privateBasePrompt)
+        check(automaticPrivate == privateBasePrompt, "Private dictation automatic leaves the model prompt unchanged")
+        check(gbPrivate.contains(privateBasePrompt), "Private dictation en-GB keeps the Fluid Intelligence prompt")
+        check(gbPrivate.contains(gbInstruction), "Private dictation en-GB applies the spelling instruction")
+        check(auPrivate.contains(privateBasePrompt), "Private dictation en-AU keeps the Fluid Intelligence prompt")
+        check(auPrivate.contains(auInstruction), "Private dictation en-AU applies the spelling instruction")
+        check(usPrivate.contains(usInstruction), "Private dictation en-US applies the spelling instruction")
+        check(
+            EnglishSpellingPreference.enGB.applyingToPrivateDictationPrompt(gbPrivate) == gbPrivate,
+            "Private dictation applying is idempotent"
+        )
+        check(
+            EnglishSpellingPreference.enGB.applyingToPrivateDictationPrompt(privateBasePrompt)
+                == EnglishSpellingPreference.enGB.applyingToDictationCleanup(privateBasePrompt, isDictation: true),
+            "Private dictation uses the dictation cleanup suffix"
+        )
+        check(
+            EnglishSpellingPreference.enGB.applyingToPrivateDictationPrompt(editPrompt) != editPrompt,
+            "Private dictation still applies spelling when the base prompt mentions translation"
+        )
+
         print("=== DEMO: automatic (current behavior) ===")
         print(automaticApplied)
         print("=== DEMO: en-AU instruction appended to dictation cleanup prompt ===")

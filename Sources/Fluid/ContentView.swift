@@ -2904,7 +2904,8 @@ struct ContentView: View {
                     windowTitle: appInfo.windowTitle,
                     appVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String,
                     textBeforeCursor: stopSnapshot?.typingContext?.textBeforeCursor,
-                    screenText: stopSnapshot?.typingContext?.screenText
+                    screenText: stopSnapshot?.typingContext?.screenText,
+                    englishSpellingPreference: SettingsStore.shared.englishSpellingPreference
                 ),
                 streamHandler: streamHandler
             )
