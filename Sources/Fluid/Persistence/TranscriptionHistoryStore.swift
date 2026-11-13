@@ -291,6 +291,7 @@ final class TranscriptionHistoryStore: ObservableObject {
     private var todaySummaryDay: DateInterval?
     private var audioBudgetRevision: UInt64 = 0
     private var automaticAudioBudgetTask: Task<Void, Never>?
+    @Published private(set) var audioPruningDeferred = false
     private(set) var audioSaveGeneration: UInt64 = 0
     private var calendarObservers: [NSObjectProtocol] = []
     private let summaryNow: () -> Date
@@ -526,16 +527,19 @@ final class TranscriptionHistoryStore: ObservableObject {
     }
 
     @discardableResult
-    func pruneAudioToBudget() -> Int {
+    func pruneAudioToBudget() async -> Int {
         // An incomplete startup snapshot must never classify older recordings as orphaned.
         guard self.hasLoaded else { return 0 }
         self.invalidateAutomaticAudioBudgetMeasurement()
-        let budgetBytes = SettingsStore.shared.audioHistoryBudgetBytes
-        let currentBytes = DictationAudioHistoryStore.shared.audioUsageBytes()
-        return self.pruneAudioToBudget(currentBytes: currentBytes, budgetBytes: budgetBytes)
+        return await self.measureAndPruneAudioToBudget()
     }
 
-    private func pruneAudioToBudget(currentBytes initialCurrentBytes: Int64, budgetBytes: Int64) -> Int {
+    private func pruneAudioToBudget(
+        currentBytes initialCurrentBytes: Int64,
+        budgetBytes: Int64,
+        savedAudioFileNames: Result<Set<String>, Error>?,
+        legacyPending: Bool
+    ) -> Int {
         guard budgetBytes > 0 else {
             return self.deleteAllSavedAudio()
         }
@@ -543,8 +547,24 @@ final class TranscriptionHistoryStore: ObservableObject {
         var currentBytes = initialCurrentBytes
         guard currentBytes > budgetBytes else { return 0 }
 
+        // Unimported legacy history can own audio these entries do not reference, so usage cannot be
+        // attributed to them. Keep all audio until that history is imported.
+        self.audioPruningDeferred = legacyPending
+        guard !legacyPending else { return 0 }
+
+        // Another running install shares the database and audio folder, and its rows added after this
+        // load are not in these entries. Keep all audio if the database cannot be read.
+        let savedFileNames: Set<String>
+        guard let savedAudioFileNames else { return 0 }
+        do {
+            savedFileNames = try savedAudioFileNames.get()
+        } catch {
+            DebugLogger.shared.warning("Deferred audio budget pruning; saved audio could not be read: \(error)", source: "TranscriptionHistoryStore")
+            return 0
+        }
+
         var updatedEntries = self.entries
-        let referencedFileNames = Set(updatedEntries.compactMap { $0.audio?.fileName })
+        let referencedFileNames = savedFileNames.union(updatedEntries.compactMap { $0.audio?.fileName })
         let orphanedAudio = DictationAudioHistoryStore.shared.deleteUnreferencedAudioFiles(referencedFileNames: referencedFileNames)
         if orphanedAudio.fileCount > 0 {
             currentBytes = max(0, currentBytes - orphanedAudio.byteCount)
@@ -574,6 +594,14 @@ final class TranscriptionHistoryStore: ObservableObject {
         return prunedCount
     }
 
+    /// Requires explicit user confirmation because resuming the budget may remove old audio.
+    func archiveLegacyHistoryAndResumeAudioCleanup() async throws -> URL {
+        let directory = try await self.writer.archiveUnreadableLegacyHistory()
+        self.audioPruningDeferred = await self.writer.pendingLegacyHistory()
+        _ = await self.pruneAudioToBudget()
+        return directory
+    }
+
     private func invalidateAutomaticAudioBudgetMeasurement() {
         self.audioBudgetRevision &+= 1
     }
@@ -584,28 +612,47 @@ final class TranscriptionHistoryStore: ObservableObject {
 
         self.automaticAudioBudgetTask = Task { @MainActor [weak self] in
             guard let self else { return }
-            while true {
-                let gate = AudioBudgetMeasurementGate(
-                    revision: self.audioBudgetRevision,
-                    budgetBytes: SettingsStore.shared.audioHistoryBudgetBytes
-                )
-                let currentBytes = await Task.detached(priority: .utility) {
-                    DictationAudioHistoryStore.shared.audioUsageBytes()
-                }.value
-                guard gate.accepts(
-                    currentRevision: self.audioBudgetRevision,
-                    currentBudgetBytes: SettingsStore.shared.audioHistoryBudgetBytes
-                ) else {
-                    continue
-                }
+            _ = await self.measureAndPruneAudioToBudget()
+            self.automaticAudioBudgetTask = nil
+        }
+    }
 
-                _ = self.pruneAudioToBudget(
-                    currentBytes: currentBytes,
-                    budgetBytes: gate.budgetBytes
-                )
-                self.automaticAudioBudgetTask = nil
-                return
+    private func measureAndPruneAudioToBudget() async -> Int {
+        while true {
+            let gate = AudioBudgetMeasurementGate(
+                revision: self.audioBudgetRevision,
+                budgetBytes: SettingsStore.shared.audioHistoryBudgetBytes
+            )
+            let currentBytes = await Task.detached(priority: .utility) {
+                DictationAudioHistoryStore.shared.audioUsageBytes()
+            }.value
+            // Check legacy history before reading: an import that finishes during the read could
+            // otherwise retire its key after a snapshot that lacks the imported rows.
+            var savedAudioFileNames: Result<Set<String>, Error>?
+            let legacyPendingBeforeRead = await self.writer.pendingLegacyHistory()
+            if gate.budgetBytes > 0, currentBytes > gate.budgetBytes, !legacyPendingBeforeRead {
+                do {
+                    savedAudioFileNames = try await .success(self.writer.savedAudioFileNames())
+                } catch {
+                    savedAudioFileNames = .failure(error)
+                }
             }
+            let legacyPending = await self.writer.pendingLegacyHistory()
+            guard gate.accepts(
+                currentRevision: self.audioBudgetRevision,
+                currentBudgetBytes: SettingsStore.shared.audioHistoryBudgetBytes
+            ) else {
+                continue
+            }
+
+            // Another manual or automatic request may still hold the usage from before this prune.
+            self.invalidateAutomaticAudioBudgetMeasurement()
+            return self.pruneAudioToBudget(
+                currentBytes: currentBytes,
+                budgetBytes: gate.budgetBytes,
+                savedAudioFileNames: savedAudioFileNames,
+                legacyPending: legacyPendingBeforeRead || legacyPending
+            )
         }
     }
 
@@ -616,10 +663,12 @@ final class TranscriptionHistoryStore: ObservableObject {
         self.loadTask = Task { @MainActor in
             do {
                 let loaded = try await self.writer.load()
+                let legacyPending = await self.writer.pendingLegacyHistory()
                 var merged = self.pendingReplacement ? [] : loaded.filter { !self.pendingDeletes.contains($0.id) && self.pendingUpserts[$0.id] == nil }
                 merged.append(contentsOf: self.pendingUpserts.values)
                 self.entries = merged.sorted { $0.timestamp > $1.timestamp }
                 self.refreshTodaySummary()
+                self.audioPruningDeferred = legacyPending
                 self.hasLoaded = true
                 self.persistenceError = nil
                 if self.pendingReplacement || !self.pendingUpserts.isEmpty || !self.pendingDeletes.isEmpty {

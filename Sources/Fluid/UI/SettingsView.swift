@@ -1702,10 +1702,12 @@ struct SettingsView: View {
         }
 
         SettingsStore.shared.audioHistoryBudgetGB = newBudget
-        let pruned = TranscriptionHistoryStore.shared.pruneAudioToBudget()
-        self.refreshAudioHistoryUsage()
-        if pruned > 0 {
-            self.presentInfoAlert(title: "Audio Pruned", message: "Deleted oldest saved audio from \(pruned) history entries.")
+        Task { @MainActor in
+            let pruned = await TranscriptionHistoryStore.shared.pruneAudioToBudget()
+            self.refreshAudioHistoryUsage()
+            if pruned > 0 {
+                self.presentInfoAlert(title: "Audio Pruned", message: "Deleted oldest saved audio from \(pruned) history entries.")
+            }
         }
     }
 
@@ -1854,6 +1856,7 @@ struct SettingsView: View {
 
     private func audioHistoryControls() -> some View {
         VStack(spacing: 12) {
+            LegacyHistoryRecoveryControls()
             HStack(alignment: .center, spacing: 12) {
                 VStack(alignment: .leading, spacing: 5) {
                     Text("Audio Storage")
@@ -3370,5 +3373,56 @@ private final class AccentColorPanelTarget: NSObject {
 
     @objc private func colorChanged(_ panel: NSColorPanel) {
         SettingsStore.shared.customAccentColorHex = Color(nsColor: panel.color).hexString
+    }
+}
+
+/// Observes only the recovery status, without making the entire Settings page observe history edits.
+private struct LegacyHistoryRecoveryControls: View {
+    @ObservedObject private var history = TranscriptionHistoryStore.shared
+    @Environment(\.theme) private var theme
+    @State private var isRecovering = false
+
+    var body: some View {
+        if self.history.audioPruningDeferred {
+            VStack(alignment: .leading, spacing: 8) {
+                Label("Audio cleanup is paused", systemImage: "exclamationmark.triangle")
+                    .font(self.theme.typography.bodyStrong)
+                Text("Older history needs recovery. Your recordings are being kept, even above the storage budget.")
+                    .font(self.theme.typography.bodySmall)
+                Button(self.isRecovering ? "Saving recovery copy…" : "Review recovery options…", action: self.reviewRecovery)
+                    .fluidOutlinedButton()
+                    .disabled(self.isRecovering)
+            }
+            .foregroundStyle(self.theme.palette.primaryText)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityIdentifier("history-audio-recovery")
+        }
+    }
+
+    private func reviewRecovery() {
+        let alert = NSAlert()
+        alert.messageText = "Resume audio cleanup?"
+        alert.informativeText = """
+        Restart FluidVoice first to import any readable older history. If this warning remains, save the unreadable history and all saved audio to a recovery folder and resume cleanup.
+
+        Saved transcripts stay intact. Cleanup may remove older audio from the app, but the recovery copy keeps every saved recording and stays outside your audio budget.
+        """
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: "Save Recovery Copy and Resume")
+        guard alert.runModal() == .alertSecondButtonReturn else { return }
+        self.isRecovering = true
+        Task { @MainActor in
+            defer { self.isRecovering = false }
+            do {
+                let directory = try await self.history.archiveLegacyHistoryAndResumeAudioCleanup()
+                NSWorkspace.shared.open(directory)
+            } catch {
+                let failure = NSAlert()
+                failure.messageText = "Audio cleanup remains paused"
+                failure.informativeText = error.localizedDescription
+                failure.runModal()
+            }
+        }
     }
 }
