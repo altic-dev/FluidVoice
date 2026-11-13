@@ -644,8 +644,8 @@ private final class MeetingProviderLanguagePin {
 final class MeetingProcessingPipeline: MeetingProcessingControlling {
     /// Bump whenever classification rules change so a resumed run can't mix rules mid-session.
     /// Era-awareness did NOT bump this: the mic pass re-runs every time, and multi-era tracks cannot predate this build.
-    /// Version 15: retain unfiltered microphone speech when echo filtering is unavailable.
-    nonisolated static let pipelineVersion = 15
+    /// Version 16: normalize quantities in completed turns before summary generation and saving.
+    nonisolated static let pipelineVersion = 16
     /// Per-turn engines starve on short turns, and an all-empty chunk collapses to unlabeled.
     static let perTurnTurnMergeGapSeconds = 5.0
 
@@ -1518,6 +1518,9 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
                 case .canonicalEvidence:
                     processed = try await self.processCanonicalAttempt(plan: plan, backend: backend, progress: progress)
                 }
+                processed.segments = try await MeetingTranscriptNormalizer.normalize(
+                    processed.segments, languageCode: request.configuration.languageCode
+                )
                 if self.managesModelResidency, summaryProvider != nil {
                     processed.postProcessing = await MeetingPostProcessingRegistry.shared.process(
                         sessionID: session.id,

@@ -92,13 +92,14 @@ final class MeetingCanonicalPipelineTests: XCTestCase {
 
         init(
             version: String = "c2b2-test",
+            languageCodes: Set<String> = ["en"],
             makeBundle: @escaping @MainActor (MeetingBackendPlan, MeetingAnalysisManifest) throws -> MeetingCanonicalResultBundle
         ) {
             self.descriptor = MeetingBackendDescriptor(
                 id: MeetingCanonicalPipelineTests.canonicalBackendID,
                 version: version,
                 execution: .local,
-                supportedLanguageCodes: ["en"],
+                supportedLanguageCodes: languageCodes,
                 supportedTrackKinds: Set(MeetingAudioTrackKind.allCases),
                 supportedFinalPrecisions: [.word],
                 resultContract: .canonicalEvidence,
@@ -318,7 +319,7 @@ final class MeetingCanonicalPipelineTests: XCTestCase {
 
     // MARK: - Legacy isolation
 
-    func testLegacyBackendBuildsNoManifestWritesNoSidecarAndReturnsUnchangedResult() async throws {
+    func testLegacyBackendNormalizesTextWithoutChangingMetadataOrWritingSidecar() async throws {
         let fixture = self.makeInRoomFixture()
         let directory = try self.makeTempSessionDirectory()
         let observer = RecordingObserver()
@@ -331,7 +332,7 @@ final class MeetingCanonicalPipelineTests: XCTestCase {
                 end: MeetingMediaTime(value: 101_000, timescale: 1000),
                 sourceTrackID: fixture.track.id,
                 speakerID: nil,
-                text: "legacy",
+                text: "twenty dollars",
                 revision: 0,
                 status: .final,
                 overlap: .none,
@@ -409,13 +410,69 @@ final class MeetingCanonicalPipelineTests: XCTestCase {
         XCTAssertNil(backend.receivedManifest ?? nil, "the legacy backend receives no manifest")
         XCTAssertTrue(self.sidecarFiles(in: directory).isEmpty, "the legacy path writes no sidecar")
         XCTAssertNil(result.resultSidecarReference)
-        XCTAssertEqual(result.segments.map(\.text), ["legacy"])
+        var formatted = expected.segments
+        formatted[0].text = "$20"
+        XCTAssertEqual(result.segments, formatted)
+        XCTAssertEqual(expected.segments[0].text, "twenty dollars")
         XCTAssertEqual(result.attempt.id, expected.attempt.id)
         XCTAssertNil(result.attempt.backendID)
         XCTAssertNil(result.attempt.backendVersion)
     }
 
     // MARK: - Canonical success and retry
+
+    func testCanonicalFormattingUsesTheRequestedTranscriptionLanguage() async throws {
+        let fixture = self.makeInRoomFixture()
+        let directory = try self.makeTempSessionDirectory()
+        let backend = CanonicalFixtureBackend(languageCodes: ["en", "es"]) { plan, manifest in
+            self.standardBundle(plan: plan, manifest: manifest, text: "twenty dollars")
+        }
+        let pipeline = self.makeCanonicalPipeline(
+            backend: backend,
+            observer: FixtureObserver(results: [
+                MeetingAnalysisChunkKey(trackID: fixture.track.id, chunkID: fixture.chunk.id):
+                    self.makeObserved(fixture.chunk, duration: 10),
+            ])
+        )
+        for (language, expected) in [("en", "$20"), ("es", "twenty dollars")] {
+            var session = fixture.session
+            session.languageCode = language
+            session.processingAttempts = []
+            let result = try await pipeline.process(session: session, sessionDirectory: directory, progress: { _ in })
+            XCTAssertEqual(result.segments.map(\.text), [expected])
+            XCTAssertEqual(result.attempt.languageCode, language)
+        }
+    }
+
+    func testCanonicalQuantitiesAreFormattedWithoutChangingRawSidecarOnRetry() async throws {
+        let fixture = self.makeInRoomFixture()
+        let directory = try self.makeTempSessionDirectory()
+        let backend = CanonicalFixtureBackend { plan, manifest in
+            self.standardBundle(plan: plan, manifest: manifest, text: "twenty dollars fire emoji")
+        }
+        let pipeline = self.makeCanonicalPipeline(
+            backend: backend,
+            observer: FixtureObserver(results: [
+                MeetingAnalysisChunkKey(trackID: fixture.track.id, chunkID: fixture.chunk.id):
+                    self.makeObserved(fixture.chunk, duration: 10),
+            ])
+        )
+        let first = try await pipeline.process(session: fixture.session, sessionDirectory: directory, progress: { _ in })
+        XCTAssertEqual(first.segments.map(\.text), ["$20 fire emoji"])
+        let reference = try XCTUnwrap(first.resultSidecarReference)
+        let sidecar = try MeetingResultSidecarStore(sessionDirectory: directory).read(
+            expectedAttemptID: first.attempt.id, expectedBackendID: Self.canonicalBackendID, reference: reference
+        )
+        XCTAssertEqual(sidecar.units.map(\.text), ["twenty dollars fire emoji"])
+        let url = try XCTUnwrap(self.sidecarFiles(in: directory).first)
+        let bytes = try Data(contentsOf: url)
+        let retry = try await pipeline.process(session: fixture.session, sessionDirectory: directory, progress: { _ in })
+        XCTAssertEqual(retry.segments, first.segments)
+        XCTAssertEqual(retry.resultSidecarReference, reference)
+        XCTAssertEqual(try Data(contentsOf: url), bytes)
+        XCTAssertEqual(retry.coverageGaps, first.coverageGaps)
+        XCTAssertEqual(retry.isComplete, first.isComplete)
+    }
 
     private func orderedWordResult(attemptID: UUID, words: [(text: String, start: Double, end: Double)]) async throws -> MeetingProcessingResult {
         let fixture = self.makeInRoomFixture()
@@ -471,6 +528,17 @@ final class MeetingCanonicalPipelineTests: XCTestCase {
         ])
         XCTAssertEqual(result.segments.count, 1)
         XCTAssertEqual(result.segments.first?.text, "first second third")
+    }
+
+    func testQuantityFormattingRunsAfterWordUnitsBecomeASpeakerTurn() async throws {
+        let result = try await self.orderedWordResult(attemptID: UUID(), words: [
+            (text: "twenty", start: 0.0, end: 0.2),
+            (text: "dollars", start: 0.2, end: 0.4),
+        ])
+        XCTAssertEqual(result.segments.count, 1)
+        XCTAssertEqual(result.segments.first?.text, "$20")
+        XCTAssertEqual(result.segments.first?.start.seconds, 0)
+        XCTAssertEqual(result.segments.first?.end.seconds ?? -1, 0.4, accuracy: 0.001)
     }
 
     private actor CheckpointFailureSummaryProvider: MeetingPostProcessingProviding {
