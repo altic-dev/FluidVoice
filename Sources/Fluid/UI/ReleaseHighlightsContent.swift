@@ -41,7 +41,7 @@ struct ReleaseHighlightsContent {
             destination: .voiceEngine
         )
         return Self(
-            release: "1.6.13-beta.2",
+            release: "1.6.13",
             title: hasPrivateAI ? "Edit by voice, with sharper speech" : "Sharper speech",
             subtitle: hasPrivateAI
                 ? "New on-device Edit Mode with its own Edit 1.1 model. Select text and say what to change, with optional on-screen context. Plus Fluid 1.1 Splash and Fluid Speech Pro."
