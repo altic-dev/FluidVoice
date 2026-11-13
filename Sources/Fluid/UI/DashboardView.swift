@@ -86,12 +86,12 @@ struct DashboardView: View {
                             HStack(alignment: .top, spacing: 28) {
                                 self.mainColumn(layout: layout)
                                     .frame(maxWidth: .infinity)
-                                self.quickActions(horizontal: false)
+                                self.actionColumn(horizontal: false)
                                     .frame(width: DashboardLayout.actionWidth)
                             }
                         } else {
                             self.mainColumn(layout: layout)
-                            self.quickActions(horizontal: layout.hasHorizontalActions)
+                            self.actionColumn(horizontal: layout.hasHorizontalActions)
                         }
                     }
                     .padding(DashboardLayout.inset)
@@ -282,6 +282,13 @@ struct DashboardView: View {
         self.screenPermissionRequestTask = Task {
             defer { self.screenPermissionRequestTask = nil }
             await self.screenPermission.requestIfNeeded { !self.busy && !Task.isCancelled }
+        }
+    }
+
+    private func actionColumn(horizontal: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 24) {
+            self.quickActions(horizontal: horizontal)
+            DashboardRecommendationsView(asr: self.asr)
         }
     }
 

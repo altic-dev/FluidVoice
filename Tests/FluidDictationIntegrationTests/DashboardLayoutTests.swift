@@ -137,3 +137,121 @@ final class DashboardLayoutTests: XCTestCase {
         XCTAssertFalse(try StatsSnapshot.build(entries: [failed], now: Date(), calendar: .current).hasFluidIntelligenceUse)
     }
 }
+
+@MainActor
+final class DashboardRecommendationTests: XCTestCase {
+    func testSpeechRecommendationRespectsMemoryAvailabilityAndLanguage() {
+        let gib: UInt64 = 1024 * 1024 * 1024
+        let available: [SettingsStore.SpeechModel] = [.fluidParakeetPro, .fluidParakeetMini]
+        XCTAssertEqual(DashboardModelRecommendationPolicy.speechModel(memoryBytes: 16 * gib, language: "en", available: available), .fluidParakeetPro)
+        XCTAssertEqual(DashboardModelRecommendationPolicy.speechModel(memoryBytes: 8 * gib, language: "de", available: available), .fluidParakeetMini)
+        XCTAssertNil(DashboardModelRecommendationPolicy.speechModel(memoryBytes: 4 * gib, language: "en", available: available))
+        XCTAssertNil(DashboardModelRecommendationPolicy.speechModel(memoryBytes: 32 * gib, language: "en", available: [.whisperSmall]))
+        for language: String? in [nil, "auto", "ta", "zh", "unknown"] {
+            XCTAssertNil(DashboardModelRecommendationPolicy.speechModel(memoryBytes: 32 * gib, language: language, available: available))
+        }
+    }
+
+    func testDismissalPersistsWithoutChangingModelsAndNewModelCanAppear() throws {
+        let suite = "DashboardRecommendations.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set("old-speech", forKey: "SelectedSpeechModel")
+        defaults.set("old-cleanup", forKey: "FluidIntelligenceSelectedModelID")
+        let card = DashboardModelRecommendation(kind: .cleanup, modelID: "ripple", name: "Ripple", detail: "", downloadSize: "", installed: false)
+        DashboardRecommendationDismissals(defaults: defaults).dismiss(card)
+        let reloaded = try DashboardRecommendationDismissals(defaults: XCTUnwrap(UserDefaults(suiteName: suite)))
+        XCTAssertEqual(reloaded.modelID(for: .cleanup), "ripple")
+        XCTAssertNil(reloaded.modelID(for: .speech))
+        XCTAssertFalse(DashboardModelRecommendationPolicy.shouldShow(targetID: "ripple", selectedID: "old", dismissedID: reloaded.modelID(for: .cleanup)))
+        XCTAssertTrue(DashboardModelRecommendationPolicy.shouldShow(targetID: "next", selectedID: "old", dismissedID: reloaded.modelID(for: .cleanup)))
+        XCTAssertFalse(DashboardModelRecommendationPolicy.shouldShow(targetID: "next", selectedID: "next", dismissedID: nil))
+        XCTAssertEqual(defaults.string(forKey: "SelectedSpeechModel"), "old-speech")
+        XCTAssertEqual(defaults.string(forKey: "FluidIntelligenceSelectedModelID"), "old-cleanup")
+    }
+
+    func testActivationWaitsForPreparationAndRejectsRepeatedClicks() async {
+        let operation = DashboardRecommendationOperation()
+        let preparing = expectation(description: "preparing")
+        let completed = expectation(description: "completed")
+        var resume: CheckedContinuation<Void, Never>?
+        var activations = 0
+        operation.start(
+            id: "one",
+            prepare: {
+                await withCheckedContinuation { resume = $0; preparing.fulfill() }
+            },
+            isCurrent: { true },
+            activate: { activations += 1 },
+            finished: { completed.fulfill() }
+        )
+        await fulfillment(of: [preparing], timeout: 2)
+        XCTAssertEqual(activations, 0)
+        operation.start(
+            id: "two",
+            prepare: { XCTFail("Duplicate click started work") },
+            isCurrent: { true },
+            activate: { XCTFail("Duplicate activation") },
+            finished: {}
+        )
+        XCTAssertEqual(operation.activeID, "one")
+        resume?.resume()
+        await fulfillment(of: [completed], timeout: 2)
+        XCTAssertEqual(activations, 1)
+        XCTAssertFalse(operation.isBusy)
+    }
+
+    func testFailurePreservesSelectionAndAllowsRetry() async {
+        let operation = DashboardRecommendationOperation()
+        let completed = expectation(description: "failed")
+        var selected = "original"
+        operation.start(
+            id: "next",
+            prepare: { throw NSError(domain: "test", code: 1, userInfo: [NSLocalizedDescriptionKey: "Download interrupted"]) },
+            isCurrent: { true },
+            activate: { selected = "next" },
+            finished: { completed.fulfill() }
+        )
+        await fulfillment(of: [completed], timeout: 2)
+        XCTAssertEqual(selected, "original")
+        XCTAssertEqual(operation.error, "Download interrupted")
+        XCTAssertEqual(operation.failedID, "next")
+        XCTAssertFalse(operation.isBusy)
+        let retried = expectation(description: "retried")
+        operation.start(
+            id: "next",
+            prepare: {},
+            isCurrent: { true },
+            activate: { selected = "next" },
+            finished: { retried.fulfill() }
+        )
+        await fulfillment(of: [retried], timeout: 2)
+        XCTAssertEqual(selected, "next")
+        XCTAssertNil(operation.error)
+    }
+
+    func testCancelledAndStaleDownloadsNeverActivate() async {
+        for cancel in [false, true] {
+            let operation = DashboardRecommendationOperation()
+            let preparing = expectation(description: "preparing")
+            let completed = expectation(description: "completed")
+            var resume: CheckedContinuation<Void, Never>?
+            var current = true
+            operation.start(
+                id: "next",
+                prepare: {
+                    await withCheckedContinuation { resume = $0; preparing.fulfill() }
+                },
+                isCurrent: { current },
+                activate: { XCTFail("Old intent must not select a model") },
+                finished: { completed.fulfill() }
+            )
+            await fulfillment(of: [preparing], timeout: 2)
+            if cancel { operation.cancel() } else { current = false }
+            resume?.resume()
+            await fulfillment(of: [completed], timeout: 2)
+            XCTAssertFalse(operation.isBusy)
+            XCTAssertNil(operation.error)
+        }
+    }
+}
