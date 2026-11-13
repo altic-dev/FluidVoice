@@ -504,6 +504,10 @@ struct CustomDictionaryView: View {
                     }
                 }
             }
+            Text("Saved replacements apply to dictation and finished meeting transcripts.")
+                .font(self.theme.typography.caption)
+                .foregroundStyle(self.theme.palette.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
             HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass")
                     .foregroundStyle(self.theme.palette.secondaryText)
