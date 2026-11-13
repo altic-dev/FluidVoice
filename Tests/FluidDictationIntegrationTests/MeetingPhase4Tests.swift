@@ -196,8 +196,8 @@ final class MeetingPhase4ClassificationTests: XCTestCase {
 
     // MARK: - 7. pipelineVersion bump
 
-    func testPipelineVersionIsSeventeen() {
-        XCTAssertEqual(MeetingProcessingPipeline.pipelineVersion, 17)
+    func testPipelineVersionIsEighteen() {
+        XCTAssertEqual(MeetingProcessingPipeline.pipelineVersion, 18)
     }
 
     // MARK: - 9. Store round-trip: a decoded track drives the classification branch

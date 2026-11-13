@@ -644,8 +644,8 @@ private final class MeetingProviderLanguagePin {
 final class MeetingProcessingPipeline: MeetingProcessingControlling {
     /// Bump whenever classification rules change so a resumed run can't mix rules mid-session.
     /// Era-awareness did NOT bump this: the mic pass re-runs every time, and multi-era tracks cannot predate this build.
-    /// Version 17: keep speaker inheritance on its source track and preserve cross-track replies.
-    nonisolated static let pipelineVersion = 17
+    /// Version 18: split sequential replies without fragmenting simultaneous word streams.
+    nonisolated static let pipelineVersion = 18
     /// Per-turn engines starve on short turns, and an all-empty chunk collapses to unlabeled.
     static let perTurnTurnMergeGapSeconds = 5.0
 
@@ -1755,41 +1755,68 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
     }
 
     /// Canonical evidence remains word-granular in the sidecar, but product session JSON and UI
-    /// rows stay turn-granular. Merge only globally adjacent visible segments with the same full
-    /// attribution/state key, so a reply on either track splits the preceding speaker's turn.
-    /// Hidden echo evidence is folded separately so it cannot fragment the visible conversation.
-    /// Original timings remain intact, including genuine simultaneous speech.
+    /// rows stay turn-granular. A visible word from another track wholly inside the gap between
+    /// same-track words splits the turn. Interleaved simultaneous words do not: splitting on
+    /// start order alone would reduce overlapping sentences to alternating one-word rows.
+    /// Hidden echoes cannot interrupt visible speech. Original timings remain intact.
     nonisolated static func mergeCanonicalSegments(
         _ segments: [MeetingTranscriptSegment],
         maximumGapSeconds: TimeInterval = MeetingProcessingPipeline.canonicalTurnMergeGapSeconds,
         maximumDurationSeconds: TimeInterval = MeetingProcessingPipeline.canonicalTurnMaximumDurationSeconds
     ) -> [MeetingTranscriptSegment] {
         let ordered = Self.inheritPreviousSpeaker(segments)
+        let completedSpeech = ordered.filter { !$0.isEcho }.sorted { $0.end < $1.end }
+        var completedIndex = 0
+        // Keep the latest completed starts from two distinct tracks. Two suffice to answer
+        // "another track" without scanning every word for every gap.
+        var latestCompleted: [MeetingTranscriptSegment] = []
         var merged: [MeetingTranscriptSegment] = []
         for isEcho in [false, true] {
             let members = ordered.filter { $0.isEcho == isEcho }
-            guard var current = members.first else { continue }
-            var currentKey = Self.canonicalSegmentMergeKey(current)
-            var memberIDs = [current.id]
-            for next in members.dropFirst() {
+            var lastTurnByTrack: [MeetingAudioTrackID: Int] = [:]
+            var memberIDsByTrack: [MeetingAudioTrackID: [MeetingTranscriptSegmentID]] = [:]
+            for next in members {
+                if !isEcho {
+                    while completedIndex < completedSpeech.count, completedSpeech[completedIndex].end <= next.start {
+                        let completed = completedSpeech[completedIndex]
+                        completedIndex += 1
+                        if let index = latestCompleted.firstIndex(where: { $0.sourceTrackID == completed.sourceTrackID }) {
+                            if completed.start > latestCompleted[index].start { latestCompleted[index] = completed }
+                        } else {
+                            latestCompleted.append(completed)
+                        }
+                        latestCompleted.sort { $0.start > $1.start }
+                        if latestCompleted.count > 2 { latestCompleted.removeLast() }
+                    }
+                }
+                guard let index = lastTurnByTrack[next.sourceTrackID] else {
+                    lastTurnByTrack[next.sourceTrackID] = merged.count
+                    memberIDsByTrack[next.sourceTrackID] = [next.id]
+                    merged.append(next)
+                    continue
+                }
+                var current = merged[index]
+                let currentKey = Self.canonicalSegmentMergeKey(current)
                 let nextKey = Self.canonicalSegmentMergeKey(next)
                 let gap = next.start.seconds - current.end.seconds
                 let combinedDuration = max(current.end.seconds, next.end.seconds) - current.start.seconds
-                if nextKey == currentKey, gap <= maximumGapSeconds, combinedDuration <= maximumDurationSeconds {
+                let interrupted = !isEcho && latestCompleted.contains {
+                    $0.sourceTrackID != next.sourceTrackID && $0.start >= current.end
+                }
+                if nextKey == currentKey, !interrupted, gap <= maximumGapSeconds, combinedDuration <= maximumDurationSeconds {
                     current.end = Self.mediaTime(max(current.end.seconds, next.end.seconds))
                     current.text = Self.joinTranscriptText(current.text, next.text)
-                    memberIDs.append(next.id)
+                    memberIDsByTrack[next.sourceTrackID, default: []].append(next.id)
                     current.id = Self.stableUUID(
-                        "canonical-merged:" + memberIDs.map(\.uuidString).joined(separator: ":")
+                        "canonical-merged:" + (memberIDsByTrack[next.sourceTrackID] ?? []).map(\.uuidString).joined(separator: ":")
                     )
+                    merged[index] = current
                 } else {
-                    merged.append(current)
-                    current = next
-                    currentKey = nextKey
-                    memberIDs = [next.id]
+                    lastTurnByTrack[next.sourceTrackID] = merged.count
+                    memberIDsByTrack[next.sourceTrackID] = [next.id]
+                    merged.append(next)
                 }
             }
-            merged.append(current)
         }
         return merged.enumerated().sorted {
             ($0.element.start, $0.element.end, $0.element.sourceTrackID.uuidString, $0.offset)

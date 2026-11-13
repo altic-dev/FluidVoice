@@ -16,7 +16,7 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
 
     static let descriptor = MeetingBackendDescriptor(
         id: .parakeetNemotron,
-        version: "11",
+        version: "12",
         execution: .local,
         supportedLanguageCodes: VoiceEngineLanguageCatalog.parakeetV3LanguageIDs,
         supportedTrackKinds: Set(MeetingAudioTrackKind.allCases),
