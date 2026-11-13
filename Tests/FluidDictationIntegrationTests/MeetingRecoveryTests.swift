@@ -1359,6 +1359,23 @@ final class MeetingRecoveryTests: XCTestCase {
         MeetingTimebaseMetadata(startedHostTime: 0, machTimebaseNumerator: 1, machTimebaseDenominator: 1, firstPresentationTime: nil)
     }
 
+    func testDefaultMeetingStoreIsIsolatedFromRealRecordingsInTestHost() async throws {
+        let first = MeetingSessionStore()
+        let second = MeetingSessionStore()
+        let id = UUID()
+        let firstDirectory = try await first.sessionDirectory(for: id)
+        let secondDirectory = try await second.sessionDirectory(for: id)
+        let temporaryDirectory = FileManager.default.temporaryDirectory.resolvingSymlinksInPath().path + "/"
+        XCTAssertTrue(firstDirectory.resolvingSymlinksInPath().path.hasPrefix(temporaryDirectory))
+        XCTAssertTrue(firstDirectory.path.contains("FluidVoice-XCTest-"))
+        XCTAssertEqual(firstDirectory, secondDirectory, "test-host views and coordinators share one isolated store")
+        let explicitRoot = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: explicitRoot) }
+        let explicit = MeetingSessionStore(rootDirectory: explicitRoot)
+        let explicitDirectory = try await explicit.sessionDirectory(for: id)
+        XCTAssertEqual(explicitDirectory, explicitRoot.appendingPathComponent(id.uuidString, isDirectory: true))
+    }
+
     func testCoverageWarningUsesCurrentResultAndPreservesRealGaps() {
         var session = self.makeSession(state: .completed)
         let warning = MeetingSessionEvent(id: UUID(), occurredAt: Date(), kind: .transcriptCoverageIncomplete, trackID: nil, detail: "old result")
