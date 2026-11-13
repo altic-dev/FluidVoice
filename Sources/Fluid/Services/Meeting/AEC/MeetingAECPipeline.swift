@@ -33,6 +33,16 @@ final nonisolated class MeetingAECPipeline: @unchecked Sendable {
         }
     }
 
+    /// The first format-validation callback is recorded unchanged, outside the joiner, but is
+    /// still transcribable raw audio. Claim no echo cancellation and report no filter failure.
+    func commitValidationCapture(_ sampleBuffer: CMSampleBuffer) {
+        guard !self.stopped else {
+            self.committer.commitRaw(sampleBuffer, failure: .stopped)
+            return
+        }
+        self.committer.commitWarmup(sampleBuffer)
+    }
+
     func consumeCapture(_ sampleBuffer: CMSampleBuffer, stream: MeetingAECStreamToken) {
         guard !self.stopped else {
             self.committer.commitRaw(sampleBuffer, failure: .stopped)

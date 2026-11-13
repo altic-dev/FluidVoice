@@ -1052,6 +1052,9 @@ final class MeetingCanonicalPipelineTests: XCTestCase {
             error: nil
         )
         session.postProcessing = originalSummary
+        let originalWarning = MeetingSessionEvent(id: UUID(), occurredAt: Date(), kind: .transcriptCoverageIncomplete, trackID: nil, detail: "Previous attempt was incomplete")
+        session.events.append(originalWarning)
+        session.transcriptIsComplete = false
 
         let root = try self.makeTempSessionDirectory()
             .appendingPathComponent("meetings", isDirectory: true)
@@ -1106,6 +1109,8 @@ final class MeetingCanonicalPipelineTests: XCTestCase {
             "Rolling back a transcript must also roll back its summary"
         )
         XCTAssertEqual(savedAfterFailure?.transcriptSegments, session.transcriptSegments)
+        XCTAssertEqual(savedAfterFailure?.hasIncompleteTranscriptCoverage, true)
+        XCTAssertEqual(savedAfterFailure?.events.filter { $0.kind == .transcriptCoverageIncomplete }.map(\.id), [originalWarning.id])
         XCTAssertEqual(coordinator.activeSession?.postProcessing, originalSummary)
 
         // Retry: a fresh attempt publishes; the completed-state save still observed the
@@ -1115,6 +1120,8 @@ final class MeetingCanonicalPipelineTests: XCTestCase {
         guard case .completed = coordinator.state else {
             return XCTFail("Expected completed state, got \(coordinator.state)")
         }
+        XCTAssertFalse(published.hasIncompleteTranscriptCoverage)
+        XCTAssertFalse(published.events.contains { $0.kind == .transcriptCoverageIncomplete })
         let reference = try XCTUnwrap(published.resultSidecarReference)
         let publishedAttempt = try XCTUnwrap(published.processingAttempts.last {
             $0.backendID == Self.canonicalBackendID.rawValue

@@ -1080,13 +1080,19 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
             case .active:
                 pipeline?.consumeCapture(sampleBuffer, stream: streamToken)
             case .armed:
+                // The format handshake is raw warm-up too. Persist its provenance before
+                // validation can activate or invalidate the pipeline; never drop the first PCM.
+                if let pipeline {
+                    pipeline.commitValidationCapture(sampleBuffer)
+                } else {
+                    self.emitDirectRawMicrophone(sampleBuffer, producerEpoch: streamToken.generation)
+                }
                 self.validateArmedCallback(
                     sampleBuffer,
                     kind: .capture,
                     stream: stream,
                     token: streamToken
                 )
-                self.emitDirectRawMicrophone(sampleBuffer, producerEpoch: streamToken.generation)
             case .raw, .constructing, .ready:
                 self.emitDirectRawMicrophone(sampleBuffer, producerEpoch: streamToken.generation)
             }

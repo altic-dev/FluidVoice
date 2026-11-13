@@ -1359,6 +1359,63 @@ final class MeetingRecoveryTests: XCTestCase {
         MeetingTimebaseMetadata(startedHostTime: 0, machTimebaseNumerator: 1, machTimebaseDenominator: 1, firstPresentationTime: nil)
     }
 
+    func testCoverageWarningUsesCurrentResultAndPreservesRealGaps() {
+        var session = self.makeSession(state: .completed)
+        let warning = MeetingSessionEvent(id: UUID(), occurredAt: Date(), kind: .transcriptCoverageIncomplete, trackID: nil, detail: "old result")
+        session.events = [warning]
+        XCTAssertTrue(session.hasIncompleteTranscriptCoverage, "legacy warnings remain visible")
+        session.transcriptIsComplete = true
+        XCTAssertFalse(session.hasIncompleteTranscriptCoverage, "old diagnostic events cannot override the latest verified result")
+        session.transcriptIsComplete = false
+        session.events = []
+        XCTAssertTrue(session.hasIncompleteTranscriptCoverage, "quarantined text must warn even without a timed gap")
+        session.transcriptIsComplete = nil
+        for reason in [MeetingTranscriptCoverageGapReason.processingFailed, .providerTruncated, .missingOrUnreadableAudio, .inadmissibleCaptureEra] {
+            session.transcriptCoverageGaps = [.init(trackID: UUID(), start: 0, end: 0.01, reason: reason)]
+            XCTAssertTrue(session.hasIncompleteTranscriptCoverage, "short duration is not proof that a real loss is harmless")
+        }
+    }
+
+    func testSuccessfulRetryClearsOldCoverageWarningButKeepsCaptureEvents() async throws {
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MeetingSessionStore(rootDirectory: dir)
+        var session = self.makeSession(state: .interrupted, endedAt: Date(), audioTracks: [self.makeMicrophoneTrack(chunks: [self.makeFinalizedChunk()])])
+        let captureEvent = MeetingSessionEvent(id: UUID(), occurredAt: Date(), kind: .microphoneDisconnected, trackID: nil, detail: "capture interruption")
+        session.events = [captureEvent, MeetingSessionEvent(id: UUID(), occurredAt: Date(), kind: .transcriptCoverageIncomplete, trackID: nil, detail: "previous attempt")]
+        try await store.create(session)
+        let coordinator = MeetingSessionCoordinator(store: store, capture: StubCaptureController(), processing: StubProcessingController(), audioArbiter: StubArbiter())
+        await coordinator.ensureRestored()
+        let result = try await coordinator.retryProcessing()
+        XCTAssertFalse(result.hasIncompleteTranscriptCoverage)
+        XCTAssertEqual(result.events.map(\.id), [captureEvent.id])
+        let saved = try await store.load(id: session.id)
+        XCTAssertEqual(saved?.hasIncompleteTranscriptCoverage, false)
+        XCTAssertEqual(saved?.events.map(\.id), [captureEvent.id])
+    }
+
+    func testFailedRetryRetainsCoverageWarning() async throws {
+        for error: Error in [CancellationError(), NSError(domain: "test", code: 1)] {
+            let dir = self.makeTempDirectory()
+            defer { try? FileManager.default.removeItem(at: dir) }
+            let store = MeetingSessionStore(rootDirectory: dir)
+            var session = self.makeSession(state: .interrupted, endedAt: Date(), audioTracks: [self.makeMicrophoneTrack(chunks: [self.makeFinalizedChunk()])])
+            let warning = MeetingSessionEvent(id: UUID(), occurredAt: Date(), kind: .transcriptCoverageIncomplete, trackID: nil, detail: "previous attempt")
+            session.events = [warning]
+            session.transcriptIsComplete = false
+            try await store.create(session)
+            let coordinator = MeetingSessionCoordinator(store: store, capture: StubCaptureController(), processing: DiagnosticFailingProcessingController(error: error), audioArbiter: StubArbiter())
+            await coordinator.ensureRestored()
+            do {
+                _ = try await coordinator.retryProcessing()
+                XCTFail("Expected processing to fail")
+            } catch {}
+            let saved = try await store.load(id: session.id)
+            XCTAssertEqual(saved?.hasIncompleteTranscriptCoverage, true)
+            XCTAssertEqual(saved?.events.filter { $0.kind == .transcriptCoverageIncomplete }.map(\.id), [warning.id])
+        }
+    }
+
     private func makeFinalizedChunk(
         sequence: Int = 0,
         path: String = "tracks/microphone/chunk_0.caf"

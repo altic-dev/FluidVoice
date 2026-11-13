@@ -776,6 +776,8 @@ final class MeetingSessionCoordinator: ObservableObject {
         session.transcriptSegments = inputSession.transcriptSegments
         session.postProcessing = inputSession.postProcessing
         session.transcriptCoverageGaps = inputSession.transcriptCoverageGaps
+        session.events.removeAll { $0.kind == .transcriptCoverageIncomplete }
+        session.events.append(contentsOf: inputSession.events.filter { $0.kind == .transcriptCoverageIncomplete })
         session.resultSidecarReference = inputSession.resultSidecarReference
         session.transcriptIsComplete = inputSession.transcriptIsComplete
         session.transcriptTimeDomain = inputSession.transcriptTimeDomain
@@ -1803,6 +1805,8 @@ final class MeetingSessionCoordinator: ObservableObject {
                     }
                 }
             }
+            // This is the current transcript's status, not a permanent capture interruption.
+            session.events.removeAll { $0.kind == .transcriptCoverageIncomplete }
             if !result.coverageGaps.isEmpty {
                 let excludedSeconds = result.coverageGaps.reduce(0.0) { total, gap in
                     total + max(0, gap.end - gap.start)

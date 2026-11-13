@@ -10,6 +10,79 @@ import XCTest
 final class MeetingAEC3Tests: XCTestCase {
     private let token = MeetingAECStreamToken(generation: 7, identity: 11)
 
+    func testValidationBufferKeepsFirstPCMAndHasNoCoverageGap() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("aec-validation-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let writer = try MeetingAudioChunkWriter(
+            track: Self.microphoneTrack(), sessionDirectory: directory, chunkDuration: 60, eventHandler: { _ in }
+        )
+        let gate = MeetingMicrophoneTranscriptGate(.unprotected)
+        let live = AECLiveRecorder()
+        let failures = AECTerminalRecorder()
+        let changes = AECProtectionRecorder()
+        let committer = MeetingAECOutputCommitter(
+            writer: writer,
+            transcriptGate: gate,
+            liveAudioHandler: { _, sample in live.append(sample) },
+            protectionChanged: { changes.append($0) },
+            terminalFailure: { failures.append($0) }
+        )
+        let pipeline = MeetingAECPipeline(processor: AECFakeProcessor(), committer: committer)
+        let first = try XCTUnwrap(MeetingAECPCMAdapter.synthesize(
+            samples: [Float](repeating: 0.125, count: 512),
+            presentationTime: CMTime(value: 48_000, timescale: 48_000)
+        ))
+        pipeline.commitValidationCapture(first)
+        for frame in 0..<8 {
+            let pts = CMTime(value: Int64(48_512 + frame * 480), timescale: 48_000)
+            let sample = try XCTUnwrap(MeetingAECPCMAdapter.synthesize(
+                samples: [Float](repeating: 0.125, count: 480), presentationTime: pts
+            ))
+            pipeline.consumeRender(sample, stream: self.token)
+            pipeline.consumeCapture(sample, stream: self.token)
+        }
+        await committer.waitForPendingCommits()
+        let snapshot = await writer.snapshot()
+        XCTAssertTrue(MeetingProcessingPipeline.microphoneCoverageGaps(track: snapshot, origin: 1).isEmpty)
+        XCTAssertEqual(snapshot.captureEras?.last?.echoProtection, .unfiltered)
+        XCTAssertNil(snapshot.captureEras?.last?.aecProvenance)
+        XCTAssertEqual(live.presentationValues.first, 48_000)
+        XCTAssertEqual(live.count, 9)
+        XCTAssertTrue(changes.values.isEmpty, "normal startup must not report an echo-filter failure")
+        XCTAssertTrue(failures.values.isEmpty)
+        pipeline.stop(boundary: gate.invalidate())
+        await committer.waitForPendingCommits()
+        let track = await writer.stop()
+        let chunk = try XCTUnwrap(track.chunks.first)
+        let audio = try AVAudioFile(forReading: chunk.fileURL(relativeTo: directory))
+        XCTAssertEqual(audio.length, 512 + 8 * 480, "first PCM must be stored once, without a delay or discarded prefix")
+        let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: audio.processingFormat, frameCapacity: AVAudioFrameCount(audio.length)))
+        try audio.read(into: buffer)
+        let channel = try XCTUnwrap(buffer.floatChannelData?[0])
+        XCTAssertTrue((0..<512).allSatisfy { abs(channel[$0] - 0.125) < 0.000_001 })
+        XCTAssertFalse(gate.admitsTranscript())
+    }
+
+    func testValidationBufferCannotReopenAfterRouteInvalidation() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("aec-validation-stale-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let writer = try MeetingAudioChunkWriter(
+            track: Self.microphoneTrack(), sessionDirectory: directory, chunkDuration: 60, eventHandler: { _ in }
+        )
+        let gate = MeetingMicrophoneTranscriptGate(.unprotected)
+        let committer = MeetingAECOutputCommitter(writer: writer, transcriptGate: gate, liveAudioHandler: nil, terminalFailure: { _ in })
+        let pipeline = MeetingAECPipeline(processor: AECFakeProcessor(), committer: committer)
+        let sample = try XCTUnwrap(MeetingAECPCMAdapter.synthesize(
+            samples: [Float](repeating: 0.1, count: 512), presentationTime: CMTime(value: 48_000, timescale: 48_000)
+        ))
+        pipeline.commitValidationCapture(sample)
+        pipeline.invalidate(reason: .stopped, boundary: gate.invalidate())
+        await committer.waitForPendingCommits()
+        XCTAssertFalse(gate.admitsTranscript())
+        let track = await writer.stop()
+        XCTAssertEqual(track.captureEras?.last?.echoProtection, .unprotected)
+    }
+
     func testFailedAECRecordsAndTranscribesEveryFollowingSampleWithoutRetrying() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("aec-fallback-\(UUID())")
         defer { try? FileManager.default.removeItem(at: directory) }
