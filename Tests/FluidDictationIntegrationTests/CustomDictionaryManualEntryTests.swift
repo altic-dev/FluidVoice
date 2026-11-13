@@ -638,7 +638,8 @@ final class CustomDictionaryManualEntryTests: XCTestCase {
         for error in [DictionaryCorrectionArchive.ArchiveError.capacityReached as Error, CocoaError(.fileWriteOutOfSpace)] {
             let finished = expectation(description: "Archive failure is shown")
             let session = try AutomaticDictionaryTrainingSession(
-                candidate: self.correctionArchiveCandidate(), asr: AppServices.shared.asr,
+                candidate: self.correctionArchiveCandidate(),
+                asr: AppServices.shared.asr,
                 archiveExample: { _ in throw error }
             )
             session.onSuccess = { finished.fulfill() }
@@ -662,7 +663,8 @@ final class CustomDictionaryManualEntryTests: XCTestCase {
     func testArchiveSuccessCompletesWithoutAWarning() async throws {
         let finished = expectation(description: "Archive succeeded")
         let session = try AutomaticDictionaryTrainingSession(
-            candidate: self.correctionArchiveCandidate(), asr: AppServices.shared.asr,
+            candidate: self.correctionArchiveCandidate(),
+                asr: AppServices.shared.asr,
             archiveExample: { _ in }
         )
         session.onSuccess = { finished.fulfill() }
@@ -678,7 +680,8 @@ final class CustomDictionaryManualEntryTests: XCTestCase {
         let noPrompt = expectation(description: "Closed prompt stays closed")
         noPrompt.isInverted = true
         let session = try AutomaticDictionaryTrainingSession(
-            candidate: self.correctionArchiveCandidate(), asr: AppServices.shared.asr,
+            candidate: self.correctionArchiveCandidate(),
+                asr: AppServices.shared.asr,
             archiveExample: { _ in archived.fulfill() }
         )
         session.onSuccess = { noPrompt.fulfill() }
