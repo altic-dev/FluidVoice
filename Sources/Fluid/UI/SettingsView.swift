@@ -291,6 +291,7 @@ struct SettingsView: View {
                                         Text("Pick a preset or a custom color.")
                                             .font(self.theme.typography.bodySmall)
                                             .foregroundStyle(self.settingsSecondaryText)
+                                            .fixedSize(horizontal: false, vertical: true)
                                     }
 
                                     Spacer()
@@ -395,6 +396,7 @@ struct SettingsView: View {
                                         Text("Microphone access is required for voice recording")
                                             .font(self.theme.typography.bodySmall)
                                             .foregroundStyle(self.settingsSecondaryText)
+                                            .fixedSize(horizontal: false, vertical: true)
                                     }
                                     Spacer()
 
@@ -523,7 +525,7 @@ struct SettingsView: View {
                                                     icon: "pencil.and.outline",
                                                     iconColor: .secondary,
                                                     title: "Edit Mode",
-                                                    description: "Select text and speak how to edit, or generate new content"
+                                                    description: "Speak to edit selected text or write new text"
                                                 ),
                                                 shortcut: self.rewriteShortcut,
                                                 isRecording: self.isRecording(.edit),
@@ -545,7 +547,7 @@ struct SettingsView: View {
                                                     icon: "xmark.circle.fill",
                                                     iconColor: .secondary,
                                                     title: "Cancel Recording",
-                                                    description: "Stop without pasting; save to History when enabled"
+                                                    description: "Stop without pasting"
                                                 ),
                                                 shortcut: self.cancelRecordingShortcut,
                                                 isRecording: self.isRecording(.cancel),
@@ -566,7 +568,7 @@ struct SettingsView: View {
                                                     icon: "arrow.down.doc",
                                                     iconColor: .secondary,
                                                     title: "Paste Last Transcription",
-                                                    description: "Re-insert your most recent transcription using your selected insertion method"
+                                                    description: "Insert your last dictation again"
                                                 ),
                                                 shortcut: self.pasteLastTranscriptionShortcut,
                                                 isRecording: self.isRecording(.pasteLast),
@@ -595,8 +597,8 @@ struct SettingsView: View {
                                                     iconColor: .secondary,
                                                     title: "Start / Stop Meeting",
                                                     description: self.settings.fluidMeetEnabled
-                                                        ? "Choose sources, press again to record, or stop an active meeting"
-                                                        : "Enable FluidMeet in FluidMeet Settings to use this shortcut"
+                                                        ? "Pick sources, record, or stop a meeting"
+                                                        : "Turn on FluidMeet to use this shortcut"
                                                 ),
                                                 shortcut: self.settings.meetingRecordingHotkeyShortcut,
                                                 isRecording: self.isRecording(.meeting),
@@ -687,6 +689,7 @@ struct SettingsView: View {
                                                     Text("Adjust the recording sound cue volume.")
                                                         .font(self.theme.typography.bodySmall)
                                                         .foregroundStyle(self.settingsSecondaryText)
+                                                        .fixedSize(horizontal: false, vertical: true)
                                                 }
 
                                                 Spacer()
@@ -877,6 +880,7 @@ struct SettingsView: View {
                                         Text("Required for global hotkey functionality")
                                             .font(self.theme.typography.bodySmall)
                                             .foregroundStyle(self.settingsSecondaryText)
+                                            .fixedSize(horizontal: false, vertical: true)
                                     }
                                     Spacer()
 
@@ -1221,6 +1225,7 @@ struct SettingsView: View {
                                     Text("Choose the display used when your next meeting starts")
                                         .font(self.theme.typography.bodySmall)
                                         .foregroundStyle(self.settingsSecondaryText)
+                                        .fixedSize(horizontal: false, vertical: true)
                                 }
 
                                 Spacer()
@@ -1242,6 +1247,7 @@ struct SettingsView: View {
                                     Text("Show transcription text in the overlay while you speak")
                                         .font(self.theme.typography.bodySmall)
                                         .foregroundStyle(self.settingsSecondaryText)
+                                        .fixedSize(horizontal: false, vertical: true)
                                 }
 
                                 Spacer()
@@ -1267,6 +1273,7 @@ struct SettingsView: View {
                                         Text("Distance from bottom of screen")
                                             .font(self.theme.typography.bodySmall)
                                             .foregroundStyle(self.settingsSecondaryText)
+                                            .fixedSize(horizontal: false, vertical: true)
                                     }
 
                                     Spacer()
@@ -1300,6 +1307,7 @@ struct SettingsView: View {
                                     Text("Where the recording indicator appears on screen")
                                         .font(self.theme.typography.bodySmall)
                                         .foregroundStyle(self.settingsSecondaryText)
+                                        .fixedSize(horizontal: false, vertical: true)
                                 }
 
                                 Spacer()
@@ -1324,6 +1332,7 @@ struct SettingsView: View {
                                     Text("Control how sensitive the audio visualizer is to sound input")
                                         .font(self.theme.typography.bodySmall)
                                         .foregroundStyle(self.settingsSecondaryText)
+                                        .fixedSize(horizontal: false, vertical: true)
                                 }
 
                                 Spacer()
@@ -1368,6 +1377,7 @@ struct SettingsView: View {
                                         Text("How many recent characters appear in the notch/pill preview")
                                             .font(self.theme.typography.bodySmall)
                                             .foregroundStyle(self.settingsSecondaryText)
+                                            .fixedSize(horizontal: false, vertical: true)
                                     }
 
                                     Spacer()
@@ -1460,9 +1470,11 @@ struct SettingsView: View {
                             Text("The debug log contains detailed information about app operations and can help with troubleshooting.")
                                 .font(self.theme.typography.bodySmall)
                                 .foregroundStyle(self.settingsSecondaryText)
+                                .fixedSize(horizontal: false, vertical: true)
                             Text("Crash diagnostics are written to Library/Logs/Fluid/Fluid.log by default.")
                                 .font(self.theme.typography.bodySmall)
                                 .foregroundStyle(self.settingsSecondaryText)
+                                .fixedSize(horizontal: false, vertical: true)
                         }
                     }
                     .padding(16)
@@ -1829,6 +1841,7 @@ struct SettingsView: View {
                 Text("Export or import settings, prompt profiles, history, and stats. API keys excluded.")
                     .font(self.theme.typography.bodySmall)
                     .foregroundStyle(self.settingsSecondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             Spacer(minLength: 16)
@@ -1901,6 +1914,7 @@ struct SettingsView: View {
                     Text("ZIP with manifest.jsonl and WAV audio.")
                         .font(self.theme.typography.bodySmall)
                         .foregroundStyle(self.settingsSecondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
 
                 Spacer(minLength: 16)
@@ -2072,6 +2086,8 @@ struct SettingsView: View {
                     }
                 }
             }
+            .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.primary.opacity(0.03)))
+            .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(self.theme.palette.cardBorder, lineWidth: 1))
         }
     }
 
@@ -2172,9 +2188,9 @@ private extension SettingsView {
             if isRecording {
                 self.shortcutCapturePill()
             } else if let shortcut {
-                self.shortcutDisplayPill(shortcut.displayString)
+                self.shortcutKeyPill(shortcut)
             } else {
-                Text("Off").foregroundStyle(self.settingsSecondaryText)
+                self.shortcutUnsetPill
             }
             Button {
                 if isRecording {
@@ -2226,6 +2242,37 @@ private extension SettingsView {
             )
     }
 
+    /// Short label for a pill: left-side modifiers lose the word "Left", and
+    /// hard-to-read punctuation keys are spelled out. The tooltip keeps the full name.
+    static func compactShortcutLabel(_ full: String) -> String {
+        let punctuation = ["`": "Backtick", "'": "Quote", ",": "Comma", ".": "Period", ";": "Semicolon"]
+        var parts = full.components(separatedBy: " + ")
+        if parts.count > 1 {
+            parts = parts.map { $0.hasPrefix("Left ") ? String($0.dropFirst("Left ".count)) : $0 }
+        }
+        if let last = parts.last, let name = punctuation[last] { parts[parts.count - 1] = name }
+        return parts.joined(separator: " ")
+    }
+
+    private func shortcutKeyPill(_ shortcut: HotkeyShortcut) -> some View {
+        self.shortcutDisplayPill(Self.compactShortcutLabel(shortcut.displayString))
+            .lineLimit(1)
+            .truncationMode(.middle)
+            .help(shortcut.displayString)
+    }
+
+    private var shortcutUnsetPill: some View {
+        Text("Not set")
+            .font(.fluidSystem(.caption).weight(.medium))
+            .foregroundStyle(self.settingsTertiaryText)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .overlay(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .strokeBorder(Color.primary.opacity(0.18), style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
+            )
+    }
+
     private func shortcutDisplayPill(_ text: String) -> some View {
         Text(text)
             .font(.fluidSystem(.caption, design: .monospaced).weight(.medium))
@@ -2245,7 +2292,6 @@ private extension SettingsView {
     private func shortcutRow(
         content: ShortcutRowContent,
         shortcut: HotkeyShortcut?,
-        supportsAutoSend: Bool = false,
         isRecording: Bool,
         isAnyRecordingActive: Bool,
         recordingMessage: String? = nil,
@@ -2273,7 +2319,6 @@ private extension SettingsView {
                     onEdit: onChangePressed,
                     onRemove: remove
                 )
-                if supportsAutoSend, enabledValue, !isRecording, let shortcut { self.autoSendToggle(for: shortcut) }
                 if isRecording, let recordingMessage, !recordingMessage.isEmpty {
                     Text(recordingMessage).font(self.theme.typography.bodySmall).foregroundStyle(self.theme.palette.warning)
                 }
@@ -2899,6 +2944,7 @@ private extension SettingsView {
                             Text("Say it at the end. Say “literal \(self.settings.spokenSendPhrase)” to dictate it normally.")
                                 .font(self.theme.typography.bodySmall)
                                 .foregroundStyle(self.settingsSecondaryText)
+                                .fixedSize(horizontal: false, vertical: true)
                         }
 
                         Spacer()
@@ -2923,6 +2969,7 @@ private extension SettingsView {
                             Text("How long to wait after you say the send phrase.")
                                 .font(self.theme.typography.bodySmall)
                                 .foregroundStyle(self.settingsSecondaryText)
+                                .fixedSize(horizontal: false, vertical: true)
                         }
 
                         Spacer()
