@@ -814,6 +814,78 @@ final class DictationAutoSendTests: XCTestCase {
 
 @MainActor
 final class DictationAutoSendTests: XCTestCase {
+    func testAutoSendIndicatorIsIndependentOfSpokenSendAndSurvivesProcessing() {
+        let state = NotchContentState.shared
+        let previous = (state.isAutoSendArmed, state.mode, state.isProcessing, state.spokenSendIndicatorState, state.isAIProcessingFailureVisible, state.isTextDeliveryFailureVisible)
+        defer {
+            state.isAutoSendArmed = previous.0
+            state.mode = previous.1
+            state.isProcessing = previous.2
+            state.setSpokenSendIndicatorState(previous.3)
+            state.isAIProcessingFailureVisible = previous.4
+            state.isTextDeliveryFailureVisible = previous.5
+        }
+        state.isAutoSendArmed = false
+        state.mode = .dictation
+        state.setSpokenSendIndicatorState(.hidden)
+        state.isAIProcessingFailureVisible = false
+        state.isTextDeliveryFailureVisible = false
+        XCTAssertEqual(state.sendIndicatorState(spokenSendEnabled: false), .hidden)
+        state.isAutoSendArmed = true
+        XCTAssertEqual(state.sendIndicatorState(spokenSendEnabled: false), .detected)
+        state.setProcessing(true)
+        state.setSpokenSendIndicatorState(.detected)
+        XCTAssertEqual(state.sendIndicatorState(spokenSendEnabled: false), .detected)
+        state.setSpokenSendIndicatorState(.hidden)
+        XCTAssertEqual(state.sendIndicatorState(spokenSendEnabled: false), .detected)
+        for phase: SpokenSendIndicatorState in [.sending, .sent, .failed] {
+            state.setSpokenSendIndicatorState(phase)
+            XCTAssertEqual(state.sendIndicatorState(spokenSendEnabled: false), phase)
+        }
+        state.setSpokenSendIndicatorState(.hidden)
+        state.isAIProcessingFailureVisible = true
+        XCTAssertEqual(state.sendIndicatorState(spokenSendEnabled: false), .hidden)
+        state.isAIProcessingFailureVisible = false
+        for mode: OverlayMode in [.command, .edit, .rewrite, .write] {
+            state.mode = mode
+            XCTAssertEqual(state.sendIndicatorState(spokenSendEnabled: true), .hidden)
+        }
+        state.mode = .dictation
+        state.isAutoSendArmed = false
+        XCTAssertEqual(state.sendIndicatorState(spokenSendEnabled: false), .hidden)
+        state.setSpokenSendIndicatorState(.detected)
+        XCTAssertEqual(state.sendIndicatorState(spokenSendEnabled: true), .detected)
+        XCTAssertEqual(state.sendIndicatorState(spokenSendEnabled: false), .hidden)
+    }
+
+    func testPostInsertionWaitHonorsCancellationBeforeAndDuringThePause() async {
+        var valid = false
+        var waits = 0
+        let rejectedBefore = await TypingService.preparePostInsertionAction(wait: { waits += 1 }, isOutputValid: { valid })
+        XCTAssertFalse(rejectedBefore)
+        XCTAssertEqual(waits, 0)
+
+        valid = true
+        let rejectedDuring = await TypingService.preparePostInsertionAction(wait: {
+            waits += 1
+            await Task.yield()
+            valid = false
+        }, isOutputValid: { valid })
+        XCTAssertFalse(rejectedDuring, "Escape during the review pause must suppress Enter")
+        XCTAssertEqual(waits, 1)
+
+        valid = true
+        let startedAt = ProcessInfo.processInfo.systemUptime
+        let allowed = await TypingService.preparePostInsertionAction(wait: {
+            try? await Task.sleep(for: .seconds(DictationAutoSendPolicy.sendDelay))
+        }, isOutputValid: { valid })
+        XCTAssertTrue(allowed)
+        XCTAssertEqual(DictationAutoSendPolicy.sendDelay, 1)
+        XCTAssertGreaterThanOrEqual(ProcessInfo.processInfo.systemUptime - startedAt, 0.95)
+        let immediate = await TypingService.preparePostInsertionAction(wait: nil, isOutputValid: { valid })
+        XCTAssertTrue(immediate, "Existing spoken-send callers require no review pause")
+    }
+
     func testPreferencesDefaultOffAndPersistIndependentlyWithoutChangingBindings() throws {
         let suite = "DictationAutoSendTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
