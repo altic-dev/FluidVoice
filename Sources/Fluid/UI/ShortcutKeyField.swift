@@ -1,11 +1,12 @@
 import SwiftUI
 
-/// A shortcut shown as keycaps inside a field. Click the field to record a new shortcut, the same
+/// A shortcut shown as centred keycaps inside a field. Click the field to record a new shortcut, the same
 /// way macOS keyboard settings work; click it again (or press Escape) to stop recording. When a
 /// shortcut can be cleared, a small clear button appears inside the field on hover.
 struct ShortcutKeyField: View {
     static let width: CGFloat = 156
-    static let height: CGFloat = 28
+    /// Same height as the shared dropdown beside it.
+    static let height: CGFloat = 34
 
     let shortcut: HotkeyShortcut?
     let title: String
@@ -23,7 +24,7 @@ struct ShortcutKeyField: View {
     }
 
     var body: some View {
-        let shape = RoundedRectangle(cornerRadius: 7, style: .continuous)
+        let shape = RoundedRectangle(cornerRadius: 10, style: .continuous)
         Button(action: self.onToggleRecording) {
             HStack(spacing: 3) {
                 if self.isRecording {
@@ -37,13 +38,13 @@ struct ShortcutKeyField: View {
                     Text("Record shortcut")
                         .foregroundStyle(self.theme.palette.tertiaryText)
                 }
-                Spacer(minLength: self.canClear ? 22 : 0)
             }
             .font(self.theme.typography.bodySmall)
             .lineLimit(1)
-            .padding(.horizontal, 6)
+            // Equal room on both sides keeps the keys centred and clear of the hover clear button.
+            .padding(.horizontal, self.onClear == nil ? 7 : 24)
             .frame(width: Self.width, height: Self.height)
-            .fluidDropdownSurface(cornerRadius: 7)
+            .fluidDropdownSurface(cornerRadius: 10)
             .overlay {
                 if self.isRecording {
                     shape.strokeBorder(self.theme.palette.accent, lineWidth: 1)
@@ -84,7 +85,7 @@ struct ShortcutKeyField: View {
             .font(self.theme.typography.bodySmall.weight(.medium))
             .foregroundStyle(self.theme.palette.primaryText)
             .padding(.horizontal, 6)
-            .frame(minWidth: 20, minHeight: 20)
+            .frame(minWidth: 22, minHeight: 22)
             .background(
                 RoundedRectangle(cornerRadius: 5, style: .continuous)
                     .fill(self.theme.palette.primaryText.opacity(0.10))
