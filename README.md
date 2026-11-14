@@ -80,7 +80,9 @@ You can use dictation without cleanup, pair a speech model with local cleanup, o
 | Model | Best for | Approximate download |
 | --- | --- | --- |
 | **Fluid 1.1 Ripple** | Smaller, faster cleanup for lighter Macs | ~600 MB |
-| **Fluid 1.1 Splash** | More capable cleanup in a larger model | Under 1.5 GB |
+| **Fluid 1.1 Splash** | More accurate cleanup, including harder corrections | ~750 MB |
+
+Ripple is almost twice as fast as Splash, with slightly lower accuracy. It can miss harder corrections that Splash catches.
 
 On a smaller Apple Silicon Mac, **Fluid Speech Mini + Fluid 1.1 Ripple** is a good starting point. Choose speech and cleanup models separately in the app; Dashboard also recommends models for your Mac. Ripple and Splash are research previews, so review their changes before sending. Optional screen context is off by default.
 
@@ -244,7 +246,7 @@ To pause listening without ending a hands-free dictation, enable **Settings → 
 - Apple Silicon for Fluid Speech, Parakeet, Nemotron, Qwen3 ASR, Cohere, and the local Edit 1.1 model
 - Intel Macs supported via Whisper; Apple Speech availability depends on macOS and language
 - Disk space for your chosen speech model: approximately 44 MiB to 2.03 GiB; allow extra space for installation
-- Optional local cleanup: about 600 MB for Ripple or under 1.5 GB for Splash; available models depend on your Mac
+- Optional local cleanup: about 600 MB for Ripple or 750 MB for Splash; available models depend on your Mac
 - Microphone access
 - Accessibility permissions for typing
 
