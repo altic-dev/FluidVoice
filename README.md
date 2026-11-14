@@ -5,12 +5,17 @@
   <a href="https://github.com/sponsors/altic-dev"><img src="https://img.shields.io/badge/Sponsor-GitHub%20Sponsors-ea4aaa?logo=githubsponsors&logoColor=white" alt="Sponsor FluidVoice"/></a>
   <a href="https://x.com/fluidvoiceapp"><img src="https://img.shields.io/badge/X-%40fluidvoiceapp-black?logo=x&logoColor=white" alt="X @fluidvoiceapp"/></a>
   <br />
-  <a href="https://huggingface.co/nvidia/parakeet_realtime_eou_120m-v1"><img src="https://img.shields.io/badge/Models-Nemotron%20Speech%203.5%20%7C%20Parakeet%20Flash%20%7C%20Parakeet%20v3%20%26%20v2%20%7C%20Cohere%20%7C%20Apple%20Speech%20%7C%20Whisper-blue" alt="Supported Models"/></a>
+  <a href="#supported-models"><img src="https://img.shields.io/badge/Speech-Fluid%20Speech%20Pro%20%7C%20Mini%20%7C%20Pico-blue" alt="Fluid Speech Pro, Mini and Pico"/></a>
+  <a href="#fluid-intelligence"><img src="https://img.shields.io/badge/Cleanup-Fluid%201.1%20Ripple%20%7C%20Splash-blue" alt="Fluid 1.1 Ripple and Splash"/></a>
   <br /><br />
   <a href="https://trendshift.io/repositories/16601?utm_source=repository-badge&utm_medium=badge&utm_campaign=badge-repository-16601" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/repositories/16601" alt="altic-dev%2FFluidVoice | Trendshift" width="250" height="55"/></a>
 </p>
 
-Open source voice-to-text dictation app for macOS with on-device AI enhancement.
+**Free, private dictation that runs on your device.** Speak into the apps you already use, clean up your words locally, and keep a searchable record of your meetings.
+
+This repository is the **macOS app**, open source under GPLv3. FluidVoice is also available on other devices through the betas below.
+
+[Website](https://fluidvoice.com) · [Speech models](https://huggingface.co/FluidVoice-Labs) · [What’s new](https://github.com/altic-dev/FluidVoice/releases/tag/v1.6.13) · [iPhone beta](https://fluidvoice.com/fluid/ios)
 
 **Install with Homebrew:** `brew install --cask fluidvoice`
 
@@ -19,15 +24,23 @@ Open source voice-to-text dictation app for macOS with on-device AI enhancement.
 > [!WARNING]
 > **fluidvoice.org is not affiliated with, operated by, or endorsed by FluidVoice or Altic.** Its claims to be our official website are unauthorized.
 >
-> Our official website is [altic.dev/fluid](https://altic.dev/fluid). Our official domains also include **fluidvoice.com** and **fluidvoice.app**.
+> Our official website is [fluidvoice.com](https://fluidvoice.com). Our official domains also include **altic.dev** and **fluidvoice.app**.
 >
 > For official downloads, use this repository's [GitHub Releases](https://github.com/altic-dev/FluidVoice/releases).
 >
 > If **fluidvoice.org** appears in your search results claiming to be our official website, please report the misleading result to the search provider.
 
-> [!NOTE]
-> FluidVoice is on macOS today. **iOS and Windows are on the way** — join the waitlist to get notified when we launch: **[altic.dev/fluid/waitlist](https://www.altic.dev/fluid/waitlist)**
+## Get FluidVoice
 
+| Platform | Status | Download or join |
+| --- | --- | --- |
+| macOS | Available · macOS 15+ | [Latest release](https://github.com/altic-dev/FluidVoice/releases/latest) · `brew install --cask fluidvoice` |
+| iOS | TestFlight beta | [Join the iPhone beta](https://fluidvoice.com/fluid/ios) |
+| Windows | Beta | [Get the Windows beta](https://fluidvoice.com/fluid/download/windows) |
+| Linux | Early beta | [Get the Linux beta](https://fluidvoice.com/fluid/download/linux) |
+| Android | In progress | [Join the waitlist](https://fluidvoice.com/fluid/waitlist) |
+
+Features and available models vary by platform. The features below describe the Mac app.
 
 > [!IMPORTANT]
 > This project is free and open source under GPLv3. If FluidVoice is useful to you, please star the repository — it helps visibility and keeps development going.
@@ -36,31 +49,61 @@ Open source voice-to-text dictation app for macOS with on-device AI enhancement.
 
 ## Support FluidVoice
 
-If FluidVoice helps you, you can support continued development and future platform work for iOS and Windows on [GitHub Sponsors](https://github.com/sponsors/altic-dev).
+If FluidVoice helps you, you can support continued development, model training, and work across platforms on [GitHub Sponsors](https://github.com/sponsors/altic-dev).
 
 ---
 
-## What's New in 1.6.0
+## What's New in 1.6.13
 
-- **Insanely fast Parakeet** — rebuilt Parakeet implementation with pretty much zero delay between speaking and seeing words on screen
-- **Fluid Intelligence** — fully local AI model for on-device dictation enhancement. No cloud, no API keys, no data leaving your Mac
-- **Better Theming** — adaptive light/dark theme with a compact toolbar switcher
-- **Refreshed Onboarding** — language-first voice engine setup, real dictation tryout, and AI enhancement setup in one clean pass
+- **Fluid Speech Pro** — our most accurate local dictation model for Apple Silicon. Pro, Mini, and Pico now support 25 languages.
+- **Fluid 1.1 Ripple and Splash** — updated on-device text cleanup, with Ripple offering a smaller, faster option for lighter Macs. Both are research previews.
+- **Edit Mode (Beta)** — a dedicated local Edit 1.1 model, with its own settings and support for your own AI providers.
+- **Qwen3 ASR 1.7B** — another local speech option on Apple Silicon, with automatic detection of 30 languages.
+- **Better FluidMeet** — improved call detection, app and microphone selection, Pro-powered transcripts, and the option to redo a saved meeting in another supported language.
+- **Everyday improvements** — model recommendations on Dashboard, more reliable text delivery and downloads, improved spoken number formatting, custom accent colors, and shortcuts that distinguish left and right modifier keys.
 
-> [!WARNING]
-> Based on early feedback, Fluid Intelligence may cause you to unsubscribe from other dictation apps and save money. You've been warned.
+[Read the full 1.6.13 release notes](https://github.com/altic-dev/FluidVoice/releases/tag/v1.6.13).
+
+## Speech recognition and text cleanup
+
+Two separate steps, both available locally:
+
+1. **Fluid Speech** turns your audio into text. Choose Pro for accuracy, Mini for a smaller download, or Pico for the smallest footprint.
+2. **Fluid Intelligence** optionally cleans up that text: remove fillers and false starts, format lists, and apply the writing style you choose for each app.
+
+You can use dictation without cleanup, pair a speech model with local cleanup, or bring your own cloud AI provider.
 
 ## Fluid Intelligence
 
-FluidVoice is fully open source under GPLv3. **Fluid Intelligence** is a separate, privately maintained local AI runtime that powers advanced on-device dictation enhancement — smart formatting, context-aware capitalization, and post-processing — all running locally on your Mac.
+**Fluid 1.1** powers on-device dictation cleanup through Fluid Intelligence. No cloud account or API key is needed for local cleanup.
 
-The app works great on its own with any supported speech model and optional cloud AI providers. Fluid Intelligence adds a fully local, private AI layer for users who want on-device enhancement without sending data anywhere.
+| Model | Best for | Approximate download |
+| --- | --- | --- |
+| **Fluid 1.1 Ripple** | Smaller, faster cleanup for lighter Macs | ~600 MB |
+| **Fluid 1.1 Splash** | More capable cleanup in a larger model | Under 1.5 GB |
+
+On a smaller Apple Silicon Mac, **Fluid Speech Mini + Fluid 1.1 Ripple** is a good starting point. Choose speech and cleanup models separately in the app; Dashboard also recommends models for your Mac. Ripple and Splash are research previews, so review their changes before sending. Optional screen context is off by default.
+
+The macOS app is open source under GPLv3. **Fluid Intelligence is a separate, privately maintained local AI runtime** included in official downloads; it is not part of this repository's source build. The app also works with supported speech models and optional cloud AI providers without Fluid Intelligence.
 
 We're keeping Fluid Intelligence private for now so we can sustainably offer the core dictation experience for free. This may change in the future.
 
 ---
 
-## Fluid Intelligence Sneak Peek
+## FluidMeet
+
+Record online or in-person meetings, with audio and transcription kept on your Mac.
+
+- **Live captions and speaker labels** — follow the conversation and see who said what.
+- **Local playback and editing** — replay individual segments, correct text, rename speakers, and merge speaker labels.
+- **Summaries** — generate a summary on your Mac or with an AI provider you choose, then revisit it after restarting the app.
+- **Meeting detection** — choose the meeting app and microphone, with start/end prompts and a cancellable stop countdown.
+- **Redo and export** — transcribe saved audio again in another supported language, or export Markdown, text, and JSON with timestamps and speaker names.
+- **Assistant integrations** — let Claude Code, Codex, and other local tools read meeting transcripts through FluidMeet's integration settings and local API.
+
+[More about FluidMeet](https://fluidvoice.com/fluid/blog/fluidmeet).
+
+## Fluid Intelligence demos
 
 <table>
   <tr>
@@ -95,7 +138,7 @@ We're keeping Fluid Intelligence private for now so we can sustainably offer the
 
 https://github.com/user-attachments/assets/ffb47afd-1621-432a-bdca-baa4b8526301
 
-### Write Mode — Write or rewrite text in any text box in any app
+### Edit Mode — Write or rewrite text in any text box in any app
 
 https://github.com/user-attachments/assets/c57ef6d5-f0a1-4a3f-a121-637533442c24
 
@@ -105,9 +148,9 @@ https://github.com/user-attachments/assets/c57ef6d5-f0a1-4a3f-a121-637533442c24
 
 - **Fluid Intelligence** — on-device AI enhancement for smart formatting, context-aware capitalization, and post-processing, all running locally on your Mac with zero data leaving your machine
 - **Command Mode** — control your Mac by voice: launch apps, run shortcuts, trigger system actions, and automate workflows without touching the keyboard
-- **Write Mode** — write or rewrite text directly in any text field across any app. Select text and rewrite it, or dictate new content inline
+- **Edit Mode (Beta)** — write or rewrite text in place, using the local Edit 1.1 model on Apple Silicon or your own AI provider
 - **Live Preview** — real-time transcription overlay with notch support, so you see words appear as you speak
-- **Multiple Speech Models** — Nemotron Speech 3.5, Parakeet Flash, Parakeet TDT v3 & v2, Cohere Transcribe, Apple Speech, and Whisper. Pick the model that fits your language and latency needs
+- **Multiple Speech Models** — Fluid Speech Pro, Mini, and Pico; Nemotron Speech 3.5; Parakeet; Qwen3 ASR; Cohere Transcribe; Apple Speech; and Whisper. Pick the model that fits your language and Mac
 - **AI Enhancement** — optional post-processing via OpenAI, Groq, custom providers, or local Fluid Intelligence for cleaner, more accurate transcripts
 - **Audio History** — optional local recording history with budget controls and ZIP export, so you can review past dictations without cloud storage
 - **Today-Usage Stats** — daily usage tracking at a glance with a stats header card and toolbar pill
@@ -120,7 +163,9 @@ https://github.com/user-attachments/assets/c57ef6d5-f0a1-4a3f-a121-637533442c24
 - **Per-App Configuration** — assign different prompt sets to different apps, so your dictation adapts to whatever you're working in. Fully optional
 - **Notch-Aware Overlay** — transcription overlay that fits cleanly around the MacBook notch, or use a standard overlay if your Mac doesn't have one
 - **Local-First** — your voice and text never leave your machine unless you opt in to a cloud AI provider
-- **Fastest Parakeet on Mac** — one of the fastest native implementations of Parakeet on macOS, with near-instant transcription and minimal latency
+- **Custom Dictionary** — save names, jargon, and instant replacements, with experimental pronunciation training for supported speech models
+- **Global Search** — find dictations, meeting transcripts, dictionary entries, cleanup styles, and settings from one place
+- **File Transcription** — turn saved audio files and voice notes into text locally
 - **Configurable Overlay** — choose from pill-shaped to large overlay sizes to show live preview, or keep it minimal. Everything is optional
 - **Everything is Optional** — AI enhancement, Fluid Intelligence, audio history, detailed analytics, and beta builds are optional. The core dictation experience works out of the box with zero configuration beyond permissions and a hotkey
 
@@ -128,18 +173,26 @@ https://github.com/user-attachments/assets/c57ef6d5-f0a1-4a3f-a121-637533442c24
 
 ## Supported Models
 
-| Model | Best for | Language support | Download size | Hardware |
-| --- | --- | --- | --- | --- |
-| Nemotron Speech 3.5 — Ultra Fast Low Latency | Streaming-capable multilingual dictation | ~40 languages | ~670 MB | Apple Silicon |
-| Nemotron 3.5 Multilingual | Higher-accuracy multilingual dictation | ~40 languages | ~530 MB | Apple Silicon |
-| [Parakeet Flash (Beta)](https://huggingface.co/nvidia/parakeet_realtime_eou_120m-v1) | Lowest-latency live English dictation | English | ~250 MB | Apple Silicon |
-| Parakeet TDT v3 | Fast default multilingual dictation | [25 languages](#parakeet-tdt-v3-languages) | ~500 MB | Apple Silicon |
-| Parakeet TDT v2 | Fastest English-only dictation | [English](#parakeet-tdt-v2-languages) | ~500 MB | Apple Silicon |
-| Cohere Transcribe | High-accuracy multilingual dictation | [14 languages](#cohere-transcribe-languages) | ~1.4 GB | Apple Silicon |
-| Apple Speech | Zero-download native macOS speech | [System languages](#apple-speech-languages) | Built-in | Apple Silicon + Intel |
-| Whisper Tiny / Base / Small / Medium / Large | Broad compatibility, including Intel Macs | [99 languages](#whisper-language-support) | ~75 MB to ~2.9 GB | Apple Silicon + Intel |
+These are **speech-to-text models**, separate from the cleanup models above. Downloads below reflect the Mac app's model catalog; sizes can change with model updates.
 
-### Parakeet TDT v3 Languages
+| Model | Best for | Language support | Approximate download | Hardware |
+| --- | --- | --- | --- | --- |
+| [Fluid Speech Pro](https://fluidvoice.com/fluid/blog/fluidspeech-pro) | Our most accurate dictation model | [25 languages](#fluid-speech-and-parakeet-tdt-v3-languages) | 622 MiB | Apple Silicon |
+| [Fluid Speech Mini](https://fluidvoice.com/labs/fluid-speech-mini) | Small download, clear dictation in noisy places | [25 languages](#fluid-speech-and-parakeet-tdt-v3-languages) | 242 MiB | Apple Silicon |
+| Fluid Speech Pico | Smallest Fluid Speech model | [25 languages](#fluid-speech-and-parakeet-tdt-v3-languages) | 154 MiB | Apple Silicon |
+| Nemotron Speech 3.5 — Ultra Fast Low Latency | Streaming-capable multilingual dictation | ~40 languages | 668 MiB | Apple Silicon |
+| Nemotron 3.5 Multilingual | Multilingual dictation | ~40 languages | 531 MiB | Apple Silicon |
+| [Parakeet Flash (Beta)](https://huggingface.co/nvidia/parakeet_realtime_eou_120m-v1) | Live English dictation | English | 428 MiB | Apple Silicon |
+| Parakeet TDT v3 | Fast multilingual dictation | [25 languages](#fluid-speech-and-parakeet-tdt-v3-languages) | 461 MiB | Apple Silicon |
+| Parakeet TDT v2 | Fast English dictation | English | 443 MiB | Apple Silicon |
+| Qwen3 ASR 1.7B | Multilingual dictation with automatic language detection | 30 languages | 2.03 GiB | Apple Silicon |
+| Cohere Transcribe | Multilingual dictation | [14 languages](#cohere-transcribe-languages) | 1.54 GiB | Apple Silicon |
+| Apple Speech | Native macOS speech recognition | [System-dependent](#apple-speech-languages) | Built-in; system language assets may be needed | Apple Silicon + Intel |
+| Whisper Tiny / Base / Small / Medium / Large Turbo / Large | Broad language coverage and Intel support | [Up to 99 languages](#whisper-language-support) | 44 MiB–1.55 GiB | Apple Silicon + Intel |
+
+**About the models:** Fluid Speech Pro is a 0.63B-parameter model with open weights under CC BY 4.0. At its November 2026 launch, it ranked first among open models under 1B parameters on the Open ASR Leaderboard. See the [Pro model card and benchmarks](https://huggingface.co/FluidVoice-Labs/fluid-speech-pro) and [Mini's measurements and limitations](https://fluidvoice.com/labs/fluid-speech-mini). The Mini article describes the earlier English release; the Mac app's 1.6.13 Mini and Pico models support the 25 languages below.
+
+### Fluid Speech and Parakeet TDT v3 Languages
 
 Bulgarian, Croatian, Czech, Danish, Dutch, English, Estonian, Finnish, French, German, Greek, Hungarian, Italian, Latvian, Lithuanian, Maltese, Polish, Portuguese, Romanian, Russian, Slovak, Slovenian, Spanish, Swedish, and Ukrainian.
 
@@ -173,9 +226,9 @@ Whisper supports up to 99 languages, depending on the model size you choose.
 
 3. **Set your hotkey** — pick a global hotkey in settings that triggers voice capture from anywhere.
 
-4. **Go through onboarding** — choose your voice model based on your language and latency needs. Models range from zero-download Apple Speech to high-accuracy Nemotron and Whisper.
+4. **Go through onboarding** — choose your voice model based on your language and latency needs. Start with Fluid Speech Pro for accuracy, Mini or Pico for a smaller download, or Whisper on Intel. Other models cover additional languages.
 
-5. **(Optional) Enable Fluid Intelligence** — download the local AI model during onboarding for on-device dictation enhancement. Everything runs locally, no data leaves your Mac.
+5. **(Optional) Enable Fluid Intelligence** — choose Ripple or Splash for on-device text cleanup. No cloud account or API key is needed.
 
 6. **(Optional) Bring your own AI provider** — add an OpenAI, Groq, or custom provider API key for cloud-based enhancement. Keys are stored securely in macOS Keychain. Select "Always allow" for key access.
 
@@ -188,10 +241,10 @@ To pause listening without ending a hands-free dictation, enable **Settings → 
 ## Requirements
 
 - macOS 15.0 (Sequoia) or later
-- Apple Silicon Mac for all models
-- Intel Macs supported via Whisper models (from 1.5.1+)
-- ~1 GB disk space for a voice model
-- ~3.5 GB disk space for the Fluid Intelligence model (optional)
+- Apple Silicon for Fluid Speech, Parakeet, Nemotron, Qwen3 ASR, Cohere, and the local Edit 1.1 model
+- Intel Macs supported via Whisper; Apple Speech availability depends on macOS and language
+- Disk space for your chosen speech model: approximately 44 MiB to 2.03 GiB; allow extra space for installation
+- Optional local cleanup: about 600 MB for Ripple or under 1.5 GB for Splash; available models depend on your Mac
 - Microphone access
 - Accessibility permissions for typing
 
