@@ -128,7 +128,9 @@ struct SettingsNavigationState: Equatable {
 /// `minimumWindowContentSize`, so the popup always sits inside the window.
 struct SettingsPopupLayout: Equatable {
     static let minimumSize = CGSize(width: 880, height: 540)
-    static let maximumSize = CGSize(width: 1180, height: 820)
+    /// Wide enough for the sidebar plus a full-width settings page (720) and its scroll bar, and no
+    /// wider, so a big window never leaves empty margins beside the page. Height still grows.
+    static let maximumSize = CGSize(width: 960, height: 820)
     static let windowMargin = CGSize(width: 50, height: 30)
     static let minimumWindowContentSize = CGSize(
         width: minimumSize.width + windowMargin.width * 2,

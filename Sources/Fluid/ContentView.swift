@@ -1927,8 +1927,9 @@ struct ContentView: View {
                 VStack(spacing: 0) {
                     HStack {
                         Text((self.settingsNavigation.selectedSection ?? .general).title)
-                            .font(self.theme.typography.bodyStrong)
+                            .font(.fluidSystem(size: 20, weight: .semibold))
                             .foregroundStyle(.primary)
+                            .accessibilityAddTraits(.isHeader)
                         Spacer(minLength: 0)
                         Button {
                             self.closeSettings()
@@ -1944,9 +1945,9 @@ struct ContentView: View {
                         .help("Close Settings")
                         .accessibilityLabel("Close Settings")
                     }
-                    .padding(.leading, 20)
+                    .padding(.leading, 24)
                     .padding(.trailing, 12)
-                    .frame(height: 48)
+                    .frame(height: 56)
 
                     // A page must never push the popup wider than its fixed size.
                     self.preferencesView
