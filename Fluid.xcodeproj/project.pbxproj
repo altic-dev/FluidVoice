@@ -147,6 +147,8 @@
 		F5E000000000000000000014 /* fv-serve in Embed Helpers */ = {isa = PBXBuildFile; fileRef = F5E000000000000000000005 /* fv-serve */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
 		C0DE123A0000000000000002 /* DictationContextCaptureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE123A0000000000000001 /* DictationContextCaptureTests.swift */; };
 		E01100000000000000000002 /* EditModeRouteTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E01100000000000000000001 /* EditModeRouteTests.swift */; };
+		4F1300000000000000000001 /* Hummingbird in Frameworks */ = {isa = PBXBuildFile; productRef = 4F1300000000000000000004 /* Hummingbird */; };
+		4F1300000000000000000002 /* Hummingbird in Frameworks */ = {isa = PBXBuildFile; productRef = 4F1300000000000000000004 /* Hummingbird */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -392,6 +394,7 @@
 				7C5AF14B2F15041600DE21B0 /* MediaRemoteAdapter in Frameworks */,
 				7C9A71022F58B00000FB7CAF /* TranscribeCpp in Frameworks */,
 				7CE006BD2E80EBE600DDCCD6 /* AppUpdater in Frameworks */,
+				4F1300000000000000000001 /* Hummingbird in Frameworks */,
 				7C078DA52E3B386A00FB7CAC /* FluidAudio in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -414,6 +417,7 @@
 				A5B000000000000000000015 /* MediaRemoteAdapter in Frameworks */,
 				A5B000000000000000000016 /* TranscribeCpp in Frameworks */,
 				A5B000000000000000000017 /* AppUpdater in Frameworks */,
+				4F1300000000000000000002 /* Hummingbird in Frameworks */,
 				A5B000000000000000000013 /* FluidAudio in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -664,6 +668,7 @@
 				7C078DA42E3B386A00FB7CAC /* FluidAudio */,
 				7C3697882ED70F9C005874CE /* DynamicNotchKit */,
 				7CE006BC2E80EBE600DDCCD6 /* AppUpdater */,
+				4F1300000000000000000004 /* Hummingbird */,
 				7C9A71012F58B00000FB7CAF /* TranscribeCpp */,
 				7C5AF14A2F15041600DE21B0 /* MediaRemoteAdapter */,
 				2E9B00000000000000000004 /* ZeppelinEmbed */,
@@ -717,6 +722,7 @@
 				7C078DA42E3B386A00FB7CAC /* FluidAudio */,
 				7C3697882ED70F9C005874CE /* DynamicNotchKit */,
 				7CE006BC2E80EBE600DDCCD6 /* AppUpdater */,
+				4F1300000000000000000004 /* Hummingbird */,
 				7C9A71012F58B00000FB7CAF /* TranscribeCpp */,
 				7C5AF14A2F15041600DE21B0 /* MediaRemoteAdapter */,
 			);
@@ -805,6 +811,7 @@
 				AEC300000000000000000001 /* XCLocalSwiftPackageReference "WebRTCAudioProcessing" */,
 				7C078DA32E3B386A00FB7CAC /* XCRemoteSwiftPackageReference "FluidAudio" */,
 				7CE006BB2E80EBE600DDCCD6 /* XCRemoteSwiftPackageReference "AppUpdater" */,
+				4F1300000000000000000003 /* XCRemoteSwiftPackageReference "hummingbird" */,
 				7C3697872ED70F9C005874CE /* XCRemoteSwiftPackageReference "DynamicNotchKit" */,
 				7C9A71002F58B00000FB7CAF /* XCRemoteSwiftPackageReference "transcribe-cpp-swift" */,
 				7C5AF1492F15041600DE21B0 /* XCRemoteSwiftPackageReference "mediaremote-adapter" */,
@@ -1619,6 +1626,14 @@
 				minimumVersion = 1.1.1;
 			};
 		};
+		4F1300000000000000000003 /* XCRemoteSwiftPackageReference "hummingbird" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/hummingbird-project/hummingbird.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 2.28.1;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -1666,6 +1681,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 7C9A71002F58B00000FB7CAF /* XCRemoteSwiftPackageReference "transcribe-cpp-swift" */;
 			productName = TranscribeCpp;
+		};
+		4F1300000000000000000004 /* Hummingbird */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 4F1300000000000000000003 /* XCRemoteSwiftPackageReference "hummingbird" */;
+			productName = Hummingbird;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};
