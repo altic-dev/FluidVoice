@@ -161,6 +161,19 @@ enum EnglishSpellingPreferenceTests {
             "Private dictation still applies spelling when the base prompt mentions translation"
         )
 
+        check(
+            EnglishSpellingPreference.allCases == [.automatic, .enUS, .enGB, .enAU, .enCA],
+            "Picker lists automatic first, then each regional spelling"
+        )
+        check(EnglishSpellingPreference.automatic.displayName == "Automatic", "Automatic picker label")
+        check(EnglishSpellingPreference.enGB.displayName == "British (en-GB)", "British picker label")
+        for preference in EnglishSpellingPreference.allCases {
+            check(
+                EnglishSpellingPreference(storedValue: preference.rawValue) == preference,
+                "Picker value \(preference.rawValue) round-trips through storage"
+            )
+        }
+
         print("=== DEMO: automatic (current behavior) ===")
         print(automaticApplied)
         print("=== DEMO: en-AU instruction appended to dictation cleanup prompt ===")

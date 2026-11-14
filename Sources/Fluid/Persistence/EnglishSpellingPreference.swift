@@ -11,6 +11,25 @@ struct EnglishSpellingPreference: RawRepresentable, Equatable, Hashable, Codable
     static let enAU = EnglishSpellingPreference(identifier: "en-AU")
     static let enCA = EnglishSpellingPreference(identifier: "en-CA")
 
+    /// Every preference, in the order the settings picker shows them.
+    static let allCases: [EnglishSpellingPreference] = [.automatic, .enUS, .enGB, .enAU, .enCA]
+
+    /// Label for the settings picker.
+    var displayName: String {
+        switch self.rawValue {
+        case "en-US":
+            return "American (en-US)"
+        case "en-GB":
+            return "British (en-GB)"
+        case "en-AU":
+            return "Australian (en-AU)"
+        case "en-CA":
+            return "Canadian (en-CA)"
+        default:
+            return "Automatic"
+        }
+    }
+
     private init(identifier: String) {
         self.rawValue = identifier
     }
