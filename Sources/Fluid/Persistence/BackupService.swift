@@ -151,6 +151,8 @@ struct SettingsBackupPayload: Codable, Equatable {
     // swiftlint:disable:next discouraged_optional_collection
     var dictationPromptConfigurations: [String: SettingsStore.DictationPromptConfiguration]? = nil
     var automaticDictionaryPromptDelay: SettingsStore.AutomaticDictionaryPromptDelay? = nil
+    /// Optional so backups from before the English spelling preference still decode.
+    var englishSpellingPreference: String? = nil
 }
 
 struct AppBackupDocument: Codable, Equatable {

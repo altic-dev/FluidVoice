@@ -1314,7 +1314,7 @@ final class SettingsStore: ObservableObject {
 
     func effectiveDictationSystemPrompt(for slot: DictationShortcutSlot, appBundleID: String? = nil) -> String {
         if let manual = DictationAppSession.shared.choice(for: slot, appID: appBundleID) {
-            return self.manualDictationPromptBody(manual, system: true)
+            return self.applyingEnglishSpellingPreference(to: self.manualDictationPromptBody(manual, system: true))
         }
         if self.promptRoutingScope(for: .dictate) == .selectedAppsOnly {
             guard self.dictationPromptSelection(for: slot) != .off else { return "" }
@@ -1330,7 +1330,9 @@ final class SettingsStore: ObservableObject {
             }
             let body = Self.customPromptBody(profile.prompt, mode: .dictate)
             if !body.isEmpty || (profile.mode.normalized == .dictate && !profile.usesLegacyEmptyPromptFallback) {
-                return self.systemPrompt(forCustomProfileBody: body, mode: .dictate)
+                return self.applyingEnglishSpellingPreference(
+                    to: self.systemPrompt(forCustomProfileBody: body, mode: .dictate)
+                )
             }
             return self.effectiveSystemPrompt(for: .dictate, appBundleID: appBundleID)
         }
@@ -1341,7 +1343,10 @@ final class SettingsStore: ObservableObject {
     }
 
     func effectiveSystemPrompt(for mode: PromptMode, appBundleID: String? = nil) -> String {
-        self.promptResolution(for: mode, appBundleID: appBundleID).systemPrompt
+        self.applyingEnglishSpellingPreference(
+            to: self.promptResolution(for: mode, appBundleID: appBundleID).systemPrompt,
+            mode: mode
+        )
     }
 
     func effectivePromptSource(for mode: PromptMode, appBundleID: String? = nil) -> PromptResolutionSource {
@@ -1409,12 +1414,13 @@ final class SettingsStore: ObservableObject {
     /// Use the same explicit custom prompt for shortcut and app-based selection.
     func shortcutOverrideSystemPrompt(for profile: DictationPromptProfile, mode: PromptMode = .dictate) -> String? {
         if mode.normalized == .dictate, profile.usesLegacyEmptyPromptFallback {
-            return profile.legacyEmptyShortcutUsesBasePrompt ? Self.baseDictationPromptText() : nil
+            guard profile.legacyEmptyShortcutUsesBasePrompt else { return nil }
+            return self.applyingEnglishSpellingPreference(to: Self.baseDictationPromptText())
         }
-        return self.systemPrompt(
+        return self.applyingEnglishSpellingPreference(to: self.systemPrompt(
             forCustomProfileBody: Self.customPromptBody(profile.prompt, mode: mode),
             mode: mode
-        )
+        ))
     }
 
     // MARK: - Model Reasoning Configuration
@@ -3886,7 +3892,8 @@ final class SettingsStore: ObservableObject {
             meetingRecordingDefaults: self.meetingRecordingDefaults,
             privateAIIdleUnload: self.privateAIIdleUnload,
             dictationPromptConfigurations: self.dictationPromptConfigurations,
-            automaticDictionaryPromptDelay: self.automaticDictionaryPromptDelay
+            automaticDictionaryPromptDelay: self.automaticDictionaryPromptDelay,
+            englishSpellingPreference: self.englishSpellingPreference.rawValue
         )
     }
 
@@ -3928,6 +3935,9 @@ final class SettingsStore: ObservableObject {
         }
         if let selectedAppleSpeechLocaleIdentifier = payload.selectedAppleSpeechLocaleIdentifier {
             self.selectedAppleSpeechLocaleIdentifier = selectedAppleSpeechLocaleIdentifier
+        }
+        if let englishSpellingPreference = payload.englishSpellingPreference {
+            self.englishSpellingPreference = EnglishSpellingPreference(storedValue: englishSpellingPreference)
         }
         // A backup predating this setting represents an absent selection, which resolves to the
         // current phase's local default. Unknown stored IDs remain intact and visibly unavailable.
@@ -6260,6 +6270,7 @@ private extension SettingsStore {
         static let selectedCohereLanguage = "SelectedCohereLanguage"
         static let selectedNemotronLanguage = "SelectedNemotronLanguage"
         static let selectedAppleSpeechLocaleIdentifier = "SelectedAppleSpeechLocaleIdentifier"
+        static let englishSpellingPreference = "EnglishSpellingPreference"
         static let externalCoreMLArtifactsDirectories = "ExternalCoreMLArtifactsDirectories"
 
         // Overlay Position

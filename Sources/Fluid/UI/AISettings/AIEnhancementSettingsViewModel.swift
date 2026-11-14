@@ -1638,11 +1638,16 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         return singleLine.count > 120 ? String(singleLine.prefix(120)) + "…" : singleLine
     }
 
-    /// Preview uses the same prompt composition as the selected editor mode.
+    /// Preview uses the same prompt composition and English spelling suffix as the saved profile.
     func combinedDraftPrompt(_ text: String, mode: SettingsStore.PromptMode) -> String {
-        if mode.normalized == .dictate, self.promptEditorMode?.isDefault != true { return text }
-        let body = SettingsStore.stripBasePrompt(for: mode, from: text)
-        return SettingsStore.combineBasePrompt(for: mode, with: body)
+        let combined: String
+        if mode.normalized == .dictate, self.promptEditorMode?.isDefault != true {
+            combined = text
+        } else {
+            let body = SettingsStore.stripBasePrompt(for: mode, from: text)
+            combined = SettingsStore.combineBasePrompt(for: mode, with: body)
+        }
+        return self.settings.applyingEnglishSpellingPreference(to: combined, mode: mode)
     }
 
     func requestDeletePrompt(_ profile: SettingsStore.DictationPromptProfile) {
