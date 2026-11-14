@@ -26,6 +26,7 @@ enum SettingsSearchTarget: Hashable {
     case microphonePermission
     case globalHotkey
     case primaryDictationShortcuts
+    case englishSpelling
     case commandModeShortcut
     case editModeShortcut
     case cancelRecordingShortcut
@@ -110,7 +111,7 @@ enum SettingsSearchTarget: Hashable {
         case .textFormatting, .spokenFormatting, .fillerWords:
             return .dictationFormatting
 
-        case .shortcuts, .globalHotkey, .primaryDictationShortcuts,
+        case .shortcuts, .globalHotkey, .primaryDictationShortcuts, .englishSpelling,
              .commandModeShortcut, .editModeShortcut, .cancelRecordingShortcut,
              .pasteLastTranscriptionShortcut, .meetingRecordingShortcut:
             return .shortcuts
@@ -196,6 +197,7 @@ struct SettingsSearchAvailability {
         case .accessibilityPermission:
             return !self.accessibilityEnabled
         case .primaryDictationShortcuts,
+             .englishSpelling,
              .commandModeShortcut,
              .editModeShortcut,
              .cancelRecordingShortcut,
@@ -288,6 +290,11 @@ enum SettingsSearchIndex {
             target: .primaryDictationShortcuts,
             title: "Primary Dictation Shortcuts",
             terms: ["keyboard shortcut mouse button record hotkey"]
+        ),
+        .init(
+            target: .englishSpelling,
+            title: "Spelling",
+            terms: ["English spelling American British Australian Canadian en-US en-GB en-AU en-CA colour color regional dictation cleanup"]
         ),
         .init(target: .commandModeShortcut, title: "Command Mode", terms: ["voice commands terminal hotkey shortcut"]),
         .init(target: .editModeShortcut, title: "Edit Mode", terms: ["rewrite selected text hotkey shortcut"]),

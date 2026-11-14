@@ -2038,6 +2038,7 @@ struct SettingsView: View {
                 )
                 self.dictationPromptPicker(for: .primary)
                 self.englishSpellingPicker()
+                    .settingsSearchTarget(.englishSpelling)
             }
             Spacer(minLength: 12)
             VStack(alignment: .trailing, spacing: 10) {
