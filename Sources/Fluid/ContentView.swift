@@ -340,7 +340,6 @@ struct ContentView: View {
 
     @State private var isHelpEntryHovered = false
     @State private var isSettingsEntryHovered = false
-    @State private var isSettingsBackHovered = false
     @FocusState private var isSettingsSearchFocused: Bool
     @State private var playgroundUsed: Bool = SettingsStore.shared.playgroundUsed
     @State private var showsFluidIntelligenceDemo = false
@@ -492,6 +491,12 @@ struct ContentView: View {
                         self.detailView
                     }
                     .navigationSplitViewStyle(.balanced)
+                    .sheet(isPresented: Binding(
+                        get: { self.settingsNavigation.isPresented },
+                        set: { presented in if !presented, self.settingsNavigation.isPresented { self.closeSettings() } }
+                    )) {
+                        self.settingsPopup
+                    }
                 }
             }
         )
@@ -952,10 +957,61 @@ struct ContentView: View {
         } else if event.type == .flagsChanged {
             return self.handleShortcutFlagsChangedEvent(event, modifiers: eventModifiers.intersection(HotkeyShortcut.relevantModifierMask), isRecordingAnyShortcut: isRecordingAnyShortcut, recordingTarget: recordingTarget)
         } else if event.type == .leftMouseDown || event.type == .rightMouseDown || event.type == .otherMouseDown {
+            if event.type == .leftMouseDown, !isRecordingAnyShortcut {
+                if self.isClickOutsideSettingsPopup(event) {
+                    self.closeSettings()
+                    return nil
+                }
+                self.closeSettingsIfTopBarClick(event)
+            }
             return self.handleShortcutMouseDownEvent(event, modifiers: eventModifiers, isRecordingAnyShortcut: isRecordingAnyShortcut, recordingTarget: recordingTarget)
         }
 
         return event
+    }
+
+    /// A click on the app window behind the settings popup closes the popup, like clicking away
+    /// from any popup. The top bar is handled separately so the window can still be dragged, the
+    /// resize edges are left alone, and nothing closes while a dialog opened from Settings is open.
+    private func isClickOutsideSettingsPopup(_ event: NSEvent) -> Bool {
+        guard self.settingsNavigation.isPresented,
+              let window = NSApp.windows.first(where: { $0.attachedSheet != nil && MainWindowIdentity.matches($0) }),
+              let popup = window.attachedSheet,
+              popup.attachedSheet == nil
+        else { return false }
+        // Judge by where the pointer is on screen. A window with a popup on it does not always
+        // receive the click itself, so the event's own window is not reliable here.
+        let pointer = NSEvent.mouseLocation
+        let isOtherWindow = event.window.map { $0 !== window && $0 !== popup } ?? false
+        let behindPopup = SettingsPopupLayout.isDismissingClick(
+            at: pointer,
+            windowContent: window.convertToScreen(window.contentLayoutRect)
+        )
+        return !isOtherWindow && !popup.frame.contains(pointer) && behindPopup
+    }
+
+    /// A click on the window's top bar also closes the settings popup, but dragging the bar must
+    /// still move the window. The press is let through; once the window is done tracking it, the
+    /// popup closes only if the window is exactly where it was.
+    private func closeSettingsIfTopBarClick(_ event: NSEvent) {
+        guard self.settingsNavigation.isPresented,
+              let window = NSApp.windows.first(where: { $0.attachedSheet != nil && MainWindowIdentity.matches($0) }),
+              window.attachedSheet?.attachedSheet == nil,
+              event.window.map({ $0 === window }) ?? true,
+              SettingsPopupLayout.isTopBarPress(
+                  at: NSEvent.mouseLocation,
+                  windowFrame: window.frame,
+                  windowContent: window.convertToScreen(window.contentLayoutRect)
+              )
+        else { return }
+        let frameAtPress = window.frame
+        // Default mode only: this waits until the window has finished following the pointer.
+        RunLoop.main.perform(inModes: [.default]) {
+            guard self.settingsNavigation.isPresented, self.activeShortcutRecordingTarget == nil,
+                  window.frame == frameAtPress
+            else { return }
+            self.closeSettings()
+        }
     }
 
     private func handleShortcutKeyDownEvent(
@@ -1479,24 +1535,9 @@ struct ContentView: View {
     }
 
     private var sidebarContent: some View {
-        ZStack {
-            // Keep both sidebars mounted so navigation feedback never waits on view construction.
-            self.appSidebarView
-                .opacity(self.settingsNavigation.isPresented ? 0 : 1)
-                .offset(x: self.settingsNavigation.isPresented ? -self.sidebarTransitionDistance : 0)
-                .allowsHitTesting(!self.settingsNavigation.isPresented)
-                .accessibilityHidden(self.settingsNavigation.isPresented)
-
-            // No flat backdrop: the settings sidebar shows the same system material as the app one.
-            self.settingsSidebarView
-                .opacity(self.settingsNavigation.isPresented ? 1 : 0)
-                .offset(x: self.settingsNavigation.isPresented ? 0 : self.sidebarTransitionDistance)
-                .allowsHitTesting(self.settingsNavigation.isPresented)
-                .accessibilityHidden(!self.settingsNavigation.isPresented)
-        }
-        .clipped()
-        .tint(self.theme.palette.accent)
-        .animation(self.modeTransitionAnimation, value: self.settingsNavigation.isPresented)
+        self.appSidebarView
+            .clipped()
+            .tint(self.theme.palette.accent)
     }
 
     private var appSidebarView: some View {
@@ -1638,33 +1679,14 @@ struct ContentView: View {
 
     private var settingsSidebarView: some View {
         VStack(spacing: 0) {
-            Button {
-                self.closeSettings()
-            } label: {
-                HStack(spacing: self.theme.metrics.spacing.sm) {
-                    Image(systemName: "chevron.left")
-                        .font(.fluidSystem(size: 11, weight: .semibold))
-                        .frame(width: 18, height: 28)
-
-                    Text("Back to app")
-                        .font(self.theme.typography.sidebarItem)
-
-                    Spacer(minLength: 0)
-                }
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, self.theme.metrics.spacing.md)
-                .padding(.top, self.theme.metrics.spacing.sm)
+            Text("Settings")
+                .font(self.theme.typography.bodyStrong)
+                .foregroundStyle(.primary)
+                .padding(.horizontal, self.theme.metrics.spacing.md + 4)
+                .padding(.top, self.theme.metrics.spacing.md)
                 .padding(.bottom, self.theme.metrics.spacing.xs)
-                .frame(maxWidth: .infinity, minHeight: 36, alignment: .leading)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(SidebarChromeButtonStyle(
-                isHovered: self.isSettingsBackHovered,
-                reduceMotion: self.accessibilityReduceMotion
-            ))
-            .onHover { self.isSettingsBackHovered = $0 }
-            .help("Back to FluidVoice")
-            .accessibilityLabel("Back to FluidVoice")
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityAddTraits(.isHeader)
 
             SidebarSearchField(
                 text: Binding(
@@ -1681,26 +1703,21 @@ struct ContentView: View {
             List {
                 ForEach(self.filteredSettingsSections) { section in
                     let isSelected = self.settingsNavigation.selectedSection == section
-                    Button {
-                        self.selectSettingsSection(section)
-                    } label: {
-                        HStack(spacing: self.theme.metrics.spacing.sm) {
-                            Image(systemName: section.systemImage)
-                                .symbolRenderingMode(.hierarchical)
-                                .foregroundStyle(isSelected ? Color.white.opacity(0.9) : Color.secondary)
-                                .frame(width: 18)
+                    HStack(spacing: self.theme.metrics.spacing.sm) {
+                        Image(systemName: section.systemImage)
+                            .symbolRenderingMode(.hierarchical)
+                            .foregroundStyle(isSelected ? Color.white.opacity(0.9) : Color.secondary)
+                            .frame(width: 18)
 
-                            Text(section.title)
-                                .foregroundStyle(isSelected ? Color.white : Color.primary)
-                        }
-                        .font(self.theme.typography.sidebarItem)
-                        .sidebarOptionHover(
-                            isSelected: isSelected,
-                            reduceMotion: self.accessibilityReduceMotion
-                        )
+                        Text(section.title)
+                            .foregroundStyle(isSelected ? Color.white : Color.primary)
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityAddTraits(isSelected ? .isSelected : [])
+                    .font(self.theme.typography.sidebarItem)
+                    .tag(section)
+                    .sidebarOptionHover(
+                        isSelected: isSelected,
+                        reduceMotion: self.accessibilityReduceMotion
+                    )
                 }
             }
             .listStyle(.sidebar)
@@ -1832,17 +1849,6 @@ struct ContentView: View {
         .accessibilityHint("What’s new, documentation, Fluid Intelligence demo, and replay onboarding")
     }
 
-    private var modeTransitionAnimation: Animation {
-        let duration = self.settingsNavigation.isPresented ? 0.16 : 0.1
-        return self.accessibilityReduceMotion
-            ? .easeOut(duration: 0.08)
-            : .snappy(duration: duration, extraBounce: 0)
-    }
-
-    private var sidebarTransitionDistance: CGFloat {
-        self.accessibilityReduceMotion ? 0 : 8
-    }
-
     private func sidebarSectionHeader(_ title: String) -> some View {
         Text(title)
             .font(self.theme.typography.sidebarSection)
@@ -1891,38 +1897,60 @@ struct ContentView: View {
             self.theme.palette.contentBackground
                 .ignoresSafeArea()
 
-            // Preserve the app destination so Back never waits on expensive detail initialization.
-            AppPageHost(
-                page: self.selectedSidebarItem ?? .welcome,
-                inputs: AppPageInputs(
-                    colorScheme: self.colorScheme,
-                    accentColor: self.settings.accentColorOption,
-                    accessibilityEnabled: self.accessibilityEnabled,
-                    isSettingsPresented: self.settingsNavigation.isPresented
-                ),
-                prewarmPages: SidebarItem.prewarmedPages,
-                canPrewarm: { !self.asr.isRunningOrStarting },
-                content: self.pageContent(for:prewarmState:)
-            )
+            self.appDetailContent
+        }
+        .navigationTitle((self.selectedSidebarItem ?? .welcome).title)
+    }
 
-            if self.settingsNavigation.isPresented {
-                self.preferencesView
-                    .transition(self.settingsDetailTransition)
+    /// Settings open over the app in a fixed-size sheet, so every settings page has one known width.
+    private var settingsPopup: some View {
+        // Read once when the popup opens. After that the popup tracks the window itself, so
+        // resizing the window never makes this whole screen recalculate.
+        let windowContentSize = NSApp.windows.first(where: MainWindowIdentity.matches)?.contentLayoutRect.size
+            ?? SettingsPopupLayout.minimumWindowContentSize
+        return SettingsPopupFrame(initialWindowContentSize: windowContentSize) {
+            HStack(spacing: 0) {
+                self.settingsSidebarView
+                    .scrollContentBackground(.hidden)
+                    .frame(width: SettingsPopupLayout.sidebarWidth)
+                    .background(self.theme.palette.sidebarBackground)
+                    .tint(self.theme.palette.accent)
+
+                Rectangle().fill(self.theme.palette.separator).frame(width: 1)
+
+                VStack(spacing: 0) {
+                    HStack {
+                        Text((self.settingsNavigation.selectedSection ?? .general).title)
+                            .font(self.theme.typography.bodyStrong)
+                            .foregroundStyle(.primary)
+                        Spacer(minLength: 0)
+                        Button {
+                            self.closeSettings()
+                        } label: {
+                            Image(systemName: "xmark")
+                                .font(.fluidSystem(size: 12, weight: .semibold))
+                                .frame(width: 22, height: 22)
+                        }
+                        .buttonStyle(FluidHoverIconButtonStyle())
+                        .focusable(false)
+                        // Escape belongs to shortcut recording while a shortcut is being captured.
+                        .keyboardShortcut(self.activeShortcutRecordingTarget == nil ? .cancelAction : nil)
+                        .help("Close Settings")
+                        .accessibilityLabel("Close Settings")
+                    }
+                    .padding(.leading, 20)
+                    .padding(.trailing, 12)
+                    .frame(height: 48)
+
+                    // A page must never push the popup wider than its fixed size.
+                    self.preferencesView
+                        .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity)
+                        .clipped()
+                }
+                .background(self.theme.palette.contentBackground)
             }
         }
-        .animation(self.modeTransitionAnimation, value: self.settingsNavigation.isPresented)
-        .navigationTitle(self.pagePresentation.title)
-    }
-
-    private var pagePresentation: AppPagePresentation {
-        AppPagePresentation(destination: self.selectedSidebarItem, settings: self.settingsNavigation)
-    }
-
-    private var settingsDetailTransition: AnyTransition {
-        if self.accessibilityReduceMotion {
-            return .opacity
-        }
-        return .offset(x: 8).combined(with: .opacity)
+        .appTheme(self.theme)
     }
 
     /// Pages get their own hosting view, which inherits none of the window's custom environment.
@@ -2125,7 +2153,12 @@ struct ContentView: View {
         }
         // Let SwiftUI and the screen choose the upper size; a hard cap can
         // fight the hosting view's content bounds while switching pages.
-        return .minimum(width: window.mainMinWidth, height: window.mainMinHeight)
+        guard self.settingsNavigation.isPresented else {
+            return .minimum(width: window.mainMinWidth, height: window.mainMinHeight)
+        }
+        // The settings popup sits on this window, so the window may not get smaller than the popup.
+        let popup = SettingsPopupLayout.minimumWindowSize
+        return .minimum(width: max(window.mainMinWidth, popup.width), height: max(window.mainMinHeight, popup.height))
     }
 
     @ViewBuilder
@@ -2149,7 +2182,6 @@ struct ContentView: View {
     }
 
     private var hasPageToolbarActions: Bool {
-        guard !self.settingsNavigation.isPresented else { return false }
         return switch self.selectedSidebarItem ?? .welcome {
         case .stats, .commandMode, .customDictionary, .changelog: true
         default: false

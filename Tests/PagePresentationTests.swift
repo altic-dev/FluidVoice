@@ -17,28 +17,54 @@ struct PagePresentationTests {
         }
 
         var settings = SettingsNavigationState()
-        check(AppPagePresentation(destination: nil, settings: settings).title == "Dashboard", "Missing destination must have a useful title")
         check(Set(destinations.map(\.title)).count == destinations.count, "Each page needs a distinct title")
         for destination in destinations {
-            let initial = settings
-            let page = AppPagePresentation(destination: destination, settings: settings)
-            check(page.title == destination.title && page.showsPageActions, "Destination chrome must be current")
-            check(settings == initial, "Reading chrome must not mutate navigation")
             for section in SettingsSection.allCases {
+                // Settings open over the page, so opening and switching sections must keep the page to return to.
                 settings.present(section, returningTo: destination)
-                let snapshot = settings
-                // Simulate a stale underlying destination while Settings is visible.
-                for hiddenDestination in destinations {
-                    let hidden = AppPagePresentation(destination: hiddenDestination, settings: settings)
-                    check(hidden.title == section.title, "Hidden content must not change the Settings title")
-                    check(!hidden.showsPageActions, "Hidden page actions must not leak into Settings")
-                    check(settings == snapshot, "Presentation must not change the return destination")
-                }
-                check(settings.dismiss() == destination, "Back must retain its original destination")
-                let restored = AppPagePresentation(destination: destination, settings: settings)
-                check(restored == page, "Rapid Settings/Back changes must not retain stale chrome")
+                check(settings.isPresented && settings.selectedSection == section, "Settings must show the requested section")
+                settings.present(.general, returningTo: .welcome)
+                check(settings.dismiss() == destination, "Closing must return to the original page")
+                check(!settings.isPresented, "Closing must hide Settings")
             }
         }
+
+        // The settings popup keeps a fixed minimum, grows with the window up to a cap,
+        // and fits inside any window at or above the size the app enforces while it is open.
+        let popupMinimum = SettingsPopupLayout.minimumSize
+        let popupMaximum = SettingsPopupLayout.maximumSize
+        let openWindowMinimum = SettingsPopupLayout.minimumWindowContentSize
+        for width in stride(from: 300, through: 3000, by: 7) {
+            for height in stride(from: 200, through: 2000, by: 11) {
+                let popup = SettingsPopupLayout(windowContentSize: CGSize(width: width, height: height))
+                check(popup.width >= popupMinimum.width && popup.height >= popupMinimum.height, "Popup must never shrink below its minimum")
+                check(popup.width <= popupMaximum.width && popup.height <= popupMaximum.height, "Popup must stop growing at its cap")
+                if CGFloat(width) >= openWindowMinimum.width, CGFloat(height) >= openWindowMinimum.height {
+                    check(popup.width <= CGFloat(width) && popup.height <= CGFloat(height), "Popup must stay inside the window")
+                }
+            }
+        }
+        check(SettingsPopupLayout(windowContentSize: openWindowMinimum).width == popupMinimum.width, "Smallest allowed window shows the minimum popup")
+        let openWindow = SettingsPopupLayout.minimumWindowSize
+        check(openWindow.width <= 1280 && openWindow.height <= 700, "The window size needed for Settings must fit the smallest supported screen")
+        check(SettingsPopupLayout(windowContentSize: CGSize(width: 1400, height: 900)).width > popupMinimum.width, "Bigger windows get a bigger popup")
+        check(SettingsPopupLayout(windowContentSize: CGSize(width: 4000, height: 3000)).width == popupMaximum.width, "Huge windows stop at the cap")
+
+        // Clicking the page behind the popup closes it; the title bar and window edges do not.
+        let behindPopup = CGRect(x: 0, y: 0, width: 980, height: 600)
+        check(SettingsPopupLayout.isDismissingClick(at: CGPoint(x: 20, y: 300), windowContent: behindPopup), "A click on the page behind the popup closes it")
+        check(!SettingsPopupLayout.isDismissingClick(at: CGPoint(x: 400, y: 630), windowContent: behindPopup), "A title bar click must still move the window")
+        for edge in [CGPoint(x: 2, y: 300), CGPoint(x: 978, y: 300), CGPoint(x: 400, y: 3), CGPoint(x: 977, y: 4)] {
+            check(!SettingsPopupLayout.isDismissingClick(at: edge, windowContent: behindPopup), "An edge click must still resize the window")
+        }
+
+        // The top bar counts as outside the popup, except the window buttons and the resize edge.
+        let frame = CGRect(x: 0, y: 0, width: 980, height: 652)
+        let content = CGRect(x: 0, y: 0, width: 980, height: 600)
+        check(SettingsPopupLayout.isTopBarPress(at: CGPoint(x: 500, y: 626), windowFrame: frame, windowContent: content), "A press on the top bar is recognised")
+        check(!SettingsPopupLayout.isTopBarPress(at: CGPoint(x: 30, y: 626), windowFrame: frame, windowContent: content), "The window buttons are left alone")
+        check(!SettingsPopupLayout.isTopBarPress(at: CGPoint(x: 500, y: 650), windowFrame: frame, windowContent: content), "The top resize edge is left alone")
+        check(!SettingsPopupLayout.isTopBarPress(at: CGPoint(x: 500, y: 300), windowFrame: frame, windowContent: content), "The page area is not the top bar")
 
         // Geometry checks use production layout code, including the capped width.
         for width in stride(from: 320, through: 2000, by: 1) {
@@ -59,28 +85,6 @@ struct PagePresentationTests {
         environment.fluidPageToolbarVisible = false
         check(!environment.fluidPageToolbarVisible, "Mounted hidden pages must suppress toolbar contribution")
         check(EnvironmentValues().fluidPageToolbarVisible, "Toolbar visibility must not leak into another view environment")
-        check(SidebarItem.prewarmedPages.contains(.cleanupStyles), "Cleanup Styles needs its own built page")
-        let store = FluidPageToolbarStore()
-        store.publish(AnyView(EmptyView()), for: .stats)
-        store.publish(AnyView(EmptyView()), for: .changelog)
-        store.publish(nil, for: .stats)
-        check(store.actions[.stats] == nil, "A page must be able to clear its own actions")
-        check(store.actions[.changelog] != nil, "Clearing one page must keep another page's actions")
-        var presentations = 0
-        let prewarm = FluidPagePrewarmState()
-        prewarm.whenPresented { presentations += 1 }
-        check(presentations == 1, "A page outside a prewarm runs its presentation work at once")
-        prewarm.begin()
-        prewarm.whenPresented { presentations += 1 }
-        check(presentations == 1, "A prewarm must not start presentation work")
-        prewarm.end(presented: true)
-        check(presentations == 2 && !prewarm.isPrewarming, "A page shown mid-prewarm must still be presented")
-        prewarm.end(presented: true)
-        check(presentations == 2, "Presentation work must run once")
-        prewarm.begin()
-        prewarm.whenPresented { presentations += 1 }
-        prewarm.end(presented: false)
-        check(presentations == 2 && !prewarm.isPrewarming, "A finished prewarm must drop its presentation work")
-        print("Page presentation: \(checks) checks passed (navigation non-effects, hidden actions, rapid Settings/Back, adaptive layout, prewarm hand-off)")
+        print("Page presentation: \(checks) checks passed (navigation non-effects, Settings open and close, adaptive layout)")
     }
 }

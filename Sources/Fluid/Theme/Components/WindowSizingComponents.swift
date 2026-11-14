@@ -117,12 +117,17 @@ final class FluidWindowSizingNSView: NSView {
         let targetWidth = min(max(frame.width, minSize.width), maximumSize.width)
         let targetHeight = min(max(frame.height, minSize.height), maximumSize.height)
         guard frame.width != targetWidth || frame.height != targetHeight else { return }
-        let targetFrame = NSRect(
+        var targetFrame = NSRect(
             x: frame.midX - targetWidth / 2,
             y: frame.midY - targetHeight / 2,
             width: targetWidth,
             height: targetHeight
         )
+        // Growing a window that sits at a screen edge must not push it off that screen.
+        if let visible = window.screen?.visibleFrame {
+            targetFrame.origin.x = max(visible.minX, min(targetFrame.origin.x, visible.maxX - targetWidth))
+            targetFrame.origin.y = max(visible.minY, min(targetFrame.origin.y, visible.maxY - targetHeight))
+        }
         window.setFrame(targetFrame, display: true, animate: false)
     }
 }
