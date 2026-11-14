@@ -3498,7 +3498,8 @@ final class ASRService: ObservableObject {
         onFinalTranscriptionStarted: (@MainActor () -> Void)? = nil,
         forDictionaryTraining: Bool = false,
         captureDictionaryPronunciation: Bool? = nil,
-        forDictionaryTesting: Bool = false
+        forDictionaryTesting: Bool = false,
+        onInitialDictionaryReplacement: (@MainActor (DictionaryReplacementRule) -> Void)? = nil
     ) async -> String {
         guard !forDictionaryTesting || self.isDictionaryTrainingCaptureActive else { return "" }
         DebugLogger.shared.info("🛑 STOP() called - beginning shutdown sequence", source: "ASRService")
@@ -3865,7 +3866,7 @@ final class ASRService: ObservableObject {
             let textWithoutFillers = ASRService.removeFillerWords(result.text)
             let dictionaryText = useDictionaryTrainingPath
                 ? textWithoutFillers
-                : ASRService.applyCustomDictionary(textWithoutFillers)
+                : ASRService.applyCustomDictionary(textWithoutFillers, onInitialReplacement: onInitialDictionaryReplacement)
             let outputText = useDictionaryTrainingPath
                 ? dictionaryText
                 : ASRService.applySpokenPunctuationFormatting(dictionaryText)
@@ -7578,7 +7579,7 @@ final class ASRService: ObservableObject {
     /// Replaces trigger words/phrases with their designated replacements.
     /// Uses each entry’s matching mode with word boundaries.
     /// Optimized: caches compiled regexes to avoid per-call compilation overhead.
-    static func applyCustomDictionary(_ text: String) -> String {
+    static func applyCustomDictionary(_ text: String, onInitialReplacement: (@MainActor (DictionaryReplacementRule) -> Void)? = nil) -> String {
         // Built-in spellings always exist, so the compiled patterns decide whether there is work.
 
         // Rebuild cache if needed (lazy initialization)
@@ -7610,6 +7611,13 @@ final class ASRService: ObservableObject {
         // default's corrected spelling can also follow the user's chosen replacement.
         result = self.applyBuiltInDictionary(to: result, onReplacement: recordReplacement)
         for pattern in self.cachedDictionaryPatterns {
+            if let onInitialReplacement, pattern.formattingOutputRegex != nil,
+               let firstLetter = result.firstIndex(where: { $0.isLetter }),
+               let match = pattern.regex.firstMatch(in: result, range: NSRange(result.startIndex..., in: result)),
+               NSLocationInRange(NSRange(result.startIndex..<firstLetter, in: result).length, match.range)
+            {
+                onInitialReplacement(pattern)
+            }
             result = DictionaryReplacementProtection.replacingMatches(
                 in: result,
                 regex: pattern.regex,
@@ -7642,14 +7650,14 @@ final class ASRService: ObservableObject {
         self.applyCaseSensitiveDictionary(text, rules: self.caseSensitiveDictionaryRules())
     }
 
-    static func applyCaseSensitiveDictionary(_ text: String, rules: [DictionaryReplacementRule]) -> String {
+    static func applyCaseSensitiveDictionary(_ text: String, rules: [DictionaryReplacementRule], initialRule: DictionaryReplacementRule? = nil) -> String {
         var result = text
         for pattern in rules {
             result = DictionaryReplacementProtection.replacingMatches(
                 in: result, regex: pattern.regex, template: pattern.template, canonical: pattern.canonical
             )
         }
-        return result
+        return initialRule?.restoringInitialOutput(in: result) ?? result
     }
 
     // MARK: - GAAV Mode Formatting

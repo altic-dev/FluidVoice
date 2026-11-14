@@ -302,7 +302,12 @@ struct ContentView: View {
     @State private var promptModeOverrideText: String? // System prompt text to use when in prompt mode
     @State private var activeDictationShortcutSlot: SettingsStore.DictationShortcutSlot? = nil
     @State private var activeRecordingMode: ActiveRecordingMode = .none
-    @State private var pendingAIReprocessText: String? = nil
+    private struct PendingAIReprocess {
+        let text: String
+        let initialDictionaryRule: DictionaryReplacementRule?
+    }
+
+    @State private var pendingAIReprocess: PendingAIReprocess?
     @State private var activeShortcutRecordingTarget: ShortcutRecordingTarget? = nil
     @State private var currentRecordingModifierKeyCodes: Set<UInt16> = []
     @State private var pendingModifierKeyCodes: Set<UInt16> = []
@@ -3172,11 +3177,13 @@ struct ContentView: View {
         // Play the stop cue as soon as the audio engine has stopped, before the
         // (potentially slow) final transcription pass. Scoped to dictation only —
         // Command/Edit modes call asr.stop() without this callback.
+        var initialDictionaryRule: DictionaryReplacementRule?
         let transcribedText = await asr.stop(
             onCaptureStopped: {
                 TranscriptionSoundPlayer.shared.playStopSound()
             },
-            onFinalTranscriptionStarted: stopOverlay.onFinalTranscriptionStarted
+            onFinalTranscriptionStarted: stopOverlay.onFinalTranscriptionStarted,
+            onInitialDictionaryReplacement: { initialDictionaryRule = $0 }
         )
         self.appBench("asr_stop_return elapsedMs=\(Int(((ProcessInfo.processInfo.systemUptime - asrStopStartedAt) * 1000).rounded()))")
         self.completeDictationStopSnapshot(&stopSnapshot)
@@ -3224,7 +3231,7 @@ struct ContentView: View {
         if cancelledAtASRStop, promptTestSessionID != nil || route == .onboardingSandbox { return }
 
         // Prompt Test Mode: reroute dictation hotkey output into the prompt editor (no typing/clipboard/history).
-        if !cancelledAtASRStop, await self.routePromptTestResult(transcribedText, sessionID: promptTestSessionID, lifecycleID: expectedOverlayLifecycleID) {
+        if !cancelledAtASRStop, await self.routePromptTestResult(transcribedText, initialDictionaryRule: initialDictionaryRule, sessionID: promptTestSessionID, lifecycleID: expectedOverlayLifecycleID) {
             return
         }
 
@@ -3379,7 +3386,7 @@ struct ContentView: View {
         finalText = ASRService.applyContinuousDictationFormatting(finalText, precedingText: stopSnapshot?.precedingText ?? self.recordingPrecedingText)
         // Run after smart capitalization too: a continued sentence must not turn 5B into 5b.
         finalText = textNormalizer.normalize(finalText, phase: .afterCleanup)
-        finalText = ASRService.applyCaseSensitiveDictionary(finalText, rules: finalDictionaryRules)
+        finalText = ASRService.applyCaseSensitiveDictionary(finalText, rules: finalDictionaryRules, initialRule: initialDictionaryRule)
         finalText = ASRService.applyTerminalLiteralAutocompleteSpacing(
             finalText,
             appName: appInfo.name,
@@ -3444,7 +3451,7 @@ struct ContentView: View {
             fallbackReason: aiFallbackReason
         )
         if !shouldShowAIProcessingFailure {
-            self.pendingAIReprocessText = nil
+            self.pendingAIReprocess = nil
         }
 
         let isFluidFrontmost = stopSnapshot
@@ -3650,7 +3657,7 @@ struct ContentView: View {
         // Submit raw fallback delivery before failure UI or notification work can
         // compete with it on the main actor. Sandbox runs never present either.
         if shouldShowAIProcessingFailure {
-            self.pendingAIReprocessText = spokenSendParse.shouldSend ? normalizedTranscribedText : transcribedText
+            self.pendingAIReprocess = .init(text: spokenSendParse.shouldSend ? normalizedTranscribedText : transcribedText, initialDictionaryRule: initialDictionaryRule)
             NotchContentState.shared.showAIProcessingFailure()
             self.menuBarManager.finishProcessingKeepingOverlayVisible()
             if let aiFallbackNotificationError {
@@ -3671,7 +3678,7 @@ struct ContentView: View {
         }
     }
 
-    private func processDictationPromptTest(_ transcribedText: String, lifecycleID: UInt64) async {
+    private func processDictationPromptTest(_ transcribedText: String, initialDictionaryRule: DictionaryReplacementRule?, lifecycleID: UInt64) async {
         let promptTest = DictationPromptTestCoordinator.shared
         let sessionID = promptTest.sessionID
         promptTest.lastTranscriptionText = transcribedText
@@ -3715,7 +3722,7 @@ struct ContentView: View {
                 windowTitle: appInfo.windowTitle
             )
             guard promptTest.acceptsResult(for: sessionID), self.cancelledOutputLifecycleID != lifecycleID else { return }
-            promptTest.lastOutputText = ASRService.applyCaseSensitiveDictionary(ASRService.applyGAAVFormatting(literalFormattedResult), rules: finalDictionaryRules)
+            promptTest.lastOutputText = ASRService.applyCaseSensitiveDictionary(ASRService.applyGAAVFormatting(literalFormattedResult), rules: finalDictionaryRules, initialRule: initialDictionaryRule)
         } catch {
             guard promptTest.acceptsResult(for: sessionID), self.cancelledOutputLifecycleID != lifecycleID else { return }
             DebugLogger.shared.error("Prompt test AI call failed: \(error.localizedDescription)", source: "ContentView")
@@ -3723,14 +3730,14 @@ struct ContentView: View {
         }
     }
 
-    private func routePromptTestResult(_ text: String, sessionID: UUID?, lifecycleID: UInt64) async -> Bool {
+    private func routePromptTestResult(_ text: String, initialDictionaryRule: DictionaryReplacementRule?, sessionID: UUID?, lifecycleID: UInt64) async -> Bool {
         guard let sessionID else { return false }
         // A closed/replaced practice session must never fall through to external typing.
         guard DictationPromptTestCoordinator.shared.acceptsResult(for: sessionID) else {
             if self.overlayLifecycleID == lifecycleID { self.menuBarManager.setProcessing(false) }
             return true
         }
-        await self.processDictationPromptTest(text, lifecycleID: lifecycleID)
+        await self.processDictationPromptTest(text, initialDictionaryRule: initialDictionaryRule, lifecycleID: lifecycleID)
         return true
     }
 
@@ -4167,12 +4174,12 @@ struct ContentView: View {
     }
 
     private func reprocessLastDictation() {
-        if let pendingText = self.pendingAIReprocessText?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !pendingText.isEmpty
+        if let pending = self.pendingAIReprocess,
+           !pending.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         {
             DebugLogger.shared.info("Actions: Reprocessing pending failed dictation", source: "ContentView")
             Task { @MainActor in
-                await self.reprocessDictationText(pendingText)
+                await self.reprocessDictationText(pending.text.trimmingCharacters(in: .whitespacesAndNewlines), initialDictionaryRule: pending.initialDictionaryRule)
             }
             return
         }
@@ -4423,7 +4430,7 @@ struct ContentView: View {
         }
     }
 
-    private func reprocessDictationText(_ transcribedText: String) async {
+    private func reprocessDictationText(_ transcribedText: String, initialDictionaryRule: DictionaryReplacementRule? = nil) async {
         // If live recording is still active, stop it first so reprocess does not
         // leave ASR running in the background (which causes the next hotkey press
         // to behave like a stop instead of start).
@@ -4495,7 +4502,7 @@ struct ContentView: View {
             : ""
         finalText = ASRService.applyContinuousDictationFormatting(finalText, precedingText: precedingText)
         finalText = textNormalizer.normalize(finalText, phase: .afterCleanup)
-        finalText = ASRService.applyCaseSensitiveDictionary(finalText, rules: finalDictionaryRules)
+        finalText = ASRService.applyCaseSensitiveDictionary(finalText, rules: finalDictionaryRules, initialRule: initialDictionaryRule)
         finalText = ASRService.applyTerminalLiteralAutocompleteSpacing(
             finalText,
             appName: appInfo.name,
@@ -4528,7 +4535,7 @@ struct ContentView: View {
             fallbackReason: aiFallbackReason
         )
         if !shouldShowAIProcessingFailure {
-            self.pendingAIReprocessText = nil
+            self.pendingAIReprocess = nil
         }
 
         let targetContext = TypingService.captureRecordingTargetContext()
@@ -4561,7 +4568,7 @@ struct ContentView: View {
 
         NotchOverlayManager.shared.updateTranscriptionText("")
         if shouldShowAIProcessingFailure {
-            self.pendingAIReprocessText = transcribedText
+            self.pendingAIReprocess = .init(text: transcribedText, initialDictionaryRule: initialDictionaryRule)
             NotchContentState.shared.showAIProcessingFailure()
             self.menuBarManager.finishProcessingKeepingOverlayVisible()
             if let aiFallbackNotificationError {
