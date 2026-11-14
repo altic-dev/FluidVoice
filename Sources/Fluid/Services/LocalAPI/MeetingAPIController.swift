@@ -22,6 +22,7 @@ struct MeetingAPIController: LocalAPIRouteHandler {
     private enum TranscriptFormat: String {
         case json
         case text
+        case markdown
     }
 
     let store: any MeetingSessionStoring
@@ -99,7 +100,7 @@ struct MeetingAPIController: LocalAPIRouteHandler {
             return LocalAPI.error("Provide a valid meeting UUID in the 'id' query parameter.", status: 400)
         }
         guard let format = TranscriptFormat(rawValue: request.query["format"] ?? "json") else {
-            return LocalAPI.error("Transcript format must be 'json' or 'text'.", status: 400)
+            return LocalAPI.error("Transcript format must be 'json', 'text', or 'markdown'.", status: 400)
         }
 
         let session: MeetingSession
@@ -128,6 +129,12 @@ struct MeetingAPIController: LocalAPIRouteHandler {
                 status: 200,
                 headers: ["Content-Type": "text/plain; charset=utf-8"],
                 body: Data(MeetingTranscriptExporter.text(for: session).utf8)
+            )
+        case .markdown:
+            return LocalAPI.Response(
+                status: 200,
+                headers: ["Content-Type": "text/markdown; charset=utf-8"],
+                body: Data(MeetingTranscriptExporter.markdown(for: session).utf8)
             )
         }
     }

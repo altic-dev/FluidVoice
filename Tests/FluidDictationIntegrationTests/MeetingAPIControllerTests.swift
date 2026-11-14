@@ -90,6 +90,50 @@ final class MeetingAPIControllerTests: XCTestCase {
         }
     }
 
+    func testMarkdownTranscriptMatchesExporterOmitsEchoesAndEscapesContent() async throws {
+        try await self.withStore { store in
+            var session = self.makeSession()
+            session.speakers[0].displayName = "Renée [lead]"
+            session.transcriptSegments[0].text = "Corrected **words** 👋"
+            var echo = session.transcriptSegments[0]
+            echo.id = UUID()
+            echo.text = "Hidden echo"
+            echo.isLikelyEcho = true
+            session.transcriptSegments.append(echo)
+            try await store.create(session)
+            let router = LocalAPIRouter(meetingStore: store)
+
+            let response = await router.route(self.request(query: ["id": session.id.uuidString, "format": "markdown"]))
+            XCTAssertEqual(response.status, 200)
+            XCTAssertEqual(response.headers["Content-Type"], "text/markdown; charset=utf-8")
+            let body = try XCTUnwrap(String(data: response.body, encoding: .utf8))
+            XCTAssertEqual(body, MeetingTranscriptExporter.markdown(for: session))
+            XCTAssertFalse(body.contains("Hidden echo"))
+            XCTAssertTrue(body.contains(#"Renée \[lead\]"#))
+            XCTAssertTrue(body.contains(#"Corrected \*\*words\*\* 👋"#))
+        }
+    }
+
+    func testMarkdownTranscriptForEmptySessionReturnsHeadings() async throws {
+        try await self.withStore { store in
+            var session = self.makeSession()
+            session.state = .recording
+            session.endedAt = nil
+            session.transcriptSegments = []
+            session.transcriptIsComplete = nil
+            try await store.create(session)
+            let router = LocalAPIRouter(meetingStore: store)
+
+            let response = await router.route(self.request(query: ["id": session.id.uuidString, "format": "markdown"]))
+            XCTAssertEqual(response.status, 200)
+            XCTAssertEqual(response.headers["Content-Type"], "text/markdown; charset=utf-8")
+            let body = try XCTUnwrap(String(data: response.body, encoding: .utf8))
+            XCTAssertEqual(body, MeetingTranscriptExporter.markdown(for: session))
+            XCTAssertEqual(body, "# API meeting\n\n## Transcript\n")
+            XCTAssertFalse(body.isEmpty)
+        }
+    }
+
     func testExistingMeetingWithoutTranscriptReturnsEmptyExport() async throws {
         try await self.withStore { store in
             var session = self.makeSession()
@@ -120,6 +164,15 @@ final class MeetingAPIControllerTests: XCTestCase {
                 let response = await router.route(self.request(query: query))
                 XCTAssertEqual(response.status, 400)
                 XCTAssertNotNil(try self.json(response)["error"] as? String)
+            }
+
+            for format in ["xml", "html", "md", "Markdown"] {
+                let response = await router.route(self.request(query: ["id": UUID().uuidString, "format": format]))
+                XCTAssertEqual(response.status, 400, format)
+                let message = try XCTUnwrap(self.json(response)["error"] as? String)
+                XCTAssertTrue(message.contains("markdown"), message)
+                XCTAssertTrue(message.contains("json"), message)
+                XCTAssertTrue(message.contains("text"), message)
             }
         }
     }
