@@ -1694,7 +1694,13 @@ struct ContentView: View {
                     set: { self.updateSettingsSearchQuery($0) }
                 ),
                 placeholder: "Search Settings",
-                isActive: self.settingsNavigation.isPresented
+                isActive: self.settingsNavigation.isPresented,
+                onCommand: { command in
+                    // The search box has focus when Settings opens, so Escape arrives here first.
+                    guard command == #selector(NSResponder.cancelOperation(_:)) else { return false }
+                    self.closeSettings()
+                    return true
+                }
             )
             .padding(.horizontal, self.theme.metrics.spacing.md)
             .padding(.top, self.theme.metrics.spacing.xs)

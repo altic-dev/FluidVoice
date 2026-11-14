@@ -838,6 +838,9 @@ private struct SidebarSearchInput: NSViewRepresentable {
             guard commandSelector == #selector(NSResponder.cancelOperation(_:)) else {
                 return self.parent.onCommand(commandSelector)
             }
+            // Escape clears the text first. With nothing left to clear, the owner may use it,
+            // for example to close the popup this field sits in.
+            if control.stringValue.isEmpty, self.parent.onCommand(commandSelector) { return true }
             textView.string = ""
             control.stringValue = ""
             self.parent.text = ""
