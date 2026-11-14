@@ -811,3 +811,102 @@ final class DictationAutoSendTests: XCTestCase {
         }
     }
 }
+
+@MainActor
+final class DictationAutoSendTests: XCTestCase {
+    func testPreferencesDefaultOffAndPersistIndependentlyWithoutChangingBindings() throws {
+        let suite = "DictationAutoSendTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set("unchanged", forKey: "PrimaryDictationShortcuts")
+        let store = DictationAutoSendPreferences(defaults: defaults)
+        let first = HotkeyShortcut(keyCode: 61, modifierFlags: [])
+        let second = HotkeyShortcut(keyCode: 58, modifierFlags: [])
+        XCTAssertFalse(store.isEnabled(for: first))
+        XCTAssertFalse(store.isEnabled(for: nil))
+        store.shortcuts = [first, first]
+        let reloaded = DictationAutoSendPreferences(defaults: defaults)
+        XCTAssertEqual(reloaded.shortcuts, [first])
+        XCTAssertTrue(reloaded.isEnabled(for: first))
+        XCTAssertFalse(reloaded.isEnabled(for: second))
+        store.shortcuts = [first, second]
+        store.retain([second])
+        XCTAssertFalse(store.isEnabled(for: first))
+        XCTAssertTrue(store.isEnabled(for: second))
+        XCTAssertEqual(defaults.string(forKey: "PrimaryDictationShortcuts"), "unchanged")
+        defaults.set(Data("invalid".utf8), forKey: DictationAutoSendPreferences.key)
+        XCTAssertFalse(store.isEnabled(for: second))
+    }
+
+    func testAutoSendOnlySendsNewTextOnNormalUncancelledDelivery() {
+        for enabled in [false, true] {
+            for cancelled in [false, true] {
+                for route: ContentView.DictationOutputRoute in [.normal, .historyOnly, .onboardingSandbox] {
+                    for text in ["", " \n", "A new sentence."] {
+                        let result = DictationAutoSendPolicy.shouldSend(enabled: enabled, route: route, cancelled: cancelled, text: text)
+                        XCTAssertEqual(result, enabled && !cancelled && route == .normal && text == "A new sentence.")
+                    }
+                }
+            }
+        }
+        let ordinary = "I will send it tomorrow."
+        XCTAssertTrue(DictationAutoSendPolicy.shouldSend(enabled: true, route: .normal, cancelled: false, text: ordinary))
+        XCTAssertEqual(SpokenSendParser.parse(ordinary, phrase: "send it", enabled: false).text, ordinary)
+    }
+
+    func testHotkeyCallbacksIdentifyEachStartingShortcutInToggleAndHoldModes() async throws {
+        let first = HotkeyShortcut(keyCode: 2, modifierFlags: [.control, .command])
+        let second = HotkeyShortcut(keyCode: 3, modifierFlags: [.control, .command])
+        for mode: HotkeyActivationMode in [.toggle, .hold] {
+            let asr = ASRService()
+            weak var currentManager: GlobalHotkeyManager?
+            var observed: [HotkeyShortcut?] = []
+            var stops = 0
+            var started: XCTestExpectation?
+            var stopped: XCTestExpectation?
+            let onStart: () async -> Void = {
+                observed.append(currentManager?.shortcutForCurrentRecordingAction(.transcription))
+                asr.isRunning = true
+                started?.fulfill()
+            }
+            let manager = GlobalHotkeyManager(
+                asrService: asr,
+                primaryShortcuts: [first, second],
+                promptModeShortcut: first,
+                commandModeShortcut: nil,
+                rewriteModeShortcut: first,
+                promptModeShortcutEnabled: false,
+                commandModeShortcutEnabled: false,
+                rewriteModeShortcutEnabled: false,
+                startRecordingCallback: onStart,
+                dictationModeCallback: onStart,
+                stopAndProcessCallback: { _ in stops += 1; asr.isRunning = false; stopped?.fulfill() },
+                isDictateRecordingProvider: { true },
+                isSessionLockedProvider: { false }
+            )
+            currentManager = manager
+            manager.setHotkeyMode(mode)
+            defer { asr.isRunning = false }
+            for shortcut in [first, second] {
+                let start = self.expectation(description: "Start \(mode) \(shortcut.keyCode)")
+                let stop = self.expectation(description: "Stop \(mode) \(shortcut.keyCode)")
+                started = start
+                stopped = stop
+                let down = try XCTUnwrap(CGEvent(keyboardEventSource: nil, virtualKey: shortcut.keyCode, keyDown: true))
+                down.flags = [.maskControl, .maskCommand]
+                let up = try XCTUnwrap(CGEvent(keyboardEventSource: nil, virtualKey: shortcut.keyCode, keyDown: false))
+                _ = manager.handleKeyEvent(type: .keyDown, event: down)
+                if mode == .toggle { _ = manager.handleKeyEvent(type: .keyUp, event: up) }
+                await self.fulfillment(of: [start], timeout: 3)
+                XCTAssertEqual(try XCTUnwrap(observed.last), shortcut)
+                XCTAssertNil(manager.shortcutForCurrentRecordingAction(.transcription), "Callback context must not leak into UI recording starts")
+                if mode == .toggle { _ = manager.handleKeyEvent(type: .keyDown, event: down) }
+                _ = manager.handleKeyEvent(type: .keyUp, event: up)
+                await self.fulfillment(of: [stop], timeout: 3)
+                XCTAssertFalse(asr.isRunning)
+            }
+            XCTAssertEqual(observed, [first, second])
+            XCTAssertEqual(stops, 2)
+        }
+    }
+}

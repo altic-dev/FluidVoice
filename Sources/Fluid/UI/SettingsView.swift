@@ -2245,6 +2245,7 @@ private extension SettingsView {
     private func shortcutRow(
         content: ShortcutRowContent,
         shortcut: HotkeyShortcut?,
+        supportsAutoSend: Bool = false,
         isRecording: Bool,
         isAnyRecordingActive: Bool,
         recordingMessage: String? = nil,
@@ -2272,6 +2273,7 @@ private extension SettingsView {
                     onEdit: onChangePressed,
                     onRemove: remove
                 )
+                if supportsAutoSend, enabledValue, !isRecording, let shortcut { self.autoSendToggle(for: shortcut) }
                 if isRecording, let recordingMessage, !recordingMessage.isEmpty {
                     Text(recordingMessage).font(self.theme.typography.bodySmall).foregroundStyle(self.theme.palette.warning)
                 }
