@@ -17,12 +17,14 @@ nonisolated struct LocalAPIRouter: HTTPResponder {
         meetingStore: any MeetingSessionStoring = MeetingSessionStore.shared,
         liveTranscript: any MeetingLiveTranscriptProviding = MeetingCoordinatorLiveTranscriptProvider()
     ) {
+        let health = HealthController()
+        let history = HistoryAPIController()
         let meetings = MeetingAPIController(store: meetingStore, liveTranscript: liveTranscript)
         let dictionary = DictionaryAPIController()
         let inference = InferenceAPIController()
         let routes: [(HTTPRequest.Method, String, any LocalAPIRouteHandler)] = [
-            (.get, "/v1/health", HealthController()),
-            (.get, "/v1/history", HistoryAPIController()),
+            (.get, "/v1/health", health),
+            (.get, "/v1/history", history),
             (.get, "/v1/meetings", meetings),
             (.get, "/v1/meetings/transcript", meetings),
             (.get, "/v1/meetings/live", meetings),
