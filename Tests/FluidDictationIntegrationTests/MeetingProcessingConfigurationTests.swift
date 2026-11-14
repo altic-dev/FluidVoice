@@ -18,6 +18,16 @@ final class MeetingProcessingConfigurationTests: XCTestCase {
         XCTAssertTrue(MeetingFinalProcessingConfiguration(customDictionaryEntries: entries).customDictionaryEntries.isEmpty)
     }
 
+    func testCaseMatchingChangesMeetingFingerprintWithoutMutatingSavedSnapshot() {
+        var entries: [SettingsStore.CustomDictionaryEntry] = [.init(triggers: ["AM"], replacement: "am")]
+        let broad = MeetingFinalProcessingConfiguration(customDictionaryRewritingEnabled: true, customDictionaryEntries: entries)
+        entries[0].caseSensitive = true
+        let exact = MeetingFinalProcessingConfiguration(customDictionaryRewritingEnabled: true, customDictionaryEntries: entries)
+        XCTAssertNotEqual(broad.identityFingerprint, exact.identityFingerprint)
+        XCTAssertFalse(broad.customDictionaryEntries[0].caseSensitive)
+        XCTAssertTrue(exact.customDictionaryEntries[0].caseSensitive)
+    }
+
     func testFinalConfigurationDefaultsAreProEnglishWithoutPostProcessing() {
         let config = MeetingFinalProcessingConfiguration()
         XCTAssertEqual(config.asrModel, "fluid-parakeet-pro")

@@ -60,6 +60,7 @@ nonisolated struct MeetingFinalProcessingConfiguration: Equatable, Sendable {
         let dictionaryIdentity = MeetingConfigFingerprintEncoding.encode(self.customDictionaryEntries.flatMap { entry in
             [("id", entry.id.uuidString), ("replacement", entry.replacement)]
                 + entry.triggers.map { ("trigger", $0) }
+                + (entry.caseSensitive ? [("caseSensitive", "true")] : [])
         })
         self.dictionaryFingerprint = SHA256.hash(data: Data(dictionaryIdentity.utf8)).map { String(format: "%02x", $0) }.joined()
         self.experimentalUnifiedFinalEnabled = experimentalUnifiedFinalEnabled

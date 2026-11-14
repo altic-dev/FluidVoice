@@ -5210,21 +5210,48 @@ final class SettingsStore: ObservableObject {
     /// For example: ["fluid voice", "fluid boys"] -> "FluidVoice"
     nonisolated struct CustomDictionaryEntry: Codable, Identifiable, Hashable, Sendable {
         let id: UUID
-        /// Words/phrases to look for (case-insensitive matching)
+        /// Words/phrases to look for, preserving the capitalization the user entered.
         var triggers: [String]
         /// The correct replacement text
         var replacement: String
+        var caseSensitive: Bool
 
-        init(triggers: [String], replacement: String) {
-            self.id = UUID()
-            self.triggers = triggers.map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
-            self.replacement = replacement
+        init(triggers: [String], replacement: String, caseSensitive: Bool = false) {
+            self.init(id: UUID(), triggers: triggers, replacement: replacement, caseSensitive: caseSensitive)
         }
 
-        init(id: UUID, triggers: [String], replacement: String) {
+        init(id: UUID, triggers: [String], replacement: String, caseSensitive: Bool = false) {
             self.id = id
-            self.triggers = triggers.map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
+            self.triggers = triggers.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             self.replacement = replacement
+            self.caseSensitive = caseSensitive
+        }
+
+        private enum CodingKeys: String, CodingKey {
+            case id, triggers, replacement, caseSensitive
+        }
+
+        init(from decoder: Decoder) throws {
+            let values = try decoder.container(keyedBy: CodingKeys.self)
+            try self.init(
+                id: values.decode(UUID.self, forKey: .id),
+                triggers: values.decode([String].self, forKey: .triggers),
+                replacement: values.decode(String.self, forKey: .replacement),
+                caseSensitive: values.decodeIfPresent(Bool.self, forKey: .caseSensitive) ?? false
+            )
+        }
+
+        func encode(to encoder: Encoder) throws {
+            var values = encoder.container(keyedBy: CodingKeys.self)
+            try values.encode(self.id, forKey: .id)
+            try values.encode(self.triggers, forKey: .triggers)
+            try values.encode(self.replacement, forKey: .replacement)
+            if self.caseSensitive { try values.encode(true, forKey: .caseSensitive) }
+        }
+
+        /// A broad rule conflicts with every case variant; exact rules conflict only with the same spelling.
+        static func triggersOverlap(_ lhs: String, caseSensitive lhsSensitive: Bool, _ rhs: String, caseSensitive rhsSensitive: Bool) -> Bool {
+            lhsSensitive && rhsSensitive ? lhs == rhs : lhs.caseInsensitiveCompare(rhs) == .orderedSame
         }
 
         /// Trims padding around visible replacement text while preserving an intentional

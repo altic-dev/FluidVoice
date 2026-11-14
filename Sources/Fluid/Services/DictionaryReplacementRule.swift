@@ -7,6 +7,7 @@ nonisolated struct DictionaryReplacementRule: Sendable {
     let regex: NSRegularExpression
     let template: String
     let canonical: NSRegularExpression?
+    let changesOnlyFormatting: Bool
 
     static func compile(for entries: [SettingsStore.CustomDictionaryEntry]) -> [DictionaryReplacementRule] {
         var patterns: [DictionaryReplacementRule] = []
@@ -14,6 +15,7 @@ nonisolated struct DictionaryReplacementRule: Sendable {
         for entry in entries {
             var canonical: NSRegularExpression?
             let replacementRange = NSRange(entry.replacement.startIndex..., in: entry.replacement)
+            let replacementContent = self.lettersAndDigits(entry.replacement)
             for trigger in entry.triggers {
                 guard !trigger.isEmpty else { continue }
 
@@ -25,21 +27,23 @@ nonisolated struct DictionaryReplacementRule: Sendable {
                 )
                 guard let regex = try? NSRegularExpression(
                     pattern: escapedTrigger,
-                    options: .caseInsensitive
+                    options: entry.caseSensitive ? [] : .caseInsensitive
                 ) else { continue }
 
                 let needsProtection = regex.matches(in: entry.replacement, range: replacementRange).contains {
                     $0.range.length < replacementRange.length
                 }
                 if needsProtection, canonical == nil {
-                    canonical = try? NSRegularExpression(pattern: self.pattern(for: entry.replacement), options: .caseInsensitive)
+                    canonical = try? NSRegularExpression(pattern: self.pattern(for: entry.replacement), options: entry.caseSensitive ? [] : .caseInsensitive)
                 }
+                let triggerContent = self.lettersAndDigits(trigger)
                 patterns.append(DictionaryReplacementRule(
                     entryID: entry.id,
                     trigger: trigger,
                     regex: regex,
                     template: NSRegularExpression.escapedTemplate(for: entry.replacement),
-                    canonical: needsProtection ? canonical : nil
+                    canonical: needsProtection ? canonical : nil,
+                    changesOnlyFormatting: triggerContent == replacementContent && !triggerContent.isEmpty
                 ))
             }
         }
@@ -47,6 +51,11 @@ nonisolated struct DictionaryReplacementRule: Sendable {
         return patterns.sorted {
             $0.regex.pattern.utf16.count > $1.regex.pattern.utf16.count
         }
+    }
+
+    /// Reapplying content-changing rules after cleanup can expand or chain replacements twice.
+    private static func lettersAndDigits(_ text: String) -> String {
+        String(text.unicodeScalars.filter { CharacterSet.alphanumerics.contains($0) }).lowercased()
     }
 
     static func pattern(

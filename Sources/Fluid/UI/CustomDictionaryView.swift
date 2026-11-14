@@ -78,6 +78,7 @@ struct CustomDictionaryView: View {
     @State private var manualReturnStep: DictionaryWordWizardStep = .spelling
     @State private var manualTriggerDraft = ""
     @State private var manualReplacement = ""
+    @State private var manualCaseSensitive = false
     @State private var manualEntryFocusRequest = 0
     @FocusState private var manualReplacementFocused: Bool
     @State private var isYourDictionaryPresented = false
@@ -208,11 +209,11 @@ struct CustomDictionaryView: View {
     }
 
     private var manualTriggers: [String] {
-        CustomDictionaryManualEntry.normalizedDraftTriggers(self.manualTriggerDraft)
+        CustomDictionaryManualEntry.normalizedDraftTriggers(self.manualTriggerDraft, caseSensitive: self.manualCaseSensitive)
     }
 
     private var manualDuplicateTriggers: [String] {
-        self.manualTriggers.filter { self.allExistingTriggers().contains($0) }
+        CustomDictionaryManualEntry.duplicateTriggers(self.manualTriggers, caseSensitive: self.manualCaseSensitive, existing: self.allExistingTriggers())
     }
 
     private var sanitizedManualReplacement: String {
@@ -815,6 +816,8 @@ struct CustomDictionaryView: View {
                     self.manualReplacementField
                 }
             }
+
+            DictionaryCaseMatchingToggle(isOn: self.$manualCaseSensitive)
 
             if !self.manualDuplicateTriggers.isEmpty {
                 Label("Already used: \(self.manualDuplicateTriggers.joined(separator: ", "))", systemImage: "exclamationmark.triangle.fill")
@@ -2045,13 +2048,15 @@ struct CustomDictionaryView: View {
         guard self.canAddManualReplacement else { return }
         let entry = SettingsStore.CustomDictionaryEntry(
             triggers: self.manualTriggers,
-            replacement: self.sanitizedManualReplacement
+            replacement: self.sanitizedManualReplacement,
+            caseSensitive: self.manualCaseSensitive
         )
         self.addReplacementEntry(entry)
         self.wizardSavedWord = entry.replacement
         self.wizardStep = .saved
         self.manualTriggerDraft = ""
         self.manualReplacement = ""
+        self.manualCaseSensitive = false
     }
 
     /// Opens the editor for the row the sidebar search matched, so the screen lands on
@@ -2561,7 +2566,7 @@ struct CustomDictionaryView: View {
             return
         }
         let entry = updatedEntries.first {
-            $0.replacement.caseInsensitiveCompare(replacementText) == .orderedSame
+            $0.caseSensitive == false && $0.replacement.caseInsensitiveCompare(replacementText) == .orderedSame
         }
         if savePronunciation, let entry, let modelKey = enrollments.first?.modelKey {
             do {
@@ -2725,7 +2730,7 @@ struct CustomDictionaryView: View {
         guard !replacementText.isEmpty else { return [] }
 
         let triggers = self.entries
-            .filter { $0.replacement.caseInsensitiveCompare(replacementText) == .orderedSame }
+            .filter { $0.caseSensitive == false && $0.replacement.caseInsensitiveCompare(replacementText) == .orderedSame }
             .flatMap(\.triggers)
 
         return CustomDictionaryTrainingMerge.normalizedTriggers(
@@ -2902,7 +2907,7 @@ struct CustomDictionaryView: View {
         var triggers = Set<String>()
         for entry in self.entries where entry.id != entryId {
             for trigger in entry.triggers {
-                triggers.insert(trigger.lowercased())
+                triggers.insert(entry.caseSensitive ? "s:" + trigger : "i:" + trigger.lowercased())
             }
         }
         return triggers
@@ -3304,34 +3309,42 @@ private struct DictionaryComposerModeTab: View {
 }
 
 enum CustomDictionaryManualEntry {
+    static func duplicateTriggers(_ triggers: [String], caseSensitive: Bool, existing: Set<String>) -> [String] {
+        triggers.filter { trigger in
+            existing.contains("i:" + trigger.lowercased()) || existing.contains("s:" + trigger) ||
+                (!caseSensitive && existing.contains { $0.hasPrefix("s:") && $0.dropFirst(2).caseInsensitiveCompare(trigger) == .orderedSame })
+        }
+    }
+
     static func normalizedTrigger(_ text: String) -> String? {
-        let trigger = text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let trigger = text.trimmingCharacters(in: .whitespacesAndNewlines)
         return trigger.isEmpty ? nil : trigger
     }
 
-    static func normalizedTriggers(_ values: [String]) -> [String] {
+    static func normalizedTriggers(_ values: [String], caseSensitive: Bool = false) -> [String] {
         var seen: Set<String> = []
         var triggers: [String] = []
         triggers.reserveCapacity(values.count)
 
         for value in values {
-            guard let trigger = self.normalizedTrigger(value), !seen.contains(trigger) else { continue }
-            seen.insert(trigger)
+            guard let trigger = self.normalizedTrigger(value) else { continue }
+            let key = caseSensitive ? trigger : trigger.lowercased()
+            guard seen.insert(key).inserted else { continue }
             triggers.append(trigger)
         }
 
         return triggers
     }
 
-    static func normalizedDraftTriggers(_ text: String) -> [String] {
+    static func normalizedDraftTriggers(_ text: String, caseSensitive: Bool = false) -> [String] {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return [] }
 
         if trimmed.allSatisfy({ $0 == "," || $0.isWhitespace }) {
-            return self.normalizedTriggers([trimmed])
+            return self.normalizedTriggers([trimmed], caseSensitive: caseSensitive)
         }
 
-        return self.normalizedTriggers(trimmed.split(separator: ",").map(String.init))
+        return self.normalizedTriggers(trimmed.split(separator: ",").map(String.init), caseSensitive: caseSensitive)
     }
 
     /// A replacement that is entirely whitespace (e.g. a pasted newline or space)
@@ -3474,24 +3487,36 @@ enum CustomDictionaryTrainingMerge {
         let replacementText = self.normalizedReplacement(replacement)
         var incomingTriggers = self.normalizedTriggers(from: triggers, intendedReplacement: replacementText)
         guard !replacementText.isEmpty else { return entries }
+        // Automatic training must not broaden a manually case-sensitive spelling.
+        incomingTriggers.removeAll { trigger in
+            entries.contains { entry in
+                entry.caseSensitive && entry.triggers.contains { $0.caseInsensitiveCompare(trigger) == .orderedSame }
+            }
+        }
         // Retraining pronunciation must not change existing text correction rules.
         if incomingTriggers.isEmpty, savePronunciation,
-           entries.contains(where: { $0.replacement.caseInsensitiveCompare(replacementText) == .orderedSame })
+           entries.contains(where: { $0.caseSensitive == false && $0.replacement.caseInsensitiveCompare(replacementText) == .orderedSame })
         {
             return entries
         }
         // A spelling-only rule anchors the pronunciation profile without inventing a misheard alias.
         if incomingTriggers.isEmpty, savePronunciation {
+            guard !entries.contains(where: { entry in
+                entry.caseSensitive && (
+                    entry.replacement.caseInsensitiveCompare(replacementText) == .orderedSame ||
+                        entry.triggers.contains { $0.caseInsensitiveCompare(replacementText) == .orderedSame }
+                )
+            }) else { return entries }
             incomingTriggers = [replacementText.lowercased()]
         }
         guard !incomingTriggers.isEmpty else { return entries }
 
         let matchingIndex = entries.firstIndex {
-            $0.replacement.caseInsensitiveCompare(replacementText) == .orderedSame
+            $0.caseSensitive == false && $0.replacement.caseInsensitiveCompare(replacementText) == .orderedSame
         }
         let replacementID = matchingIndex.map { entries[$0].id }
         let matchingEntries = entries.filter {
-            $0.replacement.caseInsensitiveCompare(replacementText) == .orderedSame
+            $0.caseSensitive == false && $0.replacement.caseInsensitiveCompare(replacementText) == .orderedSame
         }
         let existingTriggers = matchingEntries.flatMap(\.triggers)
         var combinedTriggers = self.normalizedTriggers(
@@ -3519,7 +3544,7 @@ enum CustomDictionaryTrainingMerge {
         updatedEntries.reserveCapacity(entries.count + (matchingIndex == nil ? 1 : 0))
 
         for entry in entries {
-            if entry.replacement.caseInsensitiveCompare(replacementText) == .orderedSame {
+            if !entry.caseSensitive, entry.replacement.caseInsensitiveCompare(replacementText) == .orderedSame {
                 if !didInsertMergedEntry {
                     updatedEntries.append(mergedEntry)
                     didInsertMergedEntry = true
@@ -3529,14 +3554,15 @@ enum CustomDictionaryTrainingMerge {
 
             let remainingTriggers = entry.triggers.filter { trigger in
                 guard let key = self.normalizedTrigger(trigger) else { return false }
-                return !triggerKeys.contains(key)
+                return entry.caseSensitive || !triggerKeys.contains(key)
             }
             guard !remainingTriggers.isEmpty else { continue }
             updatedEntries.append(
                 SettingsStore.CustomDictionaryEntry(
                     id: entry.id,
                     triggers: remainingTriggers,
-                    replacement: entry.replacement
+                    replacement: entry.replacement,
+                    caseSensitive: entry.caseSensitive
                 )
             )
         }
@@ -3958,9 +3984,10 @@ struct AddDictionaryEntrySheet: View {
 
     @State private var triggersText = ""
     @State private var replacement = ""
+    @State private var caseSensitive = false
 
     private var duplicateTriggers: [String] {
-        self.parseTriggers().filter { self.existingTriggers.contains($0) }
+        CustomDictionaryManualEntry.duplicateTriggers(self.parseTriggers(), caseSensitive: self.caseSensitive, existing: self.existingTriggers)
     }
 
     private var canSave: Bool {
@@ -4010,6 +4037,8 @@ struct AddDictionaryEntrySheet: View {
                         }
                     }
 
+                    DictionaryCaseMatchingToggle(isOn: self.$caseSensitive)
+
                     // Replacement input
                     VStack(alignment: .leading, spacing: 6) {
                         Text("Correct Spelling (replacement)")
@@ -4052,7 +4081,7 @@ struct AddDictionaryEntrySheet: View {
 
     private func parseTriggers() -> [String] {
         CustomDictionaryManualEntry.normalizedTriggers(
-            self.triggersText.components(separatedBy: .newlines)
+            self.triggersText.components(separatedBy: .newlines), caseSensitive: self.caseSensitive
         )
     }
 
@@ -4061,7 +4090,8 @@ struct AddDictionaryEntrySheet: View {
 
         let entry = SettingsStore.CustomDictionaryEntry(
             triggers: self.parseTriggers(),
-            replacement: self.replacement.trimmingCharacters(in: .whitespaces)
+            replacement: self.replacement.trimmingCharacters(in: .whitespaces),
+            caseSensitive: self.caseSensitive
         )
         self.onSave(entry)
         self.dismiss()
@@ -4139,11 +4169,12 @@ struct EditDictionaryEntrySheet: View {
 
     @State private var triggersText = ""
     @State private var replacement = ""
+    @State private var caseSensitive = false
     @State private var isTestingWord = false
     @State private var isTestBusy = false
 
     private var duplicateTriggers: [String] {
-        self.parseTriggers().filter { self.existingTriggers.contains($0) }
+        CustomDictionaryManualEntry.duplicateTriggers(self.parseTriggers(), caseSensitive: self.caseSensitive, existing: self.existingTriggers)
     }
 
     private var canSave: Bool {
@@ -4154,7 +4185,8 @@ struct EditDictionaryEntrySheet: View {
 
     private var hasUnsavedChanges: Bool {
         self.parseTriggers() != self.entry.triggers ||
-            CustomDictionaryManualEntry.sanitizedReplacement(self.replacement) != self.entry.replacement
+            CustomDictionaryManualEntry.sanitizedReplacement(self.replacement) != self.entry.replacement ||
+            self.caseSensitive != self.entry.caseSensitive
     }
 
     var body: some View {
@@ -4199,6 +4231,9 @@ struct EditDictionaryEntrySheet: View {
                             }
                         }
                         .disabled(self.isTestBusy)
+
+                        DictionaryCaseMatchingToggle(isOn: self.$caseSensitive)
+                            .disabled(self.isTestBusy)
 
                         // Replacement input
                         VStack(alignment: .leading, spacing: 6) {
@@ -4268,12 +4303,13 @@ struct EditDictionaryEntrySheet: View {
         .onAppear {
             self.triggersText = self.entry.triggers.joined(separator: "\n")
             self.replacement = self.entry.replacement
+            self.caseSensitive = self.entry.caseSensitive
         }
     }
 
     private func parseTriggers() -> [String] {
         CustomDictionaryManualEntry.normalizedTriggers(
-            self.triggersText.components(separatedBy: .newlines)
+            self.triggersText.components(separatedBy: .newlines), caseSensitive: self.caseSensitive
         )
     }
 
@@ -4283,9 +4319,28 @@ struct EditDictionaryEntrySheet: View {
         let updatedEntry = SettingsStore.CustomDictionaryEntry(
             id: self.entry.id,
             triggers: self.parseTriggers(),
-            replacement: CustomDictionaryManualEntry.sanitizedReplacement(self.replacement)
+            replacement: CustomDictionaryManualEntry.sanitizedReplacement(self.replacement),
+            caseSensitive: self.caseSensitive
         )
         self.onSave(updatedEntry)
         self.dismiss()
+    }
+}
+
+private struct DictionaryCaseMatchingToggle: View {
+    @Environment(\.theme) private var theme
+    @Binding var isOn: Bool
+
+    var body: some View {
+        HStack {
+            Text("Match case")
+                .font(self.theme.typography.bodySmallStrong)
+            Spacer()
+            Toggle("Match case", isOn: self.$isOn)
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .controlSize(.small)
+                .help("Only replace text with the same capitalization as the trigger. For example, AM will not match am.")
+        }
     }
 }

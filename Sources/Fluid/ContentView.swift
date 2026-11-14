@@ -3282,6 +3282,7 @@ struct ContentView: View {
             wasArmed: self.spokenSendArming.wasArmed
         )
         self.updateSpokenSendIndicatorForFinalParse(shouldSend: spokenSendParse.shouldSend)
+        let finalDictionaryRules = ASRService.caseSensitiveDictionaryRules()
         let textNormalizer = await DictationTextNormalizationService.shared.formatter(for: spokenSendParse.text)
         let normalizedTranscribedText = textNormalizer.normalize(spokenSendParse.text, phase: .beforeCleanup)
         var sendsExistingDraft = spokenSendParse.shouldSend &&
@@ -3378,6 +3379,7 @@ struct ContentView: View {
         finalText = ASRService.applyContinuousDictationFormatting(finalText, precedingText: stopSnapshot?.precedingText ?? self.recordingPrecedingText)
         // Run after smart capitalization too: a continued sentence must not turn 5B into 5b.
         finalText = textNormalizer.normalize(finalText, phase: .afterCleanup)
+        finalText = ASRService.applyCaseSensitiveDictionary(finalText, rules: finalDictionaryRules)
         finalText = ASRService.applyTerminalLiteralAutocompleteSpacing(
             finalText,
             appName: appInfo.name,
@@ -3695,6 +3697,7 @@ struct ContentView: View {
             if promptTest.sessionID == sessionID { promptTest.isProcessing = false }
         }
         do {
+            let finalDictionaryRules = ASRService.caseSensitiveDictionaryRules()
             let textNormalizer = await DictationTextNormalizationService.shared.formatter(for: transcribedText)
             let preparedText = textNormalizer.normalize(transcribedText, phase: .beforeCleanup)
             let result = try await self.processTextWithAI(
@@ -3712,7 +3715,7 @@ struct ContentView: View {
                 windowTitle: appInfo.windowTitle
             )
             guard promptTest.acceptsResult(for: sessionID), self.cancelledOutputLifecycleID != lifecycleID else { return }
-            promptTest.lastOutputText = ASRService.applyGAAVFormatting(literalFormattedResult)
+            promptTest.lastOutputText = ASRService.applyCaseSensitiveDictionary(ASRService.applyGAAVFormatting(literalFormattedResult), rules: finalDictionaryRules)
         } catch {
             guard promptTest.acceptsResult(for: sessionID), self.cancelledOutputLifecycleID != lifecycleID else { return }
             DebugLogger.shared.error("Prompt test AI call failed: \(error.localizedDescription)", source: "ContentView")
@@ -4447,6 +4450,7 @@ struct ContentView: View {
             bundleID: appInfo.bundleId,
             windowTitle: appInfo.windowTitle
         )
+        let finalDictionaryRules = ASRService.caseSensitiveDictionaryRules()
         let textNormalizer = await DictationTextNormalizationService.shared.formatter(for: punctuationFormattedText)
         let normalizedTranscribedText = textNormalizer.normalize(punctuationFormattedText, phase: .beforeCleanup)
         var finalText = normalizedTranscribedText
@@ -4491,6 +4495,7 @@ struct ContentView: View {
             : ""
         finalText = ASRService.applyContinuousDictationFormatting(finalText, precedingText: precedingText)
         finalText = textNormalizer.normalize(finalText, phase: .afterCleanup)
+        finalText = ASRService.applyCaseSensitiveDictionary(finalText, rules: finalDictionaryRules)
         finalText = ASRService.applyTerminalLiteralAutocompleteSpacing(
             finalText,
             appName: appInfo.name,
