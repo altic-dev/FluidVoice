@@ -77,6 +77,7 @@ struct AppBackupDocument {
     var appPromptBindings: [String] = []
     var transcriptionHistory: [String] = []
     var pronunciationProfiles: [String]?
+    var fileTranscriptionHistory: [String]? = nil
 }
 @MainActor final class SettingsStore {
     static let shared = SettingsStore()
@@ -144,6 +145,13 @@ actor PronunciationDictionaryStore {
         if let gate = loadGate { loadGate = nil; await gate.pause() }
         if !loaded { throw ProbeFailure.storage }
     }
+    func makeBackupPayload() -> [String] { history }
+    func restore(from payload: [String]) { writes += 1; history = payload }
+}
+@MainActor final class FileTranscriptionHistoryStore {
+    static let shared = FileTranscriptionHistoryStore()
+    var history = ["original-file"]
+    var writes = 0
     func makeBackupPayload() -> [String] { history }
     func restore(from payload: [String]) { writes += 1; history = payload }
 }
@@ -249,6 +257,8 @@ MEMBERS
     TranscriptionHistoryStore.shared.loaded = true
     TranscriptionHistoryStore.shared.loads = 0; TranscriptionHistoryStore.shared.writes = 0
     TranscriptionHistoryStore.shared.loadGate = nil
+    FileTranscriptionHistoryStore.shared.history = ["original-file"]
+    FileTranscriptionHistoryStore.shared.writes = 0
     NotificationCenter.default.snapshots = []; NotificationCenter.default.onPost = nil
     await PronunciationDictionaryStore.shared.setup(exportGate: exportGate, restoreGate: restoreGate)
     await PrivateAIIntegrationService.idleUnloader.setup(gate: idleGate)
@@ -260,10 +270,11 @@ func awaitGate(_ gate: Gate) async {
         try? await Task.sleep(for: .milliseconds(1))
     }
 }
-@MainActor func document(_ owner: String, idle: Int? = 60) -> AppBackupDocument {
+@MainActor func document(_ owner: String, idle: Int? = 60, files: [String]? = nil) -> AppBackupDocument {
     .init(settings: .init(owner: owner, privateAIIdleUnload: idle),
           promptProfiles: [owner], appPromptBindings: [owner],
-          transcriptionHistory: [owner], pronunciationProfiles: [owner])
+          transcriptionHistory: [owner], pronunciationProfiles: [owner],
+          fileTranscriptionHistory: files)
 }
 @main struct Run {
     @MainActor static func main() async throws {
@@ -327,6 +338,20 @@ func awaitGate(_ gate: Gate) async {
         expect(freshExport.pronunciationProfiles == ["B"] && freshExport.settings.owner == "B", "import and export can retry after owner finishes")
 ''')
         swift = swift.replace("CURRENT_TESTS", r'''
+        // File transcripts travel with the backup. A backup written before they were
+        // included leaves the current file transcripts in place.
+        await reset()
+        let withFiles = try await service.makeBackupDocument()
+        expect(withFiles.fileTranscriptionHistory == ["original-file"], "export includes file transcription history")
+        try await service.restore(document("legacy-backup"))
+        expect(FileTranscriptionHistoryStore.shared.history == ["original-file"] && FileTranscriptionHistoryStore.shared.writes == 0, "backup without file transcripts preserves current ones")
+        AppServices.shared.asr = ASRService()
+        try await service.restore(document("file-backup", files: ["restored-file"]))
+        expect(FileTranscriptionHistoryStore.shared.history == ["restored-file"] && FileTranscriptionHistoryStore.shared.writes == 1, "backup with file transcripts restores them")
+        AppServices.shared.asr = ASRService()
+        try await service.restore(document("empty-file-backup", files: []))
+        expect(FileTranscriptionHistoryStore.shared.history.isEmpty, "backup with an empty file list clears file transcripts")
+
         // Reject complete imports before any profile/settings/history mutation when
         // existing capture, processing, preparation, download or cleanup owns the app.
         for blocker in 0..<21 {

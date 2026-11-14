@@ -218,6 +218,29 @@ final class FileTranscriptionHistoryStore: ObservableObject {
         self.saveEntries()
     }
 
+    func makeBackupPayload() -> [FileTranscriptionEntry] {
+        self.entries
+    }
+
+    func restore(from payload: [FileTranscriptionEntry]) {
+        let indexed = Dictionary(self.entries.map { ($0.id, $0.searchRevision ?? 1) }) { first, _ in first }
+        self.entries = Array(
+            payload
+                .map { entry in
+                    var entry = entry
+                    entry.searchRevision = SearchIndexRecord.revisionAfterRestore(
+                        restored: entry.searchRevision,
+                        indexed: indexed[entry.id]
+                    )
+                    return entry
+                }
+                .sorted { $0.timestamp > $1.timestamp }
+                .prefix(self.maxEntries)
+        )
+        self.selectedEntryID = self.entries.first?.id
+        self.saveEntries()
+    }
+
     func clearAll() {
         self.entries.removeAll()
         self.selectedEntryID = nil
