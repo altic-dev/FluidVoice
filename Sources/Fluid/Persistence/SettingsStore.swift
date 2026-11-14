@@ -5251,7 +5251,12 @@ final class SettingsStore: ObservableObject {
 
         /// A broad rule conflicts with every case variant; exact rules conflict only with the same spelling.
         static func triggersOverlap(_ lhs: String, caseSensitive lhsSensitive: Bool, _ rhs: String, caseSensitive rhsSensitive: Bool) -> Bool {
-            lhsSensitive && rhsSensitive ? lhs == rhs : lhs.caseInsensitiveCompare(rhs) == .orderedSame
+            let exact = lhsSensitive && rhsSensitive
+            return self.triggerKey(lhs, caseSensitive: exact) == self.triggerKey(rhs, caseSensitive: exact)
+        }
+
+        static func triggerKey(_ trigger: String, caseSensitive: Bool) -> String {
+            caseSensitive ? trigger : trigger.folding(options: .caseInsensitive, locale: nil)
         }
 
         /// Trims padding around visible replacement text while preserving an intentional

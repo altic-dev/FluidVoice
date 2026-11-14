@@ -999,6 +999,19 @@ final class CustomDictionaryManualEntryTests: XCTestCase {
         XCTAssertEqual(snapshot.duplicates(["alias"], caseSensitive: false), ["alias"], "Published validation snapshots must not change underneath a draft")
     }
 
+    func testUnicodeDuplicateChecksRespectBroadAndExactMatching() {
+        for (saved, variant) in [("ς", "σ"), ("ß", "ss"), ("É", "e\u{301}")] {
+            let exact = DictionaryTriggerIndex(entries: [.init(triggers: [saved], replacement: "Saved", caseSensitive: true)])
+            XCTAssertEqual(exact.duplicates([variant], caseSensitive: false), [variant])
+            XCTAssertEqual(exact.duplicates([variant], caseSensitive: true), [])
+            let broad = DictionaryTriggerIndex(entries: [.init(triggers: [saved], replacement: "Saved")])
+            XCTAssertEqual(broad.duplicates([variant], caseSensitive: true), [variant])
+            XCTAssertTrue(SettingsStore.CustomDictionaryEntry.triggersOverlap(saved, caseSensitive: true, variant, caseSensitive: false))
+            XCTAssertEqual(CustomDictionaryManualEntry.normalizedTriggers([saved, variant]), [saved])
+            XCTAssertEqual(CustomDictionaryManualEntry.normalizedTriggers([saved, variant], caseSensitive: true), [saved, variant])
+        }
+    }
+
     func testExactCaseOverrideDoesNotDisableBuiltInCorrectionsForOtherCases() {
         self.withRestoredDictionary([.init(triggers: ["POST HOC"], replacement: "Custom Choice", caseSensitive: true)]) {
             XCTAssertEqual(ASRService.applyCustomDictionary("POST HOC, post hoc, Post Hoc"), "Custom Choice, PostHog, PostHog")

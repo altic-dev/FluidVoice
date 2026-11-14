@@ -3310,7 +3310,7 @@ nonisolated struct DictionaryTriggerIndex: Sendable {
     init(entries: [SettingsStore.CustomDictionaryEntry], excluding entryID: UUID? = nil) {
         for entry in entries where entry.id != entryID {
             for trigger in entry.triggers {
-                let folded = trigger.lowercased()
+                let folded = SettingsStore.CustomDictionaryEntry.triggerKey(trigger, caseSensitive: false)
                 if entry.caseSensitive {
                     self.sensitive[folded, default: []].insert(trigger)
                 } else {
@@ -3322,7 +3322,7 @@ nonisolated struct DictionaryTriggerIndex: Sendable {
 
     func duplicates(_ triggers: [String], caseSensitive: Bool) -> [String] {
         triggers.filter { trigger in
-            let folded = trigger.lowercased()
+            let folded = SettingsStore.CustomDictionaryEntry.triggerKey(trigger, caseSensitive: false)
             if self.insensitive.contains(folded) { return true }
             guard let variants = self.sensitive[folded] else { return false }
             return !caseSensitive || variants.contains(trigger)
@@ -3343,7 +3343,7 @@ enum CustomDictionaryManualEntry {
 
         for value in values {
             guard let trigger = self.normalizedTrigger(value) else { continue }
-            let key = caseSensitive ? trigger : trigger.lowercased()
+            let key = SettingsStore.CustomDictionaryEntry.triggerKey(trigger, caseSensitive: caseSensitive)
             guard seen.insert(key).inserted else { continue }
             triggers.append(trigger)
         }
