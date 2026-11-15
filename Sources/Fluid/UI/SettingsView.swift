@@ -2930,8 +2930,11 @@ private extension SettingsView {
                                 set: { self.settings.spokenSendPhrase = $0 }
                             )
                         )
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: 170)
+                        .textFieldStyle(.plain)
+                        .font(self.theme.typography.bodySmall)
+                        .padding(.horizontal, 10)
+                        .frame(width: ShortcutKeyField.width, height: ShortcutKeyField.height)
+                        .fluidDropdownSurface(cornerRadius: 10)
                         .accessibilityLabel("Spoken Send phrase")
                     }
 
@@ -2960,7 +2963,6 @@ private extension SettingsView {
                         .frame(width: 170, alignment: .trailing)
                     }
                 }
-                .padding(.leading, 12)
             }
 
             HStack(alignment: .center) {
@@ -2987,6 +2989,40 @@ private extension SettingsView {
                 .frame(width: 170, alignment: .trailing)
             }
         }
+    }
+
+    /// A titled row in a Shortcuts group, with its control in the same trailing column as the shortcut keys.
+    func shortcutsSettingRow<Control: View>(
+        title: String,
+        description: String,
+        indent: CGFloat = 0,
+        @ViewBuilder control: () -> Control
+    ) -> some View {
+        HStack(spacing: 14) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(self.theme.typography.bodyStrong)
+                    .foregroundStyle(self.settingsTitleText)
+                Text(description)
+                    .font(self.theme.typography.bodySmall)
+                    .foregroundStyle(self.settingsSecondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            control()
+        }
+        .padding(.leading, Self.shortcutsGroupInset + indent)
+        .padding(.trailing, Self.shortcutsGroupInset)
+        .padding(.vertical, 10)
+    }
+
+    /// Same size as the Auto-send switches in the Dictation group above.
+    func shortcutsSwitch(isOn: Binding<Bool>, label: String) -> some View {
+        Toggle(label, isOn: isOn)
+            .toggleStyle(.switch)
+            .tint(self.theme.palette.accent)
+            .labelsHidden()
+            .controlSize(.small)
     }
 }
 
