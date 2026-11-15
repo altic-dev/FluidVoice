@@ -150,8 +150,11 @@ actor SenseVoiceEngine {
         var detected: String?
         for range in Self.chunkRanges(for: samples, maxChunk: self.maxChunkSamples) {
             try Task.checkCancellation()
-            let chunk = Array(samples[range])
-            guard chunk.count >= SenseVoiceConstants.minimumSamples else { continue }
+            var chunk = Array(samples[range])
+            // Pad rather than drop: a short piece can still hold the end of a word.
+            if chunk.count < SenseVoiceConstants.minimumSamples {
+                chunk += [Float](repeating: 0, count: SenseVoiceConstants.minimumSamples - chunk.count)
+            }
             let raw = try self.transcribeChunk(chunk, language: language, textNorm: textNorm)
             let parsed = Self.splitTags(raw)
             if detected == nil {
@@ -348,7 +351,14 @@ actor SenseVoiceEngine {
     }
 
     private nonisolated static func isSpaced(_ scalar: Unicode.Scalar) -> Bool {
-        if scalar.value >= 0x2E80 { return false } // CJK, kana, hangul: no inter-chunk space
+        switch scalar.value {
+        case 0x1100...0x11FF, 0x3130...0x318F, 0xAC00...0xD7AF:
+            return true // Hangul: Korean separates words with spaces
+        case 0x2E80...:
+            return false // CJK and kana: no inter-chunk space
+        default:
+            break
+        }
         return scalar.properties.isAlphabetic || ("0"..."9").contains(Character(scalar))
             || ".,!?;:".unicodeScalars.contains(scalar)
     }
@@ -364,7 +374,8 @@ actor SenseVoiceEngine {
         var ranges: [Range<Int>] = []
         var start = 0
         while samples.count - start > maxChunk {
-            let hardEnd = start + maxChunk
+            // Leave at least `minimumSamples` for the remainder so the tail is never too short to run.
+            let hardEnd = min(start + maxChunk, samples.count - SenseVoiceConstants.minimumSamples)
             var bestEnd = hardEnd
             var bestEnergy = Float.greatestFiniteMagnitude
             var position = hardEnd - window
