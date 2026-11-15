@@ -2285,6 +2285,8 @@ struct SettingsView: View {
     }
 
     private func removeDictationPackage(_ package: DictationRouting.Package) {
+        // Dictation must always have a key, so the last shortcut stays.
+        guard self.dictationRouting.packages.count > 1 else { return }
         switch package.source {
         case let .main(index):
             guard self.primaryDictationShortcuts.indices.contains(index), self.primaryDictationShortcuts[index] == package.key else { return }
