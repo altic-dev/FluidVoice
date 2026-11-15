@@ -6058,7 +6058,7 @@ final class SettingsStore: ObservableObject {
             case .cohereTranscribeSixBit:
                 return "#FA6B3C"
             case .senseVoiceSmall:
-                return "#615CED"
+                return "#3B2ED6" // FunASR logo blue
             case .appleSpeech, .appleSpeechAnalyzer:
                 return "#A2AAAD" // Apple Gray
             case .whisperTiny, .whisperBase, .whisperSmall, .whisperMedium, .whisperLargeTurbo, .whisperLarge:

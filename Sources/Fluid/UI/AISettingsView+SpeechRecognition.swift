@@ -943,6 +943,11 @@ extension VoiceEngineSettingsView {
         if brand.contains("cohere") {
             return "Provider_Cohere"
         }
+        if brand.contains("funaudiollm") {
+            // "F" cube from the FunASR logo (modelscope/FunASR docs/images/logo.png),
+            // the toolkit SenseVoice is built on and released through.
+            return "Provider_FunAudioLLM"
+        }
         if brand.contains("qwen") {
             // Official organization mark from https://github.com/QwenLM.
             return "Provider_Qwen"
