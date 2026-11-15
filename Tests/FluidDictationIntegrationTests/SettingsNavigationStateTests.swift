@@ -175,6 +175,12 @@ final class SettingsNavigationStateTests: XCTestCase {
         XCTAssertEqual(SettingsSearchIndex.results(for: "Spoken Formatting").first?.section, .dictationFormatting)
         XCTAssertEqual(SettingsSearchIndex.results(for: "Remove Filler Words").first?.section, .dictationFormatting)
         XCTAssertEqual(SettingsSearchTarget.copyToClipboard.section, .dictation)
+        // Settings about how shortcuts are pressed and how messages are sent live on the Shortcuts page.
+        XCTAssertEqual(SettingsSearchTarget.activationMode.section, .shortcuts)
+        XCTAssertEqual(SettingsSearchTarget.holdSpaceToMute.section, .shortcuts)
+        XCTAssertEqual(SettingsSearchTarget.spokenSend.section, .shortcuts)
+        XCTAssertEqual(SettingsSearchIndex.results(for: "Spoken Send").first?.section, .shortcuts)
+        XCTAssertEqual(SettingsSearchIndex.results(for: "Press Style").first?.section, .shortcuts)
         XCTAssertEqual(SettingsSearchTarget.inputDevicePriority.section, .audio)
     }
 
@@ -218,7 +224,7 @@ final class SettingsNavigationStateTests: XCTestCase {
     func testSettingsSearchKeepsSectionsInNavigationOrder() {
         XCTAssertEqual(
             SettingsSearchIndex.matchingSections(for: "mic"),
-            [.dictation, .notifications, .audio]
+            [.dictation, .shortcuts, .notifications, .audio]
         )
     }
 
@@ -279,6 +285,7 @@ final class SettingsNavigationStateTests: XCTestCase {
             (.cancelRecordingShortcut, "cancel recording shortcut"),
             (.pasteLastTranscriptionShortcut, "paste last transcription shortcut"),
             (.activationMode, "activation mode"),
+            (.holdSpaceToMute, "hold space to mute"),
             (.copyToClipboard, "copy to clipboard"),
             (.textInsertionMode, "text insertion mode"),
             (.spokenSend, "spoken send"),

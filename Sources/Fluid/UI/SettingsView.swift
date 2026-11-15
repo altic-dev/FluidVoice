@@ -739,14 +739,6 @@ struct SettingsView: View {
                                             Divider().opacity(0.2)
 
                                             self.optionToggleRow(
-                                                title: "Hold Space to Mute",
-                                                description: "During dictation, hold Space to mute and release to resume. A quick tap types a space. Other Space shortcuts take priority.",
-                                                isOn: self.$settings.holdSpaceToMute
-                                            )
-                                            .settingsSearchTarget(.holdSpaceToMute)
-                                            Divider().opacity(0.2)
-
-                                            self.optionToggleRow(
                                                 title: "Copy to Clipboard",
                                                 description: "Automatically copy transcribed text to clipboard as a backup.",
                                                 isOn: self.$copyToClipboard
@@ -782,10 +774,6 @@ struct SettingsView: View {
                                                 .frame(minWidth: 170, alignment: .trailing)
                                             }
                                             .settingsSearchTarget(.textInsertionMode)
-                                            Divider().opacity(0.2)
-
-                                            self.spokenSendSettings
-                                                .settingsSearchTarget(.spokenSend)
                                             Divider().opacity(0.2)
 
                                             self.optionToggleRow(
@@ -2078,11 +2066,15 @@ struct SettingsView: View {
             self.shortcutsSection(
                 title: "Dictation",
                 hint: "Hold or tap a key to dictate",
-                footnote: "Auto-send presses Return after your text is inserted."
+                footnote: "Auto-send presses your send key after your text is inserted."
             ) {
                 self.dictationShortcutRows
             }
             .settingsSearchTarget(.primaryDictationShortcuts)
+
+            self.shortcutsSection(title: "While You Dictate") {
+                self.whileDictatingRows
+            }
 
             self.shortcutsSection(title: "Actions") {
                 self.actionShortcutRows
@@ -2896,6 +2888,8 @@ struct FlowLayout: Layout {
     }
 }
 
+// MARK: - Shortcuts: While You Dictate
+
 private extension SettingsView {
     var spokenSendSettings: some View {
         Group {
@@ -2920,9 +2914,35 @@ private extension SettingsView {
                                 .foregroundStyle(self.settingsSecondaryText)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
+                    }
+                    .fluidDropdownStyle(fillsWidth: true)
+                    .frame(width: ShortcutKeyField.width)
+                }
 
-                        Spacer()
+                self.shortcutsRowDivider
 
+                self.shortcutsSettingRow(
+                    title: "Spoken Send",
+                    description: "Say the phrase and pause. It stops and sends by itself."
+                ) {
+                    self.shortcutsSwitch(
+                        isOn: Binding(
+                            get: { self.settings.spokenSendEnabled },
+                            set: { self.settings.spokenSendEnabled = $0 }
+                        ),
+                        label: "Spoken Send"
+                    )
+                }
+
+                if self.settings.spokenSendEnabled {
+                    self.shortcutsRowDivider
+                        .padding(.leading, Self.shortcutsSubRowIndent)
+
+                    self.shortcutsSettingRow(
+                        title: "Send Phrase",
+                        description: "Say “literal \(self.settings.spokenSendPhrase)” to type it instead.",
+                        indent: Self.shortcutsSubRowIndent
+                    ) {
                         TextField(
                             "send it",
                             text: Binding(

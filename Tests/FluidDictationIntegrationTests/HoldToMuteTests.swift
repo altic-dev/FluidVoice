@@ -243,7 +243,7 @@ final class HoldToMuteTests: XCTestCase {
         }
         defaults.removeObject(forKey: "HoldSpaceToMute")
         XCTAssertFalse(SettingsStore.shared.holdSpaceToMute)
-        XCTAssertEqual(SettingsSearchTarget.holdSpaceToMute.section, .dictation)
+        XCTAssertEqual(SettingsSearchTarget.holdSpaceToMute.section, .shortcuts)
     }
 
     @MainActor

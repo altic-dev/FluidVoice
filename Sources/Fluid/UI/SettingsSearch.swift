@@ -92,11 +92,8 @@ enum SettingsSearchTarget: Hashable {
              .transcriptionSounds,
              .analyticsPrivacy,
              .microphonePermission,
-             .activationMode,
-             .holdSpaceToMute,
              .copyToClipboard,
              .textInsertionMode,
-             .spokenSend,
              .transcriptionHistory,
              .audioHistory,
              .audioStorage,
@@ -112,7 +109,8 @@ enum SettingsSearchTarget: Hashable {
 
         case .shortcuts, .globalHotkey, .primaryDictationShortcuts,
              .commandModeShortcut, .editModeShortcut, .cancelRecordingShortcut,
-             .pasteLastTranscriptionShortcut, .meetingRecordingShortcut:
+             .pasteLastTranscriptionShortcut, .meetingRecordingShortcut,
+             .activationMode, .holdSpaceToMute, .spokenSend:
             return .shortcuts
 
         case .notifications, .aiEnhancementFailures, .microphoneChanges, .pasteCheck:
@@ -202,6 +200,7 @@ struct SettingsSearchAvailability {
              .pasteLastTranscriptionShortcut,
              .meetingRecordingShortcut,
              .activationMode,
+             .holdSpaceToMute,
              .copyToClipboard,
              .textInsertionMode,
              .spokenSend,
@@ -302,7 +301,7 @@ enum SettingsSearchIndex {
             terms: ["reinsert recent text hotkey shortcut clipboard"]
         ),
         .init(target: .meetingRecordingShortcut, title: "Meeting Recording Shortcut", terms: ["FluidMeet start stop toggle recording keyboard hotkey"]),
-        .init(target: .activationMode, title: "Activation Mode", terms: ["hold toggle hotkey behavior"]),
+        .init(target: .activationMode, title: "Press Style", terms: ["activation mode hold toggle push to talk hotkey behavior"]),
         .init(target: .holdSpaceToMute, title: "Hold Space to Mute", terms: ["pause microphone spacebar resume silence"]),
         .init(
             target: .copyToClipboard,
@@ -317,7 +316,7 @@ enum SettingsSearchIndex {
         .init(
             target: .spokenSend,
             title: "Spoken Send",
-            terms: ["send immediately phrase command enter return submit voice"]
+            terms: ["send phrase stop automatically wait delay pause countdown seconds key command enter return submit voice auto-send"]
         ),
         .init(
             target: .transcriptionHistory,
