@@ -3,10 +3,12 @@ import Foundation
 struct DictionaryTransferReplacement: Codable, Equatable {
     let from: [String]
     let to: String
+    let caseSensitive: Bool
 
-    init(from: [String], to: String) {
+    init(from: [String], to: String, caseSensitive: Bool = false) {
         self.from = from
         self.to = to
+        self.caseSensitive = caseSensitive
     }
 
     init(from decoder: Decoder) throws {
@@ -22,6 +24,7 @@ struct DictionaryTransferReplacement: Codable, Equatable {
             )
         }
 
+        self.caseSensitive = try container.decodeIfPresent(Bool.self, forKey: .caseSensitive) ?? false
         self.to = try container.decodeIfPresent(String.self, forKey: .to)
             ?? container.decode(String.self, forKey: .replacement)
     }
@@ -30,6 +33,7 @@ struct DictionaryTransferReplacement: Codable, Equatable {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(self.from, forKey: .from)
         try container.encode(self.to, forKey: .to)
+        if self.caseSensitive { try container.encode(true, forKey: .caseSensitive) }
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -37,6 +41,7 @@ struct DictionaryTransferReplacement: Codable, Equatable {
         case to
         case triggers
         case replacement
+        case caseSensitive
     }
 
     private static func decodeStringList(
@@ -324,26 +329,26 @@ final class DictionaryTransferService {
     }
 
     private static func exportReplacement(from entry: SettingsStore.CustomDictionaryEntry) -> DictionaryTransferReplacement? {
-        let from = self.normalizedUniqueStrings(entry.triggers, lowercased: true)
+        let from = self.normalizedUniqueStrings(entry.triggers, caseSensitive: entry.caseSensitive)
         let to = SettingsStore.CustomDictionaryEntry.sanitizedReplacement(entry.replacement)
         guard !from.isEmpty, !to.isEmpty else { return nil }
-        return DictionaryTransferReplacement(from: from, to: to)
+        return DictionaryTransferReplacement(from: from, to: to, caseSensitive: entry.caseSensitive)
     }
 
     private static func exportReplacement(from replacement: DictionaryTransferReplacement) -> DictionaryTransferReplacement? {
-        let from = self.normalizedUniqueStrings(replacement.from, lowercased: true)
+        let from = self.normalizedUniqueStrings(replacement.from, caseSensitive: replacement.caseSensitive)
         let to = SettingsStore.CustomDictionaryEntry.sanitizedReplacement(replacement.to)
         guard !from.isEmpty, !to.isEmpty else { return nil }
-        return DictionaryTransferReplacement(from: from, to: to)
+        return DictionaryTransferReplacement(from: from, to: to, caseSensitive: replacement.caseSensitive)
     }
 
     private static func storeReplacement(
         from replacement: DictionaryTransferReplacement
     ) -> SettingsStore.CustomDictionaryEntry? {
-        let from = self.normalizedUniqueStrings(replacement.from, lowercased: true)
+        let from = self.normalizedUniqueStrings(replacement.from, caseSensitive: replacement.caseSensitive)
         let to = SettingsStore.CustomDictionaryEntry.sanitizedReplacement(replacement.to)
         guard !from.isEmpty, !to.isEmpty else { return nil }
-        return SettingsStore.CustomDictionaryEntry(triggers: from, replacement: to)
+        return SettingsStore.CustomDictionaryEntry(triggers: from, replacement: to, caseSensitive: replacement.caseSensitive)
     }
 
     private static func exportCustomWords(
@@ -378,25 +383,29 @@ final class DictionaryTransferService {
         into entries: inout [SettingsStore.CustomDictionaryEntry]
     ) {
         let matchingIndex = entries.firstIndex {
-            $0.replacement.caseInsensitiveCompare(entry.replacement) == .orderedSame
+            $0.caseSensitive == entry.caseSensitive && ($0.caseSensitive ? $0.replacement == entry.replacement : $0.replacement.caseInsensitiveCompare(entry.replacement) == .orderedSame)
         }
         let replacementID = matchingIndex.map { entries[$0].id } ?? entry.id
         let replacementText = matchingIndex.map { entries[$0].replacement } ?? entry.replacement
         let previousTriggers = matchingIndex.map { entries[$0].triggers } ?? []
-        let combinedTriggers = self.normalizedUniqueStrings(previousTriggers + entry.triggers, lowercased: true)
-        let triggerKeys = Set(combinedTriggers.map { $0.lowercased() })
+        let combinedTriggers = self.normalizedUniqueStrings(previousTriggers + entry.triggers, caseSensitive: entry.caseSensitive)
 
         entries.removeAll {
-            $0.replacement.caseInsensitiveCompare(entry.replacement) == .orderedSame
+            $0.caseSensitive == entry.caseSensitive && ($0.caseSensitive ? $0.replacement == entry.replacement : $0.replacement.caseInsensitiveCompare(entry.replacement) == .orderedSame)
         }
 
         entries = entries.compactMap { existing in
-            let remainingTriggers = existing.triggers.filter { !triggerKeys.contains($0.lowercased()) }
+            let remainingTriggers = existing.triggers.filter { trigger in
+                !combinedTriggers.contains {
+                    SettingsStore.CustomDictionaryEntry.triggersOverlap(trigger, caseSensitive: existing.caseSensitive, $0, caseSensitive: entry.caseSensitive)
+                }
+            }
             guard !remainingTriggers.isEmpty else { return nil }
             return SettingsStore.CustomDictionaryEntry(
                 id: existing.id,
                 triggers: remainingTriggers,
-                replacement: existing.replacement
+                replacement: existing.replacement,
+                caseSensitive: existing.caseSensitive
             )
         }
 
@@ -404,12 +413,13 @@ final class DictionaryTransferService {
             SettingsStore.CustomDictionaryEntry(
                 id: replacementID,
                 triggers: combinedTriggers,
-                replacement: replacementText
+                replacement: replacementText,
+                caseSensitive: entry.caseSensitive
             )
         )
     }
 
-    private static func normalizedUniqueStrings(_ values: [String], lowercased: Bool) -> [String] {
+    private static func normalizedUniqueStrings(_ values: [String], caseSensitive: Bool) -> [String] {
         var seen: Set<String> = []
         var result: [String] = []
         result.reserveCapacity(values.count)
@@ -417,8 +427,8 @@ final class DictionaryTransferService {
         for value in values {
             let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else { continue }
-            let output = lowercased ? trimmed.lowercased() : trimmed
-            let key = output.lowercased()
+            let output = trimmed
+            let key = caseSensitive ? output : output.lowercased()
             guard !seen.contains(key) else { continue }
             seen.insert(key)
             result.append(output)

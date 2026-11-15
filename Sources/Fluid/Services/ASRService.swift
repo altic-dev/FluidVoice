@@ -3498,7 +3498,8 @@ final class ASRService: ObservableObject {
         onFinalTranscriptionStarted: (@MainActor () -> Void)? = nil,
         forDictionaryTraining: Bool = false,
         captureDictionaryPronunciation: Bool? = nil,
-        forDictionaryTesting: Bool = false
+        forDictionaryTesting: Bool = false,
+        onInitialDictionaryReplacement: (@MainActor (DictionaryReplacementRule) -> Void)? = nil
     ) async -> String {
         guard !forDictionaryTesting || self.isDictionaryTrainingCaptureActive else { return "" }
         DebugLogger.shared.info("🛑 STOP() called - beginning shutdown sequence", source: "ASRService")
@@ -3865,7 +3866,7 @@ final class ASRService: ObservableObject {
             let textWithoutFillers = ASRService.removeFillerWords(result.text)
             let dictionaryText = useDictionaryTrainingPath
                 ? textWithoutFillers
-                : ASRService.applyCustomDictionary(textWithoutFillers)
+                : ASRService.applyCustomDictionary(textWithoutFillers, onInitialReplacement: onInitialDictionaryReplacement)
             let outputText = useDictionaryTrainingPath
                 ? dictionaryText
                 : ASRService.applySpokenPunctuationFormatting(dictionaryText)
@@ -7516,11 +7517,12 @@ final class ASRService: ObservableObject {
         self.cachedDictionaryPatterns = DictionaryReplacementRule.compile(for: userEntries)
         self.cachedBuiltInDictionaryPatterns = DictionaryReplacementRule.compile(for: BuiltInDictionary.entries(excludingSpellingsIn: userEntries))
         self.cachedUserDictionaryProtections = self.cachedDictionaryPatterns.map(\.regex)
-        var protectedPatterns = Set(self.cachedUserDictionaryProtections.map(\.pattern))
+        var protectedPatterns = Set(self.cachedUserDictionaryProtections.map { "\($0.options.rawValue):\($0.pattern)" })
         for entry in userEntries where !entry.replacement.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             let pattern = DictionaryReplacementRule.pattern(for: entry.replacement)
-            guard protectedPatterns.insert(pattern).inserted,
-                  let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) else { continue }
+            let options: NSRegularExpression.Options = entry.caseSensitive ? [] : .caseInsensitive
+            guard protectedPatterns.insert("\(options.rawValue):\(pattern)").inserted,
+                  let regex = try? NSRegularExpression(pattern: pattern, options: options) else { continue }
             self.cachedUserDictionaryProtections.append(regex)
         }
         self.dictionaryCacheNeedsRebuild = false
@@ -7575,9 +7577,9 @@ final class ASRService: ObservableObject {
 
     /// Applies custom dictionary replacements to transcribed text.
     /// Replaces trigger words/phrases with their designated replacements.
-    /// Uses case-insensitive matching with word boundaries.
+    /// Uses each entry’s matching mode with word boundaries.
     /// Optimized: caches compiled regexes to avoid per-call compilation overhead.
-    static func applyCustomDictionary(_ text: String) -> String {
+    static func applyCustomDictionary(_ text: String, onInitialReplacement: (@MainActor (DictionaryReplacementRule) -> Void)? = nil) -> String {
         // Built-in spellings always exist, so the compiled patterns decide whether there is work.
 
         // Rebuild cache if needed (lazy initialization)
@@ -7609,6 +7611,13 @@ final class ASRService: ObservableObject {
         // default's corrected spelling can also follow the user's chosen replacement.
         result = self.applyBuiltInDictionary(to: result, onReplacement: recordReplacement)
         for pattern in self.cachedDictionaryPatterns {
+            if let onInitialReplacement, pattern.formattingOutputRegex != nil,
+               let firstLetter = result.firstIndex(where: { $0.isLetter }),
+               let match = pattern.regex.firstMatch(in: result, range: NSRange(result.startIndex..., in: result)),
+               NSLocationInRange(NSRange(result.startIndex..<firstLetter, in: result).length, match.range)
+            {
+                onInitialReplacement(pattern)
+            }
             result = DictionaryReplacementProtection.replacingMatches(
                 in: result,
                 regex: pattern.regex,
@@ -7628,6 +7637,27 @@ final class ASRService: ObservableObject {
         }
 
         return result
+    }
+
+    /// Freeze explicit case/punctuation preferences before cleanup; content-changing rules run only once.
+    static func caseSensitiveDictionaryRules() -> [DictionaryReplacementRule] {
+        if self.dictionaryCacheNeedsRebuild { self.rebuildDictionaryCache() }
+        return self.cachedDictionaryPatterns.filter { !$0.regex.options.contains(.caseInsensitive) && $0.changesOnlyFormatting }
+    }
+
+    /// Restore explicit case/punctuation preferences after AI cleanup without replaying word substitutions.
+    static func applyCaseSensitiveDictionary(_ text: String) -> String {
+        self.applyCaseSensitiveDictionary(text, rules: self.caseSensitiveDictionaryRules())
+    }
+
+    static func applyCaseSensitiveDictionary(_ text: String, rules: [DictionaryReplacementRule], initialRule: DictionaryReplacementRule? = nil) -> String {
+        var result = text
+        for pattern in rules {
+            result = DictionaryReplacementProtection.replacingMatches(
+                in: result, regex: pattern.regex, template: pattern.template, canonical: pattern.canonical
+            )
+        }
+        return initialRule?.restoringInitialOutput(in: result) ?? result
     }
 
     // MARK: - GAAV Mode Formatting
