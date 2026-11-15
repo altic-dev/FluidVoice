@@ -71,7 +71,11 @@ final class SenseVoiceProvider: TranscriptionProvider {
     }
 
     nonisolated static var managedDirectory: URL? {
-        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?
+        self.managedDirectory(cachesDirectory: nil)
+    }
+
+    nonisolated static func managedDirectory(cachesDirectory: URL?) -> URL? {
+        (cachesDirectory ?? FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first)?
             .appendingPathComponent(self.folderHint, isDirectory: true)
     }
 
@@ -102,8 +106,12 @@ final class SenseVoiceProvider: TranscriptionProvider {
     }
 
     /// Installed folder and the variants usable in it, override folder first.
-    nonisolated static func installedArtifacts() -> (directory: URL, variants: [SenseVoiceEncoderVariant])? {
-        for directory in [self.overrideDirectory, self.managedDirectory].compactMap({ $0 }) {
+    /// `cachesDirectory` lets `SpeechModelInstallationSnapshot` scan the same root it was given.
+    nonisolated static func installedArtifacts(
+        cachesDirectory: URL? = nil
+    ) -> (directory: URL, variants: [SenseVoiceEncoderVariant])? {
+        let candidates = [self.overrideDirectory, self.managedDirectory(cachesDirectory: cachesDirectory)]
+        for directory in candidates.compactMap({ $0 }) {
             let variants = self.preferredVariants.filter { self.isComplete($0, at: directory) }
             if variants.isEmpty == false { return (directory, variants) }
         }

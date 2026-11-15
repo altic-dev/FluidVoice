@@ -20,6 +20,7 @@ final class SpeechModelInstallationSnapshot: ObservableObject {
             case realtime(folder: String, requiredModels: [String])
             case cohere(ExternalCoreMLASRModelSpec, storedPath: String?)
             case nemotron(folder: String)
+            case senseVoice
             case whisper(file: String, expectedBytes: Int64)
             case unavailable
         }
@@ -179,6 +180,8 @@ final class SpeechModelInstallationSnapshot: ObservableObject {
                     kind = .nemotron(folder: "nemotron-3.5-asr-offline-6bit-CoreML")
                 case .nemotronStreaming, .nemotronStreaming320:
                     kind = .nemotron(folder: "nemotron-3.5-asr-streaming320-int8-CoreML")
+                case .senseVoiceSmall:
+                    kind = .senseVoice
                 default:
                     kind = .unavailable
                 }
@@ -241,6 +244,12 @@ final class SpeechModelInstallationSnapshot: ObservableObject {
             case let .nemotron(folder):
                 #if arch(arm64)
                 exists = caches.map { NemotronProvider.artifactsAreComplete(at: $0.appendingPathComponent(folder, isDirectory: true)) } ?? false
+                #else
+                exists = false
+                #endif
+            case .senseVoice:
+                #if arch(arm64)
+                exists = SenseVoiceProvider.installedArtifacts(cachesDirectory: caches) != nil
                 #else
                 exists = false
                 #endif
