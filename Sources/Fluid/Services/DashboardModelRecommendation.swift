@@ -32,6 +32,10 @@ enum DashboardModelRecommendationPolicy {
             return settings.selectedAppleSpeechLocaleIdentifier.split(separator: "-").first.map(String.init)
         case .cohereTranscribeSixBit:
             return settings.selectedCohereLanguage.rawValue
+        case .senseVoiceSmall:
+            // Auto-detect covers five languages; like other automatic routes, report none.
+            let language = settings.selectedSenseVoiceLanguage
+            return language == .automatic ? nil : language.rawValue
         case .nemotronOffline, .nemotronStreaming, .nemotronStreaming320:
             return settings.selectedNemotronLanguage.rawValue.split(separator: "-").first.map(String.init)
         default:

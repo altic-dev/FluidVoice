@@ -552,6 +552,24 @@ extension VoiceEngineSettingsView {
                 }
             } label: { Label(self.settings.selectedCohereLanguage.displayName, systemImage: "globe") }
                 .fluidDropdownStyle()
+        } else if model == .senseVoiceSmall {
+            Menu {
+                ForEach(SettingsStore.SenseVoiceLanguage.allCases) { language in
+                    Button {
+                        guard language != self.settings.selectedSenseVoiceLanguage else { return }
+                        // Read on every decode, so no provider reload is needed.
+                        self.settings.selectedSenseVoiceLanguage = language
+                    } label: {
+                        HStack {
+                            Text(language.displayName)
+                            if language == self.settings.selectedSenseVoiceLanguage {
+                                Image(systemName: "checkmark")
+                            }
+                        }
+                    }
+                }
+            } label: { Label(self.settings.selectedSenseVoiceLanguage.displayName, systemImage: "globe") }
+                .fluidDropdownStyle()
         } else if model == .nemotronOffline || model == .nemotronStreaming || model == .nemotronStreaming320 {
             self.nemotronLanguagePickerButton
         } else if model == .appleSpeechAnalyzer {

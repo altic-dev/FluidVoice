@@ -576,6 +576,7 @@ private final class MeetingProviderLanguagePin {
         case none
         case apple(String)
         case cohere(SettingsStore.CohereLanguage)
+        case senseVoice(SettingsStore.SenseVoiceLanguage)
         case nemotron(SettingsStore.NemotronLanguage)
     }
 
@@ -583,6 +584,7 @@ private final class MeetingProviderLanguagePin {
         case none
         case apple(String)
         case cohere(SettingsStore.CohereLanguage)
+        case senseVoice(SettingsStore.SenseVoiceLanguage)
         case nemotron(SettingsStore.NemotronLanguage)
     }
 
@@ -608,6 +610,9 @@ private final class MeetingProviderLanguagePin {
         case let .cohere(language):
             self.desired = .cohere(language)
             self.restoration = .cohere(settings.selectedCohereLanguage)
+        case let .senseVoice(language):
+            self.desired = .senseVoice(language)
+            self.restoration = .senseVoice(settings.selectedSenseVoiceLanguage)
         case let .nemotron(language):
             self.desired = .nemotron(language)
             self.restoration = .nemotron(settings.selectedNemotronLanguage)
@@ -620,6 +625,7 @@ private final class MeetingProviderLanguagePin {
         case .none: break
         case let .apple(identifier): self.settings.selectedAppleSpeechLocaleIdentifier = identifier
         case let .cohere(language): self.settings.selectedCohereLanguage = language
+        case let .senseVoice(language): self.settings.selectedSenseVoiceLanguage = language
         case let .nemotron(language): self.settings.selectedNemotronLanguage = language
         }
     }
@@ -632,6 +638,8 @@ private final class MeetingProviderLanguagePin {
             self.settings.selectedAppleSpeechLocaleIdentifier = identifier
         case let .cohere(language):
             self.settings.selectedCohereLanguage = language
+        case let .senseVoice(language):
+            self.settings.selectedSenseVoiceLanguage = language
         case let .nemotron(language):
             self.settings.selectedNemotronLanguage = language
         }

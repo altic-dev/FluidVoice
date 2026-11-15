@@ -95,6 +95,8 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
             models = models.filter { $0.provider == .apple }
         case .cohere:
             models = models.filter { $0.provider == .cohere }
+        case .funAudio:
+            models = models.filter { $0.provider == .funAudio }
         case .openai:
             models = models.filter { $0.provider == .openai }
         case .qwen:
@@ -244,6 +246,8 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
             return "On-device dictation for Apple Silicon. Automatically detects 30 languages and produces text after you stop recording."
         case .cohereTranscribeSixBit:
             return "Cohere Transcribe downloads a CoreML pipeline from Hugging Face and caches it locally. Select the language manually before dictation. Best on Apple Silicon with 8GB+ RAM."
+        case .senseVoiceSmall:
+            return "SenseVoice Small (FunAudioLLM) downloads a ~229 MiB int8 CoreML model from Hugging Face and runs on the Neural Engine. Supports Mandarin, Cantonese, English, Japanese, and Korean with auto-detect or a fixed language. The first load optimizes the model for this Mac and can take a minute or two."
         case .nemotronOffline:
             return "Nemotron 3.5 Multilingual is slower but more accurate. Supports around 40 languages with auto or manual language selection. Best on Apple Silicon with 8GB+ RAM."
         case .nemotronStreaming, .nemotronStreaming320:
