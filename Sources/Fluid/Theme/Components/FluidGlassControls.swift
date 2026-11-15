@@ -242,12 +242,22 @@ private struct FluidQuietActionStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         let highlighted = self.isHovered && self.isEnabled
         let height = self.spacious ? FluidButtonSize.large.controlHeight : FluidButtonSize.small.controlHeight
+        let pressed = configuration.isPressed && self.isEnabled
         configuration.label
             .font(self.theme.typography.bodySmall)
             .foregroundStyle(self.tone ?? (highlighted ? self.theme.palette.primaryText : self.theme.palette.secondaryText))
             .padding(.horizontal, self.circular ? 0 : 8)
             .frame(minWidth: height, minHeight: height)
-            .contentShape(Rectangle())
+            // A soft fill in the button's own shape and hit area, so it reads as clickable on hover.
+            .background {
+                let fill = self.theme.palette.primaryText.opacity(pressed ? 0.14 : (highlighted ? 0.08 : 0))
+                if self.circular {
+                    Circle().fill(fill)
+                } else {
+                    Capsule().fill(fill)
+                }
+            }
+            .contentShape(self.circular ? AnyShape(Circle()) : AnyShape(Capsule()))
             .opacity(self.isEnabled ? (configuration.isPressed ? 0.6 : 1) : 0.4)
             .onHover { self.isHovered = $0 && self.isEnabled }
             .onChange(of: self.isEnabled) { _, enabled in
