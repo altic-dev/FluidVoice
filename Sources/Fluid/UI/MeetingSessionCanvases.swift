@@ -384,6 +384,7 @@ struct MeetingResultCanvas: View {
     var isRetranscribing = false
     /// Opens FluidMeet settings on Integrations, so adding an agent is one step from any meeting.
     var onOpenIntegrations: (() -> Void)? = nil
+    var resumesSummary = false
 
     @Environment(\.theme) private var theme
     @Environment(\.undoManager) private var undoManager
@@ -400,7 +401,6 @@ struct MeetingResultCanvas: View {
     @State private var copied = false
     @State private var copyRevision = 0
     @State private var documentSection: MeetingDocumentSection = .transcript
-    @ObservedObject private var summaryActivity = MeetingSummaryActivityCoordinator.shared
 
     /// Naming is reached by clicking a speaker's name, so the sheet opens on the one clicked.
     private func presentAssignSpeakers(focusing speakerID: SessionSpeakerID?) {
@@ -462,7 +462,7 @@ struct MeetingResultCanvas: View {
             VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xxl) {
                 VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xl) {
                     self.documentHeader(hasText: !visibleSegments.isEmpty)
-                    MeetingDocumentTabs(selection: self.$documentSection, isEnabled: self.summaryActivity.selectionLock == nil)
+                    MeetingDocumentTabs(selection: self.$documentSection)
                 }
 
                 if self.documentSection == .summary {
@@ -531,7 +531,7 @@ struct MeetingResultCanvas: View {
                                     playback: self.playback,
                                     isLoadingAudio: self.playback.activeSegmentID == row.segment.id && self.playback.isLoading,
                                     onPlayAudio: { self.playback.toggle(sessionID: self.session.id, segmentID: row.segment.id) },
-                                    isEditingText: self.pendingEditedSegment?.id == row.segment.id,
+                                    isEditingText: self.isQuiescent && self.pendingEditedSegment?.id == row.segment.id,
                                     onEditText: { if self.isQuiescent { self.pendingEditedSegment = row.segment } },
                                     onSaveText: { text in
                                         guard let editing = self.pendingEditedSegment, editing.id == row.segment.id else {
@@ -619,8 +619,8 @@ struct MeetingResultCanvas: View {
             )
         }
         // Prevents an echo toggle left on for one meeting from leaking into the next.
-        .onChange(of: self.session.id) { _, _ in
-            self.documentSection = .transcript
+        .onChange(of: self.session.id, initial: true) { _, _ in
+            self.documentSection = self.resumesSummary ? .summary : .transcript
             self.copied = false
             self.showsProbableEchoes = false
             self.isShowingAssignSpeakers = false

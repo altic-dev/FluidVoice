@@ -285,12 +285,12 @@ final class MeetingSummaryProviderTests: XCTestCase {
     }
 }
 
-private class MeetingSummaryURLProtocol: URLProtocol, @unchecked Sendable {
-    override class func canInit(with _: URLRequest) -> Bool {
+final class MeetingSummaryURLProtocol: URLProtocol, @unchecked Sendable {
+    override static func canInit(with _: URLRequest) -> Bool {
         true
     }
 
-    override class func canonicalRequest(for request: URLRequest) -> URLRequest {
+    override static func canonicalRequest(for request: URLRequest) -> URLRequest {
         request
     }
 
