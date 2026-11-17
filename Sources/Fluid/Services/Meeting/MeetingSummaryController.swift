@@ -374,7 +374,8 @@ final class MeetingSummaryGeneration: ObservableObject {
                         promptHash: promptHash,
                         transcriptHashVersion: MeetingSummaryController.SavedSummary.currentTranscriptHashVersion
                     ),
-                    sessionID: session.id, kind: kind
+                    sessionID: session.id,
+                    kind: kind
                 )
             }
         }
@@ -419,7 +420,8 @@ final class MeetingSummaryGeneration: ObservableObject {
                         modelName: model.displayName,
                         transcriptHashVersion: MeetingSummaryController.SavedSummary.currentTranscriptHashVersion
                     ),
-                    sessionID: session.id, kind: kind
+                    sessionID: session.id,
+                    kind: kind
                 )
             }
         }

@@ -96,8 +96,13 @@ final class MeetingSummaryInputTests: XCTestCase {
             store: store, remoteService: MeetingSummaryRemoteService(session: urlSession), activity: activity
         )
         let route = MeetingSummaryRoute(
-            providerID: "fixture", providerName: "Fixture", modelID: "fixture-model",
-            baseURL: "https://gateway.example/v1/", apiKey: "fixture-key", reasoning: nil, supportsTemperature: false
+            providerID: "fixture",
+            providerName: "Fixture",
+            modelID: "fixture-model",
+            baseURL: "https://gateway.example/v1/",
+            apiKey: "fixture-key",
+            reasoning: nil,
+            supportsTemperature: false
         )
 
         let saved = self.expectation(description: "summary saved after its presenter closes")
