@@ -227,71 +227,18 @@ struct SettingsView: View {
                 self.generalPage
                     .shownInSettingsSection(.general, selectedSection: self.selectedSection)
 
-                if self.asr.micStatus != .authorized {
-                    // Only surface microphone permission when the user needs to act.
-                    ThemedCard(style: .standard) {
-                        VStack(alignment: .leading, spacing: 14) {
-                            Label("Microphone Permission", systemImage: "mic.fill")
-                                .font(.fluidSystem(.headline))
-                                .foregroundStyle(.primary)
-
-                            VStack(alignment: .leading, spacing: 12) {
-                                HStack(spacing: 10) {
-                                    Circle()
-                                        .fill(self.theme.palette.warning)
-                                        .frame(width: 8, height: 8)
-
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text(
-                                            self.asr.micStatus == .denied
-                                                ? "Microphone access denied"
-                                                : "Microphone access not determined"
-                                        )
-                                        .font(self.theme.typography.bodyStrong)
-                                        .foregroundStyle(self.theme.palette.warning)
-
-                                        Text("Microphone access is required for voice recording")
-                                            .font(self.theme.typography.bodySmall)
-                                            .foregroundStyle(self.settingsSecondaryText)
-                                            .fixedSize(horizontal: false, vertical: true)
-                                    }
-                                    Spacer()
-
-                                    if self.asr.micStatus == .notDetermined {
-                                        Button {
-                                            self.asr.requestMicAccess()
-                                        } label: {
-                                            Label("Grant Access", systemImage: "mic.fill")
-                                        }
-                                        .buttonStyle(.borderedProminent)
-                                        .tint(self.theme.palette.accent)
-                                        .controlSize(.regular)
-                                    } else if self.asr.micStatus == .denied {
-                                        Button {
-                                            self.asr.openSystemSettingsForMic()
-                                        } label: {
-                                            Label("Open Settings", systemImage: "gear")
-                                        }
-                                        .fluidOutlinedButton()
-                                        .controlSize(.regular)
-                                    }
-                                }
-
-                                self.instructionsBox(
-                                    title: "How to enable microphone access:",
-                                    steps: self.asr.micStatus == .notDetermined
-                                        ? ["Click **Grant Access** above", "Choose **Allow** in the system dialog"]
-                                        : [
-                                            "Click **Open Settings** above",
-                                            "Find **\(self.appDisplayName)** in the microphone list",
-                                            "Toggle **\(self.appDisplayName) ON** to allow access",
-                                        ]
-                                )
-                            }
-                        }
-                        .padding(16)
+                // Shortcuts needs Accessibility; without it the page shows how to turn it on.
+                if self.selectedSection == .shortcuts {
+                    if self.accessibilityEnabled {
+                        self.shortcutsPage
+                    } else {
+                        self.accessibilityAccessGroup
+                            .settingsSearchTarget(.globalHotkey)
+                            .shownInSettingsSection(.shortcuts, selectedSection: self.selectedSection)
                     }
-                    .settingsSearchTarget(.microphonePermission)
+                }
+
+                self.dictationPage
                     .shownInSettingsSection(.dictation, selectedSection: self.selectedSection)
                 }
 
@@ -1742,77 +1689,60 @@ struct SettingsView: View {
         }
     }
 
-    private func audioHistoryControls() -> some View {
-        VStack(spacing: 12) {
-            LegacyHistoryRecoveryControls()
-            HStack(alignment: .center, spacing: 12) {
-                VStack(alignment: .leading, spacing: 5) {
-                    Text("Audio Storage")
-                        .font(self.theme.typography.bodyStrong)
-                        .foregroundStyle(self.settingsTitleText)
-                    Text(
-                        "Audio history: \(DictationAudioHistoryStore.formattedGigabytes(self.audioHistoryUsageBytes)) / \(Self.audioBudgetText(for: SettingsStore.shared.audioHistoryBudgetGB)) GB Budget"
-                    )
-                    .font(self.theme.typography.bodySmall)
-                    .foregroundStyle(self.settingsSecondaryText)
-
-                    ProgressView(value: self.audioHistoryUsageFraction())
-                        .progressViewStyle(.linear)
-                        .frame(maxWidth: 220)
-                }
-
-                Spacer(minLength: 16)
-
-                HStack(spacing: 8) {
-                    Text("Budget")
-                        .font(.fluidSystem(.caption))
-                        .foregroundStyle(self.settingsSecondaryText)
-
-                    TextField("4", text: self.$audioHistoryBudgetText)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: 58)
-
-                    Text("GB")
-                        .font(.fluidSystem(.caption))
-                        .foregroundStyle(self.settingsSecondaryText)
-
-                    Button("Apply") {
-                        self.applyAudioHistoryBudget()
-                    }
-                    .controlSize(.small)
-                }
+    /// Saved audio use against its budget, with the budget field beside it.
+    private var audioStorageRow: some View {
+        HStack(alignment: .center, spacing: self.theme.metrics.spacing.md + 2) {
+            VStack(alignment: .leading, spacing: 5) {
+                LegacyHistoryRecoveryControls()
+                Text("Audio Storage")
+                    .fluidText(.rowTitle)
+                    .foregroundStyle(self.theme.look.text)
+                Text(
+                    "Audio history: \(DictationAudioHistoryStore.formattedGigabytes(self.audioHistoryUsageBytes)) of \(Self.audioBudgetText(for: SettingsStore.shared.audioHistoryBudgetGB)) GB"
+                )
+                .fluidText(.body)
+                .foregroundStyle(self.theme.look.secondaryText)
+                ProgressView(value: self.audioHistoryUsageFraction())
+                    .progressViewStyle(.linear)
+                    .tint(self.theme.look.switchOn)
+                    .frame(maxWidth: 220)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
 
-            Divider().opacity(0.2)
-
-            HStack(alignment: .center, spacing: 12) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Export Audio")
-                        .font(self.theme.typography.bodyStrong)
-                        .foregroundStyle(self.settingsTitleText)
-                    Text("ZIP with manifest.jsonl and WAV audio.")
-                        .font(self.theme.typography.bodySmall)
-                        .foregroundStyle(self.settingsSecondaryText)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-
-                Spacer(minLength: 16)
-
-                Button {
-                    self.exportAudioZip()
-                } label: {
-                    Label("Export ZIP", systemImage: "square.and.arrow.up")
-                }
-                .controlSize(.small)
-
-                Button(role: .destructive) {
-                    self.deleteSavedAudio()
-                } label: {
-                    Label("Delete Audio", systemImage: "trash")
-                }
-                .controlSize(.small)
-                .disabled(self.audioHistoryUsageBytes <= 0)
+            HStack(spacing: self.theme.metrics.spacing.sm) {
+                Text("Budget")
+                    .fluidText(.label)
+                    .foregroundStyle(self.theme.look.secondaryText)
+                TextField("4", text: self.$audioHistoryBudgetText)
+                    .textFieldStyle(.plain)
+                    .fluidText(.body)
+                    .multilineTextAlignment(.trailing)
+                    .padding(.horizontal, 8)
+                    .frame(width: 58, height: 28)
+                    .fluidDropdownSurface(cornerRadius: 8)
+                    .accessibilityLabel("Audio budget in gigabytes")
+                Text("GB")
+                    .fluidText(.label)
+                    .foregroundStyle(self.theme.look.secondaryText)
+                Button("Apply") { self.applyAudioHistoryBudget() }
+                    .fluidAction()
             }
+            .fixedSize()
+        }
+        .padding(.horizontal, FluidSettingsLayout.rowInset)
+        .padding(.vertical, FluidSettingsLayout.rowVerticalPadding)
+    }
+
+    private var audioExportRow: some View {
+        FluidSettingsRow(title: "Export Audio", description: "ZIP with manifest.jsonl and WAV audio.") {
+            HStack(spacing: self.theme.metrics.spacing.sm) {
+                Button("Export ZIP") { self.exportAudioZip() }
+                    .fluidAction()
+                Button("Delete Audio", role: .destructive) { self.deleteSavedAudio() }
+                    .fluidAction()
+                    .disabled(self.audioHistoryUsageBytes <= 0)
+            }
+            .fixedSize()
         }
     }
 
@@ -2858,91 +2788,68 @@ private extension SettingsView {
     }
 }
 
+/// Learning from corrections, and its two follow-up settings while it is on. Returns separate rows
+/// so the group draws a line between each.
 private struct DictionarySuggestionsSettingsRow: View {
-    @Environment(\.theme) private var theme
     @ObservedObject private var settings = SettingsStore.shared
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .center, spacing: 12) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Learn from my corrections")
-                        .font(self.theme.typography.bodyStrong)
-                        .foregroundStyle(self.theme.palette.primaryText)
-                    Text("If you retype a word FluidVoice got wrong, it asks to add the right spelling to your dictionary.")
-                        .font(self.theme.typography.bodySmall)
-                        .foregroundStyle(self.theme.palette.secondaryText)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
+    /// Follow-up rows sit a little in, so they read as part of the switch above them.
+    private static let subRowIndent: CGFloat = 18
 
-                Toggle("Learn from my corrections", isOn: Binding(
-                    get: { self.settings.automaticDictionaryLearningEnabled },
-                    set: { enabled in
-                        self.settings.automaticDictionaryLearningEnabled = enabled
-                        if !enabled {
-                            AutomaticDictionaryCorrectionTracker.shared.cancel()
-                        }
+    var body: some View {
+        FluidSettingsRow(
+            title: "Learn from my corrections",
+            description: "If you retype a word FluidVoice got wrong, it asks to add the right spelling to your dictionary."
+        ) {
+            Toggle("Learn from my corrections", isOn: Binding(
+                get: { self.settings.automaticDictionaryLearningEnabled },
+                set: { enabled in
+                    self.settings.automaticDictionaryLearningEnabled = enabled
+                    if !enabled {
+                        AutomaticDictionaryCorrectionTracker.shared.cancel()
                     }
-                ))
-                .toggleStyle(.switch)
-                .tint(self.theme.palette.accent)
-                .labelsHidden()
+                }
+            ))
+            .fluidSwitch()
+        }
+        .settingsSearchTarget(.dictionarySuggestions)
+
+        // The threshold only matters while learning is on.
+        if self.settings.automaticDictionaryLearningEnabled {
+            FluidSettingsRow(
+                title: "Ask after",
+                description: "Wait until you've fixed the same word this many times. Pick 2 or 3 if it asks too often.",
+                indent: Self.subRowIndent
+            ) {
+                FluidDropdownPicker(
+                    "Ask after",
+                    selectedTitle: self.settings.automaticDictionarySuggestionFrequency.displayName,
+                    selection: self.$settings.automaticDictionarySuggestionFrequency
+                ) {
+                    ForEach(SettingsStore.AutomaticDictionarySuggestionFrequency.allCases) { frequency in
+                        Text(frequency.displayName).tag(frequency)
+                    }
+                }
+                .fluidDropdownStyle()
+                .fixedSize()
             }
 
-            // The threshold only matters while learning is on; keep it visibly subordinate.
-            if self.settings.automaticDictionaryLearningEnabled {
-                HStack(alignment: .center, spacing: 12) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Ask after")
-                            .font(self.theme.typography.bodyStrong)
-                            .foregroundStyle(self.theme.palette.primaryText)
-                        Text("Wait until you've fixed the same word this many times. Pick 2 or 3 if it asks too often.")
-                            .font(self.theme.typography.bodySmall)
-                            .foregroundStyle(self.theme.palette.secondaryText)
-                            .fixedSize(horizontal: false, vertical: true)
+            FluidSettingsRow(
+                title: "Prompt delay",
+                description: "Wait this long after you stop editing. Shorter delays may ask while you're still correcting.",
+                indent: Self.subRowIndent
+            ) {
+                FluidDropdownPicker(
+                    "Prompt delay",
+                    selectedTitle: self.settings.automaticDictionaryPromptDelay.displayName,
+                    selection: self.$settings.automaticDictionaryPromptDelay
+                ) {
+                    ForEach(SettingsStore.AutomaticDictionaryPromptDelay.allCases) { delay in
+                        Text(delay.displayName).tag(delay)
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-
-                    FluidDropdownPicker(
-                        "Ask after",
-                        selectedTitle: self.settings.automaticDictionarySuggestionFrequency.displayName,
-                        selection: self.$settings.automaticDictionarySuggestionFrequency
-                    ) {
-                        ForEach(SettingsStore.AutomaticDictionarySuggestionFrequency.allCases) { frequency in
-                            Text(frequency.displayName).tag(frequency)
-                        }
-                    }
-                    .fluidDropdownStyle()
-                    .fixedSize()
                 }
-                .padding(.leading, 16)
-
-                HStack(alignment: .center, spacing: 12) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Prompt delay")
-                            .font(self.theme.typography.bodyStrong)
-                            .foregroundStyle(self.theme.palette.primaryText)
-                        Text("Wait this long after you stop editing. Shorter delays may ask while you're still correcting.")
-                            .font(self.theme.typography.bodySmall)
-                            .foregroundStyle(self.theme.palette.secondaryText)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-
-                    FluidDropdownPicker(
-                        "Prompt delay",
-                        selectedTitle: self.settings.automaticDictionaryPromptDelay.displayName,
-                        selection: self.$settings.automaticDictionaryPromptDelay
-                    ) {
-                        ForEach(SettingsStore.AutomaticDictionaryPromptDelay.allCases) { delay in
-                            Text(delay.displayName).tag(delay)
-                        }
-                    }
-                    .fluidDropdownStyle()
-                    .fixedSize()
-                }
-                .padding(.leading, 16)
+                .fluidDropdownStyle()
+                .fixedSize()
             }
         }
     }
@@ -3047,6 +2954,264 @@ private extension SettingsView {
             Toggle(title, isOn: isOn)
                 .fluidSwitch()
                 .accessibilityLabel(title)
+        }
+    }
+
+    // MARK: - Dictation page
+
+    private var dictationPage: some View {
+        VStack(alignment: .leading, spacing: FluidSettingsLayout.groupSpacing) {
+            if self.asr.micStatus != .authorized {
+                // Only surface microphone permission when the user needs to act.
+                self.microphoneAccessGroup
+                    .settingsSearchTarget(.microphonePermission)
+            }
+            if self.accessibilityEnabled {
+                self.dictationBehaviorGroups
+            } else {
+                self.accessibilityAccessGroup
+            }
+        }
+    }
+
+    private var microphoneAccessGroup: some View {
+        FluidSettingsGroup {
+            FluidSettingsRow(
+                title: self.asr.micStatus == .denied ? "Microphone access is off" : "Microphone access isn't set up",
+                description: "FluidVoice needs the microphone to hear you."
+            ) {
+                if self.asr.micStatus == .notDetermined {
+                    Button("Grant Access") { self.asr.requestMicAccess() }
+                        .fluidAction(.primary)
+                } else if self.asr.micStatus == .denied {
+                    Button("Open Settings") { self.asr.openSystemSettingsForMic() }
+                        .fluidAction(.primary)
+                }
+            }
+            self.accessSteps(
+                self.asr.micStatus == .notDetermined
+                    ? ["Click **Grant Access** above", "Choose **Allow** in the system dialog"]
+                    : [
+                        "Click **Open Settings** above",
+                        "Find **\(self.appDisplayName)** in the microphone list",
+                        "Turn **\(self.appDisplayName)** on to allow access",
+                    ]
+            )
+        }
+    }
+
+    private var accessibilityAccessGroup: some View {
+        FluidSettingsGroup {
+            FluidSettingsRow(
+                title: "Accessibility access is off",
+                description: "FluidVoice needs it for keyboard shortcuts."
+            ) {
+                Button("Open Accessibility Settings") { self.openAccessibilitySettings() }
+                    .fluidAction(.primary)
+            }
+            self.accessSteps([
+                "Click **Open Accessibility Settings** above",
+                "In the Accessibility window, click the **+ button**",
+                "Select **\(self.appDisplayName)**; use **Reveal in Finder** below if needed",
+                "Click **Open**, then turn **\(self.appDisplayName)** on in the list",
+            ])
+            FluidSettingsBlock {
+                HStack(spacing: self.theme.metrics.spacing.sm) {
+                    Button("Reveal in Finder") { self.revealAppInFinder() }
+                        .fluidAction()
+                    Button("Open Applications") { self.openApplicationsFolder() }
+                        .fluidAction()
+                }
+            }
+        }
+        .settingsSearchTarget(.accessibilityPermission)
+    }
+
+    /// Numbered steps for turning on a permission, under the row that asks for it.
+    private func accessSteps(_ steps: [String]) -> some View {
+        FluidSettingsBlock {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("To turn it on:")
+                    .fluidText(.label)
+                    .foregroundStyle(self.theme.look.tertiaryText)
+                ForEach(Array(steps.enumerated()), id: \.offset) { index, step in
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text("\(index + 1).")
+                            .fluidText(.label)
+                            .foregroundStyle(self.theme.look.tertiaryText)
+                            .frame(width: 16, alignment: .trailing)
+                        Text(.init(step))
+                            .fluidText(.body)
+                            .foregroundStyle(self.theme.look.secondaryText)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var dictationBehaviorGroups: some View {
+        FluidSettingsGroup(title: "Sound") {
+            FluidSettingsRow(
+                title: "Transcription Sounds",
+                description: "Choose a recording sound. Paired sounds preview start and stop."
+            ) {
+                FluidDropdownPicker("Transcription sound", selectedTitle: SettingsStore.shared.transcriptionStartSound.displayName, selection: Binding(
+                    get: { SettingsStore.shared.transcriptionStartSound },
+                    set: { newValue in
+                        SettingsStore.shared.transcriptionStartSound = newValue
+                        TranscriptionSoundPlayer.shared.playPreview(sound: newValue)
+                    }
+                )) {
+                    ForEach(SettingsStore.TranscriptionStartSound.allCases) { option in
+                        Text(option.displayName).tag(option)
+                    }
+                }
+                .fluidDropdownStyle()
+                .frame(width: 170, alignment: .trailing)
+            }
+            .settingsSearchTarget(.transcriptionSounds)
+
+            if SettingsStore.shared.transcriptionStartSound != .none {
+                FluidSettingsRow(title: "Volume", description: "Adjust the recording sound cue volume.") {
+                    Slider(
+                        value: Binding(
+                            get: { Double(SettingsStore.shared.transcriptionSoundVolume) },
+                            set: { SettingsStore.shared.transcriptionSoundVolume = Float($0) }
+                        ),
+                        in: 0...1,
+                        step: 0.05
+                    ) { editing in
+                        if !editing {
+                            TranscriptionSoundPlayer.shared.playPreviewAtVolume(SettingsStore.shared.transcriptionSoundVolume)
+                        }
+                    }
+                    .tint(self.theme.look.switchOn)
+                    .frame(width: 170)
+                    .accessibilityLabel("Volume")
+                }
+            }
+        }
+        .settingsSearchTarget(.dictation)
+
+        FluidSettingsGroup(title: "Typing") {
+            FluidSettingsRow(
+                title: "Text Insertion Mode",
+                description: SettingsStore.shared.textInsertionMode.description
+            ) {
+                FluidDropdownPicker("Text insertion", selectedTitle: SettingsStore.shared.textInsertionMode.displayName, selection: Binding(
+                    get: { SettingsStore.shared.textInsertionMode },
+                    set: { SettingsStore.shared.textInsertionMode = $0 }
+                )) {
+                    ForEach(SettingsStore.TextInsertionMode.allCases) { mode in
+                        Text(mode.displayName).tag(mode)
+                    }
+                }
+                .fluidDropdownStyle()
+                .fixedSize(horizontal: true, vertical: false)
+                .frame(minWidth: 170, alignment: .trailing)
+            }
+            .settingsSearchTarget(.textInsertionMode)
+
+            self.switchRow(
+                title: "Copy to Clipboard",
+                description: "Copy transcribed text to the clipboard too, as a backup.",
+                isOn: self.$copyToClipboard
+            )
+            .onChange(of: self.copyToClipboard) { _, newValue in
+                SettingsStore.shared.copyTranscriptionToClipboard = newValue
+            }
+            .settingsSearchTarget(.copyToClipboard)
+        }
+
+        FluidSettingsGroup(title: "Recording") {
+            self.switchRow(
+                title: "Skip Silent Recordings",
+                description: "Avoid transcription when a recording up to four seconds contains only clear silence. Off by default to preserve quiet speech.",
+                isOn: Binding(
+                    get: { SettingsStore.shared.skipSilentRecordingsEnabled },
+                    set: { SettingsStore.shared.skipSilentRecordingsEnabled = $0 }
+                )
+            )
+            .settingsSearchTarget(.skipSilentRecordings)
+
+            self.switchRow(
+                title: "Pause Media During Transcription",
+                description: "Pause playing audio or video when transcription starts. It resumes only if FluidVoice paused it.",
+                isOn: Binding(
+                    get: { SettingsStore.shared.pauseMediaDuringTranscription },
+                    set: { SettingsStore.shared.pauseMediaDuringTranscription = $0 }
+                )
+            )
+            .settingsSearchTarget(.pauseMedia)
+        }
+
+        FluidSettingsGroup(title: "History & Stats") {
+            self.switchRow(
+                title: "Save Transcription History",
+                description: "Save transcriptions for stats tracking. Turn off for privacy.",
+                isOn: Binding(
+                    get: { SettingsStore.shared.saveTranscriptionHistory },
+                    set: {
+                        SettingsStore.shared.saveTranscriptionHistory = $0
+                        self.refreshAudioHistoryUsage()
+                    }
+                )
+            )
+            .settingsSearchTarget(.transcriptionHistory)
+
+            self.switchRow(
+                title: "Save Audio With History",
+                description: "Keep the microphone audio on this Mac with your dictation history. Off by default.",
+                isOn: Binding(
+                    get: { SettingsStore.shared.saveAudioWithTranscriptionHistory },
+                    set: {
+                        SettingsStore.shared.saveAudioWithTranscriptionHistory = $0
+                        self.refreshAudioHistoryUsage()
+                    }
+                )
+            )
+            .disabled(!SettingsStore.shared.saveTranscriptionHistory)
+            .settingsSearchTarget(.audioHistory)
+
+            if SettingsStore.shared.saveTranscriptionHistory, SettingsStore.shared.saveAudioWithTranscriptionHistory {
+                self.audioStorageRow
+                    .settingsSearchTarget(.audioStorage)
+                self.audioExportRow
+            }
+
+            self.switchRow(
+                title: "Weekends Don't Break Streak",
+                description: "Skip Saturday and Sunday when counting usage streaks.",
+                isOn: Binding(
+                    get: { SettingsStore.shared.weekendsDontBreakStreak },
+                    set: { SettingsStore.shared.weekendsDontBreakStreak = $0 }
+                )
+            )
+            .settingsSearchTarget(.usageStreak)
+        }
+
+        FluidSettingsGroup(title: "Dictionary") {
+            DictionarySuggestionsSettingsRow()
+        }
+
+        FluidSettingsGroup(title: "Privacy") {
+            FluidSettingsRow(
+                title: "Share Detailed Anonymous Analytics",
+                description: "Share anonymous daily feature, insertion performance, onboarding, and model metrics. " +
+                    "When off, FluidVoice still records the anonymous daily activity signal and, in beta builds, daily ASR and Fluid Intelligence timing summaries. " +
+                    "Never includes transcription text or prompts."
+            ) {
+                HStack(spacing: self.theme.metrics.spacing.md) {
+                    Button("What we collect") { self.showAnalyticsPrivacy = true }
+                        .fluidAction()
+                    Toggle("Share Detailed Anonymous Analytics", isOn: self.detailedAnalyticsToggleBinding)
+                        .fluidSwitch()
+                }
+                .fixedSize()
+            }
+            .settingsSearchTarget(.analyticsPrivacy)
         }
     }
 
@@ -3409,14 +3574,17 @@ private struct LegacyHistoryRecoveryControls: View {
         if self.history.audioPruningDeferred {
             VStack(alignment: .leading, spacing: 8) {
                 Label("Audio cleanup is paused", systemImage: "exclamationmark.triangle")
-                    .font(self.theme.typography.bodyStrong)
+                    .fluidText(.rowTitle)
+                    .foregroundStyle(self.theme.look.text)
                 Text("Older history needs recovery. Your recordings are being kept, even above the storage budget.")
-                    .font(self.theme.typography.bodySmall)
+                    .fluidText(.body)
+                    .foregroundStyle(self.theme.look.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
                 Button(self.isRecovering ? "Saving recovery copy…" : "Review recovery options…", action: self.reviewRecovery)
-                    .fluidOutlinedButton()
+                    .fluidAction()
                     .disabled(self.isRecovering)
             }
-            .foregroundStyle(self.theme.palette.primaryText)
+            .padding(.bottom, 6)
             .frame(maxWidth: .infinity, alignment: .leading)
             .accessibilityIdentifier("history-audio-recovery")
         }
