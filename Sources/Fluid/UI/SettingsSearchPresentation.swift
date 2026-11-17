@@ -196,6 +196,9 @@ struct SettingsPersistentScrollView<Content: View>: NSViewRepresentable {
     private var hostedContent: AnyView {
         AnyView(
             self.content
+                // A page always starts at the top. The hosting view can be taller than the page, and
+                // SwiftUI would otherwise center the page in it, leaving a gap above the first group.
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 .appTheme(self.theme)
                 .environment(\.colorScheme, self.colorScheme)
         )
