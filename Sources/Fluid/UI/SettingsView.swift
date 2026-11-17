@@ -1050,59 +1050,42 @@ struct SettingsView: View {
                 }
                 .shownInSettingsSection(.overlay, selectedSection: self.selectedSection)
 
-                // Backup & Restore Card
-                ThemedCard(style: .standard) {
-                    self.backupUtilityRow()
-                        .padding(16)
-                }
-                .settingsSearchTarget(.backupAndRestore)
-                .shownInSettingsSection(.dataAndDiagnostics, selectedSection: self.selectedSection)
+                // Data & Diagnostics: backups of your data, and logs for troubleshooting.
+                VStack(alignment: .leading, spacing: FluidSettingsLayout.groupSpacing) {
+                    FluidSettingsGroup(title: "Backup") {
+                        self.backupUtilityRow()
+                    }
+                    .settingsSearchTarget(.backupAndRestore)
 
-                // Debug Settings Card
-                ThemedCard(style: .standard) {
-                    VStack(alignment: .leading, spacing: 14) {
-                        Label("Debug Settings", systemImage: "ladybug.fill")
-                            .font(.fluidSystem(.headline))
-                            .foregroundStyle(.primary)
-
-                        VStack(alignment: .leading, spacing: 8) {
-                            self.settingsToggleRow(
-                                title: "Show Debug Logs in App",
-                                description: "File logs are always collected for diagnostics.",
-                                isOn: Binding(
-                                    get: { SettingsStore.shared.enableDebugLogs },
-                                    set: { SettingsStore.shared.enableDebugLogs = $0 }
-                                )
+                    FluidSettingsGroup(
+                        title: "Logs",
+                        footnote: "Crash diagnostics are written to Library/Logs/Fluid/Fluid.log by default."
+                    ) {
+                        self.switchRow(
+                            title: "Show Debug Logs in App",
+                            description: "File logs are always collected for diagnostics.",
+                            isOn: Binding(
+                                get: { SettingsStore.shared.enableDebugLogs },
+                                set: { SettingsStore.shared.enableDebugLogs = $0 }
                             )
-
-                            Divider().padding(.vertical, 8)
-
-                            Button {
+                        )
+                        FluidSettingsRow(
+                            title: "Debug Log",
+                            description: "Detailed information about what the app did, to help with troubleshooting."
+                        ) {
+                            Button("Reveal in Finder") {
                                 let url = FileLogger.shared.currentLogFileURL()
                                 if FileManager.default.fileExists(atPath: url.path) {
                                     NSWorkspace.shared.activateFileViewerSelecting([url])
                                 } else {
                                     DebugLogger.shared.info("Log file not found at \(url.path)", source: "SettingsView")
                                 }
-                            } label: {
-                                Label("Reveal Log File", systemImage: "doc.richtext")
                             }
-                            .fluidOutlinedButton()
-                            .controlSize(.regular)
-
-                            Text("The debug log contains detailed information about app operations and can help with troubleshooting.")
-                                .font(self.theme.typography.bodySmall)
-                                .foregroundStyle(self.settingsSecondaryText)
-                                .fixedSize(horizontal: false, vertical: true)
-                            Text("Crash diagnostics are written to Library/Logs/Fluid/Fluid.log by default.")
-                                .font(self.theme.typography.bodySmall)
-                                .foregroundStyle(self.settingsSecondaryText)
-                                .fixedSize(horizontal: false, vertical: true)
+                            .fluidAction()
                         }
                     }
-                    .padding(16)
+                    .settingsSearchTarget(.debugLogs)
                 }
-                .settingsSearchTarget(.debugLogs)
                 .shownInSettingsSection(.dataAndDiagnostics, selectedSection: self.selectedSection)
 
                 ThemedCard(style: .standard) {
@@ -1452,38 +1435,17 @@ struct SettingsView: View {
     }
 
     private func backupUtilityRow() -> some View {
-        HStack(alignment: .top, spacing: 12) {
-            Image(systemName: "externaldrive.fill")
-                .font(.fluidSystem(.headline))
-                .foregroundStyle(.primary)
-                .frame(width: 24, alignment: .center)
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Backup & Restore")
-                    .font(self.theme.typography.bodyStrong)
-                    .foregroundStyle(self.settingsTitleText)
-                Text("Export or import settings, prompt profiles, history, and stats. API keys excluded.")
-                    .font(self.theme.typography.bodySmall)
-                    .foregroundStyle(self.settingsSecondaryText)
-                    .fixedSize(horizontal: false, vertical: true)
+        FluidSettingsRow(
+            title: "Settings, Profiles, History & Stats",
+            description: "Export them to a file, or import a backup. API keys are left out."
+        ) {
+            HStack(spacing: self.theme.metrics.spacing.sm) {
+                Button("Export", action: self.exportBackup)
+                    .fluidAction()
+                Button("Import", action: self.importBackup)
+                    .fluidAction()
             }
-
-            Spacer(minLength: 16)
-
-            HStack(spacing: 8) {
-                Button(action: self.exportBackup) {
-                    Label("Export", systemImage: "square.and.arrow.up")
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(self.theme.palette.accent)
-                .controlSize(.regular)
-
-                Button(action: self.importBackup) {
-                    Label("Import", systemImage: "square.and.arrow.down")
-                }
-                .fluidOutlinedButton()
-                .controlSize(.regular)
-            }
+            .fixedSize()
         }
     }
 
