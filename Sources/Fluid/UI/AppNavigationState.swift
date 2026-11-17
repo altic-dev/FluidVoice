@@ -8,7 +8,7 @@
 import CoreGraphics
 import Foundation
 
-enum SidebarItem: Hashable {
+enum SidebarItem: Hashable, CaseIterable {
     case welcome
     case models
     case voiceEngine

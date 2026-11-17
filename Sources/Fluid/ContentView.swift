@@ -558,6 +558,14 @@ struct ContentView: View {
                 default: self.menuBarManager.openPreferencesFromUI()
                 }
             }
+            .onReceive(DistributedNotificationCenter.default().publisher(for: Notification.Name("com.FluidApp.debug.openPage"))) { notification in
+                // A page title from the sidebar ("Models", "History", …) opens that page.
+                guard UserDefaults.standard.bool(forKey: "FluidDebugRemoteToggleEnabled"),
+                      let title = notification.object as? String,
+                      let page = SidebarItem.allCases.first(where: { $0.title.caseInsensitiveCompare(title) == .orderedSame })
+                else { return }
+                self.navigateToApp(page)
+            }
             .onReceive(DistributedNotificationCenter.default().publisher(for: Notification.Name("com.FluidApp.debug.setTheme"))) { notification in
                 guard UserDefaults.standard.bool(forKey: "FluidDebugRemoteToggleEnabled"),
                       let theme = (notification.object as? String).flatMap(SettingsStore.ThemePreference.init(rawValue:))
