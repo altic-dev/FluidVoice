@@ -207,24 +207,19 @@ struct SettingsView: View {
         ) {
             VStack(spacing: 16) {
                 if self.selectedSection == .fluidMeet {
-                    ThemedCard(style: .standard) {
-                        VStack(alignment: .leading, spacing: 14) {
-                            Label("FluidMeet Settings", systemImage: "person.2")
-                                .font(.fluidSystem(.headline))
-                                .foregroundStyle(.primary)
-                            self.settingsToggleRow(
-                                title: "Enable FluidMeet",
-                                description: "Record and transcribe meetings. Turning this off hides FluidMeet and stops meeting detection. Your saved meetings are kept.",
-                                footnote: self.appServices.hasActiveMeetingSessionActivity
-                                    ? "Finish the current meeting recording or processing before turning FluidMeet off." : nil,
-                                isOn: Binding(
-                                    get: { self.settings.fluidMeetEnabled },
-                                    set: { self.appServices.setFluidMeetEnabled($0) }
-                                )
+                    // The page title already names FluidMeet, so the group carries no title of its own.
+                    FluidSettingsGroup {
+                        self.switchRow(
+                            title: "Enable FluidMeet",
+                            description: "Record and transcribe meetings. Turning this off hides FluidMeet and stops meeting detection. Your saved meetings are kept.",
+                            footnote: self.appServices.hasActiveMeetingSessionActivity
+                                ? "Finish the current meeting recording or processing before turning FluidMeet off." : nil,
+                            isOn: Binding(
+                                get: { self.settings.fluidMeetEnabled },
+                                set: { self.appServices.setFluidMeetEnabled($0) }
                             )
-                            .disabled(self.appServices.hasActiveMeetingSessionActivity)
-                        }
-                        .padding(16)
+                        )
+                        .disabled(self.appServices.hasActiveMeetingSessionActivity)
                     }
                     .settingsSearchTarget(.fluidMeet)
                 }
