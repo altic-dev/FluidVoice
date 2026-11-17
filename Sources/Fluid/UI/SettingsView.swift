@@ -753,51 +753,42 @@ struct SettingsView: View {
                     self.formattingPage
                 }
 
-                // Notification Settings Card
-                ThemedCard(style: .standard) {
-                    VStack(alignment: .leading, spacing: 14) {
-                        VStack(alignment: .leading, spacing: 12) {
-                            self.optionToggleRow(
-                                title: "AI Enhancement Failures",
-                                description: "Notify when AI Enhancement fails and raw transcription is typed.",
-                                isOn: Binding(
-                                    get: { SettingsStore.shared.notifyAIProcessingFailures },
-                                    set: { SettingsStore.shared.notifyAIProcessingFailures = $0 }
-                                )
-                            )
-                            .settingsSearchTarget(.aiEnhancementFailures)
+                // The page title already says these are notifications, so the group has no title.
+                FluidSettingsGroup {
+                    self.switchRow(
+                        title: "AI Enhancement Failures",
+                        description: "Notify when AI Enhancement fails and raw transcription is typed.",
+                        isOn: Binding(
+                            get: { SettingsStore.shared.notifyAIProcessingFailures },
+                            set: { SettingsStore.shared.notifyAIProcessingFailures = $0 }
+                        )
+                    )
+                    .settingsSearchTarget(.aiEnhancementFailures)
 
-                            Divider().opacity(0.2)
+                    self.switchRow(
+                        title: "Microphone Changes",
+                        description: "Show an alert when FluidVoice changes or loses its microphone.",
+                        isOn: Binding(
+                            get: { self.settings.showMicrophoneChangeAlerts },
+                            set: { enabled in
+                                self.settings.showMicrophoneChangeAlerts = enabled
+                                if enabled == false {
+                                    MicrophoneChangeOverlayController.shared.hide()
+                                }
+                            }
+                        )
+                    )
+                    .settingsSearchTarget(.microphoneChanges)
 
-                            self.optionToggleRow(
-                                title: "Microphone Changes",
-                                description: "Show an alert when FluidVoice changes or loses its microphone.",
-                                isOn: Binding(
-                                    get: { self.settings.showMicrophoneChangeAlerts },
-                                    set: { enabled in
-                                        self.settings.showMicrophoneChangeAlerts = enabled
-                                        if enabled == false {
-                                            MicrophoneChangeOverlayController.shared.hide()
-                                        }
-                                    }
-                                )
-                            )
-                            .settingsSearchTarget(.microphoneChanges)
-
-                            Divider().opacity(0.2)
-
-                            self.optionToggleRow(
-                                title: "Paste Check",
-                                description: "Show a card when FluidVoice can't confirm that pasted text landed.",
-                                isOn: Binding(
-                                    get: { self.settings.showPasteCheckAlerts },
-                                    set: { self.settings.showPasteCheckAlerts = $0 }
-                                )
-                            )
-                            .settingsSearchTarget(.pasteCheck)
-                        }
-                    }
-                    .padding(16)
+                    self.switchRow(
+                        title: "Paste Check",
+                        description: "Show a card when FluidVoice can't confirm that pasted text landed.",
+                        isOn: Binding(
+                            get: { self.settings.showPasteCheckAlerts },
+                            set: { self.settings.showPasteCheckAlerts = $0 }
+                        )
+                    )
+                    .settingsSearchTarget(.pasteCheck)
                 }
                 .shownInSettingsSection(.notifications, selectedSection: self.selectedSection)
 
