@@ -1980,17 +1980,19 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
             return true
         }
         guard shouldReport else { return }
-        // Recovery can no longer find the meeting app to capture, for example after the host ends a
-        // Zoom call or Zoom quits. Nothing can resume this capture, so report it as the end of the meeting.
-        if case MeetingCaptureError.applicationUnavailable = triggeringError {
-            self.eventHandler(.sourceApplicationEnded(detail: triggeringError.localizedDescription))
-            return
+        self.eventHandler(.rebuildExhausted(triggeringError))
+    }
+}
+
+nonisolated extension MeetingCaptureEvent {
+    /// The event to report once stream recovery gives up. Recovery that can no longer find the meeting
+    /// app to capture (for example after the host ends a Zoom call, or Zoom quits) is the end of the
+    /// meeting. Any other failure is an unexpected stop.
+    static func rebuildExhausted(_ error: Error) -> MeetingCaptureEvent {
+        if case MeetingCaptureError.applicationUnavailable = error {
+            return .sourceApplicationEnded(detail: error.localizedDescription)
         }
-        self.eventHandler(.interrupted(
-            kind: .captureStoppedUnexpectedly,
-            trackID: nil,
-            detail: triggeringError.localizedDescription
-        ))
+        return .interrupted(kind: .captureStoppedUnexpectedly, trackID: nil, detail: error.localizedDescription)
     }
 }
 

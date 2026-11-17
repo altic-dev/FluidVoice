@@ -152,6 +152,25 @@ final class MeetingRecoveryTests: XCTestCase {
         await coordinator.shutdownForTermination()
     }
 
+    /// The capture engine's give-up decision: only a meeting app that can no longer be found ends the
+    /// meeting. Every other exhausted recovery stays an unexpected stop that waits for Retry.
+    func testExhaustedRecoveryEndsMeetingOnlyWhenTheMeetingAppIsUnavailable() {
+        let ended = MeetingCaptureEvent.rebuildExhausted(MeetingCaptureError.applicationUnavailable("Zoom"))
+        guard case let .sourceApplicationEnded(detail) = ended else {
+            return XCTFail("An unavailable meeting app must end the meeting, got \(ended)")
+        }
+        XCTAssertEqual(detail, "Zoom is no longer available to record.")
+        for error: Error in [MeetingCaptureError.noCaptureDisplay, NSError(domain: "Fixture", code: -3808)] {
+            let stopped = MeetingCaptureEvent.rebuildExhausted(error)
+            guard case let .interrupted(kind, trackID, detail) = stopped else {
+                return XCTFail("\(error) must stay an unexpected stop, got \(stopped)")
+            }
+            XCTAssertEqual(kind, .captureStoppedUnexpectedly)
+            XCTAssertNil(trackID)
+            XCTAssertEqual(detail, error.localizedDescription)
+        }
+    }
+
     /// Without finalized audio there is nothing to transcribe, so the session stays an interrupted
     /// offer exactly as before.
     func testSourceApplicationEndedWithoutFinalizedAudioStaysInterrupted() async throws {
