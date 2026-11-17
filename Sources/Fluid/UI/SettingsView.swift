@@ -792,113 +792,121 @@ struct SettingsView: View {
                 }
                 .shownInSettingsSection(.notifications, selectedSection: self.selectedSection)
 
-                // Audio Devices Card
-                ThemedCard(style: .standard) {
-                    VStack(alignment: .leading, spacing: 14) {
-                        HStack {
-                            Label("Audio Devices", systemImage: "speaker.wave.2.fill")
-                                .font(.fluidSystem(.headline))
-                                .foregroundStyle(.primary)
-
-                            Spacer()
-
-                            Button {
-                                self.refreshDevices()
-                                // Update cached default device names on refresh
-                                let defaultInput = AudioDevice.getDefaultInputDevice()
-                                self.cachedDefaultInputUID = defaultInput?.uid ?? ""
-                                self.cachedDefaultOutputName = AudioDevice.getDefaultOutputDevice()?.name ?? ""
-                            } label: {
-                                Label("Refresh", systemImage: "arrow.clockwise")
+                // Audio devices: the microphone order FluidVoice tries, and where sound plays.
+                VStack(alignment: .leading, spacing: FluidSettingsLayout.groupSpacing) {
+                    FluidSettingsGroup(
+                        title: "Microphones",
+                        hint: "Tried from top to bottom",
+                        footnote: "Drag to reorder; unavailable devices keep their place. This order applies only to FluidVoice and does not change your macOS input."
+                    ) {
+                        self.microphonePriorityRows
+                        if self.selectedInputDevice?.isBluetooth == true {
+                            FluidSettingsBlock {
+                                Label(
+                                    "Bluetooth microphone mode can reduce headphone playback quality. Prefer a wired, USB, or display microphone when available.",
+                                    systemImage: "exclamationmark.triangle"
+                                )
+                                .fluidText(.body)
+                                .foregroundStyle(self.theme.look.text)
+                                .fixedSize(horizontal: false, vertical: true)
                             }
-                            .fluidOutlinedButton()
-                            .controlSize(.small)
                         }
-
-                        VStack(alignment: .leading, spacing: 12) {
-                            self.microphonePrioritySection
-                                .settingsSearchTarget(.inputDevicePriority)
-                                .onChange(of: self.inputDevices) { _, newDevices in
+                        FluidSettingsBlock {
+                            HStack(spacing: self.theme.metrics.spacing.sm) {
+                                Button("Refresh") {
+                                    self.refreshDevices()
+                                    // Update cached default device names on refresh
                                     let defaultInput = AudioDevice.getDefaultInputDevice()
                                     self.cachedDefaultInputUID = defaultInput?.uid ?? ""
-                                    guard newDevices.isEmpty == false else { return }
-                                    if let selectedInput = self.appServices.microphonePreferenceCoordinator
-                                        .reconcileMicrophoneSelection(
-                                            availableInputs: newDevices,
-                                            defaultInputUID: self.cachedDefaultInputUID
-                                        )
-                                    {
-                                        self.selectedInputUID = selectedInput.uid
-                                    }
-                                }
-
-                            HStack {
-                                Text("Output Device")
-                                    .font(self.theme.typography.bodyStrong)
-                                    .foregroundStyle(self.settingsTitleText)
-                                Spacer()
-                                FluidDropdownPicker(
-                                    "Output device",
-                                    selectedTitle: self.outputDevices.first(where: { $0.uid == self.selectedOutputUID }).map { $0.name == self.cachedDefaultOutputName ? "\($0.name) (System Default)" : $0.name } ?? "Loading...",
-                                    selection: self.$selectedOutputUID
-                                ) {
-                                    // Handle empty state gracefully
-                                    if self.outputDevices.isEmpty {
-                                        Text("Loading...").tag("")
-                                    } else {
-                                        ForEach(self.outputDevices, id: \.uid) { dev in
-                                            // Add "(System Default)" tag using cached name to avoid CoreAudio calls during layout
-                                            let isSystemDefault = !self.cachedDefaultOutputName.isEmpty && dev.name == self.cachedDefaultOutputName
-                                            Text(isSystemDefault ? "\(dev.name) (System Default)" : dev.name).tag(dev.uid)
-                                        }
-                                    }
-                                }
-                                .fluidDropdownStyle()
-                                .frame(width: 240)
-                                .disabled(self.asr.isRunning) // Disable device changes during recording
-                                .onChange(of: self.selectedOutputUID) { oldUID, newUID in
-                                    guard !newUID.isEmpty else { return }
-
-                                    // Prevent device changes during active recording
-                                    if self.asr.isRunning {
-                                        DebugLogger.shared.warning("Cannot change output device during recording", source: "SettingsView")
-                                        // Revert to previous value
-                                        self.selectedOutputUID = oldUID
-                                        return
-                                    }
-
-                                    SettingsStore.shared.preferredOutputDeviceUID = newUID
-                                    _ = AudioDevice.setDefaultOutputDevice(uid: newUID)
-                                }
-                                // Sync selection when devices load or change
-                                .onChange(of: self.outputDevices) { _, newDevices in
-                                    // Update cached default device name when device list changes
                                     self.cachedDefaultOutputName = AudioDevice.getDefaultOutputDevice()?.name ?? ""
+                                }
+                                .fluidAction()
+                                if self.settings.suppressedMicrophoneUIDs.isEmpty == false {
+                                    Button("Restore Removed") {
+                                        self.settings.restoreRemovedMicrophones(with: self.inputDevices)
+                                        self.refreshActiveInputSelection()
+                                    }
+                                    .fluidAction()
+                                    .disabled(self.isMicrophonePriorityEditingDisabled)
+                                }
+                            }
+                        }
+                    }
+                    .settingsSearchTarget(.inputDevicePriority)
+                    .onChange(of: self.inputDevices) { _, newDevices in
+                        let defaultInput = AudioDevice.getDefaultInputDevice()
+                        self.cachedDefaultInputUID = defaultInput?.uid ?? ""
+                        guard newDevices.isEmpty == false else { return }
+                        if let selectedInput = self.appServices.microphonePreferenceCoordinator
+                            .reconcileMicrophoneSelection(
+                                availableInputs: newDevices,
+                                defaultInputUID: self.cachedDefaultInputUID
+                            )
+                        {
+                            self.selectedInputUID = selectedInput.uid
+                        }
+                    }
 
-                                    if !newDevices.isEmpty {
-                                        let currentValid = newDevices.contains { $0.uid == self.selectedOutputUID }
-                                        if !currentValid {
-                                            if let prefUID = SettingsStore.shared.preferredOutputDeviceUID,
-                                               newDevices.contains(where: { $0.uid == prefUID })
-                                            {
-                                                self.selectedOutputUID = prefUID
-                                            } else if let defaultUID = AudioDevice.getDefaultOutputDevice()?.uid,
-                                                      newDevices.contains(where: { $0.uid == defaultUID })
-                                            {
-                                                self.selectedOutputUID = defaultUID
-                                            } else {
-                                                self.selectedOutputUID = newDevices.first?.uid ?? ""
-                                            }
+                    FluidSettingsGroup(title: "Output") {
+                        FluidSettingsRow(title: "Output Device") {
+                            FluidDropdownPicker(
+                                "Output device",
+                                selectedTitle: self.outputDevices.first(where: { $0.uid == self.selectedOutputUID }).map { $0.name == self.cachedDefaultOutputName ? "\($0.name) (System Default)" : $0.name } ?? "Loading...",
+                                selection: self.$selectedOutputUID
+                            ) {
+                                // Handle empty state gracefully
+                                if self.outputDevices.isEmpty {
+                                    Text("Loading...").tag("")
+                                } else {
+                                    ForEach(self.outputDevices, id: \.uid) { dev in
+                                        // Add "(System Default)" tag using cached name to avoid CoreAudio calls during layout
+                                        let isSystemDefault = !self.cachedDefaultOutputName.isEmpty && dev.name == self.cachedDefaultOutputName
+                                        Text(isSystemDefault ? "\(dev.name) (System Default)" : dev.name).tag(dev.uid)
+                                    }
+                                }
+                            }
+                            .fluidDropdownStyle()
+                            .frame(width: 240)
+                            .disabled(self.asr.isRunning) // Disable device changes during recording
+                            .onChange(of: self.selectedOutputUID) { oldUID, newUID in
+                                guard !newUID.isEmpty else { return }
+
+                                // Prevent device changes during active recording
+                                if self.asr.isRunning {
+                                    DebugLogger.shared.warning("Cannot change output device during recording", source: "SettingsView")
+                                    // Revert to previous value
+                                    self.selectedOutputUID = oldUID
+                                    return
+                                }
+
+                                SettingsStore.shared.preferredOutputDeviceUID = newUID
+                                _ = AudioDevice.setDefaultOutputDevice(uid: newUID)
+                            }
+                            // Sync selection when devices load or change
+                            .onChange(of: self.outputDevices) { _, newDevices in
+                                // Update cached default device name when device list changes
+                                self.cachedDefaultOutputName = AudioDevice.getDefaultOutputDevice()?.name ?? ""
+
+                                if !newDevices.isEmpty {
+                                    let currentValid = newDevices.contains { $0.uid == self.selectedOutputUID }
+                                    if !currentValid {
+                                        if let prefUID = SettingsStore.shared.preferredOutputDeviceUID,
+                                           newDevices.contains(where: { $0.uid == prefUID })
+                                        {
+                                            self.selectedOutputUID = prefUID
+                                        } else if let defaultUID = AudioDevice.getDefaultOutputDevice()?.uid,
+                                                  newDevices.contains(where: { $0.uid == defaultUID })
+                                        {
+                                            self.selectedOutputUID = defaultUID
+                                        } else {
+                                            self.selectedOutputUID = newDevices.first?.uid ?? ""
                                         }
                                     }
                                 }
                             }
-                            .settingsSearchTarget(.outputDevice)
-
-                            self.microphoneQualityGuidance
                         }
+                        .settingsSearchTarget(.outputDevice)
                     }
-                    .padding(16)
                 }
                 .shownInSettingsSection(.audio, selectedSection: self.selectedSection)
 
@@ -2018,64 +2026,17 @@ private extension SettingsView {
         self.colorScheme == .light ? Color(nsColor: .labelColor).opacity(0.85) : self.theme.palette.secondaryText
     }
 
-    var microphonePrioritySection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text("Input Device Priority")
-                    .font(self.theme.typography.bodyStrong)
-                    .foregroundStyle(self.settingsTitleText)
-
-                Spacer()
-
-                if self.settings.suppressedMicrophoneUIDs.isEmpty == false {
-                    Button {
-                        self.settings.restoreRemovedMicrophones(with: self.inputDevices)
-                        self.refreshActiveInputSelection()
-                    } label: {
-                        Label("Restore Removed", systemImage: "arrow.uturn.backward")
-                    }
-                    .buttonStyle(.plain)
-                    .font(self.theme.typography.bodySmall)
-                    .foregroundStyle(self.theme.palette.accent)
-                    .disabled(self.isMicrophonePriorityEditingDisabled)
-                }
-            }
-
-            VStack(spacing: 0) {
-                if self.settings.microphonePriority.isEmpty {
-                    HStack(spacing: 8) {
-                        Image(systemName: "mic.slash")
-                            .foregroundStyle(self.settingsSecondaryText)
-                        Text(self.inputDevices.isEmpty ? "No microphones available" : "No microphones in priority")
-                            .font(self.theme.typography.bodySmall)
-                            .foregroundStyle(self.settingsSecondaryText)
-                        Spacer()
-                    }
-                    .padding(.horizontal, 12)
-                    .frame(minHeight: 42)
-                } else {
-                    ForEach(Array(self.settings.microphonePriority.enumerated()), id: \.element.uid) { index, entry in
-                        if index > 0 {
-                            Divider().opacity(0.55)
-                        }
-                        self.microphonePriorityRow(entry, rank: index + 1)
-                    }
-                }
-            }
-            .background(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(self.theme.palette.cardBackground.opacity(self.colorScheme == .light ? 0.72 : 0.52))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .stroke(self.theme.palette.cardBorder.opacity(0.7), lineWidth: 1)
-                    )
+    /// One row per microphone in priority order, or one line saying there are none.
+    @ViewBuilder
+    var microphonePriorityRows: some View {
+        if self.settings.microphonePriority.isEmpty {
+            FluidSettingsRow(
+                title: self.inputDevices.isEmpty ? "No microphones available" : "No microphones in priority"
             )
-            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-
-            Text("FluidVoice tries microphones from top to bottom. Drag to reorder; unavailable devices keep their place.")
-                .font(self.theme.typography.bodySmall)
-                .foregroundStyle(self.settingsSecondaryText)
-                .fixedSize(horizontal: false, vertical: true)
+        } else {
+            ForEach(Array(self.settings.microphonePriority.enumerated()), id: \.element.uid) { index, entry in
+                self.microphonePriorityRow(entry, rank: index + 1)
+            }
         }
     }
 
@@ -2093,40 +2054,31 @@ private extension SettingsView {
         return HStack(spacing: 10) {
             Image(systemName: "line.3.horizontal")
                 .font(.fluidSystem(size: 11, weight: .semibold))
-                .foregroundStyle(self.settingsTertiaryText.opacity(self.isMicrophonePriorityEditingDisabled ? 0.35 : 0.72))
+                .foregroundStyle(self.theme.look.tertiaryText.opacity(self.isMicrophonePriorityEditingDisabled ? 0.5 : 1))
                 .frame(width: 18, height: 30)
                 .contentShape(Rectangle())
                 .onDrag {
                     self.draggedMicrophoneUID = entry.uid
                     return NSItemProvider(object: entry.uid as NSString)
                 } preview: {
-                    ZStack {
-                        RoundedRectangle(cornerRadius: 7, style: .continuous)
-                            .fill(self.theme.palette.cardBackground)
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 7, style: .continuous)
-                                    .stroke(self.theme.palette.cardBorder.opacity(0.8), lineWidth: 1)
-                            )
-
-                        Image(systemName: "line.3.horizontal")
-                            .font(.fluidSystem(size: 11, weight: .semibold))
-                            .foregroundStyle(self.settingsTitleText)
-                    }
-                    .frame(width: 30, height: 30)
-                    .shadow(color: Color.black.opacity(0.18), radius: 5, y: 2)
+                    Image(systemName: "line.3.horizontal")
+                        .font(.fluidSystem(size: 11, weight: .semibold))
+                        .foregroundStyle(self.theme.look.text)
+                        .frame(width: 30, height: 30)
+                        .fluidLit(self.theme.look.card, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
                 }
                 .allowsHitTesting(self.isMicrophonePriorityEditingDisabled == false)
                 .accessibilityHidden(true)
 
             Text("\(rank).")
-                .font(self.theme.typography.bodySmall)
-                .foregroundStyle(self.settingsSecondaryText)
+                .fluidText(.label)
+                .foregroundStyle(self.theme.look.tertiaryText)
                 .monospacedDigit()
                 .frame(width: 22, alignment: .trailing)
 
             Text(entry.name)
-                .font(self.theme.typography.bodyStrong)
-                .foregroundStyle(isAvailable ? self.settingsTitleText : self.settingsSecondaryText)
+                .fluidText(.rowTitle)
+                .foregroundStyle(isAvailable ? self.theme.look.text : self.theme.look.secondaryText)
                 .lineLimit(1)
 
             Spacer(minLength: 8)
@@ -2137,29 +2089,24 @@ private extension SettingsView {
                 } label: {
                     Image(systemName: "trash")
                         .font(.fluidSystem(size: 11, weight: .semibold))
-                        .foregroundStyle(Color(nsColor: .systemRed).opacity(0.82))
                         .frame(width: 24, height: 24)
-                        .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(FluidHoverIconButtonStyle())
                 .disabled(self.isMicrophonePriorityEditingDisabled)
                 .help("Remove \(entry.name) from microphone priority")
                 .accessibilityLabel("Remove \(entry.name)")
                 .transition(.opacity)
             } else if isActive {
-                Circle()
-                    .fill(Color(nsColor: .systemGreen))
-                    .frame(width: 7, height: 7)
-                    .shadow(color: Color(nsColor: .systemGreen).opacity(0.45), radius: 3)
-                    .accessibilityLabel("Active microphone")
+                // Which microphone FluidVoice is using right now, in words rather than a colored dot.
+                FluidStatusLabel(text: "In use")
             } else if isAvailable == false {
                 Text("Unavailable")
-                    .font(self.theme.typography.bodySmall)
-                    .foregroundStyle(self.settingsSecondaryText)
+                    .fluidText(.label)
+                    .foregroundStyle(self.theme.look.secondaryText)
             }
         }
-        .padding(.horizontal, 12)
-        .frame(minHeight: 42)
+        .padding(.horizontal, FluidSettingsLayout.rowInset)
+        .frame(minHeight: 44)
         .contentShape(Rectangle())
         .opacity(isAvailable ? 1 : 0.62)
         .onHover { isHovering in
@@ -2247,38 +2194,6 @@ private extension SettingsView {
             return nil
         }
         return self.inputDevices.first { $0.uid == confirmedUID }
-    }
-
-    @ViewBuilder
-    var microphoneQualityGuidance: some View {
-        if self.selectedInputDevice?.isBluetooth == true {
-            self.microphoneQualityGuidanceRow(
-                message: "Bluetooth microphone mode can reduce headphone playback quality. Prefer a wired, USB, or display microphone when available.",
-                systemImage: "exclamationmark.triangle.fill",
-                color: self.theme.palette.warning
-            )
-        } else {
-            self.microphoneQualityGuidanceRow(
-                message: "This order applies only to FluidVoice and does not change your macOS input.",
-                systemImage: "info.circle",
-                color: self.settingsSecondaryText
-            )
-        }
-    }
-
-    func microphoneQualityGuidanceRow(
-        message: String,
-        systemImage: String,
-        color: Color
-    ) -> some View {
-        HStack(alignment: .top, spacing: 8) {
-            Image(systemName: systemImage)
-                .foregroundStyle(color)
-            Text(message)
-                .font(self.theme.typography.bodySmall)
-                .foregroundStyle(color)
-                .fixedSize(horizontal: false, vertical: true)
-        }
     }
 }
 
