@@ -61,6 +61,8 @@ struct FluidSettingsGroup<Content: View>: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+            // Row hover fills stay inside the card's rounded corners.
+            .clipShape(RoundedRectangle(cornerRadius: FluidSettingsLayout.cornerRadius, style: .continuous))
             .fluidLit(look.card, in: RoundedRectangle(cornerRadius: FluidSettingsLayout.cornerRadius, style: .continuous))
 
             if let footnote {

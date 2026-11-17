@@ -2049,18 +2049,18 @@ struct SettingsView: View {
 
     // MARK: - Shortcuts page
 
-    private static let shortcutsGroupInset: CGFloat = 14
+    private static var shortcutsGroupInset: CGFloat { FluidSettingsLayout.rowInset }
     private static let dictationStyleColumnWidth: CGFloat = 184
     private static let dictationAutoSendColumnWidth: CGFloat = 64
 
     private var shortcutsPage: some View {
-        VStack(alignment: .leading, spacing: 24) {
+        VStack(alignment: .leading, spacing: FluidSettingsLayout.groupSpacing) {
             if !self.hotkeyManagerInitialized {
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.small).fixedSize()
                     Text("Shortcuts are starting…")
-                        .font(self.theme.typography.bodySmall)
-                        .foregroundStyle(self.settingsSecondaryText)
+                        .fluidText(.body)
+                        .foregroundStyle(self.theme.look.secondaryText)
                 }
             }
             self.shortcutsSection(
@@ -2091,44 +2091,14 @@ struct SettingsView: View {
         footnote: String? = nil,
         @ViewBuilder content: () -> Content
     ) -> some View {
-        let shape = RoundedRectangle(cornerRadius: 10, style: .continuous)
-        return VStack(alignment: .leading, spacing: 0) {
-            HStack(alignment: .firstTextBaseline) {
-                Text(title)
-                    .font(self.theme.typography.bodyStrong)
-                    .foregroundStyle(self.settingsTitleText)
-                    .accessibilityAddTraits(.isHeader)
-                Spacer(minLength: 12)
-                if let hint {
-                    Text(hint)
-                        .font(self.theme.typography.bodySmall)
-                        .foregroundStyle(self.settingsTertiaryText)
-                }
-            }
-            .padding(.horizontal, 4)
-            .padding(.bottom, 8)
-
-            VStack(spacing: 0, content: content)
-                .background(shape.fill(self.theme.palette.elevatedCardBackground))
-                .overlay(shape.strokeBorder(self.theme.palette.cardBorder, lineWidth: 1))
-
-            if let footnote {
-                Text(footnote)
-                    .font(self.theme.typography.bodySmall)
-                    .foregroundStyle(self.settingsTertiaryText)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.horizontal, 4)
-                    .padding(.top, 8)
-            }
-        }
+        // Shortcuts draws its own lines, so a row can span the table or carry its warning.
+        let rows = content()
+        return FluidSettingsGroup(title: title, hint: hint, footnote: footnote, separated: false) { rows }
     }
 
     /// Hairline between rows, inset from the leading edge like system settings lists.
     private var shortcutsRowDivider: some View {
-        Rectangle()
-            .fill(self.theme.palette.cardBorder)
-            .frame(height: 1)
-            .padding(.leading, Self.shortcutsGroupInset)
+        FluidHairline().padding(.leading, Self.shortcutsGroupInset)
     }
 
     @ViewBuilder
@@ -2186,8 +2156,8 @@ struct SettingsView: View {
                     }
                 }
             }
-            .font(self.theme.typography.caption)
-            .foregroundStyle(self.settingsTertiaryText)
+            .fluidText(.label)
+            .foregroundStyle(self.theme.look.tertiaryText)
             .lineLimit(1)
             .padding(.horizontal, Self.shortcutsGroupInset)
             .padding(.top, 10)
@@ -2218,13 +2188,12 @@ struct SettingsView: View {
                 self.toggleRecording(addTarget)
             } label: {
                 Label("Add shortcut", systemImage: "plus")
-                    .font(self.theme.typography.bodySmall)
-                    .foregroundStyle(self.theme.palette.accent)
-                    .frame(maxWidth: .infinity, minHeight: 36, alignment: .leading)
+                    .fluidText(.body)
+                    .foregroundStyle(self.theme.look.text)
+                    .frame(maxWidth: .infinity, minHeight: 40, alignment: .leading)
                     .padding(.horizontal, Self.shortcutsGroupInset)
-                    .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .fluidSelectableRow(isSelected: false)
             .disabled(self.isRecordingAnyShortcut)
         }
     }
@@ -2294,10 +2263,7 @@ struct SettingsView: View {
             get: { self.settings.autoSendEnabled(for: shortcut) },
             set: { self.settings.setAutoSendEnabled($0, for: shortcut) }
         ))
-        .toggleStyle(.switch)
-        .tint(self.theme.palette.accent)
-        .controlSize(.small)
-        .font(self.theme.typography.bodySmall)
+        .fluidSwitch()
         .fixedSize()
         .disabled(self.isRecordingAnyShortcut)
         .accessibilityLabel("Auto-send for \(shortcut.displayString)")
@@ -2951,7 +2917,7 @@ private extension SettingsView {
                             )
                         )
                         .textFieldStyle(.plain)
-                        .font(self.theme.typography.bodySmall)
+                        .fluidText(.body)
                         .padding(.horizontal, 10)
                         .frame(width: ShortcutKeyField.width, height: ShortcutKeyField.height)
                         .fluidDropdownSurface(cornerRadius: 10)
@@ -3018,31 +2984,13 @@ private extension SettingsView {
         indent: CGFloat = 0,
         @ViewBuilder control: () -> Control
     ) -> some View {
-        HStack(spacing: 14) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                    .font(self.theme.typography.bodyStrong)
-                    .foregroundStyle(self.settingsTitleText)
-                Text(description)
-                    .font(self.theme.typography.bodySmall)
-                    .foregroundStyle(self.settingsSecondaryText)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            control()
-        }
-        .padding(.leading, Self.shortcutsGroupInset + indent)
-        .padding(.trailing, Self.shortcutsGroupInset)
-        .padding(.vertical, 10)
+        let control = control()
+        return FluidSettingsRow(title: title, description: description, indent: indent) { control }
     }
 
     /// Same size as the Auto-send switches in the Dictation group above.
     func shortcutsSwitch(isOn: Binding<Bool>, label: String) -> some View {
-        Toggle(label, isOn: isOn)
-            .toggleStyle(.switch)
-            .tint(self.theme.palette.accent)
-            .labelsHidden()
-            .controlSize(.small)
+        Toggle(label, isOn: isOn).fluidSwitch()
     }
 }
 
