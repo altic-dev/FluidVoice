@@ -77,9 +77,10 @@ or shadow.
 Pages move onto the look one at a time (Models first). A page on the look uses:
 
 - `.fluidCanvas()` on its scroll view for the page background.
-- `FluidPageHeader(title:subtitle:)` for its headline. The toolbar already shows the page
-  name, so the headline is a sentence about the page (like the Dashboard greeting), never
-  the page name again.
+- `FluidPageHeader(title:subtitle:)` for a headline, only when it tells people something the
+  page doesn't already say. The toolbar already shows the page name, so a headline is a
+  sentence about the page (like the Dashboard greeting), never the page name again. Models
+  has none: its cards already say what each model does.
 - `FluidSurfaceCard { }` for cards: solid fill, hairline edge, no material.
 - A card that opens something is one button: `Button { … }.fluidCardButton()`, with a
   `FluidActionLabel(title: "Change")` inside to name the action. The whole card takes the click,

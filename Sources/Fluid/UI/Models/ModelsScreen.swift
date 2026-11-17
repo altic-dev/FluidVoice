@@ -45,15 +45,13 @@ struct ModelsScreen: View {
 
     var body: some View {
         ScrollView(.vertical) {
-            VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xl) {
-                FluidPageHeader(title: "What hears you, and how your words come out.")
-                ViewThatFits(in: .horizontal) {
-                    // Side by side, both cards take the taller one's height.
-                    HStack(alignment: .top, spacing: self.theme.metrics.spacing.md) { self.cards }
-                        .fixedSize(horizontal: false, vertical: true)
-                    VStack(alignment: .leading, spacing: self.theme.metrics.spacing.md) { self.cards }
-                        .fixedSize(horizontal: false, vertical: true)
-                }
+            // No headline: each card already says what its model does.
+            ViewThatFits(in: .horizontal) {
+                // Side by side, both cards take the taller one's height.
+                HStack(alignment: .top, spacing: self.theme.metrics.spacing.md) { self.cards }
+                    .fixedSize(horizontal: false, vertical: true)
+                VStack(alignment: .leading, spacing: self.theme.metrics.spacing.md) { self.cards }
+                    .fixedSize(horizontal: false, vertical: true)
             }
             // Same width rule as Voice Engine and AI Settings: fill the page with even margins.
             .fluidPageContent(width: .expanding)
