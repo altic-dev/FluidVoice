@@ -73,7 +73,6 @@ struct MeetingDocumentTabs: View {
     @Binding var selection: MeetingDocumentSection
     var primaryTitle = "Transcript"
     var primaryIcon = "text.alignleft"
-    var isEnabled = true
     @Environment(\.theme) private var theme
 
     var body: some View {
@@ -90,7 +89,6 @@ struct MeetingDocumentTabs: View {
                 .allowsHitTesting(false)
                 .accessibilityHidden(true)
         }
-        .disabled(!self.isEnabled)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Meeting document views")
     }

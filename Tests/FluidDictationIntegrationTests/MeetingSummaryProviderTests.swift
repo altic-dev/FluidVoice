@@ -285,7 +285,7 @@ final class MeetingSummaryProviderTests: XCTestCase {
     }
 }
 
-private class MeetingSummaryURLProtocol: URLProtocol, @unchecked Sendable {
+final class MeetingSummaryURLProtocol: URLProtocol, @unchecked Sendable {
     override class func canInit(with _: URLRequest) -> Bool {
         true
     }

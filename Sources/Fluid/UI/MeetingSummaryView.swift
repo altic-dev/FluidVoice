@@ -3,10 +3,11 @@ import Combine
 import SwiftUI
 
 struct MeetingSummaryView: View {
-    var session: MeetingSession? = nil
-    var isQuiescent = true
+    let session: MeetingSession?
+    let isQuiescent: Bool
     @Environment(\.theme) private var theme
     @ObservedObject private var settings = SettingsStore.shared
+    @ObservedObject private var generation = AppServices.shared.meetingSummaryGeneration
     @StateObject private var preferences = MeetingSummaryPreferences()
     @StateObject private var controller = MeetingSummaryController()
     @State private var kind = MeetingSummaryKind.executive
@@ -19,12 +20,37 @@ struct MeetingSummaryView: View {
     @State private var confirmDeletion = false
     @State private var showModelPicker = false
 
-    private var refreshID: String {
-        // A prompt edit re-checks the saved custom summary, so an older result never stays on screen.
-        let prompt = self.kind == .custom
+    init(session: MeetingSession?, isQuiescent: Bool) {
+        self.session = session
+        self.isQuiescent = isQuiescent
+        if let request = AppServices.shared.meetingSummaryGeneration.request, request.sessionID == session?.id {
+            self._kind = State(initialValue: request.kind)
+        }
+    }
+
+    private var promptHash: String? {
+        self.kind == .custom
             ? MeetingSummaryInput.fingerprint(self.preferences.customPrompt.trimmingCharacters(in: .whitespacesAndNewlines))
-            : ""
-        return "\(self.session?.id.uuidString ?? "home")-\(self.session?.updatedAt.timeIntervalSince1970 ?? 0)-\(self.kind.rawValue)-\(prompt)"
+            : nil
+    }
+
+    private var refreshID: String {
+        "\(self.session?.id.uuidString ?? "home")-\(self.session?.updatedAt.timeIntervalSince1970 ?? 0)-\(self.kind.rawValue)-\(self.promptHash ?? "")-\(self.generation.savedRevision)"
+    }
+
+    private var isGenerating: Bool {
+        self.generation.isRunning && self.generation.request?.sessionID == self.session?.id
+    }
+
+    private var busy: Bool {
+        self.controller.busy || self.isGenerating
+    }
+
+    private var generationError: String? {
+        guard let request = self.generation.request,
+              request.sessionID == self.session?.id, request.kind == self.kind, request.promptHash == self.promptHash
+        else { return nil }
+        return self.generation.error
     }
 
     private var providerID: String {
@@ -80,7 +106,7 @@ struct MeetingSummaryView: View {
             Task { @MainActor in self.reloadProviders() }
         }
         .onChange(of: self.preferences.selection) { _, _ in self.resolveRoute() }
-        .onDisappear { self.controller.cancel() }
+        .onDisappear { self.controller.cancelModelOperation() }
         .alert("Delete summary model?", isPresented: self.$confirmDeletion) {
             Button("Cancel", role: .cancel) {}
             Button("Delete", role: .destructive) { self.controller.deleteModel(asr: AppServices.shared.asr) }
@@ -100,13 +126,17 @@ struct MeetingSummaryView: View {
                 if !self.catalog.isEmpty {
                     Button("Manage providers") { AppNavigationRouter.shared.request(.aiEnhancements) }
                         .buttonStyle(.link)
-                        .disabled(self.controller.busy)
+                        .disabled(self.busy)
                 }
             }
-            if !self.catalogLoaded {
+            if !self.catalogLoaded && !self.isGenerating {
                 ProgressView().controlSize(.small)
             } else if !self.hasChoices {
-                self.setupPrompt
+                if self.isGenerating {
+                    self.actions
+                } else {
+                    self.setupPrompt
+                }
             } else {
                 // Two equal columns; stacked when the window is narrow.
                 ViewThatFits(in: .horizontal) {
@@ -119,9 +149,9 @@ struct MeetingSummaryView: View {
                         self.kindPicker
                     }
                 }
-                .disabled(self.controller.busy)
+                .disabled(self.busy)
                 if self.usesOnDevice {
-                    self.thinkingRow.disabled(self.controller.busy)
+                    self.thinkingRow.disabled(self.busy)
                 }
                 if self.kind == .custom {
                     self.customPromptEditor
@@ -132,13 +162,6 @@ struct MeetingSummaryView: View {
                         .font(self.theme.typography.caption)
                         .foregroundStyle(self.theme.palette.secondaryText)
                 }
-                if let error = self.controller.error ?? self.readinessIssue {
-                    Text(error)
-                        .font(self.theme.typography.bodySmall)
-                        .foregroundStyle(self.theme.palette.warning)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .textSelection(.enabled)
-                }
                 if self.session == nil {
                     Text("Open a completed meeting to summarize its transcript.")
                         .font(self.theme.typography.bodySmall)
@@ -147,6 +170,13 @@ struct MeetingSummaryView: View {
                 Label(self.destination, systemImage: self.usesOnDevice ? "lock" : "network")
                     .font(self.theme.typography.caption)
                     .foregroundStyle(self.theme.palette.secondaryText)
+            }
+            if let error = self.controller.error ?? self.generationError ?? (self.hasChoices ? self.readinessIssue : nil) {
+                Text(error)
+                    .font(self.theme.typography.bodySmall)
+                    .foregroundStyle(self.theme.palette.warning)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
             }
         }
         .padding(self.theme.metrics.spacing.lg)
@@ -304,7 +334,7 @@ struct MeetingSummaryView: View {
                     }
                 }
                 .frame(minHeight: 96, maxHeight: 200)
-                .disabled(self.controller.busy)
+                .disabled(self.busy)
                 .accessibilityLabel("Custom summary prompt")
             Text("Saved for every meeting. Replaces the summary type instructions; the transcript is still treated as source material only.")
                 .font(self.theme.typography.caption)
@@ -316,12 +346,12 @@ struct MeetingSummaryView: View {
     private var actions: some View {
         FluidGlassControlGroup {
             HStack(spacing: self.theme.metrics.spacing.sm) {
-                if self.controller.checking {
-                    ProgressView().controlSize(.small)
-                } else if self.controller.generating {
+                if self.isGenerating {
                     ProgressView().controlSize(.small)
                     Text("Summarizing…").font(self.theme.typography.bodySmall)
-                    Button("Cancel") { self.controller.cancel() }.fluidGlassAction()
+                    Button("Cancel") { self.generation.cancel() }.fluidGlassAction()
+                } else if self.controller.checking {
+                    ProgressView().controlSize(.small)
                 } else if self.usesOnDevice, self.controller.downloading {
                     Button {} label: {
                         VStack(spacing: 4) {
@@ -334,7 +364,7 @@ struct MeetingSummaryView: View {
                     }
                     .fluidGlassAction()
                     .disabled(true)
-                    Button("Cancel") { self.controller.cancel() }.fluidGlassAction()
+                    Button("Cancel") { self.controller.cancelModelOperation() }.fluidGlassAction()
                 } else if self.usesOnDevice, self.controller.deleting {
                     ProgressView().controlSize(.small)
                     Text("Deleting download…").font(self.theme.typography.bodySmall)
@@ -359,23 +389,25 @@ struct MeetingSummaryView: View {
                         Button("Delete model", systemImage: "trash", role: .destructive) {
                             self.confirmDeletion = true
                         }
-                        .disabled(self.controller.busy || self.controller.checking || !self.isQuiescent)
+                        .disabled(self.busy || self.controller.checking || !self.isQuiescent)
                     } label: { Image(systemName: "ellipsis") }
                         .menuIndicator(.hidden)
                         .fluidGlassAction(circular: true)
                         .accessibilityLabel("Summary model actions")
-                        .disabled(self.controller.busy)
+                        .disabled(self.busy)
                 }
             }
         }
     }
 
     private func generate() {
-        guard let session else { return }
+        guard let session, self.isQuiescent, !self.busy, !self.controller.checking else { return }
         if self.usesOnDevice {
-            self.controller.summarizeOnDevice(
+            guard self.controller.installed, let model = self.onDeviceModel else { return }
+            self.generation.summarizeOnDevice(
                 session: session,
                 kind: self.kind,
+                model: model,
                 customPrompt: self.preferences.customPrompt,
                 thinking: self.preferences.thinksFirst,
                 asr: AppServices.shared.asr
@@ -384,7 +416,7 @@ struct MeetingSummaryView: View {
         }
         self.resolveRoute()
         if let route {
-            self.controller.summarize(
+            self.generation.summarize(
                 session: session,
                 kind: self.kind,
                 route: route,

@@ -252,6 +252,7 @@ struct MeetingTranscriptionView: View {
     @ObservedObject private var appServices = AppServices.shared
     @ObservedObject private var summaryActivity = MeetingSummaryActivityCoordinator.shared
     let onOpenVoiceEngine: () -> Void
+    let resumingSummarySessionID: MeetingSessionID?
 
     @Environment(\.theme) private var theme
     @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
@@ -289,12 +290,20 @@ struct MeetingTranscriptionView: View {
         coordinator: MeetingSessionCoordinator,
         asrService: ASRService,
         historySnapshot: MeetingHistorySnapshot,
+        resumingSummarySessionID: MeetingSessionID? = nil,
         onOpenVoiceEngine: @escaping () -> Void
     ) {
         self.coordinator = coordinator
         self.asrService = asrService
         self.historySnapshot = historySnapshot
+        self.resumingSummarySessionID = resumingSummarySessionID
         self.onOpenVoiceEngine = onOpenVoiceEngine
+        if let resumingSummarySessionID {
+            if coordinator.state != .completed(resumingSummarySessionID) {
+                self._selectedHistorySessionID = State(initialValue: resumingSummarySessionID)
+            }
+            self._isMeetingHistoryVisible = State(initialValue: false)
+        }
 
         let initialDraft = MeetingTranscriptionSetupDraft(settings: .shared)
         self._setupDraft = State(initialValue: initialDraft)
@@ -345,7 +354,8 @@ struct MeetingTranscriptionView: View {
                         onEditSetup: self.openMeetingSettings,
                         isRetrying: self.isRetrying,
                         onCloseSelection: self.closeCanvasAction,
-                        onOpenIntegrations: self.openMeetingIntegrations
+                        onOpenIntegrations: self.openMeetingIntegrations,
+                        resumingSummarySessionID: self.resumingSummarySessionID
                     )
                     .padding(.trailing, self.isMeetingHistoryVisible && geometry.size.width >= 900 ? 272 : 0)
                     .allowsHitTesting(!self.isMeetingHistoryVisible || geometry.size.width >= 900)
@@ -414,7 +424,7 @@ struct MeetingTranscriptionView: View {
             self.applyPendingSourceChoiceRefresh()
             MeetingDiarizationModelStore.shared.prepareInBackground()
             async let sources: Void = self.refreshSources(requestPermissions: false)
-            if self.isMeetingHistoryVisible {
+            if self.isMeetingHistoryVisible || self.selectedHistorySessionID != nil {
                 await self.loadMeetingHistory()
             }
             await sources
@@ -1514,6 +1524,7 @@ struct MeetingTranscriptionCanvas: View {
     let isRetrying: Bool
     let onCloseSelection: (() -> Void)?
     var onOpenIntegrations: (() -> Void)? = nil
+    var resumingSummarySessionID: MeetingSessionID? = nil
 
     @Environment(\.theme) private var theme
 
@@ -1614,7 +1625,8 @@ struct MeetingTranscriptionCanvas: View {
                         onAssignSpeakers: { names in await self.onAssignSpeakers(session.id, names) },
                         onClose: self.onCloseSelection,
                         isRetranscribing: self.isRetrying,
-                        onOpenIntegrations: self.onOpenIntegrations
+                        onOpenIntegrations: self.onOpenIntegrations,
+                        resumesSummary: session.id == self.resumingSummarySessionID
                     )
                 }
             case let .failed(session, message):

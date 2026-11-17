@@ -256,6 +256,7 @@ struct ContentView: View {
 
     @EnvironmentObject private var appServices: AppServices
     @StateObject private var meetingHistorySnapshot = MeetingHistorySnapshot()
+    @State private var meetingSummaryToResume: MeetingSessionID?
     @StateObject private var mouseTracker = MousePositionTracker()
     @StateObject private var commandModeService = CommandModeService()
     @StateObject private var rewriteModeService = RewriteModeService()
@@ -632,7 +633,11 @@ struct ContentView: View {
                     )
                 }
             }
-            .onChange(of: self.selectedSidebarItem) { _, newValue in
+            .onChange(of: self.selectedSidebarItem) { oldValue, newValue in
+                if oldValue == .meetingTranscription {
+                    let generation = self.appServices.meetingSummaryGeneration
+                    self.meetingSummaryToResume = generation.isRunning ? generation.request?.sessionID : nil
+                }
                 self.handleModeTransition(from: self.previousSidebarItem, to: newValue)
                 self.previousSidebarItem = newValue
             }
@@ -2326,10 +2331,13 @@ struct ContentView: View {
     }
 
     private var meetingTranscriptionView: some View {
-        MeetingTranscriptionView(
+        let generation = self.appServices.meetingSummaryGeneration
+        let runningSessionID = generation.isRunning ? generation.request?.sessionID : nil
+        return MeetingTranscriptionView(
             coordinator: self.appServices.meetingSessionCoordinator,
             asrService: self.asr,
             historySnapshot: self.meetingHistorySnapshot,
+            resumingSummarySessionID: runningSessionID ?? self.meetingSummaryToResume,
             onOpenVoiceEngine: { self.selectedSidebarItem = .voiceEngine }
         )
     }
