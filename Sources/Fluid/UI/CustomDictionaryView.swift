@@ -1164,59 +1164,35 @@ struct CustomDictionaryView: View {
         .frame(width: Self.DictionaryHeaderControlLayout.controlsWidth, height: Self.DictionaryHeaderControlLayout.controlHeight, alignment: .leading)
     }
 
+    /// Only shown inside Settings' Dictation Formatting page, so it uses the settings look.
     private var punctuationDictionarySection: some View {
-        ThemedCard(style: .standard, hoverEffect: false) {
-            HStack(alignment: .center, spacing: self.theme.metrics.spacing.md) {
-                self.settingsIconTile(systemName: "textformat")
-
-                VStack(alignment: .leading, spacing: 3) {
-                    HStack(spacing: 6) {
-                        Text("Spoken Formatting")
-                            .font(self.theme.typography.sectionTitle)
-                        Text("\(SettingsStore.SpokenFormattingAction.allCases.count) actions · \(self.punctuationRules.count) punctuation")
-                            .font(self.theme.typography.captionSmall)
-                            .foregroundStyle(self.theme.palette.tertiaryText)
-                    }
-                    Text("Use a start word to safely insert formatting actions, punctuation, and symbols.")
-                        .font(self.theme.typography.caption)
-                        .foregroundStyle(self.theme.palette.secondaryText)
+        FluidSettingsGroup {
+            FluidSettingsRow(
+                title: "Spoken Formatting",
+                description: "Use a start word to safely insert formatting actions, punctuation, and symbols.",
+                footnote: "\(SettingsStore.SpokenFormattingAction.allCases.count) actions · \(self.punctuationRules.count) punctuation"
+            ) {
+                HStack(alignment: .center, spacing: self.theme.metrics.spacing.md) {
+                    Button("Modify") { self.presentPunctuationDictionary() }
+                        .fluidAction()
+                        .help("Modify spoken formatting")
+                        .popover(isPresented: self.$isPunctuationDictionaryPresented, arrowEdge: .top) {
+                            self.punctuationDictionaryPopover
+                        }
+                    self.punctuationDictionaryToggle
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-
-                self.punctuationDictionaryControls
+                .fixedSize()
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private var punctuationDictionaryControls: some View {
-        HStack(alignment: .center, spacing: self.theme.metrics.spacing.md) {
-            Button {
-                self.presentPunctuationDictionary()
-            } label: {
-                Label("Modify", systemImage: "slider.horizontal.3")
-                    .frame(width: Self.DictionaryHeaderControlLayout.actionButtonLabelWidth)
-            }
-            .frame(width: Self.DictionaryHeaderControlLayout.actionButtonWidth)
-            .fluidButton(.compact, size: .medium)
-            .help("Modify spoken formatting")
-            .popover(isPresented: self.$isPunctuationDictionaryPresented, arrowEdge: .top) {
-                self.punctuationDictionaryPopover
-            }
-
-            self.punctuationDictionaryToggle
-        }
-        .frame(width: Self.DictionaryHeaderControlLayout.controlsWidth, height: Self.DictionaryHeaderControlLayout.controlHeight, alignment: .leading)
-    }
-
     private var punctuationDictionaryToggle: some View {
         Toggle("Spoken Formatting", isOn: self.$punctuationAutoConvertEnabled)
-            .labelsHidden()
-            .toggleStyle(.switch)
+            .fluidSwitch()
             .onChange(of: self.punctuationAutoConvertEnabled) { _, newValue in
                 SettingsStore.shared.autoConvertPunctuationEnabled = newValue
             }
-            .frame(width: Self.DictionaryHeaderControlLayout.toggleColumnWidth, alignment: .trailing)
             .help("Turn Spoken Formatting on or off.")
     }
 

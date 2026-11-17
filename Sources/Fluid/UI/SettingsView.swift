@@ -749,88 +749,8 @@ struct SettingsView: View {
                     .shownInSettingsSection(self.selectedSection == .shortcuts ? .shortcuts : .dictation, selectedSection: self.selectedSection)
                 }
 
-                ThemedCard(style: .standard) {
-                    VStack(alignment: .leading, spacing: 14) {
-                        Label("Text Formatting", systemImage: "textformat")
-                            .font(.fluidSystem(.headline))
-                            .foregroundStyle(.primary)
-
-                        VStack(spacing: 16) {
-                            self.settingsToggleRow(
-                                title: "Lowercase First Letter",
-                                description: "Start each transcription with a lowercase letter.",
-                                isOn: Binding(
-                                    get: { self.settings.gaavLowercaseFirstLetterEnabled },
-                                    set: { self.settings.gaavLowercaseFirstLetterEnabled = $0 }
-                                )
-                            )
-                            Divider().opacity(0.2)
-
-                            self.settingsToggleRow(
-                                title: "Remove Trailing Period",
-                                description: "Drop a final period from transcriptions.",
-                                isOn: Binding(
-                                    get: { self.settings.gaavRemoveTrailingPeriodEnabled },
-                                    set: { self.settings.gaavRemoveTrailingPeriodEnabled = $0 }
-                                )
-                            )
-                            Divider().opacity(0.2)
-
-                            self.settingsToggleRow(
-                                title: "Slash Commands & @ Formatting",
-                                description: "Convert spoken slash commands and supported @ mentions into symbols.",
-                                isOn: Binding(
-                                    get: { self.settings.literalDictationFormattingEnabled },
-                                    set: { self.settings.literalDictationFormattingEnabled = $0 }
-                                )
-                            )
-                            Divider().opacity(0.2)
-
-                            self.settingsToggleRow(
-                                title: "Space Between Dictations",
-                                description: "Add spacing when consecutive dictations are joined.",
-                                isOn: Binding(
-                                    get: { self.settings.continuousDictationSpacingEnabled },
-                                    set: { self.settings.continuousDictationSpacingEnabled = $0 }
-                                )
-                            )
-                            Divider().opacity(0.2)
-
-                            self.settingsToggleRow(
-                                title: "Smart Capitalization",
-                                description: "Use text before the cursor to choose uppercase or lowercase.",
-                                isOn: Binding(
-                                    get: { self.settings.contextAwareCapitalizationEnabled },
-                                    set: { self.settings.contextAwareCapitalizationEnabled = $0 }
-                                )
-                            )
-                        }
-                    }
-                    .padding(16)
-                }
-                .settingsSearchTarget(.textFormatting)
-                .shownInSettingsSection(.dictationFormatting, selectedSection: self.selectedSection)
-
                 if self.selectedSection == .dictationFormatting {
-                    CustomDictionaryView(formattingOnly: true, revealTarget: .constant(nil))
-                        .settingsSearchTarget(.spokenFormatting)
-                    ThemedCard(style: .standard) {
-                        VStack(alignment: .leading, spacing: 14) {
-                            self.settingsToggleRow(
-                                title: "Remove Filler Words",
-                                description: "Remove filler sounds like ‘um’, ‘uh’, and ‘er’ from transcriptions.",
-                                isOn: Binding(
-                                    get: { self.settings.removeFillerWordsEnabled },
-                                    set: { self.settings.removeFillerWordsEnabled = $0 }
-                                )
-                            )
-                            if self.settings.removeFillerWordsEnabled {
-                                FillerWordsEditor()
-                            }
-                        }
-                        .padding(16)
-                    }
-                    .settingsSearchTarget(.fillerWords)
+                    self.formattingPage
                 }
 
                 // Notification Settings Card
@@ -2507,43 +2427,44 @@ struct FillerWordsEditor: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Filler words to remove:")
-                .font(self.theme.typography.bodySmall)
-                .foregroundStyle(.secondary)
+            Text("Filler words to remove")
+                .fluidText(.label)
+                .foregroundStyle(self.theme.look.tertiaryText)
 
-            // Word chips
             FlowLayout(spacing: 6) {
                 ForEach(self.fillerWords, id: \.self) { word in
-                    HStack(spacing: 4) {
+                    HStack(spacing: 2) {
                         Text(word)
-                            .font(.fluidSystem(.caption))
+                            .fluidText(.body)
+                            .foregroundStyle(self.theme.look.text)
                         Button {
                             self.removeWord(word)
                         } label: {
                             Image(systemName: "xmark")
-                                .font(.fluidSystem(.caption2))
+                                .font(.fluidSystem(size: 9, weight: .semibold))
+                                .frame(width: 16, height: 16)
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(FluidHoverIconButtonStyle())
+                        .accessibilityLabel("Remove \(word)")
                     }
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(
-                        RoundedRectangle(cornerRadius: 6, style: .continuous)
-                            .fill(.quaternary)
-                    )
+                    .padding(.leading, 10)
+                    .padding(.trailing, 4)
+                    .padding(.vertical, 3)
+                    .background(self.theme.look.quietFill, in: Capsule())
                 }
             }
 
-            // Add new word
             HStack(spacing: 8) {
                 TextField("Add word", text: self.$newWord)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: 100)
+                    .textFieldStyle(.plain)
+                    .fluidText(.body)
+                    .padding(.horizontal, 10)
+                    .frame(width: 140, height: 28)
+                    .fluidDropdownSurface(cornerRadius: 8)
                     .onSubmit { self.addWord() }
 
                 Button("Add") { self.addWord() }
-                    .fluidOutlinedButton()
-                    .controlSize(.small)
+                    .fluidAction()
                     .disabled(self.newWord.trimmingCharacters(in: .whitespaces).isEmpty)
 
                 Spacer()
@@ -2552,8 +2473,7 @@ struct FillerWordsEditor: View {
                     self.fillerWords = SettingsStore.defaultFillerWords
                     SettingsStore.shared.fillerWords = self.fillerWords
                 }
-                .fluidOutlinedButton()
-                .controlSize(.small)
+                .fluidAction()
             }
         }
     }
@@ -2954,6 +2874,75 @@ private extension SettingsView {
             Toggle(title, isOn: isOn)
                 .fluidSwitch()
                 .accessibilityLabel(title)
+        }
+    }
+
+    // MARK: - Dictation Formatting page
+
+    /// Three groups whose first rows already say what they hold, so none needs a title of its own.
+    private var formattingPage: some View {
+        VStack(alignment: .leading, spacing: FluidSettingsLayout.groupSpacing) {
+            FluidSettingsGroup {
+                self.switchRow(
+                    title: "Lowercase First Letter",
+                    description: "Start each transcription with a lowercase letter.",
+                    isOn: Binding(
+                        get: { self.settings.gaavLowercaseFirstLetterEnabled },
+                        set: { self.settings.gaavLowercaseFirstLetterEnabled = $0 }
+                    )
+                )
+                self.switchRow(
+                    title: "Remove Trailing Period",
+                    description: "Drop a final period from transcriptions.",
+                    isOn: Binding(
+                        get: { self.settings.gaavRemoveTrailingPeriodEnabled },
+                        set: { self.settings.gaavRemoveTrailingPeriodEnabled = $0 }
+                    )
+                )
+                self.switchRow(
+                    title: "Slash Commands & @ Formatting",
+                    description: "Convert spoken slash commands and supported @ mentions into symbols.",
+                    isOn: Binding(
+                        get: { self.settings.literalDictationFormattingEnabled },
+                        set: { self.settings.literalDictationFormattingEnabled = $0 }
+                    )
+                )
+                self.switchRow(
+                    title: "Space Between Dictations",
+                    description: "Add spacing when consecutive dictations are joined.",
+                    isOn: Binding(
+                        get: { self.settings.continuousDictationSpacingEnabled },
+                        set: { self.settings.continuousDictationSpacingEnabled = $0 }
+                    )
+                )
+                self.switchRow(
+                    title: "Smart Capitalization",
+                    description: "Use text before the cursor to choose uppercase or lowercase.",
+                    isOn: Binding(
+                        get: { self.settings.contextAwareCapitalizationEnabled },
+                        set: { self.settings.contextAwareCapitalizationEnabled = $0 }
+                    )
+                )
+            }
+            .settingsSearchTarget(.textFormatting)
+
+            CustomDictionaryView(formattingOnly: true, revealTarget: .constant(nil))
+                .settingsSearchTarget(.spokenFormatting)
+
+            FluidSettingsGroup {
+                self.switchRow(
+                    title: "Remove Filler Words",
+                    description: "Remove filler sounds like ‘um’, ‘uh’, and ‘er’ from transcriptions.",
+                    isOn: Binding(
+                        get: { self.settings.removeFillerWordsEnabled },
+                        set: { self.settings.removeFillerWordsEnabled = $0 }
+                    )
+                )
+                if self.settings.removeFillerWordsEnabled {
+                    FluidSettingsBlock { FillerWordsEditor() }
+                }
+            }
+            .settingsSearchTarget(.fillerWords)
         }
     }
 
