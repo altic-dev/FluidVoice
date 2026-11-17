@@ -542,9 +542,20 @@ struct ContentView: View {
                 guard UserDefaults.standard.bool(forKey: "FluidDebugRemoteToggleEnabled") else { return }
                 self.toggleSidebar()
             }
-            .onReceive(DistributedNotificationCenter.default().publisher(for: Notification.Name("com.FluidApp.debug.openSettings"))) { _ in
+            .onReceive(DistributedNotificationCenter.default().publisher(for: Notification.Name("com.FluidApp.debug.openSettings"))) { notification in
                 guard UserDefaults.standard.bool(forKey: "FluidDebugRemoteToggleEnabled") else { return }
-                self.menuBarManager.openPreferencesFromUI()
+                // An optional page name ("shortcuts", "audio", …) opens that page; "close" closes Settings.
+                switch (notification.object as? String).map({ ($0, SettingsSection(rawValue: $0)) }) {
+                case let (_, section?)?: self.openSettings(section)
+                case ("close", _)?: self.closeSettings()
+                default: self.menuBarManager.openPreferencesFromUI()
+                }
+            }
+            .onReceive(DistributedNotificationCenter.default().publisher(for: Notification.Name("com.FluidApp.debug.setTheme"))) { notification in
+                guard UserDefaults.standard.bool(forKey: "FluidDebugRemoteToggleEnabled"),
+                      let theme = (notification.object as? String).flatMap(SettingsStore.ThemePreference.init(rawValue:))
+                else { return }
+                self.settings.themePreference = theme
             }
             .onReceive(NotificationCenter.default.publisher(for: .settingsBackupDidRestore)) { _ in
                 self.reloadSettingsStateAfterBackupRestore()
@@ -1684,8 +1695,8 @@ struct ContentView: View {
     private var settingsSidebarView: some View {
         VStack(spacing: 0) {
             Text("Settings")
-                .font(self.theme.typography.bodyStrong)
-                .foregroundStyle(.primary)
+                .fluidText(.sheetTitle)
+                .foregroundStyle(self.theme.look.text)
                 .padding(.horizontal, self.theme.metrics.spacing.md + 4)
                 .padding(.top, self.theme.metrics.spacing.md)
                 .padding(.bottom, self.theme.metrics.spacing.xs)
@@ -1716,22 +1727,23 @@ struct ContentView: View {
                     HStack(spacing: self.theme.metrics.spacing.sm) {
                         Image(systemName: section.systemImage)
                             .symbolRenderingMode(.hierarchical)
-                            .foregroundStyle(isSelected ? Color.white.opacity(0.9) : Color.secondary)
+                            .foregroundStyle(isSelected ? self.theme.look.text : self.theme.look.secondaryText)
                             .frame(width: 18)
 
                         Text(section.title)
-                            .foregroundStyle(isSelected ? Color.white : Color.primary)
+                            .foregroundStyle(self.theme.look.text)
                     }
-                    .font(self.theme.typography.sidebarItem)
+                    .fluidText(.rowTitle)
                     .tag(section)
                     .sidebarOptionHover(
                         isSelected: isSelected,
-                        reduceMotion: self.accessibilityReduceMotion
+                        reduceMotion: self.accessibilityReduceMotion,
+                        selectedFill: self.theme.look.selection
                     )
                 }
             }
             .listStyle(.sidebar)
-            .accentColor(self.theme.palette.accent)
+            .accentColor(self.theme.look.selection)
             .animation(nil, value: self.settingsNavigation.selectedSection)
         }
     }
@@ -1918,16 +1930,15 @@ struct ContentView: View {
             self.settingsSidebarView
                 .scrollContentBackground(.hidden)
                 .frame(width: SettingsPopupLayout.sidebarWidth)
-                .background(self.theme.palette.sidebarBackground)
-                .tint(self.theme.palette.accent)
+                .tint(self.theme.look.text)
 
-            Rectangle().fill(self.theme.palette.separator).frame(width: 1)
+            FluidHairline(axis: .vertical)
 
             VStack(spacing: 0) {
                 HStack {
                     Text((self.settingsNavigation.selectedSection ?? .general).title)
-                        .font(.fluidSystem(size: 20, weight: .semibold))
-                        .foregroundStyle(.primary)
+                        .fluidText(.detailTitle)
+                        .foregroundStyle(self.theme.look.text)
                         .accessibilityAddTraits(.isHeader)
                     Spacer(minLength: 0)
                     Button {
@@ -1944,8 +1955,11 @@ struct ContentView: View {
                     .help("Close Settings")
                     .accessibilityLabel("Close Settings")
                 }
-                .padding(.leading, 24)
-                .padding(.trailing, 12)
+                // Same column as the page below: the title lines up with the cards' leading edge and
+                // the close button with their trailing edge, at every popup width.
+                .padding(.horizontal, FluidPageLayout.inset)
+                .frame(maxWidth: FluidPageLayout.Width.form.maximum)
+                .frame(maxWidth: .infinity)
                 .frame(height: 56)
 
                 // A page must never push the popup wider than its fixed size.
@@ -1953,8 +1967,9 @@ struct ContentView: View {
                     .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity)
                     .clipped()
             }
-            .background(self.theme.palette.contentBackground)
         }
+        // One flat sheet, like the model pop-ups: no light, no grain.
+        .background(self.theme.look.sheet)
         .appTheme(self.theme)
     }
 
@@ -6294,14 +6309,16 @@ private struct SidebarChromeButtonStyle: ButtonStyle {
 }
 
 extension View {
-    func sidebarOptionHover(isSelected: Bool, reduceMotion: Bool) -> some View {
-        modifier(SidebarOptionHoverModifier(isSelected: isSelected, reduceMotion: reduceMotion))
+    /// `selectedFill` replaces the accent fill on the selected row, for sidebars on the refined look.
+    func sidebarOptionHover(isSelected: Bool, reduceMotion: Bool, selectedFill: Color? = nil) -> some View {
+        modifier(SidebarOptionHoverModifier(isSelected: isSelected, reduceMotion: reduceMotion, selectedFill: selectedFill))
     }
 }
 
 private struct SidebarOptionHoverModifier: ViewModifier {
     let isSelected: Bool
     let reduceMotion: Bool
+    let selectedFill: Color?
 
     @Environment(\.theme) private var theme
     @State private var isHovered = false
@@ -6324,7 +6341,7 @@ private struct SidebarOptionHoverModifier: ViewModifier {
 
     private var backgroundColor: Color {
         if self.isSelected {
-            return self.theme.palette.accent
+            return self.selectedFill ?? self.theme.palette.accent
         }
         return Color.primary.opacity(self.isHovered ? 0.08 : 0)
     }

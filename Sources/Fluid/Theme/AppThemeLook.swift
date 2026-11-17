@@ -64,6 +64,10 @@ extension AppTheme {
         /// Neutral fill for tiles and plain chips.
         let quietFill: Color
         let tileGlyph: Color
+        /// The selected row in a sidebar. Opaque, because the system list paints it as a solid fill.
+        let selection: Color
+        /// A switch that is on.
+        let switchOn: Color
         /// The one main action in a view.
         let primaryAction: Action
         /// Every other action.
@@ -85,6 +89,8 @@ extension AppTheme {
             highlightFill: Color.white.opacity(0.08),
             quietFill: Color.white.opacity(0.06),
             tileGlyph: Color.white.opacity(0.8),
+            selection: Color(white: 0.2),
+            switchOn: Color(white: 0.55),
             primaryAction: Action(body: .flat(Color.white), label: Color.black),
             secondaryAction: Action(body: .flat(Color.white.opacity(0.08)), label: Color.white.opacity(0.9))
         )
@@ -105,6 +111,8 @@ extension AppTheme {
             highlightFill: Color.black.opacity(0.06),
             quietFill: Color.black.opacity(0.05),
             tileGlyph: Color.black.opacity(0.7),
+            selection: Color(white: 0.89),
+            switchOn: Color(white: 0.2),
             primaryAction: Action(body: .flat(Color(red: 0.067, green: 0.067, blue: 0.075)), label: Color.white),
             secondaryAction: Action(body: .flat(Color.black.opacity(0.06)), label: Color.black.opacity(0.88))
         )
@@ -122,6 +130,8 @@ enum FluidTextRole {
     case sheetTitle
     /// Heading of a detail panel.
     case detailTitle
+    /// Title over a group of settings rows.
+    case groupTitle
     /// Name of the thing a card or row is about.
     case itemTitle
     /// Name in a dense list row.
@@ -141,6 +151,7 @@ enum FluidTextRole {
         case .subtitle: 15
         case .sheetTitle: 17
         case .detailTitle: 22
+        case .groupTitle: 15
         case .itemTitle: 20
         case .rowTitle: 14
         case .body: 13
