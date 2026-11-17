@@ -160,7 +160,12 @@ final class MeetingRecoveryTests: XCTestCase {
             return XCTFail("An unavailable meeting app must end the meeting, got \(ended)")
         }
         XCTAssertEqual(detail, "Zoom is no longer available to record.")
-        for error: Error in [MeetingCaptureError.noCaptureDisplay, NSError(domain: "Fixture", code: -3808)] {
+        let others: [Error] = [
+            MeetingCaptureError.applicationAmbiguous("Zoom"),
+            MeetingCaptureError.noCaptureDisplay,
+            NSError(domain: "Fixture", code: -3808),
+        ]
+        for error in others {
             let stopped = MeetingCaptureEvent.rebuildExhausted(error)
             guard case let .interrupted(kind, trackID, detail) = stopped else {
                 return XCTFail("\(error) must stay an unexpected stop, got \(stopped)")

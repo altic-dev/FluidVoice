@@ -792,9 +792,10 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
                 requested.windowID = nil
                 requested.displayID = nil
             }
-            let resolved = try MeetingRecordingSourceResolver.resolve(
-                mode: .onlineCall, source: MeetingRecordingSource(application: requested), target: nil, applications: candidates
-            )
+            let source = MeetingRecordingSource(application: requested)
+            let resolved = try allowApplicationRelaunch
+                ? MeetingRecordingSourceResolver.resolveRecovery(source: source, applications: candidates)
+                : MeetingRecordingSourceResolver.resolve(mode: .onlineCall, source: source, target: nil, applications: candidates)
             guard let runningApplication = content.applications.first(where: { $0.processID == resolved?.processID }) else {
                 throw MeetingCaptureError.applicationUnavailable(application.displayName)
             }
@@ -2596,6 +2597,8 @@ nonisolated enum MeetingCaptureError: LocalizedError {
     case wrongActiveSession
     case applicationNotSelected
     case applicationUnavailable(String)
+    /// Recovery found several running copies of the app and cannot tell which one holds the call.
+    case applicationAmbiguous(String)
     case noCaptureDisplay
     case microphoneUnavailable
     case microphonePermissionDenied
@@ -2618,6 +2621,8 @@ nonisolated enum MeetingCaptureError: LocalizedError {
             return "Choose the application that contains the online meeting."
         case let .applicationUnavailable(name):
             return "\(name) is no longer available to record."
+        case let .applicationAmbiguous(name):
+            return "More than one \(name) is running, so recording could not tell which one has the call."
         case .noCaptureDisplay:
             return "No display is available for meeting-audio capture."
         case .microphoneUnavailable:
