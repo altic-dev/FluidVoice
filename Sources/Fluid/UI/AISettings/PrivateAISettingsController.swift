@@ -61,6 +61,11 @@ enum PrivateAIModelLoadState: Equatable {
     }
 }
 
+struct PrivateAIModelFiles: Sendable, Equatable {
+    let installed: Bool
+    let removable: Bool
+}
+
 /// Retained FI settings state and actions, shared by the existing page and its controls.
 /// The runtime and persistence behavior remains in the existing services and provider view model.
 @MainActor
@@ -121,6 +126,28 @@ final class PrivateAISettingsController: ObservableObject {
     /// Drives the Deactivate affordance: stays true after the idle unloader frees the runtime,
     /// because dictation would still reload Fluid Intelligence on the next run.
     var routesDictationThroughPrivateAI: Bool { self.viewModel.routesDictationThroughPrivateAI }
+
+    /// Active = dictation will use this model. Whether it is in memory right now is separate,
+    /// because the idle unloader frees it and the next dictation reloads it.
+    func isActive(_ model: PrivateAIRegisteredModel, installed: Bool) -> Bool {
+        model.id == self.privateAISelectedModelID
+            && installed
+            && !self.privateAILoadState.needsDownload(model.id)
+            && PrivateAIProviderPromptFormat.verifiedModelID(for: model.id, settings: self.settings) != nil
+            && self.routesDictationThroughPrivateAI
+    }
+
+    /// Disk checks for each model's files, done off the main thread.
+    nonisolated static func readModelFiles(_ models: [PrivateAIRegisteredModel]) async -> [String: PrivateAIModelFiles] {
+        await Task.detached(priority: .utility) {
+            Dictionary(uniqueKeysWithValues: models.map { model in
+                (model.id, PrivateAIModelFiles(
+                    installed: PrivateAIIntegrationService.isModelInstalled(model),
+                    removable: PrivateAIIntegrationService.canRemoveInstalledModel(model)
+                ))
+            })
+        }.value
+    }
 
     /// Inverse of `usePreviewModel`: stops routing dictation through Fluid Intelligence
     /// and frees the loaded runtime. The model stays installed and selected.

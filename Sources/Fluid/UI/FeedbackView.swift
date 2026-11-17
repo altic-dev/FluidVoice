@@ -1,9 +1,18 @@
 import SwiftUI
 
+/// A note another screen fills in for the user. Everything in it stays visible and editable.
+struct FeedbackDraft: Equatable {
+    let category: FeedbackCategory
+    let message: String
+    let includeDetails: Bool
+}
+
 /// One calm surface: what kind of note, the note, how to reach you, send. Extras live in a
 /// single quiet footer line so nothing competes with the message itself.
 struct FeedbackView: View {
     @Environment(\.theme) private var theme
+    /// Taken once when it arrives, then cleared, so later visits start empty.
+    @Binding var pendingDraft: FeedbackDraft?
     @State private var category: FeedbackCategory = .issue
     @State private var message = ""
     @State private var email = ""
@@ -11,6 +20,7 @@ struct FeedbackView: View {
     @State private var sending = false
     @State private var sent = false
     @State private var error: String?
+    @State private var showsFilledInNote = false
     @FocusState private var messageFocused: Bool
 
     private static let starURL = URL(string: "https://github.com/altic-dev/Fluid-oss")
@@ -54,6 +64,29 @@ struct FeedbackView: View {
             .fluidPageContent(width: .form, alignment: .center)
         }
         .background(self.theme.palette.contentBackground)
+        .onAppear(perform: self.takePendingDraft)
+        .onChange(of: self.pendingDraft) { _, _ in self.takePendingDraft() }
+    }
+
+    private func takePendingDraft() {
+        guard let draft = self.pendingDraft else { return }
+        self.pendingDraft = nil
+        self.category = draft.category
+        self.message = draft.message
+        self.includeDetails = draft.includeDetails
+        self.sent = false
+        self.error = nil
+        self.showsFilledInNote = true
+    }
+
+    private var filledInNote: some View {
+        Label("We filled this in for you. Add anything you noticed, or just send it.", systemImage: "checkmark")
+            .font(self.theme.typography.caption)
+            .foregroundStyle(self.theme.look.highlightText)
+            .padding(.horizontal, self.theme.metrics.spacing.md)
+            .padding(.vertical, self.theme.metrics.spacing.sm)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(self.theme.look.highlightFill, in: RoundedRectangle(cornerRadius: self.theme.metrics.corners.md, style: .continuous))
     }
 
     // MARK: - Category
@@ -94,6 +127,9 @@ struct FeedbackView: View {
     private var form: some View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xl) {
+                if self.showsFilledInNote {
+                    self.filledInNote
+                }
                 self.messageField
 
                 VStack(alignment: .leading, spacing: self.theme.metrics.spacing.lg) {
@@ -316,6 +352,7 @@ struct FeedbackView: View {
             self.message = ""
             self.email = ""
             self.includeDetails = false
+            self.showsFilledInNote = false
         } catch {
             self.error = error.localizedDescription
         }

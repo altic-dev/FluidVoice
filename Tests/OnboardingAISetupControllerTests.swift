@@ -4,7 +4,7 @@ import Foundation
 private final class Harness {
     typealias Controller = OnboardingAISetupController
     var modelID = "fluid-1.1-ripple"
-    var modelName = "Fluid 1.1 Ripple"
+    var modelName = "Ripple"
     var installed = false
     var failRecommendation = false
     var failDownload = false
@@ -66,7 +66,7 @@ struct OnboardingAISetupControllerTests {
 
     @MainActor
     static func main() async {
-        for (id, name) in [("fluid-1.1-ripple", "Fluid 1.1 Ripple"), ("fluid-1.1-splash", "Fluid 1.1 Splash")] {
+        for (id, name) in [("fluid-1.1-ripple", "Ripple"), ("fluid-1.1-splash", "Splash")] {
             let harness = Harness()
             harness.modelID = id
             harness.modelName = name

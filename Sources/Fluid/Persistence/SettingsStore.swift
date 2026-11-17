@@ -5839,19 +5839,18 @@ final class SettingsStore: ObservableObject {
             }
         }
 
+        /// The newest speech model. Every screen that marks a model "New" reads this.
+        var isNew: Bool {
+            self == .fluidParakeetPro
+        }
+
         /// Optional badge text for the card (e.g., "FluidVoice Pick")
         var badgeText: String? {
             switch self {
-            case .parakeetTDT: return "FluidVoice Pick"
-            case .parakeetTDTv2: return "FluidVoice Pick"
-            case .fluidParakeetMini, .fluidParakeetPico, .fluidParakeetPro: return "New"
-            case .parakeetRealtime: return "Beta"
-            case .qwen3Asr: return "Beta"
-            case .qwen3Asr17B: return nil
-            case .cohereTranscribeSixBit: return "New"
-            case .nemotronOffline, .nemotronStreaming, .nemotronStreaming320: return "New + Beta"
-            case .appleSpeechAnalyzer: return "New"
-            default: return nil
+            case .parakeetTDT, .parakeetTDTv2: return "FluidVoice Pick"
+            case .parakeetRealtime, .qwen3Asr: return "Beta"
+            case .nemotronOffline, .nemotronStreaming, .nemotronStreaming320: return "Beta"
+            default: return self.isNew ? "New" : nil
             }
         }
 

@@ -10,8 +10,8 @@ struct ReleaseFeaturePreview: View {
             switch self.kind {
             case .meeting: self.meeting
             case .dashboard: self.dashboard
-            case .ripple: self.cleanupModel("Fluid 1.1 Ripple", detail: "Fast & capable", symbol: "bolt")
-            case .splash: self.cleanupModel("Fluid 1.1 Splash", detail: "Higher quality", symbol: "sparkles")
+            case .ripple: self.cleanupModel("Ripple", detail: "Fast & capable", symbol: "bolt")
+            case .splash: self.cleanupModel("Splash", detail: "Higher quality", symbol: "sparkles")
             case .speech: self.speech
             }
         }

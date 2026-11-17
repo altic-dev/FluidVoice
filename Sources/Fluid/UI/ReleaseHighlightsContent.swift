@@ -26,7 +26,7 @@ struct ReleaseHighlightsContent {
             id: "ripple",
             preview: .ripple,
             eyebrow: "FASTER CLEANUP",
-            title: "Fluid 1.1 Ripple",
+            title: "Ripple",
             detail: "Fast, multilingual cleanup on your Mac. Research preview: review your text before sending.",
             action: "Explore Ripple",
             destination: .aiProviders
@@ -35,7 +35,7 @@ struct ReleaseHighlightsContent {
             id: "splash",
             preview: .splash,
             eyebrow: "HIGHER-QUALITY CLEANUP",
-            title: "Fluid 1.1 Splash",
+            title: "Splash",
             detail: "Our most capable multilingual cleanup model. Research preview: review your text before sending.",
             action: "Explore Splash",
             destination: .aiProviders

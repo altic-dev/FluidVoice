@@ -271,7 +271,7 @@ extension VoiceEngineSettingsView {
                         .stroke(isSelected ? Color.fluidGreen : self.theme.palette.cardBorder.opacity(0.5), lineWidth: 1)
                 )
 
-            self.speechModelLogoView(for: model)
+            FluidModelLogo(mark: .speech(model))
                 .frame(width: 28, height: 28)
 
             VStack(alignment: .leading, spacing: 4) {
@@ -356,12 +356,7 @@ extension VoiceEngineSettingsView {
                     .controlSize(.small)
                     .disabled(self.viewModel.isCancellingModelDownload)
                 }
-            } else if (self.viewModel.asr.isDownloadingModel
-                || self.viewModel.asr.isLoadingModel
-                || self.viewModel.asr.isCancellingModelPreparation)
-                && isConfiguredActive
-                && !self.viewModel.asr.isAsrReady
-            {
+            } else if self.viewModel.isPreparingSelectedModel, isConfiguredActive {
                 // Active model is loading/downloading (for Activate flow)
                 HStack(spacing: 8) {
                     VStack(alignment: .trailing, spacing: 4) {
@@ -868,71 +863,6 @@ extension VoiceEngineSettingsView {
         .background(RoundedRectangle(cornerRadius: 8)
             .fill(self.theme.palette.cardBackground.opacity(0.8))
             .overlay(RoundedRectangle(cornerRadius: 8).stroke(self.theme.palette.cardBorder.opacity(0.5), lineWidth: 1)))
-    }
-
-    // MARK: - Speech Model Logo View
-
-    private func speechModelLogoView(for model: SettingsStore.SpeechModel) -> some View {
-        let bgColor = self.speechModelBackgroundColor(for: model)
-        let imageName = self.speechModelImageName(for: model)
-        let isNvidia = model.brandName.lowercased().contains("nvidia")
-
-        return ZStack {
-            RoundedRectangle(cornerRadius: 7, style: .continuous)
-                .fill(bgColor)
-
-            if model.brandName == "FluidVoice" {
-                FluidVoiceBrandIcon(size: 28)
-            } else if model.usesAppleLogo {
-                Image(systemName: "apple.logo")
-                    .font(.fluidSystem(size: 14, weight: .medium))
-                    .foregroundStyle(.primary)
-            } else if let imageName {
-                Image(imageName)
-                    .resizable()
-                    .aspectRatio(contentMode: .fit)
-                    // NVIDIA logo larger to fill more of the container
-                    .frame(width: isNvidia ? 24 : 18, height: isNvidia ? 24 : 18)
-            } else {
-                Text(String(model.brandName.prefix(2)).uppercased())
-                    .font(.fluidSystem(size: 10, weight: .bold, design: .rounded))
-                    .foregroundStyle(self.theme.palette.primaryText)
-            }
-        }
-        .frame(width: 28, height: 28)
-        .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-    }
-
-    private func speechModelBackgroundColor(for model: SettingsStore.SpeechModel) -> Color {
-        let brand = model.brandName.lowercased()
-
-        // Keep these provider marks on a light background in both appearances.
-        if brand.contains("nvidia") || brand.contains("openai") || brand.contains("whisper") || brand.contains("qwen") {
-            return Color(red: 0.97, green: 0.97, blue: 0.97)
-        }
-        if brand.contains("apple") || model.usesAppleLogo {
-            return self.theme.palette.cardBackground.opacity(0.9)
-        }
-        return Color(hex: model.brandColorHex)?.opacity(0.2) ?? self.theme.palette.cardBackground
-    }
-
-    private func speechModelImageName(for model: SettingsStore.SpeechModel) -> String? {
-        let brand = model.brandName.lowercased()
-
-        if brand.contains("nvidia") {
-            return "Provider_NVIDIA"
-        }
-        if brand.contains("cohere") {
-            return "Provider_Cohere"
-        }
-        if brand.contains("qwen") {
-            // Official organization mark from https://github.com/QwenLM.
-            return "Provider_Qwen"
-        }
-        if brand.contains("openai") || brand.contains("whisper") {
-            return "Provider_OpenAI"
-        }
-        return nil
     }
 }
 

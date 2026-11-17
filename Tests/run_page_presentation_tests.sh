@@ -11,6 +11,7 @@ sed '/^struct DashboardSetupStatus/,$d' Sources/Fluid/UI/DashboardView.swift > "
 xcrun swiftc -parse-as-library \
     Sources/Fluid/UI/AppNavigationState.swift \
     Sources/Fluid/Theme/Components/FluidPageLayout.swift \
+    Sources/Fluid/Theme/Components/FluidPopupLayout.swift \
     "$task_test_dir/DashboardLayout.swift" \
     Tests/PagePresentationTests.swift \
     -o "$task_test_dir/tests"

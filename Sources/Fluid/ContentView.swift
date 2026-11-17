@@ -258,6 +258,7 @@ struct ContentView: View {
     @StateObject private var meetingHistorySnapshot = MeetingHistorySnapshot()
     @State private var meetingSummaryToResume: MeetingSessionID?
     @StateObject private var mouseTracker = MousePositionTracker()
+    @StateObject private var popupPresence = FluidPopupPresence()
     @StateObject private var commandModeService = CommandModeService()
     @StateObject private var rewriteModeService = RewriteModeService()
     @EnvironmentObject private var menuBarManager: MenuBarManager
@@ -336,6 +337,8 @@ struct ContentView: View {
     /// A dictionary, vocabulary, punctuation or prompt row chosen from the sidebar
     /// search. The screen it belongs to opens that row and clears this.
     @State private var appSearchRevealTarget: AppSearchHit.Target?
+    /// A Feedback note another page filled in; the Feedback page takes it once and clears it.
+    @State private var pendingFeedbackDraft: FeedbackDraft?
     @State private var appSearchExpanded: Set<AppSearchKind> = []
 
     @State private var isHelpEntryHovered = false
@@ -491,7 +494,7 @@ struct ContentView: View {
                         self.detailView
                     }
                     .navigationSplitViewStyle(.balanced)
-                    .sheet(isPresented: Binding(
+                    .fluidPopup(isPresented: Binding(
                         get: { self.settingsNavigation.isPresented },
                         set: { presented in if !presented, self.settingsNavigation.isPresented { self.closeSettings() } }
                     )) {
@@ -502,7 +505,7 @@ struct ContentView: View {
         )
 
         let tracked = layout.withMouseTracking(self.mouseTracker)
-        let env = tracked.environmentObject(self.mouseTracker)
+        let env = tracked.environmentObject(self.mouseTracker).environment(\.fluidPopupPresence, self.popupPresence)
         let nav = env.onChange(of: self.menuBarManager.requestedNavigationDestination) { _, destination in
             self.handleMenuBarNavigation(destination)
         }
@@ -983,7 +986,7 @@ struct ContentView: View {
         // receive the click itself, so the event's own window is not reliable here.
         let pointer = NSEvent.mouseLocation
         let isOtherWindow = event.window.map { $0 !== window && $0 !== popup } ?? false
-        let behindPopup = SettingsPopupLayout.isDismissingClick(
+        let behindPopup = FluidPopupLayout.isDismissingClick(
             at: pointer,
             windowContent: window.convertToScreen(window.contentLayoutRect)
         )
@@ -998,7 +1001,7 @@ struct ContentView: View {
               let window = NSApp.windows.first(where: { $0.attachedSheet != nil && MainWindowIdentity.matches($0) }),
               window.attachedSheet?.attachedSheet == nil,
               event.window.map({ $0 === window }) ?? true,
-              SettingsPopupLayout.isTopBarPress(
+              FluidPopupLayout.isTopBarPress(
                   at: NSEvent.mouseLocation,
                   windowFrame: window.frame,
                   windowContent: window.convertToScreen(window.contentLayoutRect)
@@ -1597,6 +1600,7 @@ struct ContentView: View {
             }
 
             Section {
+                self.sidebarNavigationLink(.models, title: "Models", systemImage: "square.stack.3d.up")
                 self.sidebarNavigationLink(.voiceEngine, title: "Voice Engine", systemImage: "waveform")
                 self.sidebarNavigationLink(.aiEnhancements, title: "AI Settings", systemImage: "cpu")
                 self.sidebarNavigationLink(.cleanupStyles, title: "Cleanup Styles", systemImage: "wand.and.stars")
@@ -1908,54 +1912,48 @@ struct ContentView: View {
         .navigationTitle((self.selectedSidebarItem ?? .welcome).title)
     }
 
-    /// Settings open over the app in a fixed-size sheet, so every settings page has one known width.
+    /// Settings open over the app at the shared pop-up size, so every settings page has one known width.
     private var settingsPopup: some View {
-        // Read once when the popup opens. After that the popup tracks the window itself, so
-        // resizing the window never makes this whole screen recalculate.
-        let windowContentSize = NSApp.windows.first(where: MainWindowIdentity.matches)?.contentLayoutRect.size
-            ?? SettingsPopupLayout.minimumWindowContentSize
-        return SettingsPopupFrame(initialWindowContentSize: windowContentSize) {
-            HStack(spacing: 0) {
-                self.settingsSidebarView
-                    .scrollContentBackground(.hidden)
-                    .frame(width: SettingsPopupLayout.sidebarWidth)
-                    .background(self.theme.palette.sidebarBackground)
-                    .tint(self.theme.palette.accent)
+        HStack(spacing: 0) {
+            self.settingsSidebarView
+                .scrollContentBackground(.hidden)
+                .frame(width: SettingsPopupLayout.sidebarWidth)
+                .background(self.theme.palette.sidebarBackground)
+                .tint(self.theme.palette.accent)
 
-                Rectangle().fill(self.theme.palette.separator).frame(width: 1)
+            Rectangle().fill(self.theme.palette.separator).frame(width: 1)
 
-                VStack(spacing: 0) {
-                    HStack {
-                        Text((self.settingsNavigation.selectedSection ?? .general).title)
-                            .font(.fluidSystem(size: 20, weight: .semibold))
-                            .foregroundStyle(.primary)
-                            .accessibilityAddTraits(.isHeader)
-                        Spacer(minLength: 0)
-                        Button {
-                            self.closeSettings()
-                        } label: {
-                            Image(systemName: "xmark")
-                                .font(.fluidSystem(size: 12, weight: .semibold))
-                                .frame(width: 22, height: 22)
-                        }
-                        .buttonStyle(FluidHoverIconButtonStyle())
-                        .focusable(false)
-                        // Escape belongs to shortcut recording while a shortcut is being captured.
-                        .keyboardShortcut(self.activeShortcutRecordingTarget == nil ? .cancelAction : nil)
-                        .help("Close Settings")
-                        .accessibilityLabel("Close Settings")
+            VStack(spacing: 0) {
+                HStack {
+                    Text((self.settingsNavigation.selectedSection ?? .general).title)
+                        .font(.fluidSystem(size: 20, weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .accessibilityAddTraits(.isHeader)
+                    Spacer(minLength: 0)
+                    Button {
+                        self.closeSettings()
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.fluidSystem(size: 12, weight: .semibold))
+                            .frame(width: 22, height: 22)
                     }
-                    .padding(.leading, 24)
-                    .padding(.trailing, 12)
-                    .frame(height: 56)
-
-                    // A page must never push the popup wider than its fixed size.
-                    self.preferencesView
-                        .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity)
-                        .clipped()
+                    .buttonStyle(FluidHoverIconButtonStyle())
+                    .focusable(false)
+                    // Escape belongs to shortcut recording while a shortcut is being captured.
+                    .keyboardShortcut(self.activeShortcutRecordingTarget == nil ? .cancelAction : nil)
+                    .help("Close Settings")
+                    .accessibilityLabel("Close Settings")
                 }
-                .background(self.theme.palette.contentBackground)
+                .padding(.leading, 24)
+                .padding(.trailing, 12)
+                .frame(height: 56)
+
+                // A page must never push the popup wider than its fixed size.
+                self.preferencesView
+                    .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity)
+                    .clipped()
             }
+            .background(self.theme.palette.contentBackground)
         }
         .appTheme(self.theme)
     }
@@ -1979,6 +1977,15 @@ struct ContentView: View {
         switch page {
         case .welcome:
             return AnyView(self.welcomeView)
+        case .models:
+            return AnyView(ModelsScreen(
+                appServices: self.appServices,
+                menuBarManager: self.menuBarManager,
+                openFeedback: { draft in
+                    self.pendingFeedbackDraft = draft
+                    self.navigateToApp(.feedback)
+                }
+            ))
         case .voiceEngine:
             return AnyView(VoiceEngineSettingsScreen(
                 appServices: self.appServices,
@@ -2002,7 +2009,7 @@ struct ContentView: View {
         case .stats:
             return AnyView(self.statsView)
         case .feedback:
-            return AnyView(FeedbackView())
+            return AnyView(FeedbackView(pendingDraft: self.$pendingFeedbackDraft))
         case .changelog:
             return AnyView(ChangelogView())
         case .commandMode:
@@ -2160,11 +2167,11 @@ struct ContentView: View {
         }
         // Let SwiftUI and the screen choose the upper size; a hard cap can
         // fight the hosting view's content bounds while switching pages.
-        guard self.settingsNavigation.isPresented else {
+        guard self.popupPresence.isAnyOpen else {
             return .minimum(width: window.mainMinWidth, height: window.mainMinHeight)
         }
-        // The settings popup sits on this window, so the window may not get smaller than the popup.
-        let popup = SettingsPopupLayout.minimumWindowSize
+        // A pop-up sits on this window, so the window may not get smaller than the pop-up.
+        let popup = FluidPopupLayout.minimumWindowSize
         return .minimum(width: max(window.mainMinWidth, popup.width), height: max(window.mainMinHeight, popup.height))
     }
 
@@ -6221,6 +6228,7 @@ extension ContentView {
 @MainActor
 private enum SidebarSymbolCache {
     private static let symbolNames = [
+        "square.stack.3d.up",
         "waveform",
         "brain",
         "cpu",

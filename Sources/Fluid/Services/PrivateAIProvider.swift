@@ -150,6 +150,8 @@ struct PrivateAIRegisteredModel: Sendable, Codable, Hashable, Identifiable {
     var recommendedMemoryGB: Int?
     var artifact: PrivateAIModelArtifact
     var presentation: PrivateAIModelPresentation?
+    /// Language codes the model is trained for, from the model registry; empty when it lists none.
+    var supportedLanguageIDs: [String] = []
 
     var canDownload: Bool {
         self.artifact.downloadURL != nil && self.artifact.sha256?.isEmpty == false

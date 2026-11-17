@@ -3,6 +3,8 @@ import SwiftUI
 enum FluidDropdownAppearance {
     case standard
     case inline
+    /// Sits inside a line of small text, e.g. a pop-up header.
+    case text
 }
 
 /// Shared dropdown surface. Native menus, pickers, and searchable popovers use
@@ -19,7 +21,7 @@ struct FluidDropdownSurface: ViewModifier {
         let highlighted = self.isHovered && self.isEnabled
         content
             .background {
-                if self.appearance == .inline {
+                if self.appearance != .standard {
                     RoundedRectangle(cornerRadius: self.cornerRadius, style: .continuous)
                         .fill(self.theme.palette.primaryText.opacity(highlighted ? 0.055 : 0))
                 } else {
@@ -48,10 +50,11 @@ struct FluidDropdownChevron: View {
     @Environment(\.theme) private var theme
     var isExpanded = false
     var tone: Color?
+    var size: CGFloat = 10
 
     var body: some View {
         Image(systemName: "chevron.down")
-            .font(.fluidSystem(size: 10, weight: .semibold))
+            .font(.fluidSystem(size: self.size, weight: .semibold))
             .foregroundStyle(self.tone ?? self.theme.palette.secondaryText)
             .rotationEffect(.degrees(self.isExpanded ? 180 : 0))
             .accessibilityHidden(true)
@@ -82,16 +85,51 @@ private struct FluidDropdownButtonStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(self.appearance == .inline ? self.theme.typography.statement : self.theme.typography.bodySmall)
+            .font(self.font)
             .foregroundStyle(self.tone ?? self.theme.palette.primaryText)
             .frame(maxWidth: self.fillsWidth ? .infinity : nil, alignment: .leading)
-            .padding(.leading, self.appearance == .inline ? 8 : 12)
-            .padding(.trailing, self.appearance == .inline ? 24 : 30)
-            .padding(.vertical, self.appearance == .inline ? 8 : 9)
-            .fluidDropdownSurface(appearance: self.appearance)
+            .padding(.leading, self.leadingPadding)
+            .padding(.trailing, self.trailingPadding)
+            .padding(.vertical, self.verticalPadding)
+            .fluidDropdownSurface(cornerRadius: self.appearance == .text ? 6 : 10, appearance: self.appearance)
             .overlay(alignment: .trailing) {
-                FluidDropdownChevron().padding(.trailing, self.appearance == .inline ? 8 : 12).allowsHitTesting(false)
+                FluidDropdownChevron(size: self.appearance == .text ? 8 : 10)
+                    .padding(.trailing, self.leadingPadding)
+                    .allowsHitTesting(false)
             }
+    }
+
+    private var font: Font {
+        switch self.appearance {
+        case .standard: self.theme.typography.bodySmall
+        case .inline: self.theme.typography.statement
+        case .text: FluidTextRole.label.font
+        }
+    }
+
+    private var leadingPadding: CGFloat {
+        switch self.appearance {
+        case .standard: 12
+        case .inline: 8
+        case .text: 6
+        }
+    }
+
+    /// Leaves room for the chevron.
+    private var trailingPadding: CGFloat {
+        switch self.appearance {
+        case .standard: 30
+        case .inline: 24
+        case .text: 18
+        }
+    }
+
+    private var verticalPadding: CGFloat {
+        switch self.appearance {
+        case .standard: 9
+        case .inline: 8
+        case .text: 3
+        }
     }
 }
 

@@ -47,6 +47,11 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
         self.asr.isCancellingModelDownload
     }
 
+    /// The selected model is downloading, loading or cancelling and can't transcribe yet.
+    var isPreparingSelectedModel: Bool {
+        (self.asr.isDownloadingModel || self.asr.isLoadingModel || self.asr.isCancellingModelPreparation) && !self.asr.isAsrReady
+    }
+
     init(settings: SettingsStore, appServices: AppServices) {
         self.settings = settings
         self.appServices = appServices
@@ -156,6 +161,44 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
             self.previewSpeechModel = model
             self.setSelectedSpeechProvider(model.provider)
         }
+        self.prepareSelectedSpeechModel()
+    }
+
+    /// Uses a model for one language: the model and its language setting, exactly as onboarding applies them.
+    func activateSpeechRoute(_ route: VoiceEngineLanguageRoute) {
+        guard !self.areSpeechModelActionsBlocked else { return }
+        VoiceEngineLanguageCatalog.apply(route, to: self.settings)
+        self.previewSpeechModel = route.model
+        self.setSelectedSpeechProvider(route.model.provider)
+        self.prepareSelectedSpeechModel()
+    }
+
+    /// Downloads first so dictation never points at missing files, then switches only if
+    /// the user hasn't picked another model in the meantime.
+    func downloadAndActivateSpeechRoute(_ route: VoiceEngineLanguageRoute) {
+        guard !self.areSpeechModelActionsBlocked else { return }
+        let modelInUse = self.settings.selectedSpeechModel
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await self.asr.downloadModel(route.model, updateWeights: false, progressHandler: nil)
+            } catch is CancellationError {
+                DebugLogger.shared.info("Model download cancelled: \(route.model.displayName)", source: "VoiceEngineVM")
+                return
+            } catch {
+                DebugLogger.shared.error("Failed to download model \(route.model.displayName): \(error)", source: "VoiceEngineVM")
+                self.asr.errorTitle = "Model Download Failed"
+                self.asr.errorMessage = error.localizedDescription
+                self.asr.showError = true
+                return
+            }
+            guard self.settings.selectedSpeechModel == modelInUse else { return }
+            self.activateSpeechRoute(route)
+        }
+    }
+
+    private func prepareSelectedSpeechModel() {
+        let model = self.settings.selectedSpeechModel
         self.asr.resetTranscriptionProvider()
         Task {
             do {

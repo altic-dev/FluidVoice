@@ -15,13 +15,8 @@ struct FluidIntelligenceLiveSection<Management: View>: View {
     @State private var showsVerificationResult = false
     @State private var verificationError: String?
     @State private var verifiedModelName = ""
-    @State private var snapshots: [String: ModelFiles] = [:]
+    @State private var snapshots: [String: PrivateAIModelFiles] = [:]
     @State private var recommendedModelID: String?
-
-    private struct ModelFiles: Sendable {
-        let installed: Bool
-        let removable: Bool
-    }
 
     private struct ReadIdentity: Equatable {
         let selectedID: String
@@ -72,14 +67,7 @@ struct FluidIntelligenceLiveSection<Management: View>: View {
             guard !self.controller.isBusy else { return }
             let identity = self.readIdentity
             let models = self.models
-            let files = await Task.detached(priority: .utility) {
-                Dictionary(uniqueKeysWithValues: models.map { model in
-                    (model.id, ModelFiles(
-                        installed: PrivateAIIntegrationService.isModelInstalled(model),
-                        removable: PrivateAIIntegrationService.canRemoveInstalledModel(model)
-                    ))
-                })
-            }.value
+            let files = await PrivateAISettingsController.readModelFiles(models)
             guard !Task.isCancelled, identity == self.readIdentity else { return }
             self.snapshots = files
             for model in models {
@@ -120,11 +108,8 @@ struct FluidIntelligenceLiveSection<Management: View>: View {
 
     private func cardControls(_ model: PrivateAIRegisteredModel) -> some View {
         let files = self.snapshots[model.id]
-        let selected = model.id == self.controller.privateAISelectedModelID
         let needsDownload = self.controller.privateAILoadState.needsDownload(model.id)
-        // Active = dictation will use this model. Whether it is in memory right now is shown
-        // separately, because the idle unloader frees it and the next dictation reloads it.
-        let active = !needsDownload && files?.installed == true && selected && self.isVerified && self.controller.routesDictationThroughPrivateAI
+        let active = self.controller.isActive(model, installed: files?.installed == true)
         let inMemory = self.controller.privateAILoadState.isLoaded(model.id)
         let realUpdate = files?.installed == true && self.controller.privateAIModelUpdateStatusByID[model.id]?.state == .updateAvailable
         return VStack(alignment: .leading, spacing: 8) {

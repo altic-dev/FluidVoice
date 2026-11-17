@@ -31,12 +31,12 @@ struct PagePresentationTests {
 
         // The settings popup keeps a fixed minimum, grows with the window up to a cap,
         // and fits inside any window at or above the size the app enforces while it is open.
-        let popupMinimum = SettingsPopupLayout.minimumSize
-        let popupMaximum = SettingsPopupLayout.maximumSize
-        let openWindowMinimum = SettingsPopupLayout.minimumWindowContentSize
+        let popupMinimum = FluidPopupLayout.minimumSize
+        let popupMaximum = FluidPopupLayout.maximumSize
+        let openWindowMinimum = FluidPopupLayout.minimumWindowContentSize
         for width in stride(from: 300, through: 3000, by: 7) {
             for height in stride(from: 200, through: 2000, by: 11) {
-                let popup = SettingsPopupLayout(windowContentSize: CGSize(width: width, height: height))
+                let popup = FluidPopupLayout(windowContentSize: CGSize(width: width, height: height))
                 check(popup.width >= popupMinimum.width && popup.height >= popupMinimum.height, "Popup must never shrink below its minimum")
                 check(popup.width <= popupMaximum.width && popup.height <= popupMaximum.height, "Popup must stop growing at its cap")
                 if CGFloat(width) >= openWindowMinimum.width, CGFloat(height) >= openWindowMinimum.height {
@@ -44,27 +44,27 @@ struct PagePresentationTests {
                 }
             }
         }
-        check(SettingsPopupLayout(windowContentSize: openWindowMinimum).width == popupMinimum.width, "Smallest allowed window shows the minimum popup")
-        let openWindow = SettingsPopupLayout.minimumWindowSize
-        check(openWindow.width <= 1280 && openWindow.height <= 700, "The window size needed for Settings must fit the smallest supported screen")
-        check(SettingsPopupLayout(windowContentSize: CGSize(width: 1400, height: 900)).width > popupMinimum.width, "Bigger windows get a bigger popup")
-        check(SettingsPopupLayout(windowContentSize: CGSize(width: 4000, height: 3000)).width == popupMaximum.width, "Huge windows stop at the cap")
+        check(FluidPopupLayout(windowContentSize: openWindowMinimum).width == popupMinimum.width, "Smallest allowed window shows the minimum popup")
+        let openWindow = FluidPopupLayout.minimumWindowSize
+        check(openWindow.width <= 1280 && openWindow.height <= 700, "The window size needed for a pop-up must fit the smallest supported screen")
+        check(FluidPopupLayout(windowContentSize: CGSize(width: 1400, height: 900)).width > popupMinimum.width, "Bigger windows get a bigger popup")
+        check(FluidPopupLayout(windowContentSize: CGSize(width: 4000, height: 3000)).width == popupMaximum.width, "Huge windows stop at the cap")
 
         // Clicking the page behind the popup closes it; the title bar and window edges do not.
         let behindPopup = CGRect(x: 0, y: 0, width: 980, height: 600)
-        check(SettingsPopupLayout.isDismissingClick(at: CGPoint(x: 20, y: 300), windowContent: behindPopup), "A click on the page behind the popup closes it")
-        check(!SettingsPopupLayout.isDismissingClick(at: CGPoint(x: 400, y: 630), windowContent: behindPopup), "A title bar click must still move the window")
+        check(FluidPopupLayout.isDismissingClick(at: CGPoint(x: 20, y: 300), windowContent: behindPopup), "A click on the page behind the popup closes it")
+        check(!FluidPopupLayout.isDismissingClick(at: CGPoint(x: 400, y: 630), windowContent: behindPopup), "A title bar click must still move the window")
         for edge in [CGPoint(x: 2, y: 300), CGPoint(x: 978, y: 300), CGPoint(x: 400, y: 3), CGPoint(x: 977, y: 4)] {
-            check(!SettingsPopupLayout.isDismissingClick(at: edge, windowContent: behindPopup), "An edge click must still resize the window")
+            check(!FluidPopupLayout.isDismissingClick(at: edge, windowContent: behindPopup), "An edge click must still resize the window")
         }
 
         // The top bar counts as outside the popup, except the window buttons and the resize edge.
         let frame = CGRect(x: 0, y: 0, width: 980, height: 652)
         let content = CGRect(x: 0, y: 0, width: 980, height: 600)
-        check(SettingsPopupLayout.isTopBarPress(at: CGPoint(x: 500, y: 626), windowFrame: frame, windowContent: content), "A press on the top bar is recognised")
-        check(!SettingsPopupLayout.isTopBarPress(at: CGPoint(x: 30, y: 626), windowFrame: frame, windowContent: content), "The window buttons are left alone")
-        check(!SettingsPopupLayout.isTopBarPress(at: CGPoint(x: 500, y: 650), windowFrame: frame, windowContent: content), "The top resize edge is left alone")
-        check(!SettingsPopupLayout.isTopBarPress(at: CGPoint(x: 500, y: 300), windowFrame: frame, windowContent: content), "The page area is not the top bar")
+        check(FluidPopupLayout.isTopBarPress(at: CGPoint(x: 500, y: 626), windowFrame: frame, windowContent: content), "A press on the top bar is recognised")
+        check(!FluidPopupLayout.isTopBarPress(at: CGPoint(x: 30, y: 626), windowFrame: frame, windowContent: content), "The window buttons are left alone")
+        check(!FluidPopupLayout.isTopBarPress(at: CGPoint(x: 500, y: 650), windowFrame: frame, windowContent: content), "The top resize edge is left alone")
+        check(!FluidPopupLayout.isTopBarPress(at: CGPoint(x: 500, y: 300), windowFrame: frame, windowContent: content), "The page area is not the top bar")
 
         // Geometry checks use production layout code, including the capped width.
         for width in stride(from: 320, through: 2000, by: 1) {

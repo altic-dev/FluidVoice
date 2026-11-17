@@ -34,6 +34,9 @@ enum PrivateAIModelRegistry {
 struct PrivateAIProviderFeature { static let shared = Self(); let providerID = "fi" }
 enum PrivateAIProviderPromptFormat {
     static func verifiedModelID(settings: SettingsStore) -> String? { "mini" }
+    static func verifiedModelID(for id: String, settings: SettingsStore) -> String? {
+        id == self.verifiedModelID(settings: settings) ? id : nil
+    }
 }
 
 final class SettingsStore {

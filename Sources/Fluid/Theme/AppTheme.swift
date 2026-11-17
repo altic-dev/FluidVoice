@@ -277,6 +277,7 @@ struct AppTheme {
     let typography: Typography
     let metrics: Metrics
     let materials: Materials
+    var look: Look = .dark
 
     static func adaptive(accent: Color, colorScheme: ColorScheme) -> AppTheme {
         switch colorScheme {
@@ -328,7 +329,8 @@ struct AppTheme {
                 elevatedCard: .regularMaterial,
                 formRow: .ultraThinMaterial,
                 toolbar: .ultraThinMaterial
-            )
+            ),
+            look: .light
         )
     }
 
@@ -371,7 +373,8 @@ struct AppTheme {
                 elevatedCard: .regularMaterial,
                 formRow: .ultraThinMaterial,
                 toolbar: .ultraThinMaterial
-            )
+            ),
+            look: .dark
         )
     }
 

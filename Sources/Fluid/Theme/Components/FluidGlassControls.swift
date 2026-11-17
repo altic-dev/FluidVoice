@@ -217,7 +217,8 @@ private struct FluidGlassActionModifier: ViewModifier {
                 content.buttonStyle(.glassProminent).tint(self.tone ?? FluidBrandColors.blue)
                     .controlSize(self.spacious ? .extraLarge : .large).buttonBorderShape(self.circular ? .circle : .capsule)
             } else {
-                content.buttonStyle(.glass).controlSize(self.spacious ? .extraLarge : .large).buttonBorderShape(self.circular ? .circle : .capsule)
+                // A secondary action stays neutral inside tinted containers; only an explicit tone colors it.
+                content.buttonStyle(.glass).tint(self.tone).controlSize(self.spacious ? .extraLarge : .large).buttonBorderShape(self.circular ? .circle : .capsule)
             }
         } else {
             if self.prominent {
