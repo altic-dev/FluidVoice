@@ -1,6 +1,8 @@
 import SwiftUI
 
-/// Static samples use the production surface and production sizing, without microphone activity.
+/// The overlay's look, as rows for a Settings group: a live preview, the styles, the knobs the
+/// chosen style has, and a reset. Samples use the production surface and sizing, without microphone
+/// activity, and the swatches show real overlay colors, since those are the values.
 struct OverlayAppearanceEditor: View {
     @ObservedObject private var settings = SettingsStore.shared
     @Environment(\.theme) private var theme
@@ -12,190 +14,171 @@ struct OverlayAppearanceEditor: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            HStack {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Make it yours")
-                        .font(.fluidSystem(size: 26, weight: .bold))
-                    Text("A little personality for every thought.")
-                        .font(.fluidSystem(size: 13))
-                        .foregroundStyle(self.theme.palette.secondaryText)
-                }
-                Spacer()
-                Button {
-                    self.settings.overlayMaterial = .smokedGlass
-                    self.settings.overlayGlassOpacity = SettingsStore.defaultOverlayGlassOpacity
-                    self.settings.overlayTint = .ocean
-                    self.settings.overlayHighlight = 0.5
-                    self.settings.overlayEdgeLightEnabled = true
-                } label: {
-                    Label("Reset look", systemImage: "arrow.counterclockwise")
-                        .font(self.theme.typography.bodyStrong)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 6)
-                }
-                .fluidOutlinedButton()
-                .controlSize(.regular)
-            }
-
-            HStack {
-                Text("Try a backdrop")
-                    .font(self.theme.typography.bodyStrong)
-                Spacer()
-                HStack(spacing: 4) {
-                    self.backdropOption("Light", symbol: "sun.max.fill", value: 1)
-                    self.backdropOption("Dark", symbol: "moon.fill", value: 0)
-                }
-                .padding(4)
-                .background(self.theme.palette.secondaryText.opacity(0.08), in: Capsule())
-                .overlay {
-                    Capsule().strokeBorder(self.theme.palette.secondaryText.opacity(0.12), lineWidth: 1)
-                }
-            }
-
-            self.sample
-
-            LazyVGrid(columns: Array(repeating: GridItem(.flexible(minimum: 60), spacing: 10), count: 5), spacing: 10) {
-                ForEach(SettingsStore.OverlayMaterial.allCases, id: \.self) { material in
-                    Button {
-                        self.settings.overlayMaterial = material
-                    } label: {
-                        VStack(spacing: 8) {
-                            Image(systemName: material.symbol)
-                                .font(.fluidSystem(size: 18, weight: .medium))
-                                .foregroundStyle(.white)
-                                .frame(maxWidth: .infinity)
-                                .frame(height: 48)
-                                .bottomOverlaySurface(
-                                    .resolve(
-                                        material: material,
-                                        opacity: self.settings.overlayGlassOpacity,
-                                        tint: self.settings.overlayTint,
-                                        highlight: self.settings.overlayHighlight
-                                    ),
-                                    cornerRadius: 12
-                                )
-                            HStack(spacing: 4) {
-                                Text(material.displayName)
-                                    .font(self.theme.typography.caption)
-                                    .multilineTextAlignment(.center)
-                                if self.settings.overlayMaterial == material {
-                                    Image(systemName: "checkmark.circle.fill")
-                                }
-                            }
-                            .foregroundStyle(.primary)
-                            .frame(minHeight: 30)
-                        }
-                        .padding(9)
-                        .frame(maxWidth: .infinity)
-                        .background(
-                            self.settings.overlayMaterial == material ? self.theme.palette.accent.opacity(0.12) : .clear,
-                            in: RoundedRectangle(cornerRadius: 16)
-                        )
-                        .contentShape(RoundedRectangle(cornerRadius: 16))
+        FluidSettingsBlock {
+            VStack(alignment: .leading, spacing: self.theme.metrics.spacing.md) {
+                HStack {
+                    Text("Preview on a")
+                        .fluidText(.label)
+                        .foregroundStyle(self.theme.look.tertiaryText)
+                    HStack(spacing: 2) {
+                        self.backdropOption("Light", symbol: "sun.max", value: 1)
+                        self.backdropOption("Dark", symbol: "moon", value: 0)
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel(material.displayName)
-                    .accessibilityAddTraits(self.settings.overlayMaterial == material ? .isSelected : [])
-                }
-            }
-            .frame(maxWidth: 720)
-            .frame(maxWidth: .infinity, alignment: .center)
-
-            Text(self.settings.overlayMaterial.detail)
-                .font(self.theme.typography.bodySmall)
-                .foregroundStyle(self.theme.palette.secondaryText)
-
-            if self.isGlass {
-                self.knob(
-                    "Transparency",
-                    value: Binding(
-                        get: { 1 - self.settings.overlayGlassOpacity },
-                        set: { self.settings.overlayGlassOpacity = 1 - $0 }
-                    ),
-                    range: 0...0.75,
-                    low: "Smoky",
-                    high: "Airy"
-                )
-                .disabled(self.reduceTransparency)
-            }
-
-            if [.velvet, .aurora].contains(self.settings.overlayMaterial) {
-                HStack(spacing: 12) {
-                    Text("Color").font(self.theme.typography.bodySmall)
+                    Text("backdrop")
+                        .fluidText(.label)
+                        .foregroundStyle(self.theme.look.tertiaryText)
                     Spacer()
+                }
+                self.sample
+            }
+        }
+
+        FluidSettingsBlock {
+            VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(minimum: 60), spacing: 8), count: 5), spacing: 8) {
+                    ForEach(SettingsStore.OverlayMaterial.allCases, id: \.self) { material in
+                        self.materialTile(material)
+                    }
+                }
+                Text(self.settings.overlayMaterial.detail)
+                    .fluidText(.body)
+                    .foregroundStyle(self.theme.look.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+
+        if self.isGlass {
+            self.knob(
+                "Transparency",
+                value: Binding(
+                    get: { 1 - self.settings.overlayGlassOpacity },
+                    set: { self.settings.overlayGlassOpacity = 1 - $0 }
+                ),
+                range: 0...0.75,
+                low: "Smoky",
+                high: "Airy"
+            )
+            .disabled(self.reduceTransparency)
+        }
+
+        if [.velvet, .aurora].contains(self.settings.overlayMaterial) {
+            FluidSettingsRow(title: "Color") {
+                HStack(spacing: 2) {
                     ForEach(SettingsStore.OverlayTint.allCases, id: \.self) { tint in
                         Button {
                             self.settings.overlayTint = tint
                         } label: {
                             Circle().fill(tint.color)
-                                .frame(width: 26, height: 26)
+                                .frame(width: 22, height: 22)
                                 .overlay {
                                     if self.settings.overlayTint == tint {
                                         Image(systemName: "checkmark")
-                                            .font(.fluidSystem(size: 11, weight: .bold))
+                                            .font(.fluidSystem(size: 10, weight: .bold))
                                             .foregroundStyle(.white)
                                     }
                                 }
-                                .padding(3)
-                                .contentShape(Circle())
+                                .frame(width: 30, height: 30)
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(FluidHoverIconButtonStyle())
                         .accessibilityLabel(tint.rawValue.capitalized)
                         .accessibilityAddTraits(self.settings.overlayTint == tint ? .isSelected : [])
                     }
                 }
             }
+        }
 
-            if self.settings.overlaySize == .pill {
-                // Same row shape as "Color" and the knob headers: title left, control right.
-                HStack(spacing: 12) {
-                    Text("Show edge light").font(self.theme.typography.bodySmall)
-                    Spacer()
-                    Toggle("Show edge light", isOn: self.$settings.overlayEdgeLightEnabled)
-                        .toggleStyle(.switch)
-                        .tint(self.theme.palette.accent)
-                        .labelsHidden()
-                }
+        if self.settings.overlaySize == .pill {
+            FluidSettingsRow(title: "Show edge light") {
+                Toggle("Show edge light", isOn: self.$settings.overlayEdgeLightEnabled)
+                    .fluidSwitch()
             }
-            if self.settings.overlayMaterial != .original, self.settings.overlaySize != .pill || self.settings.overlayEdgeLightEnabled {
-                self.knob(
-                    "Edge light",
-                    value: self.$settings.overlayHighlight,
-                    range: 0...1,
-                    low: "Soft",
-                    high: "Defined"
-                )
+        }
+        if self.settings.overlayMaterial != .original, self.settings.overlaySize != .pill || self.settings.overlayEdgeLightEnabled {
+            self.knob(
+                "Edge light",
+                value: self.$settings.overlayHighlight,
+                range: 0...1,
+                low: "Soft",
+                high: "Defined"
+            )
+        }
+
+        FluidSettingsRow(
+            title: "Reset look",
+            description: "Go back to Smoked Glass with its default settings.",
+            footnote: self.reduceTransparency ? "Reduce Transparency is on in macOS. Glass uses a solid finish." : nil
+        ) {
+            Button("Reset") {
+                self.settings.overlayMaterial = .smokedGlass
+                self.settings.overlayGlassOpacity = SettingsStore.defaultOverlayGlassOpacity
+                self.settings.overlayTint = .ocean
+                self.settings.overlayHighlight = 0.5
+                self.settings.overlayEdgeLightEnabled = true
             }
-            if self.reduceTransparency {
-                Text("Reduce Transparency is on in macOS. Glass uses a solid finish.")
-                    .font(self.theme.typography.caption).foregroundStyle(self.theme.palette.secondaryText)
-            }
+            .fluidAction()
         }
     }
 
-    private var sample: some View {
-        VStack(spacing: 0) {
-            GeometryReader { proxy in
-                let layout = BottomOverlayView.LayoutConstants.get(for: self.settings.overlaySize)
-                let scale = min(1, max(0.1, (proxy.size.width - 40) / layout.containerWidth))
-                OverlayAppearanceSample(size: self.settings.overlaySize, appearance: self.settings.bottomOverlayAppearance)
-                    .scaleEffect(scale)
-                    .frame(width: proxy.size.width, height: proxy.size.height)
+    /// A style tile: a small swatch of the real material, its name, and a tick on the chosen one.
+    private func materialTile(_ material: SettingsStore.OverlayMaterial) -> some View {
+        let isSelected = self.settings.overlayMaterial == material
+        return Button {
+            self.settings.overlayMaterial = material
+        } label: {
+            VStack(spacing: 8) {
+                Image(systemName: material.symbol)
+                    .font(.fluidSystem(size: 18, weight: .medium))
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 48)
+                    .bottomOverlaySurface(
+                        .resolve(
+                            material: material,
+                            opacity: self.settings.overlayGlassOpacity,
+                            tint: self.settings.overlayTint,
+                            highlight: self.settings.overlayHighlight
+                        ),
+                        cornerRadius: 12
+                    )
+                HStack(spacing: 4) {
+                    Text(material.displayName)
+                        .fluidText(.label)
+                        .multilineTextAlignment(.center)
+                    if isSelected {
+                        Image(systemName: "checkmark")
+                            .font(.fluidSystem(size: 9, weight: .bold))
+                    }
+                }
+                .foregroundStyle(self.theme.look.text)
+                .frame(minHeight: 30)
             }
-            .frame(height: self.settings.overlaySize == .large ? 210 : 145)
-            .background {
-                LinearGradient(
-                    colors: self.backdrop == 0
-                        ? [Color(red: 0.12, green: 0.19, blue: 0.28), Color(red: 0.42, green: 0.28, blue: 0.37)]
-                        : [.gray.opacity(0.2), .white.opacity(0.8)],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                )
-            }
+            .padding(8)
         }
-        .background(self.theme.palette.cardBackground)
-        .clipShape(RoundedRectangle(cornerRadius: 16))
+        .fluidSelectableRow(isSelected: isSelected, cornerRadius: 14)
+        .accessibilityLabel(material.displayName)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+    }
+
+    private var sample: some View {
+        GeometryReader { proxy in
+            let layout = BottomOverlayView.LayoutConstants.get(for: self.settings.overlaySize)
+            let scale = min(1, max(0.1, (proxy.size.width - 40) / layout.containerWidth))
+            OverlayAppearanceSample(size: self.settings.overlaySize, appearance: self.settings.bottomOverlayAppearance)
+                .scaleEffect(scale)
+                .frame(width: proxy.size.width, height: proxy.size.height)
+        }
+        .frame(height: self.settings.overlaySize == .large ? 210 : 145)
+        .background {
+            // Neutral backdrops, so the overlay's own material is the only color in the preview.
+            LinearGradient(
+                colors: self.backdrop == 0
+                    ? [Color(white: 0.16), Color(white: 0.34)]
+                    : [Color(white: 0.78), Color(white: 0.96)],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
     private func backdropOption(_ title: String, symbol: String, value: Int) -> some View {
@@ -203,42 +186,38 @@ struct OverlayAppearanceEditor: View {
         return Button {
             self.backdrop = value
         } label: {
-            HStack(spacing: 7) {
-                Image(systemName: symbol)
-                    .font(.fluidSystem(size: 12, weight: .semibold))
-                    .foregroundStyle(selected ? (value == 1 ? Color.orange : Color.indigo) : self.theme.palette.secondaryText)
-                Text(title)
-                    .font(.fluidSystem(size: 12, weight: .semibold))
-            }
-            .foregroundStyle(selected ? self.theme.palette.primaryText : self.theme.palette.secondaryText)
-            .padding(.horizontal, 15)
-            .padding(.vertical, 10)
-            .background {
-                if selected {
-                    Capsule()
-                        .fill(self.theme.palette.cardBackground)
-                        .shadow(color: .black.opacity(0.10), radius: 3, y: 1)
-                }
-            }
-            .contentShape(Capsule())
+            Label(title, systemImage: symbol)
+                .fluidText(.label)
+                .foregroundStyle(selected ? self.theme.look.text : self.theme.look.secondaryText)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
         }
-        .buttonStyle(.plain)
+        .fluidSelectableRow(isSelected: selected, cornerRadius: 8, fillsWidth: false)
         .accessibilityLabel("\(title) sample backdrop")
         .accessibilityAddTraits(selected ? .isSelected : [])
     }
 
+    /// A titled slider with its value, and words for each end.
     private func knob(_ title: String, value: Binding<Double>, range: ClosedRange<Double>, low: String, high: String) -> some View {
-        VStack(spacing: 6) {
-            HStack {
-                Text(title).font(self.theme.typography.bodySmall)
-                Spacer()
-                Text("\(Int((value.wrappedValue * 100).rounded()))%")
-                    .font(self.theme.typography.caption.monospacedDigit()).foregroundStyle(self.theme.palette.secondaryText)
-            }
-            HStack {
-                Text(low).font(self.theme.typography.caption).foregroundStyle(self.theme.palette.secondaryText).frame(width: 48, alignment: .leading)
-                Slider(value: value, in: range, step: 0.05).accessibilityLabel(title)
-                Text(high).font(self.theme.typography.caption).foregroundStyle(self.theme.palette.secondaryText).frame(width: 48, alignment: .trailing)
+        FluidSettingsBlock {
+            VStack(spacing: 6) {
+                HStack {
+                    Text(title)
+                        .fluidText(.rowTitle)
+                        .foregroundStyle(self.theme.look.text)
+                    Spacer()
+                    Text("\(Int((value.wrappedValue * 100).rounded()))%")
+                        .fluidText(.label)
+                        .monospacedDigit()
+                        .foregroundStyle(self.theme.look.secondaryText)
+                }
+                HStack {
+                    Text(low).fluidText(.label).foregroundStyle(self.theme.look.secondaryText).frame(width: 48, alignment: .leading)
+                    Slider(value: value, in: range, step: 0.05)
+                        .tint(self.theme.look.switchOn)
+                        .accessibilityLabel(title)
+                    Text(high).fluidText(.label).foregroundStyle(self.theme.look.secondaryText).frame(width: 48, alignment: .trailing)
+                }
             }
         }
     }

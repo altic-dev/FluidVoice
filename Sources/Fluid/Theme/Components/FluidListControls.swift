@@ -13,12 +13,16 @@ extension FluidInteractionVisuals {
     }
 }
 
-/// A full-width list row: hover, press and selected fills over the row's whole hit area.
+/// A selectable row, tile or segment: hover, press and selected fills over the whole hit area.
 struct FluidSelectableRowStyle: ButtonStyle {
     let isSelected: Bool
+    /// Rounds the fill for tiles and segments; list rows keep square edges.
+    var cornerRadius: CGFloat = 0
+    /// Rows span their container; tiles and segments keep their own width.
+    var fillsWidth = true
 
     func makeBody(configuration: Configuration) -> some View {
-        RowBody(configuration: configuration, isSelected: self.isSelected)
+        RowBody(configuration: configuration, isSelected: self.isSelected, cornerRadius: self.cornerRadius, fillsWidth: self.fillsWidth)
     }
 
     private struct RowBody: View {
@@ -28,18 +32,24 @@ struct FluidSelectableRowStyle: ButtonStyle {
         @State private var isHovered = false
         let configuration: Configuration
         let isSelected: Bool
+        let cornerRadius: CGFloat
+        let fillsWidth: Bool
 
         var body: some View {
+            let shape = RoundedRectangle(cornerRadius: self.cornerRadius, style: .continuous)
             self.configuration.label
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(maxWidth: self.fillsWidth ? .infinity : nil, alignment: .leading)
                 .background(FluidInteractionVisuals.fill(
                     self.theme.palette,
                     isSelected: self.isSelected,
                     isHovered: self.isHovered && self.isEnabled,
                     isPressed: self.configuration.isPressed
-                ))
-                .contentShape(Rectangle())
-                .contentShape(.focusEffect, RoundedRectangle(cornerRadius: 6, style: .continuous).inset(by: 3))
+                ), in: shape)
+                .contentShape(shape)
+                .contentShape(
+                    .focusEffect,
+                    self.cornerRadius > 0 ? AnyShape(shape) : AnyShape(RoundedRectangle(cornerRadius: 6, style: .continuous).inset(by: 3))
+                )
                 .onHover { self.isHovered = $0 }
                 .animation(self.reduceMotion ? nil : .easeOut(duration: 0.12), value: self.isHovered)
         }
@@ -47,10 +57,10 @@ struct FluidSelectableRowStyle: ButtonStyle {
 }
 
 extension View {
-    /// A full-width selectable row. The whole row takes clicks; the keyboard-focus ring is
-    /// rounded and inset instead of square.
-    func fluidSelectableRow(isSelected: Bool) -> some View {
-        self.buttonStyle(FluidSelectableRowStyle(isSelected: isSelected))
+    /// A selectable row. The whole row takes clicks; the keyboard-focus ring is rounded and inset
+    /// instead of square. Tiles and segments pass a corner radius and keep their own width.
+    func fluidSelectableRow(isSelected: Bool, cornerRadius: CGFloat = 0, fillsWidth: Bool = true) -> some View {
+        self.buttonStyle(FluidSelectableRowStyle(isSelected: isSelected, cornerRadius: cornerRadius, fillsWidth: fillsWidth))
     }
 }
 

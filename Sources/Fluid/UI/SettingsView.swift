@@ -910,264 +910,143 @@ struct SettingsView: View {
                 }
                 .shownInSettingsSection(.audio, selectedSection: self.selectedSection)
 
-                // Overlay Settings Card
-                ThemedCard(style: .standard) {
-                    VStack(alignment: .leading, spacing: 14) {
-                        VStack(alignment: .leading, spacing: 12) {
+                // Overlay: its look (bottom overlay only), where and how it shows, and the visualizer.
+                VStack(alignment: .leading, spacing: FluidSettingsLayout.groupSpacing) {
+                    if self.settings.overlayPosition == .bottom {
+                        FluidSettingsGroup(title: "Look") {
+                            self.overlayMaterialSettings
+                        }
+                    }
+
+                    FluidSettingsGroup(
+                        title: "Placement & Behavior",
+                        footnote: self.asr.isRunning ? "Settings are disabled during active recording." : nil
+                    ) {
+                        FluidSettingsRow(title: "Overlay Position", description: "Where the recording indicator appears on screen.") {
+                            FluidDropdownPicker("Overlay position", selectedTitle: self.settings.overlayPosition.displayName, selection: self.$settings.overlayPosition) {
+                                ForEach(SettingsStore.OverlayPosition.allCases, id: \.self) { position in
+                                    Text(position.displayName).tag(position)
+                                }
+                            }
+                            .fluidDropdownStyle()
+                            .frame(width: 170, alignment: .trailing)
+                        }
+                        .settingsSearchTarget(.overlayPosition)
+
+                        FluidSettingsRow(
+                            title: self.settings.overlayPosition == .bottom ? "Dictation Overlay Size" : "Notch Style",
+                            description: self.settings.overlayPosition == .bottom
+                                ? "How large the recording indicator appears."
+                                : "Choose the regular notch or the compact layout."
+                        ) {
                             if self.settings.overlayPosition == .bottom {
-                                self.overlayMaterialSettings
-                                Divider().padding(.vertical, 8)
-                            }
-
-                            HStack {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(self.settings.overlayPosition == .bottom ? "Dictation Overlay Size" : "Notch Style")
-                                        .font(self.theme.typography.bodyStrong)
-                                        .foregroundStyle(self.settingsTitleText)
-                                    Text(
-                                        self.settings.overlayPosition == .bottom
-                                            ? "How large the recording indicator appears"
-                                            : "Choose the regular notch or the compact layout"
-                                    )
-                                    .font(self.theme.typography.bodySmall)
-                                    .foregroundStyle(self.settingsSecondaryText)
-                                }
-
-                                Spacer()
-
-                                if self.settings.overlayPosition == .bottom {
-                                    FluidDropdownPicker("Overlay size", selectedTitle: self.settings.overlaySize.displayName, selection: self.$settings.overlaySize) {
-                                        ForEach(SettingsStore.OverlaySize.allCases, id: \.self) { size in
-                                            Text(size.displayName).tag(size)
-                                        }
-                                    }
-                                    .fluidDropdownStyle()
-                                    .frame(width: 170, alignment: .trailing)
-                                } else {
-                                    FluidDropdownPicker(
-                                        "Notch presentation",
-                                        selectedTitle: self.settings.notchPresentationMode.displayName,
-                                        selection: self.$settings.notchPresentationMode
-                                    ) {
-                                        ForEach(SettingsStore.NotchPresentationMode.allCases, id: \.self) { mode in
-                                            Text(mode.displayName).tag(mode)
-                                        }
-                                    }
-                                    .fluidDropdownStyle()
-                                    .frame(width: 170, alignment: .trailing)
-                                }
-                            }
-                            .settingsSearchTarget(.overlayStyle)
-
-                            Divider().padding(.vertical, 4)
-
-                            HStack {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text("Meeting Overlay")
-                                        .font(self.theme.typography.bodyStrong)
-                                        .foregroundStyle(self.settingsTitleText)
-                                    Text("Choose the display used when your next meeting starts")
-                                        .font(self.theme.typography.bodySmall)
-                                        .foregroundStyle(self.settingsSecondaryText)
-                                        .fixedSize(horizontal: false, vertical: true)
-                                }
-
-                                Spacer()
-
-                                Picker("", selection: self.$settings.meetingOverlayPreference) {
-                                    ForEach(MeetingOverlayPreference.allCases, id: \.self) { preference in
-                                        Text(preference == .pill ? "Pill" : "Captions").tag(preference)
+                                FluidDropdownPicker("Overlay size", selectedTitle: self.settings.overlaySize.displayName, selection: self.$settings.overlaySize) {
+                                    ForEach(SettingsStore.OverlaySize.allCases, id: \.self) { size in
+                                        Text(size.displayName).tag(size)
                                     }
                                 }
-                                .pickerStyle(.menu)
+                                .fluidDropdownStyle()
                                 .frame(width: 170, alignment: .trailing)
-                            }
-
-                            HStack {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text("Live Preview")
-                                        .font(self.theme.typography.bodyStrong)
-                                        .foregroundStyle(self.settingsTitleText)
-                                    Text("Show transcription text in the overlay while you speak")
-                                        .font(self.theme.typography.bodySmall)
-                                        .foregroundStyle(self.settingsSecondaryText)
-                                        .fixedSize(horizontal: false, vertical: true)
-                                }
-
-                                Spacer()
-
-                                Toggle("", isOn: self.$enableStreamingPreview)
-                                    .labelsHidden()
-                                    .onChange(of: self.enableStreamingPreview) { _, newValue in
-                                        SettingsStore.shared.enableStreamingPreview = newValue
-                                    }
-                            }
-                            .settingsSearchTarget(.livePreview)
-
-                            // Bottom overlay specific settings (only show when bottom is selected)
-                            if self.settings.overlayPosition == .bottom {
-                                Divider().padding(.vertical, 4)
-
-                                // Bottom Offset
-                                HStack {
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text("Bottom Offset")
-                                            .font(self.theme.typography.bodyStrong)
-                                            .foregroundStyle(self.settingsTitleText)
-                                        Text("Distance from bottom of screen")
-                                            .font(self.theme.typography.bodySmall)
-                                            .foregroundStyle(self.settingsSecondaryText)
-                                            .fixedSize(horizontal: false, vertical: true)
-                                    }
-
-                                    Spacer()
-
-                                    HStack(spacing: 6) {
-                                        Slider(value: self.$settings.overlayBottomOffset, in: 20...500)
-                                            .frame(width: 110)
-                                            .controlSize(.small)
-
-                                        Text("\(Int(self.settings.overlayBottomOffset)) px")
-                                            .font(.fluidSystem(.caption, design: .monospaced))
-                                            .foregroundStyle(self.settingsSecondaryText)
-                                            .frame(width: 54, alignment: .trailing)
-                                    }
-                                    .frame(width: 170, alignment: .trailing)
-                                }
-                                .settingsSearchTarget(.bottomOffset)
-                            }
-
-                            Divider().padding(.vertical, 12)
-                            Text("Behavior & placement")
-                                .font(self.theme.typography.bodyStrong)
-                                .padding(.bottom, 4)
-
-                            // Overlay Position
-                            HStack {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text("Overlay Position")
-                                        .font(self.theme.typography.bodyStrong)
-                                        .foregroundStyle(self.settingsTitleText)
-                                    Text("Where the recording indicator appears on screen")
-                                        .font(self.theme.typography.bodySmall)
-                                        .foregroundStyle(self.settingsSecondaryText)
-                                        .fixedSize(horizontal: false, vertical: true)
-                                }
-
-                                Spacer()
-
-                                FluidDropdownPicker("Overlay position", selectedTitle: self.settings.overlayPosition.displayName, selection: self.$settings.overlayPosition) {
-                                    ForEach(SettingsStore.OverlayPosition.allCases, id: \.self) { position in
-                                        Text(position.displayName).tag(position)
+                            } else {
+                                FluidDropdownPicker(
+                                    "Notch presentation",
+                                    selectedTitle: self.settings.notchPresentationMode.displayName,
+                                    selection: self.$settings.notchPresentationMode
+                                ) {
+                                    ForEach(SettingsStore.NotchPresentationMode.allCases, id: \.self) { mode in
+                                        Text(mode.displayName).tag(mode)
                                     }
                                 }
                                 .fluidDropdownStyle()
                                 .frame(width: 170, alignment: .trailing)
                             }
-                            .settingsSearchTarget(.overlayPosition)
+                        }
+                        .settingsSearchTarget(.overlayStyle)
 
-                            Divider().padding(.vertical, 8)
-
-                            HStack {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text("Sensitivity")
-                                        .font(self.theme.typography.bodyStrong)
-                                        .foregroundStyle(self.settingsTitleText)
-                                    Text("Control how sensitive the audio visualizer is to sound input")
-                                        .font(self.theme.typography.bodySmall)
-                                        .foregroundStyle(self.settingsSecondaryText)
-                                        .fixedSize(horizontal: false, vertical: true)
+                        if self.settings.overlayPosition == .bottom {
+                            FluidSettingsRow(title: "Bottom Offset", description: "Distance from the bottom of the screen.") {
+                                HStack(spacing: 6) {
+                                    Slider(value: self.$settings.overlayBottomOffset, in: 20...500)
+                                        .tint(self.theme.look.switchOn)
+                                        .controlSize(.small)
+                                        .frame(width: 110)
+                                        .accessibilityLabel("Bottom offset")
+                                    Text("\(Int(self.settings.overlayBottomOffset)) px")
+                                        .fluidText(.label)
+                                        .monospacedDigit()
+                                        .foregroundStyle(self.theme.look.secondaryText)
+                                        .frame(width: 54, alignment: .trailing)
                                 }
+                                .frame(width: 170, alignment: .trailing)
+                            }
+                            .settingsSearchTarget(.bottomOffset)
+                        }
 
-                                Spacer()
+                        self.switchRow(
+                            title: "Live Preview",
+                            description: "Show transcription text in the overlay while you speak.",
+                            isOn: self.$enableStreamingPreview
+                        )
+                        .onChange(of: self.enableStreamingPreview) { _, newValue in
+                            SettingsStore.shared.enableStreamingPreview = newValue
+                        }
+                        .settingsSearchTarget(.livePreview)
 
+                        FluidSettingsRow(title: "Meeting Overlay", description: "Choose the display used when your next meeting starts.") {
+                            FluidDropdownPicker(
+                                "Meeting overlay",
+                                selectedTitle: self.settings.meetingOverlayPreference == .pill ? "Pill" : "Captions",
+                                selection: self.$settings.meetingOverlayPreference
+                            ) {
+                                ForEach(MeetingOverlayPreference.allCases, id: \.self) { preference in
+                                    Text(preference == .pill ? "Pill" : "Captions").tag(preference)
+                                }
+                            }
+                            .fluidDropdownStyle()
+                            .frame(width: 170, alignment: .trailing)
+                        }
+                    }
+
+                    FluidSettingsGroup(title: "Visualizer") {
+                        VStack(spacing: 0) {
+                            FluidSettingsRow(title: "Sensitivity", description: "How strongly the visualizer reacts to sound.") {
                                 Button("Reset") {
                                     self.visualizerNoiseThreshold = 0.4
                                     SettingsStore.shared.visualizerNoiseThreshold = self.visualizerNoiseThreshold
                                 }
-                                .fluidOutlinedButton()
-                                .controlSize(.small)
+                                .fluidAction()
                             }
-                            .settingsSearchTarget(.overlaySensitivity)
-
-                            HStack(spacing: 10) {
-                                Text("More")
-                                    .font(.fluidSystem(.caption))
-                                    .foregroundStyle(self.settingsSecondaryText)
-                                    .frame(width: 36, alignment: .trailing)
-
+                            self.overlaySliderLine(low: "More", high: "Less", value: String(format: "%.2f", self.visualizerNoiseThreshold)) {
                                 Slider(value: self.$visualizerNoiseThreshold, in: 0.01...0.8, step: 0.01)
-                                    .controlSize(.regular)
-
-                                Text("Less")
-                                    .font(.fluidSystem(.caption))
-                                    .foregroundStyle(self.settingsSecondaryText)
-                                    .frame(width: 36, alignment: .leading)
-
-                                Text(String(format: "%.2f", self.visualizerNoiseThreshold))
-                                    .font(.fluidSystem(.caption, design: .monospaced))
-                                    .foregroundStyle(self.settingsTertiaryText)
-                                    .frame(width: 36)
-                            }
-
-                            Divider().padding(.vertical, 8)
-
-                            VStack(alignment: .leading, spacing: 10) {
-                                HStack(alignment: .top) {
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text("Transcription Preview Length")
-                                            .font(self.theme.typography.bodyStrong)
-                                            .foregroundStyle(self.settingsTitleText)
-                                        Text("How many recent characters appear in the notch/pill preview")
-                                            .font(self.theme.typography.bodySmall)
-                                            .foregroundStyle(self.settingsSecondaryText)
-                                            .fixedSize(horizontal: false, vertical: true)
-                                    }
-
-                                    Spacer()
-
-                                    Text("\(self.settings.transcriptionPreviewCharLimit) chars")
-                                        .font(.fluidSystem(.caption, design: .monospaced))
-                                        .foregroundStyle(self.settingsSecondaryText)
-                                }
-
-                                HStack(spacing: 10) {
-                                    Text("Less")
-                                        .font(.fluidSystem(.caption))
-                                        .foregroundStyle(self.settingsSecondaryText)
-                                        .frame(width: 36, alignment: .trailing)
-
-                                    Slider(
-                                        value: Binding(
-                                            get: { Double(self.settings.transcriptionPreviewCharLimit) },
-                                            set: { self.settings.transcriptionPreviewCharLimit = Int($0.rounded()) }
-                                        ),
-                                        in: Double(SettingsStore.transcriptionPreviewCharLimitRange.lowerBound)...Double(SettingsStore.transcriptionPreviewCharLimitRange.upperBound),
-                                        step: Double(SettingsStore.transcriptionPreviewCharLimitStep)
-                                    )
-                                    .controlSize(.regular)
-
-                                    Text("More")
-                                        .font(.fluidSystem(.caption))
-                                        .foregroundStyle(self.settingsSecondaryText)
-                                        .frame(width: 36, alignment: .leading)
-                                }
-                            }
-                            .settingsSearchTarget(.transcriptionPreviewLength)
-
-                            Divider().padding(.vertical, 4)
-
-                            if self.asr.isRunning {
-                                Text("Settings are disabled during active recording")
-                                    .font(.fluidSystem(.caption))
-                                    .foregroundStyle(self.settingsSecondaryText)
-                                    .italic()
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .padding(.top, 4)
+                                    .accessibilityLabel("Sensitivity")
                             }
                         }
+                        .settingsSearchTarget(.overlaySensitivity)
+
+                        VStack(spacing: 0) {
+                            FluidSettingsRow(
+                                title: "Transcription Preview Length",
+                                description: "How many recent characters appear in the notch or pill preview."
+                            ) {
+                                Text("\(self.settings.transcriptionPreviewCharLimit) chars")
+                                    .fluidText(.label)
+                                    .monospacedDigit()
+                                    .foregroundStyle(self.theme.look.secondaryText)
+                            }
+                            self.overlaySliderLine(low: "Less", high: "More", value: nil) {
+                                Slider(
+                                    value: Binding(
+                                        get: { Double(self.settings.transcriptionPreviewCharLimit) },
+                                        set: { self.settings.transcriptionPreviewCharLimit = Int($0.rounded()) }
+                                    ),
+                                    in: Double(SettingsStore.transcriptionPreviewCharLimitRange.lowerBound)...Double(SettingsStore.transcriptionPreviewCharLimitRange.upperBound),
+                                    step: Double(SettingsStore.transcriptionPreviewCharLimitStep)
+                                )
+                                .accessibilityLabel("Transcription preview length")
+                            }
+                        }
+                        .settingsSearchTarget(.transcriptionPreviewLength)
                     }
-                    .padding(16)
                 }
                 .shownInSettingsSection(.overlay, selectedSection: self.selectedSection)
 
@@ -2781,6 +2660,31 @@ private extension SettingsView {
                 .fluidSwitch()
                 .accessibilityLabel(title)
         }
+    }
+
+    /// A full-width slider under its row, with a word at each end and an optional value.
+    private func overlaySliderLine(low: String, high: String, value: String?, @ViewBuilder slider: () -> some View) -> some View {
+        HStack(spacing: 10) {
+            Text(low)
+                .fluidText(.label)
+                .foregroundStyle(self.theme.look.secondaryText)
+                .frame(width: 36, alignment: .leading)
+            slider()
+                .tint(self.theme.look.switchOn)
+            Text(high)
+                .fluidText(.label)
+                .foregroundStyle(self.theme.look.secondaryText)
+                .frame(width: 36, alignment: .trailing)
+            if let value {
+                Text(value)
+                    .fluidText(.label)
+                    .monospacedDigit()
+                    .foregroundStyle(self.theme.look.tertiaryText)
+                    .frame(width: 36, alignment: .trailing)
+            }
+        }
+        .padding(.horizontal, FluidSettingsLayout.rowInset)
+        .padding(.bottom, FluidSettingsLayout.rowVerticalPadding)
     }
 
     // MARK: - Dictation Formatting page
