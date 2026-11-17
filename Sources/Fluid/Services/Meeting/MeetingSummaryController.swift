@@ -151,6 +151,8 @@ final class MeetingSummaryController: ObservableObject {
     @Published private(set) var output = ""
     @Published private(set) var outputProvenance = ""
     @Published private(set) var outputNotice = ""
+    /// The transcript or speaker names changed after the shown summary was written.
+    @Published private(set) var outputIsOutdated = false
     @Published private(set) var error: String?
     private var operation: Task<Void, Never>?
     private var generation = UUID()
@@ -179,7 +181,7 @@ final class MeetingSummaryController: ObservableObject {
         var configurationHash: String?
         var promptVersion: Int?
         var generatedAt: Date?
-        /// Set for custom-prompt summaries, so an edited prompt does not show an older result.
+        /// The custom prompt a summary was written with, kept as a record.
         var promptHash: String?
         /// Display name of an on-device model, whose ID is not meant to be read.
         var modelName: String?
@@ -198,21 +200,22 @@ final class MeetingSummaryController: ObservableObject {
 
         /// Summaries saved before providers were recorded came from the earlier on-device
         /// model, which was withdrawn for accuracy; they stay hidden.
-        func isCurrent(transcriptHash: String, promptHash: String?) -> Bool {
-            self.providerID != nil && self.transcriptHash == transcriptHash && self.promptHash == promptHash
+        var isShown: Bool {
+            self.providerID != nil
         }
 
-        func isCurrent(session: MeetingSession, promptHash: String?) -> Bool {
-            let hash: String
+        /// The transcript or speaker names changed since this summary was written. It is still shown, with a warning.
+        func isOutdated(for session: MeetingSession) -> Bool {
+            let hash: String?
             switch self.transcriptHashVersion {
             case nil:
                 hash = MeetingSummaryInput.fingerprint(MeetingSummaryInput.transcript(for: session))
             case Self.currentTranscriptHashVersion:
                 hash = MeetingSummaryInput.contentFingerprint(for: session)
             default:
-                return false
+                hash = nil
             }
-            return self.isCurrent(transcriptHash: hash, promptHash: promptHash)
+            return hash != self.transcriptHash
         }
 
         /// Upgrade before saving a rename, while the original title can still verify old files.
@@ -234,37 +237,36 @@ final class MeetingSummaryController: ObservableObject {
         }
     }
 
-    func refresh(session: MeetingSession?, kind: MeetingSummaryKind, customPrompt: String = "") async {
+    func refresh(session: MeetingSession?, kind: MeetingSummaryKind) async {
         guard !self.busy else { return }
         let generation = UUID()
         self.generation = generation
-        self.output = ""
-        self.outputProvenance = ""
-        self.outputNotice = ""
+        self.show(nil)
         self.error = nil
         self.checking = true
         let model = self.model
         let store = self.store
-        let promptHash = kind == .custom ? MeetingSummaryInput.fingerprint(customPrompt.trimmingCharacters(in: .whitespacesAndNewlines)) : nil
-        let snapshot = await Task.detached(priority: .utility) { () -> (Bool, SavedSummary?) in
+        let snapshot = await Task.detached(priority: .utility) { () -> (installed: Bool, saved: SavedSummary?, isOutdated: Bool) in
             let installed = model.map { PrivateAIIntegrationService.isModelInstalled($0) } ?? false
             guard let session,
                   let directory = try? await store.existingSessionDirectory(for: session.id),
                   let data = try? Data(contentsOf: directory.appendingPathComponent("manual-summary-\(kind.rawValue).json")),
                   let saved = try? JSONDecoder().decode(SavedSummary.self, from: data),
-                  saved.isCurrent(
-                      session: session,
-                      promptHash: promptHash
-                  )
-            else { return (installed, nil) }
-            return (installed, saved)
+                  saved.isShown
+            else { return (installed, nil, false) }
+            return (installed, saved, saved.isOutdated(for: session))
         }.value
         guard self.generation == generation, !Task.isCancelled else { return }
-        self.installed = snapshot.0
-        self.output = snapshot.1?.text ?? ""
-        self.outputProvenance = snapshot.1?.provenance ?? ""
-        self.outputNotice = snapshot.1?.notice ?? ""
+        self.installed = snapshot.installed
+        self.show(snapshot.saved, isOutdated: snapshot.isOutdated)
         self.checking = false
+    }
+
+    private func show(_ saved: SavedSummary?, isOutdated: Bool = false) {
+        self.output = saved?.text ?? ""
+        self.outputProvenance = saved?.provenance ?? ""
+        self.outputNotice = saved?.notice ?? ""
+        self.outputIsOutdated = isOutdated
     }
 
     func download() {

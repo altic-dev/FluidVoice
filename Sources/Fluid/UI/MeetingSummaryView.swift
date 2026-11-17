@@ -35,7 +35,7 @@ struct MeetingSummaryView: View {
     }
 
     private var refreshID: String {
-        "\(self.session?.id.uuidString ?? "home")-\(self.session?.updatedAt.timeIntervalSince1970 ?? 0)-\(self.kind.rawValue)-\(self.promptHash ?? "")-\(self.generation.savedRevision)"
+        "\(self.session?.id.uuidString ?? "home")-\(self.session?.updatedAt.timeIntervalSince1970 ?? 0)-\(self.kind.rawValue)-\(self.generation.savedRevision)"
     }
 
     private var isGenerating: Bool {
@@ -86,6 +86,9 @@ struct MeetingSummaryView: View {
         VStack(alignment: .leading, spacing: self.theme.metrics.spacing.lg) {
             self.configurationPanel
             if !self.controller.output.isEmpty {
+                if self.controller.outputIsOutdated {
+                    self.outdatedWarning
+                }
                 self.summaryDocument
             }
         }
@@ -93,12 +96,7 @@ struct MeetingSummaryView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.vertical, self.theme.metrics.spacing.md)
         .task(id: self.refreshID) {
-            if self.kind == .custom {
-                // Coalesce typing; a newer keystroke cancels this task before it reads the saved file.
-                try? await Task.sleep(for: .milliseconds(250))
-                guard !Task.isCancelled else { return }
-            }
-            await self.controller.refresh(session: self.session, kind: self.kind, customPrompt: self.preferences.customPrompt)
+            await self.controller.refresh(session: self.session, kind: self.kind)
         }
         .task { self.reloadProviders() }
         .onReceive(self.settings.objectWillChange) { _ in
@@ -379,10 +377,7 @@ struct MeetingSummaryView: View {
                         self.generate()
                     }
                     .fluidGlassAction(prominent: true)
-                    .disabled(
-                        (!self.usesOnDevice && self.route == nil) || self.needsCustomPrompt
-                            || self.session?.transcriptSegments.isEmpty != false || !self.isQuiescent
-                    )
+                    .disabled(self.generateDisabled)
                 }
                 if self.usesOnDevice, self.controller.installed {
                     Menu {
@@ -423,6 +418,35 @@ struct MeetingSummaryView: View {
                 customPrompt: self.preferences.customPrompt
             )
         }
+    }
+
+    private var outdatedWarning: some View {
+        HStack(alignment: .center, spacing: self.theme.metrics.spacing.md) {
+            Label {
+                Text("The meeting changed after this summary was written. Regenerate it if needed.")
+                    .fixedSize(horizontal: false, vertical: true)
+            } icon: {
+                Image(systemName: "exclamationmark.triangle.fill")
+            }
+            .font(self.theme.typography.bodySmall)
+            .foregroundStyle(self.theme.palette.warning)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            if !self.isGenerating {
+                Button("Regenerate", systemImage: "arrow.clockwise") { self.generate() }
+                    .fluidGlassAction()
+                    .disabled(self.generateDisabled)
+            }
+        }
+        .padding(self.theme.metrics.spacing.md)
+        .background(RoundedRectangle(cornerRadius: 12).fill(self.theme.palette.warning.opacity(0.08)))
+        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(self.theme.palette.warning.opacity(0.3)))
+        .accessibilityElement(children: .contain)
+    }
+
+    private var generateDisabled: Bool {
+        (!self.usesOnDevice && self.route == nil) || self.needsCustomPrompt
+            || self.session?.transcriptSegments.isEmpty != false || !self.isQuiescent
+            || (self.usesOnDevice && !self.controller.installed) || self.busy || self.controller.checking
     }
 
     private var summaryDocument: some View {

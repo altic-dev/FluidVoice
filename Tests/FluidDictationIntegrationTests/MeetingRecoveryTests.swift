@@ -5956,7 +5956,7 @@ final class MeetingRecoveryTests: XCTestCase {
                 let file = directory.appendingPathComponent("manual-summary-\(kind.rawValue).json")
                 try JSONEncoder().encode(saved).write(to: file, options: .atomic)
                 let controller = MeetingSummaryController(store: store)
-                await controller.refresh(session: session, kind: kind, customPrompt: prompt)
+                await controller.refresh(session: session, kind: kind)
                 XCTAssertEqual(controller.output, saved.text, "Legacy \(kind) summary should load before rename")
             }
 
@@ -5973,7 +5973,7 @@ final class MeetingRecoveryTests: XCTestCase {
             let controller = MeetingSummaryController(store: reloadedStore)
             var upgradedFiles: [MeetingSummaryKind: Data] = [:]
             for kind in MeetingSummaryKind.allCases {
-                await controller.refresh(session: renamed, kind: kind, customPrompt: prompt)
+                await controller.refresh(session: renamed, kind: kind)
                 XCTAssertEqual(controller.output, "Saved \(kind.rawValue) summary", "\(provider): \(kind)")
                 XCTAssertEqual(controller.outputProvenance, "Fixture provider · fixture-model")
                 let file = directory.appendingPathComponent("manual-summary-\(kind.rawValue).json")
@@ -5988,25 +5988,26 @@ final class MeetingRecoveryTests: XCTestCase {
             // Already-upgraded summaries survive another rename without rewriting their files.
             let secondRename = try await coordinator.renameSession(sessionID: session.id, to: "New Weekly Sync")
             for kind in MeetingSummaryKind.allCases {
-                await controller.refresh(session: secondRename, kind: kind, customPrompt: prompt)
+                await controller.refresh(session: secondRename, kind: kind)
                 XCTAssertEqual(controller.output, "Saved \(kind.rawValue) summary")
                 let file = directory.appendingPathComponent("manual-summary-\(kind.rawValue).json")
                 XCTAssertEqual(try Data(contentsOf: file), upgradedFiles[kind])
             }
-            await controller.refresh(session: secondRename, kind: .custom, customPrompt: "Edited prompt")
-            XCTAssertTrue(controller.output.isEmpty, "Migrating a custom summary must retain its prompt check")
+            XCTAssertFalse(controller.outputIsOutdated, "A title change does not make a summary outdated")
             var corrected = secondRename
             corrected.transcriptSegments[0].text += " A transcript correction."
             await controller.refresh(session: corrected, kind: .detailed)
-            XCTAssertTrue(controller.output.isEmpty, "Renaming must not disable transcript invalidation")
+            XCTAssertEqual(controller.output, "Saved detailed summary")
+            XCTAssertTrue(controller.outputIsOutdated, "Renaming must not disable transcript change detection")
             corrected = secondRename
             corrected.speakers[0].displayName = "Corrected speaker"
             await controller.refresh(session: corrected, kind: .participants)
-            XCTAssertTrue(controller.output.isEmpty, "Renaming must not disable speaker invalidation")
+            XCTAssertEqual(controller.output, "Saved participants summary")
+            XCTAssertTrue(controller.outputIsOutdated, "Renaming must not disable speaker change detection")
         }
     }
 
-    func testRenameSessionDoesNotReviveInvalidSavedSummaries() async throws {
+    func testRenameSessionDoesNotUpgradeOutdatedOrInvalidSavedSummaries() async throws {
         let dir = self.makeTempDirectory()
         defer { try? FileManager.default.removeItem(at: dir) }
         let store = MeetingSessionStore(rootDirectory: dir)
@@ -6031,9 +6032,15 @@ final class MeetingRecoveryTests: XCTestCase {
         )
         let renamed = try await coordinator.renameSession(sessionID: session.id, to: "Weekly Sync")
         let controller = MeetingSummaryController(store: store)
+        let shownAsOutdated: [MeetingSummaryKind: String] = [.executive: "Stale", .decisions: "Future"]
         for (kind, data) in files {
             await controller.refresh(session: renamed, kind: kind)
-            XCTAssertTrue(controller.output.isEmpty, "\(kind) must stay hidden")
+            if let text = shownAsOutdated[kind] {
+                XCTAssertEqual(controller.output, text, "\(kind) stays visible")
+                XCTAssertTrue(controller.outputIsOutdated, "\(kind) is marked outdated")
+            } else {
+                XCTAssertTrue(controller.output.isEmpty, "\(kind) must stay hidden")
+            }
             let file = directory.appendingPathComponent("manual-summary-\(kind.rawValue).json")
             XCTAssertEqual(try Data(contentsOf: file), data, "An invalid file must not be upgraded")
         }
