@@ -229,138 +229,7 @@ struct SettingsView: View {
                     .settingsSearchTarget(.fluidMeet)
                 }
 
-                // App Settings Card
-                ThemedCard(style: .standard) {
-                    VStack(alignment: .leading, spacing: 14) {
-                        // Section header
-                        Label("App Settings", systemImage: "power")
-                            .font(.fluidSystem(.headline))
-                            .foregroundStyle(.primary)
-
-                        VStack(spacing: 16) {
-                            // Launch at startup
-                            self.settingsToggleRow(
-                                title: "Launch at startup",
-                                description: "Automatically start FluidVoice when you log in",
-                                footnote: self.settings.launchAtStartupStatusMessage,
-                                errorMessage: self.settings.launchAtStartupErrorMessage,
-                                isOn: self.launchAtStartupBinding
-                            )
-                            .settingsSearchTarget(.launchAtStartup)
-                            Divider().opacity(0.2)
-
-                            // Show window when launched at login
-                            self.settingsToggleRow(
-                                title: "Show window when launched at login",
-                                description: "When off, FluidVoice starts silently in the menu bar at login. Opening the app yourself always shows the window.",
-                                isOn: Binding(
-                                    get: { SettingsStore.shared.showMainWindowAtLoginLaunch },
-                                    set: { SettingsStore.shared.showMainWindowAtLoginLaunch = $0 }
-                                )
-                            )
-                            .settingsSearchTarget(.showWindowAtLogin)
-                            Divider().opacity(0.2)
-
-                            // Hide from Dock & App Switcher
-                            self.settingsToggleRow(
-                                title: "Hide from Dock & App Switcher",
-                                description: "Keep FluidVoice in the menu bar only (hides Dock icon and Cmd+Tab entry)",
-                                footnote: "Note: May require app restart to take effect.",
-                                isOn: Binding(
-                                    get: { SettingsStore.shared.hideFromDockAndAppSwitcher },
-                                    set: { SettingsStore.shared.hideFromDockAndAppSwitcher = $0 }
-                                )
-                            )
-                            .settingsSearchTarget(.dockVisibility)
-                            Divider().opacity(0.2)
-
-                            // Accent Color
-                            VStack(alignment: .leading, spacing: 6) {
-                                HStack(alignment: .center) {
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text("Accent Color")
-                                            .font(self.theme.typography.bodyStrong)
-                                            .foregroundStyle(self.settingsTitleText)
-                                        Text("Pick a preset or a custom color.")
-                                            .font(self.theme.typography.bodySmall)
-                                            .foregroundStyle(self.settingsSecondaryText)
-                                            .fixedSize(horizontal: false, vertical: true)
-                                    }
-
-                                    Spacer()
-
-                                    HStack(spacing: 10) {
-                                        ForEach(SettingsStore.AccentColorOption.allCases) { option in
-                                            let isSelected = self.settings.customAccentColorHex == nil && self.settings.accentColorOption == option
-                                            Button {
-                                                self.settings.accentColorOption = option
-                                            } label: {
-                                                Circle()
-                                                    .fill(Color(hex: option.hex) ?? .gray)
-                                                    .frame(width: 16, height: 16)
-                                                    .overlay(
-                                                        Circle()
-                                                            .stroke(
-                                                                isSelected ? self.theme.palette.accent : self.theme.palette.cardBorder.opacity(0.5),
-                                                                lineWidth: isSelected ? 2 : 1
-                                                            )
-                                                    )
-                                                    .padding(4)
-                                            }
-                                            .buttonStyle(.plain)
-                                            .accessibilityLabel(option.rawValue)
-                                            .help(option.rawValue)
-                                        }
-
-                                        let isCustom = self.settings.customAccentColorHex != nil
-                                        Button {
-                                            AccentColorPanelTarget.shared.open(with: self.settings.accentColor)
-                                        } label: {
-                                            Circle()
-                                                .fill(AngularGradient(
-                                                    colors: [.red, .yellow, .green, .cyan, .blue, .purple, .red],
-                                                    center: .center
-                                                ))
-                                                .frame(width: 16, height: 16)
-                                                .overlay(
-                                                    Circle()
-                                                        .fill(self.settings.accentColor)
-                                                        .frame(width: 7, height: 7)
-                                                        .opacity(isCustom ? 1 : 0)
-                                                )
-                                                .overlay(
-                                                    Circle()
-                                                        .stroke(
-                                                            isCustom ? self.theme.palette.accent : self.theme.palette.cardBorder.opacity(0.5),
-                                                            lineWidth: isCustom ? 2 : 1
-                                                        )
-                                                )
-                                                .padding(4)
-                                        }
-                                        .buttonStyle(.plain)
-                                        .accessibilityLabel("Custom")
-                                        .help("Custom")
-                                    }
-                                    .padding(.horizontal, 6)
-                                    .padding(.vertical, 4)
-                                    .background(
-                                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                            .fill(self.theme.palette.contentBackground)
-                                            .overlay(
-                                                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                                    .stroke(self.theme.palette.cardBorder.opacity(0.4), lineWidth: 1)
-                                            )
-                                    )
-                                }
-                            }
-                            .settingsSearchTarget(.accentColor)
-                        }
-                    }
-                    .padding(16)
-                }
-                .shownInSettingsSection(.general, selectedSection: self.selectedSection)
-
-                self.updateSettingsCard
+                self.generalPage
                     .shownInSettingsSection(.general, selectedSection: self.selectedSection)
 
                 if self.asr.micStatus != .authorized {
@@ -3171,77 +3040,148 @@ private extension SettingsView {
 }
 
 private extension SettingsView {
-    private var updateSettingsCard: some View {
-        ThemedCard(style: .standard) {
-            VStack(alignment: .leading, spacing: 14) {
-                Label("Updates", systemImage: "arrow.triangle.2.circlepath")
-                    .font(.fluidSystem(.headline))
-                    .foregroundStyle(.primary)
-
-                ViewThatFits(in: .horizontal) {
-                    HStack(alignment: .center, spacing: 24) {
-                        self.installedVersionLabel.fixedSize()
-                        Spacer(minLength: 16)
-                        self.updateActions
-                    }
-                    VStack(alignment: .leading, spacing: 14) {
-                        self.installedVersionLabel
-                        self.updateActions
-                    }
-                }
-
-                self.updateCheckStatus
-
-                Divider().opacity(0.2)
-                VStack(spacing: 16) {
-                    self.settingsToggleRow(
-                        title: "Automatic update checks",
-                        description: "Check for new versions once per hour.",
-                        isOn: Binding(
-                            get: { self.settings.autoUpdateCheckEnabled },
-                            set: { self.settings.autoUpdateCheckEnabled = $0 }
-                        )
-                    )
-                    Divider().opacity(0.2)
-                    self.settingsToggleRow(
-                        title: "Show update pop-ups",
-                        description: "When off, available updates still appear in the top bar and here.",
-                        isOn: Binding(
-                            get: { self.settings.showUpdatePopups },
-                            set: { self.settings.showUpdatePopups = $0 }
-                        )
-                    )
-                    Divider().opacity(0.2)
-                    self.settingsToggleRow(
-                        title: "Include beta releases",
-                        description: "Check stable and preview releases. Preview builds may be less reliable.",
-                        isOn: Binding(
-                            get: { self.settings.betaReleasesEnabled },
-                            set: { self.settings.betaReleasesEnabled = $0 }
-                        )
-                    )
-                }
-
-                Divider().opacity(0.2)
-                self.rollbackControls
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(16)
+    /// A titled setting with a switch, in the shared settings look.
+    func switchRow(
+        title: String,
+        description: String? = nil,
+        footnote: String? = nil,
+        error: String? = nil,
+        isOn: Binding<Bool>
+    ) -> some View {
+        FluidSettingsRow(title: title, description: description, footnote: footnote, error: error) {
+            Toggle(title, isOn: isOn)
+                .fluidSwitch()
+                .accessibilityLabel(title)
         }
-        .settingsSearchTarget(.automaticUpdates)
     }
 
-    private var installedVersionLabel: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text("Version \(self.currentAppVersion)")
-                .font(self.theme.typography.bodyStrong)
-                .foregroundStyle(self.settingsTitleText)
-                .textSelection(.enabled)
-            Text(self.lastUpdateCheckLabel)
-                .font(self.theme.typography.bodySmall)
-                .foregroundStyle(self.settingsSecondaryText)
+    // MARK: - General page
+
+    private var generalPage: some View {
+        VStack(alignment: .leading, spacing: FluidSettingsLayout.groupSpacing) {
+            FluidSettingsGroup(title: "Startup") {
+                self.switchRow(
+                    title: "Launch at startup",
+                    description: "Start FluidVoice when you log in.",
+                    footnote: self.settings.launchAtStartupStatusMessage,
+                    error: self.settings.launchAtStartupErrorMessage,
+                    isOn: self.launchAtStartupBinding
+                )
+                .settingsSearchTarget(.launchAtStartup)
+
+                self.switchRow(
+                    title: "Show window when launched at login",
+                    description: "When off, FluidVoice starts quietly in the menu bar at login. Opening the app yourself always shows the window.",
+                    isOn: Binding(
+                        get: { SettingsStore.shared.showMainWindowAtLoginLaunch },
+                        set: { SettingsStore.shared.showMainWindowAtLoginLaunch = $0 }
+                    )
+                )
+                .settingsSearchTarget(.showWindowAtLogin)
+            }
+
+            FluidSettingsGroup(title: "Appearance") {
+                self.switchRow(
+                    title: "Hide from Dock & App Switcher",
+                    description: "Keep FluidVoice in the menu bar only, without a Dock icon or a Cmd+Tab entry.",
+                    footnote: "May need a restart to take effect.",
+                    isOn: Binding(
+                        get: { SettingsStore.shared.hideFromDockAndAppSwitcher },
+                        set: { SettingsStore.shared.hideFromDockAndAppSwitcher = $0 }
+                    )
+                )
+                .settingsSearchTarget(.dockVisibility)
+
+                FluidSettingsRow(title: "Accent Color", description: "Pick a preset or a custom color.") {
+                    self.accentColorSwatches
+                }
+                .settingsSearchTarget(.accentColor)
+            }
+
+            self.updatesGroup
         }
-        .accessibilityElement(children: .combine)
+    }
+
+    /// The accent color's own values are colors, so this is the one place colors show on the page.
+    private var accentColorSwatches: some View {
+        HStack(spacing: 2) {
+            ForEach(SettingsStore.AccentColorOption.allCases) { option in
+                let isSelected = self.settings.customAccentColorHex == nil && self.settings.accentColorOption == option
+                Button {
+                    self.settings.accentColorOption = option
+                } label: {
+                    self.accentSwatch(Circle().fill(Color(hex: option.hex) ?? .gray), isSelected: isSelected)
+                }
+                .buttonStyle(FluidHoverIconButtonStyle())
+                .accessibilityLabel(option.rawValue)
+                .accessibilityAddTraits(isSelected ? .isSelected : [])
+                .help(option.rawValue)
+            }
+
+            let isCustom = self.settings.customAccentColorHex != nil
+            Button {
+                AccentColorPanelTarget.shared.open(with: self.settings.accentColor)
+            } label: {
+                self.accentSwatch(
+                    Circle()
+                        .fill(AngularGradient(colors: [.red, .yellow, .green, .cyan, .blue, .purple, .red], center: .center))
+                        .overlay(Circle().fill(self.settings.accentColor).frame(width: 7, height: 7).opacity(isCustom ? 1 : 0)),
+                    isSelected: isCustom
+                )
+            }
+            .buttonStyle(FluidHoverIconButtonStyle())
+            .accessibilityLabel("Custom")
+            .accessibilityAddTraits(isCustom ? .isSelected : [])
+            .help("Custom")
+        }
+    }
+
+    /// A swatch with a ring around the chosen one.
+    private func accentSwatch(_ swatch: some View, isSelected: Bool) -> some View {
+        swatch
+            .frame(width: 16, height: 16)
+            .padding(3)
+            .overlay(Circle().strokeBorder(isSelected ? self.theme.look.text : .clear, lineWidth: 1.5))
+            .frame(width: 26, height: 26)
+    }
+
+    private var updatesGroup: some View {
+        FluidSettingsGroup(title: "Updates") {
+            FluidSettingsRow(title: "Version \(self.currentAppVersion)", description: self.lastUpdateCheckLabel) {
+                self.updateActions
+            }
+
+            if self.updater.isCheckingForUpdates || self.updater.isUpdateInProgress || self.updater.availableUpdateVersion != nil {
+                FluidSettingsBlock { self.updateCheckStatus }
+            }
+
+            self.switchRow(
+                title: "Automatic update checks",
+                description: "Check for new versions once per hour.",
+                isOn: Binding(
+                    get: { self.settings.autoUpdateCheckEnabled },
+                    set: { self.settings.autoUpdateCheckEnabled = $0 }
+                )
+            )
+            self.switchRow(
+                title: "Show update pop-ups",
+                description: "When off, available updates still appear in the top bar and here.",
+                isOn: Binding(
+                    get: { self.settings.showUpdatePopups },
+                    set: { self.settings.showUpdatePopups = $0 }
+                )
+            )
+            self.switchRow(
+                title: "Include beta releases",
+                description: "Check stable and preview releases. Preview builds may be less reliable.",
+                isOn: Binding(
+                    get: { self.settings.betaReleasesEnabled },
+                    set: { self.settings.betaReleasesEnabled = $0 }
+                )
+            )
+            self.rollbackControls
+        }
+        .settingsSearchTarget(.automaticUpdates)
     }
 
     private var lastUpdateCheckLabel: String {
@@ -3250,33 +3190,33 @@ private extension SettingsView {
         } ?? "Not checked yet"
     }
 
+    /// "View Update" is the page's one main action, and only while an update is waiting.
     private var updateActions: some View {
-        FluidGlassControlGroup {
-            HStack(spacing: 8) {
-                Button(self.updateActionTitle) {
-                    if self.updater.availableUpdateVersion != nil {
-                        self.updater.showAvailableUpdate()
-                    } else {
-                        self.updater.checkForUpdatesManually()
-                    }
-                }
-                .fluidGlassAction(prominent: true)
-                .disabled(self.updater.isCheckingForUpdates || self.updater.isUpdateInProgress || self.isRollingBack)
-
+        HStack(spacing: self.theme.metrics.spacing.sm) {
+            Button(self.updateActionTitle) {
                 if self.updater.availableUpdateVersion != nil {
-                    Button("Check Again") { self.updater.checkForUpdatesManually() }
-                        .fluidGlassAction()
-                        .disabled(self.updater.isCheckingForUpdates || self.updater.isUpdateInProgress || self.isRollingBack)
+                    self.updater.showAvailableUpdate()
+                } else {
+                    self.updater.checkForUpdatesManually()
                 }
-
-                Button("Release Notes") {
-                    if let url = URL(string: "https://github.com/altic-dev/Fluid-oss/releases") {
-                        NSWorkspace.shared.open(url)
-                    }
-                }
-                .fluidGlassAction()
             }
+            .fluidAction(self.updater.availableUpdateVersion != nil ? .primary : .secondary)
+            .disabled(self.updater.isCheckingForUpdates || self.updater.isUpdateInProgress || self.isRollingBack)
+
+            if self.updater.availableUpdateVersion != nil {
+                Button("Check Again") { self.updater.checkForUpdatesManually() }
+                    .fluidAction()
+                    .disabled(self.updater.isCheckingForUpdates || self.updater.isUpdateInProgress || self.isRollingBack)
+            }
+
+            Button("Release Notes") {
+                if let url = URL(string: "https://github.com/altic-dev/Fluid-oss/releases") {
+                    NSWorkspace.shared.open(url)
+                }
+            }
+            .fluidAction()
         }
+        .fixedSize()
     }
 
     private var updateActionTitle: String {
@@ -3290,19 +3230,24 @@ private extension SettingsView {
             HStack(spacing: 8) {
                 ProgressView().controlSize(.small)
                 Text(self.updater.isUpdateInProgress ? "Installing an update…" : "Checking for updates…")
-                    .font(self.theme.typography.bodySmall)
+                    .fluidText(.body)
+                    .foregroundStyle(self.theme.look.secondaryText)
             }
         } else if let version = self.updater.availableUpdateVersion {
             Label("Version \(version) is available", systemImage: "arrow.down.circle")
-                .font(self.theme.typography.bodySmallStrong)
-                .foregroundStyle(self.theme.palette.accent)
+                .fluidText(.rowTitle)
+                .foregroundStyle(self.theme.look.text)
                 .fixedSize(horizontal: false, vertical: true)
         }
     }
 
     private var rollbackControls: some View {
-        VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
-            FluidManagementRow(title: "Roll back", detail: "Choose an earlier version. FluidVoice will restart.") {
+        FluidSettingsRow(
+            title: "Roll back",
+            description: "Choose an earlier version. FluidVoice will restart.",
+            footnote: self.rollbackStatusNote
+        ) {
+            VStack(alignment: .trailing, spacing: self.theme.metrics.spacing.xs) {
                 HStack(spacing: self.theme.metrics.spacing.sm) {
                     FluidDropdownPicker(
                         "Rollback version",
@@ -3322,29 +3267,24 @@ private extension SettingsView {
                     Button(self.isRollingBack ? "Rolling Back…" : "Roll Back") {
                         self.restorePreviousVersion()
                     }
-                    .fluidGlassAction()
+                    .fluidAction()
                     .disabled(self.selectedRollbackVersion.isEmpty || self.isRollingBack || self.updater.isUpdateInProgress)
                 }
-            }
-            if self.isLoadingRollbackVersions {
-                HStack(spacing: self.theme.metrics.spacing.sm) {
-                    ProgressView().controlSize(.mini)
-                    Text("Loading versions…").font(self.theme.typography.caption)
-                }
-                .foregroundStyle(self.settingsSecondaryText)
-            } else if let error = self.rollbackVersionsError {
-                HStack {
-                    Text(error).font(self.theme.typography.caption)
-                        .foregroundStyle(self.settingsSecondaryText)
+                if self.rollbackVersionsError != nil {
                     Button("Try Again") { Task { await self.loadRollbackVersions() } }
-                        .buttonStyle(.link)
+                        .fluidAction()
                 }
-            } else if self.rollbackOptions.isEmpty, self.rollbackVersion.isEmpty {
-                Text("No earlier versions are available.")
-                    .font(self.theme.typography.caption)
-                    .foregroundStyle(self.settingsSecondaryText)
             }
+            .fixedSize()
         }
+    }
+
+    /// Loading, failure or "nothing to roll back to", under the Roll back row.
+    private var rollbackStatusNote: String? {
+        if self.isLoadingRollbackVersions { return "Loading versions…" }
+        if let error = self.rollbackVersionsError { return error }
+        if self.rollbackOptions.isEmpty, self.rollbackVersion.isEmpty { return "No earlier versions are available." }
+        return nil
     }
 
     private var selectedRollbackTitle: String {

@@ -544,8 +544,15 @@ struct ContentView: View {
             }
             .onReceive(DistributedNotificationCenter.default().publisher(for: Notification.Name("com.FluidApp.debug.openSettings"))) { notification in
                 guard UserDefaults.standard.bool(forKey: "FluidDebugRemoteToggleEnabled") else { return }
-                // An optional page name ("shortcuts", "audio", …) opens that page; "close" closes Settings.
-                switch (notification.object as? String).map({ ($0, SettingsSection(rawValue: $0)) }) {
+                // An optional page name ("shortcuts", "audio", …) opens that page, "search:<words>"
+                // searches Settings and scrolls to the first match, and "close" closes Settings.
+                let request = notification.object as? String
+                if let query = request?.split(separator: ":", maxSplits: 1).dropFirst().first, request?.hasPrefix("search:") == true {
+                    if !self.settingsNavigation.isPresented { self.openSettings(.general) }
+                    self.updateSettingsSearchQuery(String(query))
+                    return
+                }
+                switch request.map({ ($0, SettingsSection(rawValue: $0)) }) {
                 case let (_, section?)?: self.openSettings(section)
                 case ("close", _)?: self.closeSettings()
                 default: self.menuBarManager.openPreferencesFromUI()
