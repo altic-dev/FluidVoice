@@ -102,8 +102,10 @@ private struct SettingsSearchAnchor: NSViewRepresentable {
 private struct SettingsSearchTargetModifier: ViewModifier {
     let target: SettingsSearchTarget
 
+    @Environment(\.theme) private var theme
     @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
     @Environment(\.settingsSearchPresentation) private var presentation
+    @Environment(\.isInsideFluidSettingsGroup) private var isInsideGroup
 
     private var isMatched: Bool {
         self.presentation?.matchedTargets.contains(self.target) == true
@@ -113,14 +115,19 @@ private struct SettingsSearchTargetModifier: ViewModifier {
         self.presentation?.primaryTarget == self.target
     }
 
+    /// A row on a group's card fills its own bounds; anything else gets a ring just outside it.
+    private var showsRing: Bool {
+        self.isMatched && !self.isInsideGroup
+    }
+
     func body(content: Content) -> some View {
         content
             .background {
                 ZStack {
                     if self.isMatched {
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .fill(Color.accentColor.opacity(self.isPrimary ? 0.12 : 0.07))
-                            .padding(-6)
+                        RoundedRectangle(cornerRadius: self.isInsideGroup ? 0 : 8, style: .continuous)
+                            .fill(self.theme.look.text.opacity(self.isPrimary ? 0.08 : 0.04))
+                            .padding(self.isInsideGroup ? 0 : -6)
                     }
 
                     if let presentation {
@@ -132,10 +139,10 @@ private struct SettingsSearchTargetModifier: ViewModifier {
                 }
             }
             .overlay {
-                if self.isMatched {
+                if self.showsRing {
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
                         .stroke(
-                            Color.accentColor.opacity(self.isPrimary ? 0.72 : 0.38),
+                            self.theme.look.text.opacity(self.isPrimary ? 0.6 : 0.3),
                             lineWidth: self.isPrimary ? 1.5 : 1
                         )
                         .padding(-6)

@@ -61,6 +61,7 @@ struct FluidSettingsGroup<Content: View>: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+            .environment(\.isInsideFluidSettingsGroup, true)
             // Row hover fills stay inside the card's rounded corners.
             .clipShape(RoundedRectangle(cornerRadius: FluidSettingsLayout.cornerRadius, style: .continuous))
             .fluidLit(look.card, in: RoundedRectangle(cornerRadius: FluidSettingsLayout.cornerRadius, style: .continuous))
@@ -141,6 +142,19 @@ struct FluidSettingsBlock<Content: View>: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, FluidSettingsLayout.rowInset)
             .padding(.vertical, FluidSettingsLayout.rowVerticalPadding)
+    }
+}
+
+private struct FluidSettingsGroupMemberKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+extension EnvironmentValues {
+    /// True for views on a settings group's card, so marks like a search highlight fill their row
+    /// instead of reaching past the card's clipped edge.
+    var isInsideFluidSettingsGroup: Bool {
+        get { self[FluidSettingsGroupMemberKey.self] }
+        set { self[FluidSettingsGroupMemberKey.self] = newValue }
     }
 }
 
