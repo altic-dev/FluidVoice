@@ -1,21 +1,15 @@
 import SwiftUI
 
 struct DictionaryMatcherExperimentSettings: View {
-    @Environment(\.theme) private var theme
     @AppStorage("DictionarySharedFeatureMatcherEnabled") private var enabled = DictionaryMatcherExperiment.defaultEnabled
 
     var body: some View {
-        HStack {
-            Text("Learn from your pronunciation")
-                .font(self.theme.typography.bodyStrong)
-            Spacer()
+        FluidSettingsRow(title: "Learn from your pronunciation") {
             Toggle("Learn from your pronunciation", isOn: Binding(
                 get: { self.enabled },
                 set: { DictionaryMatcherExperiment.setEnabled($0) }
             ))
-            .toggleStyle(.switch)
-            .tint(self.theme.palette.accent)
-            .labelsHidden()
+            .fluidSwitch()
             .accessibilityLabel("Learn from your pronunciation")
         }
     }

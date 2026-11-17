@@ -1088,19 +1088,14 @@ struct SettingsView: View {
                 }
                 .shownInSettingsSection(.dataAndDiagnostics, selectedSection: self.selectedSection)
 
-                ThemedCard(style: .standard) {
-                    VStack(alignment: .leading, spacing: 14) {
+                // Experimental: features still being tried out.
+                VStack(alignment: .leading, spacing: FluidSettingsLayout.groupSpacing) {
+                    FluidSettingsGroup {
                         self.returnToStartingFieldToggle
-
-                        Divider().padding(.vertical, 4)
-
                         DictionaryMatcherExperimentSettings()
                             .disabled(self.asr.isRunningOrStarting)
                             .settingsSearchTarget(.dictionaryMatcherExperiments)
-
-                        Divider().padding(.vertical, 4)
-
-                        self.settingsToggleRow(
+                        self.switchRow(
                             title: "Faster Long Dictation",
                             description: "For long recordings, reuse completed live windows and process only the remaining tail when you stop.",
                             footnote: "Parakeet only. Falls back to normal transcription if reuse is unavailable or fails.",
@@ -1109,14 +1104,9 @@ struct SettingsView: View {
                                 set: { SettingsStore.shared.experimentalParakeetUnifiedFinalEnabled = $0 }
                             )
                         )
-
-                        Divider().padding(.vertical, 4)
-
+                        .settingsSearchTarget(.fasterLongDictation)
                         self.overlayClosingAnimationSetting
-
-                        Divider().padding(.vertical, 4)
-
-                        self.settingsToggleRow(
+                        self.switchRow(
                             title: "Show Performance in History",
                             description: "Display transcription time, cleanup time, and Fluid Intelligence speed.",
                             isOn: Binding(
@@ -1126,23 +1116,15 @@ struct SettingsView: View {
                         )
                         .settingsSearchTarget(.historyPerformance)
                     }
-                    .padding(16)
-                }
-                .settingsSearchTarget(.fasterLongDictation)
-                .shownInSettingsSection(.experimental, selectedSection: self.selectedSection)
 
-                if PrivateAIProviderFeature.shared.isAvailable {
-                    ThemedCard(style: .standard) {
-                        VStack(alignment: .leading, spacing: 16) {
-                            Label("Fluid Intelligence", systemImage: "sparkles")
-                                .font(.fluidSystem(.headline))
+                    if PrivateAIProviderFeature.shared.isAvailable {
+                        FluidSettingsGroup(title: "Fluid Intelligence") {
                             DictationScreenContextSettings(settings: self.settings, isBusy: self.asr.isRunningOrStarting)
                         }
-                        .padding(16)
+                        .settingsSearchTarget(.dictationScreenContext)
                     }
-                    .settingsSearchTarget(.dictationScreenContext)
-                    .shownInSettingsSection(.experimental, selectedSection: self.selectedSection)
                 }
+                .shownInSettingsSection(.experimental, selectedSection: self.selectedSection)
             }
             .padding(.bottom, 28)
             // Settings read best at a fixed width; a bigger popup adds margin, not longer rows.
@@ -1827,7 +1809,7 @@ struct SettingsView: View {
 
 private extension SettingsView {
     var overlayClosingAnimationSetting: some View {
-        self.settingsToggleRow(
+        self.switchRow(
             title: "Animate overlay closing",
             description: "Off closes immediately. Turn on to try the closing transition.",
             isOn: self.$settings.overlayClosingAnimationEnabled
@@ -2595,7 +2577,7 @@ struct AnalyticsConfirmationView: View {
 
 private extension SettingsView {
     var returnToStartingFieldToggle: some View {
-        self.settingsToggleRow(
+        self.switchRow(
             title: "Return to Starting Field",
             description: "Paste dictation into the field where you started recording, even if you switch apps.",
             footnote: "Off by default. When off, dictation follows your current cursor. Applies to dictation only.",

@@ -15,19 +15,16 @@ struct DictationScreenContextSettings: View {
         self._permission = StateObject(wrappedValue: permission ?? DictationScreenPermissionController())
     }
 
+    /// Two rows for a Settings group: the switch, then screen access. The switch row is always
+    /// present, so it owns the permission refresh and the request cleanup.
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            FluidManagementRow(
-                title: "Use my active screen to improve dictation accuracy",
-                detail: "Off by default. Supported models process screen context on your device. Research preview: review your text before sending; context may cause inaccurate changes."
-            ) {
-                Toggle("Use my active screen to improve dictation accuracy", isOn: self.enabledBinding)
-                    .toggleStyle(.switch)
-                    .labelsHidden()
-                    .disabled(self.isBusy)
-            }
-
-            self.permissionStatus
+        FluidSettingsRow(
+            title: "Use my active screen to improve dictation accuracy",
+            description: "Off by default. Supported models process screen context on your device. Research preview: review your text before sending; context may cause inaccurate changes."
+        ) {
+            Toggle("Use my active screen to improve dictation accuracy", isOn: self.enabledBinding)
+                .fluidSwitch()
+                .disabled(self.isBusy)
         }
         .task { await self.permission.refresh() }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
@@ -39,6 +36,8 @@ struct DictationScreenContextSettings: View {
         .onDisappear {
             self.permissionRequestTask?.cancel()
         }
+
+        self.permissionRow
     }
 
     /// The feature switch never requests permission or opens System Settings.
@@ -49,31 +48,29 @@ struct DictationScreenContextSettings: View {
         )
     }
 
-    @ViewBuilder private var permissionStatus: some View {
+    @ViewBuilder private var permissionRow: some View {
         if !self.permission.hasChecked {
-            Text("Checking screen access…")
-                .font(self.theme.typography.caption)
-                .foregroundStyle(self.theme.palette.secondaryText)
+            FluidSettingsRow(title: "Screen access") {
+                Text("Checking…")
+                    .fluidText(.label)
+                    .foregroundStyle(self.theme.look.secondaryText)
+            }
         } else if self.permission.isAllowed {
-            Label("Screen access allowed", systemImage: "checkmark.circle.fill")
-                .font(self.theme.typography.caption)
-                .foregroundStyle(self.theme.palette.success)
+            FluidSettingsRow(title: "Screen access") {
+                FluidStatusLabel(text: "Allowed")
+            }
         } else {
-            HStack(spacing: 12) {
-                FluidGlassControlGroup {
-                    Button(self.permission.requiresSettings ? "Open System Settings" : "Allow screen access") {
-                        self.requestScreenAccess()
-                    }
-                    .fluidGlassAction()
-                    .disabled(self.isBusy || self.permission.isRequesting)
-                }
-
-                Text(self.permission.requiresSettings
+            FluidSettingsRow(
+                title: "Screen access",
+                description: self.permission.requiresSettings
                     ? "Allow FluidVoice under Screen & System Audio Recording."
-                    : "macOS calls this Screen Recording access.")
-                    .font(self.theme.typography.caption)
-                    .foregroundStyle(self.theme.palette.secondaryText)
-                    .fixedSize(horizontal: false, vertical: true)
+                    : "macOS calls this Screen Recording access."
+            ) {
+                Button(self.permission.requiresSettings ? "Open System Settings" : "Allow screen access") {
+                    self.requestScreenAccess()
+                }
+                .fluidAction()
+                .disabled(self.isBusy || self.permission.isRequesting)
             }
         }
     }
