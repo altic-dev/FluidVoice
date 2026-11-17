@@ -1371,51 +1371,6 @@ struct SettingsView: View {
 
     // MARK: - Helper Views
 
-    private func settingsToggleRow(
-        title: String,
-        description: String,
-        footnote: String? = nil,
-        errorMessage: String? = nil,
-        isOn: Binding<Bool>
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(alignment: .center) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(title)
-                        .font(self.theme.typography.bodyStrong)
-                        .foregroundStyle(self.settingsTitleText)
-                        .fixedSize(horizontal: false, vertical: true)
-                    Text(description)
-                        .font(self.theme.typography.bodySmall)
-                        .foregroundStyle(self.settingsSecondaryText)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-
-                Spacer()
-
-                Toggle(title, isOn: isOn)
-                    .toggleStyle(.switch)
-                    .tint(self.theme.palette.accent)
-                    .labelsHidden()
-                    .accessibilityLabel(title)
-            }
-
-            if let footnote = footnote {
-                Text(footnote)
-                    .font(self.theme.typography.bodySmall)
-                    .foregroundStyle(self.settingsSecondaryText)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
-            if let errorMessage = errorMessage {
-                Text(errorMessage)
-                    .font(.fluidSystem(.caption))
-                    .foregroundStyle(self.theme.palette.warning)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
-    }
-
     private func backupUtilityRow() -> some View {
         FluidSettingsRow(
             title: "Settings, Profiles, History & Stats",
@@ -1498,67 +1453,6 @@ struct SettingsView: View {
         let budget = SettingsStore.shared.audioHistoryBudgetBytes
         guard budget > 0 else { return 0 }
         return min(1, Double(self.audioHistoryUsageBytes) / Double(budget))
-    }
-
-    private func optionToggleRow(
-        title: String,
-        description: String,
-        isOn: Binding<Bool>
-    ) -> some View {
-        HStack(alignment: .center) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                    .font(self.theme.typography.bodyStrong)
-                    .foregroundStyle(self.settingsTitleText)
-                Text(description)
-                    .font(self.theme.typography.bodySmall)
-                    .foregroundStyle(self.settingsSecondaryText)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-
-            Toggle("", isOn: isOn)
-                .toggleStyle(.switch)
-                .tint(self.theme.palette.accent)
-                .labelsHidden()
-        }
-    }
-
-    private func instructionsBox(
-        title: String,
-        steps: [String],
-        warningStyle: Bool = false
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 6) {
-                Image(systemName: "info.circle.fill")
-                    .foregroundStyle(warningStyle ? self.theme.palette.warning : self.theme.palette.accent)
-                    .font(.fluidSystem(.caption))
-                Text(title)
-                    .font(self.theme.typography.bodySmallStrong)
-                    .foregroundStyle(self.settingsTitleText)
-            }
-
-            VStack(alignment: .leading, spacing: 4) {
-                ForEach(Array(steps.enumerated()), id: \.offset) { index, step in
-                    HStack(alignment: .top, spacing: 8) {
-                        Text("\(index + 1).")
-                            .font(.fluidSystem(.caption))
-                            .foregroundStyle(warningStyle ? self.theme.palette.warning : self.theme.palette.accent)
-                            .fontWeight(.semibold)
-                            .frame(width: 16, alignment: .trailing)
-                        Text(.init(step))
-                            .font(.fluidSystem(.caption))
-                            .foregroundStyle(.primary)
-                    }
-                }
-            }
-        }
-        .padding(12)
-        .background(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill((warningStyle ? self.theme.palette.warning : self.theme.palette.accent).opacity(0.12))
-        )
     }
 
     private var dictationRouting: DictationRouting {
@@ -1835,18 +1729,6 @@ private extension SettingsView {
             primaryTarget: primaryTarget,
             scrollCoordinator: self.searchScrollCoordinator
         )
-    }
-
-    var settingsTitleText: Color {
-        Color(nsColor: .labelColor)
-    }
-
-    var settingsSecondaryText: Color {
-        self.colorScheme == .light ? Color(nsColor: .labelColor).opacity(0.90) : self.theme.palette.primaryText.opacity(0.82)
-    }
-
-    var settingsTertiaryText: Color {
-        self.colorScheme == .light ? Color(nsColor: .labelColor).opacity(0.85) : self.theme.palette.secondaryText
     }
 
     /// One row per microphone in priority order, or one line saying there are none.
