@@ -311,14 +311,14 @@ struct FeedbackView: View {
 
     // MARK: - Surfaces
 
-    /// The shared card: flat, a hairline, no shadow. The page stays quiet around the message.
+    /// The shared card with the aura: the form (or the thank-you after sending) is the one card
+    /// this page leads with.
     private var surface: some View {
-        RoundedRectangle(cornerRadius: FluidSurfaceCard<EmptyView>.cornerRadius, style: .continuous)
-            .fill(self.theme.look.card.top)
-            .overlay(
-                RoundedRectangle(cornerRadius: FluidSurfaceCard<EmptyView>.cornerRadius, style: .continuous)
-                    .strokeBorder(self.theme.look.card.edgeTop, lineWidth: 1)
-            )
+        Color.clear.fluidLit(
+            self.theme.look.card,
+            in: RoundedRectangle(cornerRadius: FluidSurfaceCard<EmptyView>.cornerRadius, style: .continuous),
+            aura: self.theme.look.aura
+        )
     }
 
     // MARK: - Submit

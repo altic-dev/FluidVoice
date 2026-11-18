@@ -164,12 +164,21 @@ struct DashboardView: View {
         let today = self.history.todaySummary
         let streak = self.stats.snapshot?.usingWeekdays(self.settings.weekendsDontBreakStreak).currentStreak
         let fixed = self.stats.snapshot?.fluidFixedWords ?? 0
+        let milestone = StatsDailyMilestone(words: today.words)
+        let week = self.stats.snapshot?.dailyWordCounts(days: 7).map { $0.words > 0 } ?? []
         let spacing = self.theme.metrics.spacing
         return Button { self.selectedSidebarItem = .stats } label: {
             LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: spacing.xl, alignment: .leading), count: layout.statisticColumns(count: fixed > 0 ? 4 : 3)), alignment: .leading, spacing: spacing.xl) {
-                self.stat("Today", value: today.words.formatted(), detail: "words dictated")
+                self.stat("Today", value: today.words.formatted(), detail: milestone.nextTarget.map { "of \($0.formatted()) today" } ?? "words dictated") {
+                    FluidAuraBar(fraction: milestone.progress, height: 4)
+                        .frame(width: Self.statAccessoryWidth)
+                }
                 self.stat("Time saved", value: today.words == 0 ? "0m" : today.formattedTimeSaved(typingWPM: self.settings.userTypingWPM), detail: "estimated today")
-                self.stat("Streak", value: streak.map { "\($0) \($0 == 1 ? "day" : "days")" } ?? "—", detail: "keep it going")
+                self.stat("Streak", value: streak.map { "\($0) \($0 == 1 ? "day" : "days")" } ?? "—", detail: "keep it going") {
+                    if !week.isEmpty {
+                        FluidAuraDots(active: week)
+                    }
+                }
                 // Quiet proof that Smart mode earns its keep; absent until it has fixed something.
                 if fixed > 0 {
                     self.stat("Fluid Intelligence", value: fixed.formatted(), detail: "words fixed for you")
@@ -179,7 +188,7 @@ struct DashboardView: View {
         }
         // Keyboard focus shows as the hover fill instead of the heavy system ring,
         // which otherwise lands on this card every time the dashboard opens.
-        .fluidCardButton(padding: spacing.xl, isHighlighted: self.statisticsFocused)
+        .fluidCardButton(padding: spacing.xl, isHighlighted: self.statisticsFocused, leads: true)
         .focused(self.$statisticsFocused)
         .focusEffectDisabled()
         .disabled(self.busy)
@@ -187,12 +196,23 @@ struct DashboardView: View {
         .accessibilityHint("Opens the Stats page")
     }
 
-    private func stat(_ title: String, value: String, detail: String) -> some View {
+    /// The progress bar under Today is as wide as the week's dots under Streak.
+    private static let statAccessoryWidth: CGFloat = 92
+
+    private func stat(_ title: String, value: String, detail: String, @ViewBuilder accessory: () -> some View = { EmptyView() }) -> some View {
         VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xs) {
             Text(title).fluidText(.label).foregroundStyle(self.theme.look.secondaryText)
             Text(value).fluidText(.metric).foregroundStyle(self.theme.look.text).monospacedDigit()
                 .lineLimit(1).minimumScaleFactor(0.7)
             Text(detail).fluidText(.label).foregroundStyle(self.theme.look.tertiaryText)
+            // Every column keeps this row, with or without a bar or dots, so the stats stay level.
+            ZStack(alignment: .leading) {
+                Color.clear
+                accessory()
+            }
+            .frame(height: 8)
+            .padding(.top, self.theme.metrics.spacing.xs)
+            .accessibilityHidden(true)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .combine)

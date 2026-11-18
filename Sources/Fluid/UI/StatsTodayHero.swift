@@ -19,7 +19,7 @@ struct StatsTodayHero: View {
 
     var body: some View {
         let spacing = self.theme.metrics.spacing
-        FluidSurfaceCard(padding: spacing.xxl) {
+        FluidSurfaceCard(padding: spacing.xxl, leads: true) {
             VStack(alignment: .leading, spacing: spacing.xl) {
                 ViewThatFits(in: .horizontal) {
                     HStack(alignment: .center, spacing: 40) {
@@ -82,6 +82,7 @@ struct StatsTodayHero: View {
                     StatsStreakDay(
                         date: day.date,
                         words: day.words,
+                        ink: look.aura.color(at: Double(index) / Double(max(1, self.activity.count - 1))),
                         tooltipAlignment: index < 2 ? .topLeading : (index > 4 ? .topTrailing : .top)
                     )
                 }
@@ -106,17 +107,9 @@ struct StatsTodayHero: View {
                     .foregroundStyle(look.text)
                     .monospacedDigit()
             }
-            GeometryReader { geometry in
-                ZStack(alignment: .leading) {
-                    Capsule().fill(look.quietFill)
-                    Capsule()
-                        .fill(look.data)
-                        .frame(width: geometry.size.width * self.progress)
-                }
-            }
-            .frame(height: 8)
-            .accessibilityLabel("Today's word milestone")
-            .accessibilityValue("\(Int(self.progress * 100)) percent")
+            FluidAuraBar(fraction: self.progress)
+                .accessibilityLabel("Today's word milestone")
+                .accessibilityValue("\(Int(self.progress * 100)) percent")
             Text("\(self.sessions.formatted()) dictations")
                 .fluidText(.label)
                 .foregroundStyle(look.tertiaryText)
@@ -128,6 +121,8 @@ struct StatsTodayHero: View {
 private struct StatsStreakDay: View {
     let date: Date
     let words: Int
+    /// This day's color along the week.
+    let ink: Color
     let tooltipAlignment: Alignment
     @Environment(\.theme) private var theme
     @State private var isHovered = false
@@ -137,7 +132,7 @@ private struct StatsStreakDay: View {
         VStack(spacing: self.theme.metrics.spacing.xs + 2) {
             // A filled circle marks a day you dictated; an empty one a quiet day.
             Circle()
-                .fill(self.words > 0 ? look.data : look.quietFill)
+                .fill(self.words > 0 ? self.ink : look.quietFill)
                 .frame(width: 12, height: 12)
                 .frame(width: 24, height: 24)
             Text(self.date.formatted(.dateTime.weekday(.narrow)))

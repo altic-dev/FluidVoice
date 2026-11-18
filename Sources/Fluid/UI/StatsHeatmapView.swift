@@ -1,6 +1,8 @@
 import SwiftUI
 
-/// Owns its pointer state. Hover never invalidates the parent or any Swift Charts view.
+/// Owns its pointer state. Hover never invalidates the parent or any Swift Charts view. One hover
+/// region covers the whole grid and works out the square under the pointer, so scrolling past the
+/// grid hit-tests one region instead of one per day.
 struct StatsHeatmapView: View {
     let period: StatsActivityPeriod
     private let labels: [Date: DayLabels]
@@ -35,46 +37,45 @@ struct StatsHeatmapView: View {
         let calendar = Calendar.current
         let columns = period.weeks
         return HStack(alignment: .top, spacing: 6) {
-            VStack(spacing: 4) {
-                Color.clear.frame(height: 16)
+            VStack(spacing: Self.gap) {
+                Color.clear.frame(height: Self.cellHeight)
                 ForEach(0..<7) { row in
                     Text(row.isMultiple(of: 2) ? calendar.shortWeekdaySymbols[(calendar.firstWeekday - 1 + row) % 7] : "")
                         .fluidText(.label)
                         .foregroundStyle(self.theme.look.tertiaryText)
-                        .frame(width: 30, height: 16)
+                        .frame(width: 30, height: Self.cellHeight)
                 }
             }
             .frame(width: 30)
             GeometryReader { geometry in
-                let width = max(2, min(26, (geometry.size.width - CGFloat(max(0, columns.count - 1)) * 4) / CGFloat(max(1, columns.count))))
-                HStack(alignment: .top, spacing: 4) {
+                let width = max(2, min(26, (geometry.size.width - CGFloat(max(0, columns.count - 1)) * Self.gap) / CGFloat(max(1, columns.count))))
+                HStack(alignment: .top, spacing: Self.gap) {
                     ForEach(columns.indices, id: \.self) { column in
-                        VStack(spacing: 4) {
+                        VStack(spacing: Self.gap) {
                             Text(period.monthLabel(for: column))
                                 .fluidText(.label)
                                 .foregroundStyle(self.theme.look.tertiaryText)
                                 .fixedSize()
-                                .frame(width: width, height: 16, alignment: .leading)
+                                .frame(width: width, height: Self.cellHeight, alignment: .leading)
                             ForEach(0..<7) { row in
                                 self.dayCell(
                                     columns[column][row],
                                     maximum: period.peakWords,
                                     tooltipAlignment: column < 3 ? .topLeading : (column >= columns.count - 3 ? .topTrailing : .top)
                                 )
-                                .frame(width: width, height: 16)
+                                .frame(width: width, height: Self.cellHeight)
                             }
                         }
                         .zIndex(columns[column].contains { $0?.date == self.hoveredDate } ? 1 : 0)
                     }
                 }
-                // One hover region replaces a tracking region on every day.
                 .contentShape(Rectangle())
                 .onContinuousHover { phase in
                     switch phase {
                     case let .active(location):
-                        self.updateHover(at: location, columns: columns, cellWidth: width)
+                        self.hover(self.day(at: location, cellWidth: width, columns: columns)?.date)
                     case .ended:
-                        self.hoveredDate = nil
+                        self.hover(nil)
                     }
                 }
             }
@@ -120,6 +121,25 @@ struct StatsHeatmapView: View {
         } else {
             Color.clear.accessibilityHidden(true)
         }
+    }
+
+    /// Space between squares, a square's height (also the month and weekday label rows), and
+    /// the distance from one row's top to the next.
+    private static let gap: CGFloat = 4
+    private static let cellHeight: CGFloat = 16
+    private static let rowPitch: CGFloat = cellHeight + gap
+
+    /// The day under a point in the grid. The gaps belong to the square before them, so moving
+    /// across the grid never flickers to "nothing hovered".
+    private func day(at location: CGPoint, cellWidth: CGFloat, columns: [[StatsActivityPeriod.Day?]]) -> StatsActivityPeriod.Day? {
+        let column = Int(location.x / (cellWidth + Self.gap))
+        let row = Int((location.y - Self.rowPitch) / Self.rowPitch)
+        guard location.y >= Self.rowPitch, columns.indices.contains(column), (0..<7).contains(row) else { return nil }
+        return columns[column][row]
+    }
+
+    private func hover(_ date: Date?) {
+        if self.hoveredDate != date { self.hoveredDate = date }
     }
 
     /// Empty days use the track; busier days use darker steps of the data ink. The legend uses the same steps.

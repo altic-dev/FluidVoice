@@ -315,6 +315,7 @@ struct TranscriptionHistoryView: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .focusable(false)
                 .simultaneousGesture(TapGesture(count: 2).onEnded {
                     self.selectedEntryID = entry.id
                     self.listFocused = true
@@ -327,6 +328,12 @@ struct TranscriptionHistoryView: View {
                 .accessibilityAction(named: Text(entry.isStarred ? "Unpin transcription" : "Pin transcription")) {
                     self.togglePin(entry)
                 }
+                // Row buttons are not Tab stops: the list is one keyboard stop, arrows move the
+                // selection, and every action is also in the detail panel and the right-click menu.
+                // Thousands of focusable buttons made each scroll frame rebuild the focus map.
+                // Hidden rows fade the actions instead of building them on hover, so a row passing
+                // under the pointer only changes opacity. Disabled while hidden so keyboard focus never
+                // lands on an invisible button; the row's accessibility actions cover every row.
                 HStack(spacing: self.theme.metrics.spacing.xs) {
                     // A tick means "selected" in this look, so a copy says so in words.
                     if isCopied {
@@ -340,6 +347,7 @@ struct TranscriptionHistoryView: View {
                             Image(systemName: "doc.on.doc")
                         }
                         .fluidGlassAction(circular: true, quiet: true)
+                        .focusable(false)
                         .help("Copy final text")
                         .accessibilityLabel("Copy final text")
                     }
@@ -349,10 +357,12 @@ struct TranscriptionHistoryView: View {
                         Image(systemName: "flag")
                     }
                     .fluidGlassAction(circular: true, quiet: true)
+                    .focusable(false)
                     .help("Report an issue with this dictation")
                     .accessibilityLabel("Report issue")
                 }
                 .opacity(showsActions ? 1 : 0)
+                .disabled(!showsActions)
                 .allowsHitTesting(showsActions)
                 .accessibilityHidden(!showsActions)
             }
@@ -364,6 +374,7 @@ struct TranscriptionHistoryView: View {
                         .foregroundStyle(entry.isStarred ? look.text : look.tertiaryText)
                 }
                 .fluidGlassAction(circular: true, quiet: true)
+                .focusable(false)
                 .help(entry.isStarred ? "Unpin transcription" : "Pin transcription")
                 .accessibilityLabel(entry.isStarred ? "Unpin transcription" : "Pin transcription")
                 .accessibilityIdentifier("History.Pin.\(entry.id.uuidString)")
@@ -899,21 +910,25 @@ private struct TranscriptionFeedbackReportSheet: View {
 
 /// A list row with the shared hover and selected fills. Its row actions show while it is hovered,
 /// selected or holds keyboard focus.
+/// Hover and selection fill for a History row. `content` learns whether to show the row's actions
+/// (hovered or selected). No per-row focus tracking: with thousands of rows it made every scroll
+/// frame rebuild SwiftUI's focus map.
 private struct HistoryHoverRow<Content: View>: View {
     @Environment(\.theme) private var theme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let isSelected: Bool
     @ViewBuilder let content: (Bool) -> Content
     @State private var isHovered = false
-    @FocusState private var containsFocus: Bool
 
     var body: some View {
-        self.content(self.isHovered || self.isSelected || self.containsFocus)
-            .focused(self.$containsFocus)
+        let shape = RoundedRectangle(cornerRadius: FluidSettingsLayout.cornerRadius, style: .continuous)
+        self.content(self.isHovered || self.isSelected)
             .background(
                 FluidInteractionVisuals.fill(self.theme.palette, isSelected: self.isSelected, isHovered: self.isHovered),
-                in: RoundedRectangle(cornerRadius: FluidSettingsLayout.cornerRadius, style: .continuous)
+                in: shape
             )
+            // The selected entry is where the eye goes, so it alone gets the aura line.
+            .fluidAuraEdge(shape, isOn: self.isSelected)
             .onHover { self.isHovered = $0 }
             .animation(self.reduceMotion ? nil : .easeOut(duration: 0.12), value: self.isHovered)
     }

@@ -72,37 +72,3 @@ struct ButtonHoverModifier: ViewModifier {
             .animation(FluidInteractionVisuals.hoverAnimation, value: self.isHovered)
     }
 }
-
-// Removed CursorFollowingGlow - was causing performance issues
-// struct CursorFollowingGlow: View {
-//     @EnvironmentObject var mouseTracker: MousePositionTracker
-//     let size: CGFloat
-//     let intensity: Double
-//
-//     init(size: CGFloat = 300, intensity: Double = 0.2) {
-//         self.size = size
-//         self.intensity = intensity
-//     }
-//
-//     var body: some View {
-//         GeometryReader { geometry in
-//             let relativeX = mouseTracker.relativePosition.x
-//             let relativeY = mouseTracker.relativePosition.y
-//
-//             RadialGradient(
-//                 colors: [
-//                     Color.white.opacity(intensity * 0.6),
-//                     Color.white.opacity(intensity * 0.3),
-//                     Color.white.opacity(intensity * 0.1),
-//                     Color.clear
-//                 ],
-//                 center: UnitPoint(x: relativeX, y: relativeY),
-//                 startRadius: size * 0.1,
-//                 endRadius: size * 0.5
-//             )
-//             .blendMode(.overlay)
-//             .allowsHitTesting(false)
-//             .animation(.easeInOut(duration: 0.25), value: mouseTracker.mousePosition)
-//         }
-//     }
-// }

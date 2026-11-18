@@ -1,14 +1,13 @@
 import Charts
 import SwiftUI
 
-/// Lifetime achievements and patterns, derived only from the cached Stats snapshot.
+/// Lifetime achievements and patterns, derived only from the cached Stats snapshot. The apps and
+/// hours cards keep their pointer state in `StatsHighlightPointer`, so hovering them redraws only
+/// the card under the pointer.
 struct StatsHighlightsView: View {
     let snapshot: StatsSnapshot
     @Environment(\.theme) private var theme
-    @State private var hoveredApp: String?
-    @State private var pinnedApp: String?
-    @State private var hoveredHour: Int?
-    @State private var pinnedHour: Int?
+    @State private var pointer = StatsHighlightPointer()
 
     var body: some View {
         let gap = self.theme.metrics.spacing.lg
@@ -30,12 +29,12 @@ struct StatsHighlightsView: View {
                 .padding(.top, self.theme.metrics.spacing.sm)
             ViewThatFits(in: .horizontal) {
                 HStack(alignment: .top, spacing: gap) {
-                    self.appsCard.frame(minWidth: 280)
-                    self.hoursCard.frame(minWidth: 300)
+                    StatsAppsCard(snapshot: self.snapshot, pointer: self.pointer).frame(minWidth: 280)
+                    StatsHoursCard(snapshot: self.snapshot, pointer: self.pointer).frame(minWidth: 300)
                 }
                 VStack(spacing: gap) {
-                    self.appsCard
-                    self.hoursCard
+                    StatsAppsCard(snapshot: self.snapshot, pointer: self.pointer)
+                    StatsHoursCard(snapshot: self.snapshot, pointer: self.pointer)
                 }
             }
             self.sectionHeading("Personal bests", subtitle: "Your standout moments, so far")
@@ -56,10 +55,7 @@ struct StatsHighlightsView: View {
     }
 
     private func sectionHeading(_ title: String, subtitle: String) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(title).fluidText(.groupTitle).foregroundStyle(self.theme.look.text)
-            Text(subtitle).fluidText(.label).foregroundStyle(self.theme.look.secondaryText)
-        }
+        StatsSectionHeading(title: title, subtitle: subtitle)
     }
 
     private var wordMilestone: some View {
@@ -172,130 +168,6 @@ struct StatsHighlightsView: View {
         .accessibilityHidden(true)
     }
 
-    private var appsCard: some View {
-        FluidSurfaceCard(padding: self.theme.metrics.spacing.xl) {
-            VStack(alignment: .leading, spacing: self.theme.metrics.spacing.lg) {
-                self.sectionHeading("Where your words go", subtitle: self.appCaption)
-                if self.snapshot.topAppUsage.isEmpty {
-                    Text("Dictate into an app to see it here.")
-                        .fluidText(.body)
-                        .foregroundStyle(self.theme.look.secondaryText)
-                        .frame(maxWidth: .infinity, minHeight: 220, alignment: .center)
-                } else {
-                    VStack(spacing: self.theme.metrics.spacing.md) {
-                        ForEach(self.snapshot.topAppUsage, id: \.name) { app in
-                            self.appRow(name: app.name, sessions: app.sessions)
-                        }
-                    }
-                    .frame(minHeight: 220, alignment: .top)
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-    }
-
-    private func appRow(name: String, sessions: Int) -> some View {
-        let share = Double(sessions) / Double(max(1, self.snapshot.totalTranscriptions))
-        return Button {
-            self.pinnedApp = self.pinnedApp == name ? nil : name
-        } label: {
-            VStack(spacing: self.theme.metrics.spacing.xs + 2) {
-                HStack {
-                    Text(name).fluidText(.rowTitle).foregroundStyle(self.theme.look.text).lineLimit(1)
-                    Spacer()
-                    Text("\(sessions.formatted()) · \(Int((share * 100).rounded()))%")
-                        .fluidText(.label)
-                        .foregroundStyle(self.theme.look.secondaryText)
-                        .monospacedDigit()
-                }
-                GeometryReader { geometry in
-                    ZStack(alignment: .leading) {
-                        Capsule().fill(self.theme.look.quietFill)
-                        Capsule().fill(self.theme.look.data)
-                            .frame(width: geometry.size.width * share)
-                    }
-                }
-                .frame(height: 6)
-                .accessibilityHidden(true)
-            }
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .onHover { active in
-            if active {
-                self.hoveredApp = name
-            } else if self.hoveredApp == name {
-                self.hoveredApp = nil
-            }
-        }
-        .opacity(self.hoveredApp == nil && self.pinnedApp == nil || name == (self.hoveredApp ?? self.pinnedApp) ? 1 : 0.4)
-        .accessibilityElement(children: .combine)
-    }
-
-    private var appCaption: String {
-        guard let app = self.snapshot.topAppUsage.first(where: { $0.name == (self.hoveredApp ?? self.pinnedApp) }) else {
-            return "Hover an app to explore · click to pin"
-        }
-        return "\(app.name) · \(app.sessions.formatted()) of \(self.snapshot.totalTranscriptions.formatted()) dictations"
-    }
-
-    private var hourCaption: String {
-        guard let hour = self.hoveredHour ?? self.pinnedHour, self.snapshot.hourlySessions.indices.contains(hour) else {
-            return "Hover an hour to explore · click to pin"
-        }
-        return String(format: "%02d:00–%02d:00", hour, hour + 1) + " · \(self.snapshot.hourlySessions[hour].formatted()) dictations"
-    }
-
-    private var hoursCard: some View {
-        FluidSurfaceCard(padding: self.theme.metrics.spacing.xl) {
-            VStack(alignment: .leading, spacing: self.theme.metrics.spacing.lg) {
-                self.sectionHeading("Your golden hour", subtitle: self.hourCaption)
-                Chart(Array(self.snapshot.hourlySessions.enumerated()), id: \.offset) { hour, count in
-                    BarMark(x: .value("Hour", hour), y: .value("Dictations", count))
-                        .foregroundStyle(self.theme.look.data.opacity(count > 0 && count == self.snapshot.hourlySessions.max() ? 1 : 0.35))
-                        .cornerRadius(3)
-                        .opacity(self.hoveredHour == nil && self.pinnedHour == nil || hour == (self.hoveredHour ?? self.pinnedHour) ? 1 : 0.35)
-                        .accessibilityLabel("\(hour):00")
-                        .accessibilityValue("\(count) dictations")
-                }
-                .statsChartInteraction(onInspect: { x, proxy, pin in
-                    guard let value: Double = proxy.value(atX: x) else { return }
-                    let hour = min(23, max(0, Int(value.rounded())))
-                    if pin {
-                        self.pinnedHour = self.pinnedHour == hour ? nil : hour
-                    } else if self.hoveredHour != hour {
-                        self.hoveredHour = hour
-                    }
-                }, onExit: { self.hoveredHour = nil })
-                .chartXScale(domain: -1...24)
-                .chartXAxis {
-                    AxisMarks(values: [0, 6, 12, 18]) { value in
-                        AxisValueLabel {
-                            if let hour = value.as(Int.self) { Text(String(format: "%02d:00", hour)) }
-                        }
-                    }
-                }
-                .chartYAxis { AxisMarks(position: .leading, values: .automatic(desiredCount: 3)) }
-                .frame(height: 140)
-                FluidHairline()
-                HStack(alignment: .top, spacing: self.theme.metrics.spacing.xl) {
-                    self.smallMetric(value: "\(self.snapshot.aiEnhancementRate)%", title: "AI enhanced")
-                    Spacer(minLength: 0)
-                    self.smallMetric(value: "\(self.snapshot.averageWordsPerTranscription)", title: "words per dictation")
-                }
-                .frame(minHeight: 47, alignment: .top)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-    }
-
-    private func smallMetric(value: String, title: String) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(value).fluidText(.value).foregroundStyle(self.theme.look.text).monospacedDigit()
-            Text(title).fluidText(.label).foregroundStyle(self.theme.look.secondaryText)
-        }
-    }
-
     private var longestRecord: some View {
         self.recordCard(
             title: "One thought, fully expressed",
@@ -337,6 +209,165 @@ struct StatsHighlightsView: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+
+/// Which app and hour the pointer is on in the highlights cards, and which are pinned.
+@Observable
+final class StatsHighlightPointer {
+    var hoveredApp: String?
+    var pinnedApp: String?
+    var hoveredHour: Int?
+    var pinnedHour: Int?
+}
+
+/// A section or card title with the line under it.
+private struct StatsSectionHeading: View {
+    let title: String
+    let subtitle: String
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(self.title).fluidText(.groupTitle).foregroundStyle(self.theme.look.text)
+            Text(self.subtitle).fluidText(.label).foregroundStyle(self.theme.look.secondaryText)
+        }
+    }
+}
+
+private struct StatsAppsCard: View {
+    let snapshot: StatsSnapshot
+    let pointer: StatsHighlightPointer
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        FluidSurfaceCard(padding: self.theme.metrics.spacing.xl) {
+            VStack(alignment: .leading, spacing: self.theme.metrics.spacing.lg) {
+                StatsSectionHeading(title: "Where your words go", subtitle: self.appCaption)
+                if self.snapshot.topAppUsage.isEmpty {
+                    Text("Dictate into an app to see it here.")
+                        .fluidText(.body)
+                        .foregroundStyle(self.theme.look.secondaryText)
+                        .frame(maxWidth: .infinity, minHeight: 220, alignment: .center)
+                } else {
+                    VStack(spacing: self.theme.metrics.spacing.md) {
+                        ForEach(self.snapshot.topAppUsage, id: \.name) { app in
+                            self.appRow(name: app.name, sessions: app.sessions)
+                        }
+                    }
+                    .frame(minHeight: 220, alignment: .top)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private func appRow(name: String, sessions: Int) -> some View {
+        let share = Double(sessions) / Double(max(1, self.snapshot.totalTranscriptions))
+        return Button {
+            self.pointer.pinnedApp = self.pointer.pinnedApp == name ? nil : name
+        } label: {
+            VStack(spacing: self.theme.metrics.spacing.xs + 2) {
+                HStack {
+                    Text(name).fluidText(.rowTitle).foregroundStyle(self.theme.look.text).lineLimit(1)
+                    Spacer()
+                    Text("\(sessions.formatted()) · \(Int((share * 100).rounded()))%")
+                        .fluidText(.label)
+                        .foregroundStyle(self.theme.look.secondaryText)
+                        .monospacedDigit()
+                }
+                GeometryReader { geometry in
+                    ZStack(alignment: .leading) {
+                        Capsule().fill(self.theme.look.quietFill)
+                        Capsule().fill(self.theme.look.data)
+                            .frame(width: geometry.size.width * share)
+                    }
+                }
+                .frame(height: 6)
+                .accessibilityHidden(true)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { active in
+            if active {
+                self.pointer.hoveredApp = name
+            } else if self.pointer.hoveredApp == name {
+                self.pointer.hoveredApp = nil
+            }
+        }
+        .opacity(self.pointer.hoveredApp == nil && self.pointer.pinnedApp == nil || name == (self.pointer.hoveredApp ?? self.pointer.pinnedApp) ? 1 : 0.4)
+        .accessibilityElement(children: .combine)
+    }
+
+    private var appCaption: String {
+        guard let app = self.snapshot.topAppUsage.first(where: { $0.name == (self.pointer.hoveredApp ?? self.pointer.pinnedApp) }) else {
+            return "Hover an app to explore · click to pin"
+        }
+        return "\(app.name) · \(app.sessions.formatted()) of \(self.snapshot.totalTranscriptions.formatted()) dictations"
+    }
+}
+
+private struct StatsHoursCard: View {
+    let snapshot: StatsSnapshot
+    let pointer: StatsHighlightPointer
+    @Environment(\.theme) private var theme
+
+    private var hourCaption: String {
+        guard let hour = self.pointer.hoveredHour ?? self.pointer.pinnedHour, self.snapshot.hourlySessions.indices.contains(hour) else {
+            return "Hover an hour to explore · click to pin"
+        }
+        return String(format: "%02d:00–%02d:00", hour, hour + 1) + " · \(self.snapshot.hourlySessions[hour].formatted()) dictations"
+    }
+
+    var body: some View {
+        FluidSurfaceCard(padding: self.theme.metrics.spacing.xl) {
+            VStack(alignment: .leading, spacing: self.theme.metrics.spacing.lg) {
+                StatsSectionHeading(title: "Your golden hour", subtitle: self.hourCaption)
+                Chart(Array(self.snapshot.hourlySessions.enumerated()), id: \.offset) { hour, count in
+                    BarMark(x: .value("Hour", hour), y: .value("Dictations", count))
+                        .foregroundStyle(self.theme.look.data.opacity(count > 0 && count == self.snapshot.hourlySessions.max() ? 1 : 0.35))
+                        .cornerRadius(3)
+                        .opacity(self.pointer.hoveredHour == nil && self.pointer.pinnedHour == nil || hour == (self.pointer.hoveredHour ?? self.pointer.pinnedHour) ? 1 : 0.35)
+                        .accessibilityLabel("\(hour):00")
+                        .accessibilityValue("\(count) dictations")
+                }
+                .statsChartInteraction(onInspect: { x, proxy, pin in
+                    guard let value: Double = proxy.value(atX: x) else { return }
+                    let hour = min(23, max(0, Int(value.rounded())))
+                    if pin {
+                        self.pointer.pinnedHour = self.pointer.pinnedHour == hour ? nil : hour
+                    } else if self.pointer.hoveredHour != hour {
+                        self.pointer.hoveredHour = hour
+                    }
+                }, onExit: { if self.pointer.hoveredHour != nil { self.pointer.hoveredHour = nil } })
+                .chartXScale(domain: -1...24)
+                .chartXAxis {
+                    AxisMarks(values: [0, 6, 12, 18]) { value in
+                        AxisValueLabel {
+                            if let hour = value.as(Int.self) { Text(String(format: "%02d:00", hour)) }
+                        }
+                    }
+                }
+                .chartYAxis { AxisMarks(position: .leading, values: .automatic(desiredCount: 3)) }
+                .frame(height: 140)
+                FluidHairline()
+                HStack(alignment: .top, spacing: self.theme.metrics.spacing.xl) {
+                    self.smallMetric(value: "\(self.snapshot.aiEnhancementRate)%", title: "AI enhanced")
+                    Spacer(minLength: 0)
+                    self.smallMetric(value: "\(self.snapshot.averageWordsPerTranscription)", title: "words per dictation")
+                }
+                .frame(minHeight: 47, alignment: .top)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private func smallMetric(value: String, title: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(value).fluidText(.value).foregroundStyle(self.theme.look.text).monospacedDigit()
+            Text(title).fluidText(.label).foregroundStyle(self.theme.look.secondaryText)
         }
     }
 }

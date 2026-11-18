@@ -1,7 +1,6 @@
-import AppKit
 import SwiftUI
 
-// Building blocks of the refined look (`AppTheme.Look`): the lit canvas, grain, lit cards and
+// Building blocks of the refined look (`AppTheme.Look`): the canvas and its sky, lit cards and
 // keys, hairlines, page header and symbol tiles. Screens pass content only; colors, light and
 // sizes come from the theme.
 
@@ -110,13 +109,15 @@ struct FluidActionLabel: View {
 /// A whole card that is one button: the card surface with the shared hover and press fill over
 /// all of it, a slight settle on press, and the keyboard-focus ring in the card's shape. Any
 /// `FluidActionLabel` inside lights with it. Disabled cards show no hover. `isHighlighted` shows the
-/// hover look without the pointer, for a card that marks keyboard focus that way.
+/// hover look without the pointer, for a card that marks keyboard focus that way. `leads` gives the
+/// card the aura edge; only the one card a page leads with gets it.
 struct FluidCardButtonStyle: ButtonStyle {
     var padding: CGFloat = 14
     var isHighlighted = false
+    var leads = false
 
     func makeBody(configuration: Configuration) -> some View {
-        CardBody(configuration: configuration, padding: self.padding, isHighlighted: self.isHighlighted)
+        CardBody(configuration: configuration, padding: self.padding, isHighlighted: self.isHighlighted, leads: self.leads)
     }
 
     private struct CardBody: View {
@@ -127,6 +128,7 @@ struct FluidCardButtonStyle: ButtonStyle {
         let configuration: Configuration
         let padding: CGFloat
         let isHighlighted: Bool
+        let leads: Bool
 
         var body: some View {
             let shape = RoundedRectangle(cornerRadius: FluidSurfaceCard<EmptyView>.cornerRadius, style: .continuous)
@@ -138,7 +140,7 @@ struct FluidCardButtonStyle: ButtonStyle {
             self.configuration.label
                 .environment(\.fluidCardInteraction, interaction)
                 .padding(self.padding)
-                .fluidLit(self.theme.look.card, in: shape, isPressed: interaction.isPressed, wash: wash)
+                .fluidLit(self.theme.look.card, in: shape, isPressed: interaction.isPressed, wash: wash, aura: self.leads ? self.theme.look.aura : nil)
                 .contentShape(shape)
                 .contentShape(.focusEffect, shape)
                 .scaleEffect(interaction.isPressed && !self.reduceMotion ? 0.99 : 1)
@@ -155,20 +157,28 @@ extension View {
     }
 
     /// Makes a whole card one button. Put a `FluidActionLabel` inside to name the action.
-    func fluidCardButton(padding: CGFloat = 14, isHighlighted: Bool = false) -> some View {
-        self.buttonStyle(FluidCardButtonStyle(padding: padding, isHighlighted: isHighlighted))
+    /// `leads` marks the one card a page leads with, which gets the aura edge.
+    func fluidCardButton(padding: CGFloat = 14, isHighlighted: Bool = false, leads: Bool = false) -> some View {
+        self.buttonStyle(FluidCardButtonStyle(padding: padding, isHighlighted: isHighlighted, leads: leads))
     }
 
-    /// Paints the page background, light and grain, including under the toolbar. Only for pages
+    /// Paints the page background and its faint sky, including under the toolbar. Only for pages
     /// on the refined look.
     func fluidCanvas() -> some View {
         self.modifier(FluidCanvas())
     }
 
     /// A two-tone fill lit from above with a brighter top edge and a shadow, behind this view.
-    /// `wash` tints the fill for hover or press without touching the content.
-    func fluidLit<S: InsettableShape>(_ lit: AppTheme.Look.Lit, in shape: S, isPressed: Bool = false, wash: Color = .clear) -> some View {
-        self.modifier(FluidLitBackground(lit: lit, shape: shape, isPressed: isPressed, wash: wash))
+    /// `wash` tints the fill for hover or press without touching the content. `aura` lays the
+    /// look's colored edge over the top of the plain one.
+    func fluidLit<S: InsettableShape>(
+        _ lit: AppTheme.Look.Lit,
+        in shape: S,
+        isPressed: Bool = false,
+        wash: Color = .clear,
+        aura: AppTheme.Look.Aura? = nil
+    ) -> some View {
+        self.modifier(FluidLitBackground(lit: lit, shape: shape, isPressed: isPressed, wash: wash, aura: aura))
     }
 }
 
@@ -177,9 +187,15 @@ private struct FluidLitBackground<S: InsettableShape>: ViewModifier {
     let shape: S
     let isPressed: Bool
     let wash: Color
+    let aura: AppTheme.Look.Aura?
 
     func body(content: Content) -> some View {
         content
+            .background {
+                if let aura {
+                    FluidAuraBloom(aura: aura, shape: self.shape)
+                }
+            }
             .background {
                 self.shape
                     .fill(LinearGradient(colors: [self.lit.top, self.lit.bottom], startPoint: .top, endPoint: .bottom))
@@ -198,6 +214,99 @@ private struct FluidLitBackground<S: InsettableShape>: ViewModifier {
                     )
                     .allowsHitTesting(false)
             }
+            .overlay {
+                if let aura {
+                    FluidAuraEdge(aura: aura, shape: self.shape)
+                }
+            }
+    }
+}
+
+/// How far down a shape the aura reaches before it is gone.
+private let fluidAuraFade = LinearGradient(
+    stops: [.init(color: .black, location: 0), .init(color: .clear, location: 0.6)],
+    startPoint: .top,
+    endPoint: .bottom
+)
+
+/// The aura line over a shape's plain edge: one point of color across the top, fading out down the
+/// sides so the plain edge carries on below. Static.
+private struct FluidAuraEdge<S: InsettableShape>: View {
+    let aura: AppTheme.Look.Aura
+    let shape: S
+
+    var body: some View {
+        self.shape
+            .strokeBorder(LinearGradient(stops: self.aura.stops, startPoint: .leading, endPoint: .trailing), lineWidth: 1)
+            .mask(fluidAuraFade)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+    }
+}
+
+/// The light around a lead card, drawn once under it: a soft haze of the aura colors centred on its
+/// top edge, and a blurred copy of the edge so the line glows like neon, both fading down the
+/// sides. One Canvas, redrawn only when the card's size or colors change, so scrolling past it
+/// costs nothing.
+private struct FluidAuraBloom<S: InsettableShape>: View {
+    /// How far the light reaches past the card's edges.
+    private static var reach: CGFloat { 72 }
+
+    let aura: AppTheme.Look.Aura
+    let shape: S
+
+    var body: some View {
+        Canvas { context, size in
+            let reach = Self.reach
+            let card = CGRect(x: reach, y: reach, width: size.width - reach * 2, height: size.height - reach * 2)
+            guard card.width > 1, card.height > 1 else { return }
+
+            // Haze: an ellipse as wide as the card and twice the reach tall, brightest at the
+            // middle of the top edge.
+            var haze = context
+            haze.translateBy(x: card.midX, y: card.minY)
+            haze.scaleBy(x: card.width / 2, y: reach)
+            haze.fill(
+                Path(ellipseIn: CGRect(x: -1, y: -1, width: 2, height: 2)),
+                with: .radialGradient(
+                    Gradient(stops: [
+                        .init(color: self.aura.tint.middle.opacity(self.aura.hazeOpacity), location: 0),
+                        .init(color: self.aura.tint.start.opacity(self.aura.hazeOpacity * 0.4), location: 0.5),
+                        .init(color: .clear, location: 1),
+                    ]),
+                    center: .zero,
+                    startRadius: 0,
+                    endRadius: 1
+                )
+            )
+
+            // Neon: the edge line, blurred, fading out down the sides.
+            var glow = context
+            glow.opacity = self.aura.haloOpacity
+            glow.clipToLayer { layer in
+                layer.fill(
+                    Path(CGRect(origin: .zero, size: size)),
+                    with: .linearGradient(
+                        Gradient(colors: [.black, .clear]),
+                        startPoint: CGPoint(x: 0, y: card.minY),
+                        endPoint: CGPoint(x: 0, y: card.minY + card.height * 0.6)
+                    )
+                )
+            }
+            glow.addFilter(.blur(radius: 7))
+            glow.stroke(
+                self.shape.path(in: card),
+                with: .linearGradient(
+                    Gradient(stops: self.aura.stops),
+                    startPoint: CGPoint(x: card.minX, y: 0),
+                    endPoint: CGPoint(x: card.maxX, y: 0)
+                ),
+                lineWidth: 2
+            )
+        }
+        .padding(-Self.reach)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
     }
 }
 
@@ -209,9 +318,9 @@ private struct FluidCanvas: ViewModifier {
     }
 }
 
-/// A base color with the look's faint top light and fine grain, after fluidvoice.com: one light
-/// from the top left, gone by mid-page. The grain is laid on with an overlay blend, so it shows
-/// only where there is light and the dark stays clean. Static: no animation, no timers.
+/// A base color with the look's faint sky, after fluidvoice.com: a warm light from the top left and
+/// a fainter cool one from the top right, both gone by mid-page. Smooth, with no texture. Static:
+/// no animation, no timers.
 struct FluidAmbientBackground: View {
     /// The lit area stops growing past this height, so tall windows stay dark below it.
     private static let lightHeight: CGFloat = 768
@@ -229,14 +338,10 @@ struct FluidAmbientBackground: View {
                 Self.light(ambience.glow)
                     .frame(width: width * 1.1, height: height * 0.9)
                     .position(x: width * 0.1, y: 0)
+                Self.light(ambience.farGlow)
+                    .frame(width: width * 0.8, height: height * 0.8)
+                    .position(x: width, y: height * 0.2)
             }
-            Image(nsImage: FluidGrainTile.image)
-                .renderingMode(.template)
-                .interpolation(.none)
-                .resizable(resizingMode: .tile)
-                .foregroundStyle(ambience.grain)
-                .opacity(ambience.grainOpacity)
-                .blendMode(.overlay)
         }
         .compositingGroup()
         .allowsHitTesting(false)
@@ -249,53 +354,72 @@ struct FluidAmbientBackground: View {
     }
 }
 
-/// One tile of sparse speckles, made once and tiled. Tinted and faded by the caller.
-private enum FluidGrainTile {
-    static let image: NSImage = {
-        let side = 128
-        let image = NSImage(size: NSSize(width: side, height: side))
-        guard let rep = NSBitmapImageRep(
-            bitmapDataPlanes: nil,
-            pixelsWide: side,
-            pixelsHigh: side,
-            bitsPerSample: 8,
-            samplesPerPixel: 4,
-            hasAlpha: true,
-            isPlanar: false,
-            colorSpaceName: .deviceRGB,
-            bytesPerRow: side * 4,
-            bitsPerPixel: 32
-        ), let pixels = rep.bitmapData else { return image }
-        // A fixed seed keeps the pattern identical on every launch and every page.
-        var state: UInt32 = 0x2f6b1d35
-        for index in 0..<side * side {
-            state = state &* 1_664_525 &+ 1_013_904_223
-            // Sparse speckles: about a third of the pixels stay empty, the rest ramp up.
-            let noise = Double(state >> 24) / 255
-            let strength = UInt8((min(1, max(0, noise * 2.2 - 0.7)) * 255).rounded())
-            for channel in 0..<4 {
-                pixels[index * 4 + channel] = strength
-            }
-        }
-        rep.size = NSSize(width: side, height: side)
-        image.addRepresentation(rep)
-        image.isTemplate = true
-        return image
-    }()
-}
-
-/// A card in the look's card surface.
+/// A card in the look's card surface. `leads` gives it the aura edge; only the one card a page
+/// leads with gets it.
 struct FluidSurfaceCard<Content: View>: View {
     static var cornerRadius: CGFloat { 14 }
 
     @Environment(\.theme) private var theme
     var padding: CGFloat = 14
+    var leads = false
     @ViewBuilder let content: () -> Content
 
     var body: some View {
         self.content()
             .padding(self.padding)
-            .fluidLit(self.theme.look.card, in: RoundedRectangle(cornerRadius: Self.cornerRadius, style: .continuous))
+            .fluidLit(
+                self.theme.look.card,
+                in: RoundedRectangle(cornerRadius: Self.cornerRadius, style: .continuous),
+                aura: self.leads ? self.theme.look.aura : nil
+            )
+    }
+}
+
+/// A progress bar for a lead card: a quiet track with the aura colors filling it from the left and
+/// glowing softly. Callers name it for accessibility.
+struct FluidAuraBar: View {
+    @Environment(\.theme) private var theme
+    let fraction: Double
+    var height: CGFloat = 8
+
+    var body: some View {
+        let aura = self.theme.look.aura
+        GeometryReader { geometry in
+            let filled = geometry.size.width * min(1, max(0, self.fraction.isFinite ? self.fraction : 0))
+            ZStack(alignment: .leading) {
+                Capsule().fill(self.theme.look.quietFill)
+                // The fill glows softly, like the lead card's edge.
+                Capsule()
+                    .fill(aura.ink)
+                    .frame(width: filled)
+                    .blur(radius: self.height)
+                    .opacity(aura.haloOpacity)
+                Capsule()
+                    .fill(aura.ink)
+                    .frame(width: filled)
+            }
+        }
+        .frame(height: self.height)
+    }
+}
+
+/// One dot per day, oldest first. A day with dictation takes its color along the aura; a quiet
+/// day stays on the track.
+struct FluidAuraDots: View {
+    @Environment(\.theme) private var theme
+    let active: [Bool]
+    var size: CGFloat = 8
+
+    var body: some View {
+        let look = self.theme.look
+        HStack(spacing: self.size * 0.75) {
+            ForEach(self.active.indices, id: \.self) { index in
+                Circle()
+                    .fill(self.active[index] ? look.aura.color(at: Double(index) / Double(max(1, self.active.count - 1))) : look.quietFill)
+                    .frame(width: self.size, height: self.size)
+            }
+        }
+        .accessibilityHidden(true)
     }
 }
 
@@ -313,7 +437,7 @@ struct FluidHairline: View {
 }
 
 /// A search box inside a page or list: a quiet grey field with a clear button once there is text.
-/// Keyboard focus shows as a hairline edge, not a colored ring.
+/// Keyboard focus shows as the field chrome's edge, not the system ring.
 struct FluidSearchField: View {
     @Environment(\.theme) private var theme
     @Binding var text: String
@@ -345,8 +469,23 @@ struct FluidSearchField: View {
     }
 }
 
-/// The surface of a text field or editor: a quiet grey fill, and a hairline edge while it has
-/// keyboard focus instead of a colored ring. The caller owns the focus state.
+private struct FluidAuraEdgeModifier<S: InsettableShape>: ViewModifier {
+    @Environment(\.theme) private var theme
+    let shape: S
+    let isOn: Bool
+
+    func body(content: Content) -> some View {
+        content.overlay {
+            if self.isOn {
+                FluidAuraEdge(aura: self.theme.look.aura, shape: self.shape)
+            }
+        }
+    }
+}
+
+/// The surface of a text field or editor: a quiet grey fill and, while it has keyboard focus, a
+/// hairline edge with the aura across its top instead of the system ring. The caller owns the
+/// focus state.
 private struct FluidFieldChrome: ViewModifier {
     @Environment(\.theme) private var theme
     let isFocused: Bool
@@ -359,10 +498,20 @@ private struct FluidFieldChrome: ViewModifier {
             .padding(self.padding ?? self.theme.metrics.spacing.md)
             .background(look.quietFill, in: shape)
             .overlay(shape.strokeBorder(self.isFocused ? look.tertiaryText : .clear, lineWidth: 1).allowsHitTesting(false))
+            .overlay {
+                if self.isFocused {
+                    FluidAuraEdge(aura: look.aura, shape: shape)
+                }
+            }
     }
 }
 
 extension View {
+    /// The aura line alone across the top of `shape`, for the one selected row in a long list.
+    func fluidAuraEdge<S: InsettableShape>(_ shape: S, isOn: Bool = true) -> some View {
+        self.modifier(FluidAuraEdgeModifier(shape: shape, isOn: isOn))
+    }
+
     /// Puts a text field or editor on the look's input surface. `padding` defaults to the
     /// theme's medium spacing; pass 0 when the content lays out its own insets.
     func fluidFieldChrome(isFocused: Bool, padding: CGFloat? = nil) -> some View {

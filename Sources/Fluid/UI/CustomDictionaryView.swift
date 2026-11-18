@@ -631,7 +631,8 @@ struct CustomDictionaryView: View {
     }
 
     private var trainReplacementSection: some View {
-        FluidSurfaceCard(padding: self.theme.metrics.spacing.xl) {
+        // Teaching a correction is the page's main job, so this card leads it.
+        FluidSurfaceCard(padding: self.theme.metrics.spacing.xl, leads: true) {
             if self.wizardStep == .manual {
                 VStack(alignment: .leading, spacing: self.theme.metrics.spacing.lg) {
                     Button("Back") { self.wizardStep = self.manualReturnStep }

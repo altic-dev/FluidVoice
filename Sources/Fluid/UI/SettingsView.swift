@@ -2879,7 +2879,7 @@ private extension SettingsView {
                 )
                 .settingsSearchTarget(.dockVisibility)
 
-                FluidSettingsRow(title: "Accent Color", description: "Pick a preset or a custom color.") {
+                FluidSettingsRow(title: "Accent Color", description: "Tints the soft light at the top of each page.") {
                     self.accentColorSwatches
                 }
                 .settingsSearchTarget(.accentColor)
@@ -2897,7 +2897,10 @@ private extension SettingsView {
                 Button {
                     self.settings.accentColorOption = option
                 } label: {
-                    self.accentSwatch(Circle().fill(Color(hex: option.hex) ?? .gray), isSelected: isSelected)
+                    self.accentSwatch(
+                        Circle().fill(LinearGradient(colors: FluidLookTint.preset(option).colors, startPoint: .topLeading, endPoint: .bottomTrailing)),
+                        isSelected: isSelected
+                    )
                 }
                 .buttonStyle(FluidHoverIconButtonStyle())
                 .accessibilityLabel(option.rawValue)

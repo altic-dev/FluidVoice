@@ -45,7 +45,7 @@ struct AdaptiveAppTheme<Content: View>: View {
         let activeScheme = preferredScheme ?? self.colorScheme
 
         self.content
-            .appTheme(AppTheme.adaptive(accent: self.accent, colorScheme: activeScheme))
+            .appTheme(AppTheme.adaptive(accent: self.accent, colorScheme: activeScheme, tint: FluidLookTint.current(self.settings)))
             .preferredColorScheme(preferredScheme)
     }
 }

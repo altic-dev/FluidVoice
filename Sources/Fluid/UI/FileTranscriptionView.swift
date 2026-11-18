@@ -216,8 +216,8 @@ struct FileTranscriptionView: View {
     private var fileSelectionCard: some View {
         VStack(spacing: 16) {
             if let fileURL = selectedFileURL ?? self.transcriptionService.currentFileURL {
-                // Show selected file
-                FluidSurfaceCard(padding: self.theme.metrics.spacing.lg) {
+                // Show selected file; it leads the page.
+                FluidSurfaceCard(padding: self.theme.metrics.spacing.lg, leads: true) {
                     HStack(spacing: self.theme.metrics.spacing.md) {
                         FluidGlyphTile(systemImage: self.selectedFileIsVideo ? "film" : "waveform", size: 36)
 

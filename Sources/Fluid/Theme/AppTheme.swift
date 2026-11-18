@@ -279,19 +279,19 @@ struct AppTheme {
     let materials: Materials
     var look: Look = .dark
 
-    static func adaptive(accent: Color, colorScheme: ColorScheme) -> AppTheme {
+    static func adaptive(accent: Color, colorScheme: ColorScheme, tint: FluidLookTint = .fluid) -> AppTheme {
         switch colorScheme {
         case .light:
-            return .light(accent: accent)
+            return .light(accent: accent, tint: tint)
         case .dark:
-            return .dark(accent: accent)
+            return .dark(accent: accent, tint: tint)
         @unknown default:
-            return .dark(accent: accent)
+            return .dark(accent: accent, tint: tint)
         }
     }
 
     /// Light theme using system colors so macOS accessibility contrast settings stay in control.
-    static func light(accent: Color) -> AppTheme {
+    static func light(accent: Color, tint: FluidLookTint = .fluid) -> AppTheme {
         AppTheme(
             palette: Palette(
                 windowBackground: Color(nsColor: .windowBackgroundColor),
@@ -330,12 +330,12 @@ struct AppTheme {
                 formRow: .ultraThinMaterial,
                 toolbar: .ultraThinMaterial
             ),
-            look: .light
+            look: .light(tint: tint)
         )
     }
 
     /// Default dark-forward theme tuned for macOS Sonoma / Sequoia aesthetics.
-    static func dark(accent: Color) -> AppTheme {
+    static func dark(accent: Color, tint: FluidLookTint = .fluid) -> AppTheme {
         AppTheme(
             palette: Palette(
                 windowBackground: Color(red: 0.07, green: 0.07, blue: 0.07),
@@ -374,7 +374,7 @@ struct AppTheme {
                 formRow: .ultraThinMaterial,
                 toolbar: .ultraThinMaterial
             ),
-            look: .dark
+            look: .dark(tint: tint)
         )
     }
 

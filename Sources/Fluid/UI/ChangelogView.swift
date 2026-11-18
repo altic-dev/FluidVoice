@@ -186,7 +186,8 @@ private struct ChangelogReleaseCard: View {
     let theme: AppTheme
 
     var body: some View {
-        FluidSurfaceCard(padding: self.theme.metrics.spacing.xl) {
+        // The newest release is what people come here for, so it leads the page.
+        FluidSurfaceCard(padding: self.theme.metrics.spacing.xl, leads: self.isLatest) {
             VStack(alignment: .leading, spacing: self.theme.metrics.spacing.md) {
                 HStack(alignment: .firstTextBaseline, spacing: self.theme.metrics.spacing.sm) {
                     VStack(alignment: .leading, spacing: 4) {

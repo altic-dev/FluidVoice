@@ -1861,7 +1861,8 @@ private struct MeetingSetupCanvas: View {
 
     private var recordingSetup: some View {
         VStack(alignment: .leading, spacing: self.theme.metrics.spacing.lg) {
-            FluidSurfaceCard(padding: self.theme.metrics.spacing.xl) {
+            // Starting a recording is the page's main job, so this card leads it.
+            FluidSurfaceCard(padding: self.theme.metrics.spacing.xl, leads: true) {
                 VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xl) {
                     self.plan
                     FluidGlassControlGroup {

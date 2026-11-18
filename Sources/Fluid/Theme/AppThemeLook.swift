@@ -1,11 +1,12 @@
 import SwiftUI
 
 extension AppTheme {
-    /// The refined look, after fluidvoice.com: black, white and grey only. A black canvas with a
-    /// faint light at the top and fine grain, flat cards with a hairline edge, a white main action
-    /// and quiet grey actions. Screens read these roles through the shared components in
-    /// `Components/FluidLookControls.swift`, so restyling the app means changing values here.
-    /// Do not add hues: the only color on a page should be a maker's own logo.
+    /// The refined look, after fluidvoice.com: black, white and grey, with one quiet color pattern.
+    /// A smooth black canvas with a faint sky at the top, flat cards with a hairline edge, a white
+    /// main action and quiet grey actions. Screens read these roles through the shared components
+    /// in `Components/FluidLookControls.swift`, so restyling the app means changing values here.
+    /// The only hues are the tint (the sky, and the aura on the one card a page leads with and the
+    /// field being typed in), which follows the accent color setting, and a maker's own logo.
     ///
     /// Pages move onto this look one at a time. A page that has moved paints its background with
     /// `.fluidCanvas()`; once every page has, the window paints it and the older palette roles go.
@@ -31,22 +32,63 @@ extension AppTheme {
             let label: Color
         }
 
-        /// Light and grain behind a page.
+        /// The faint sky behind a page.
         struct Ambience {
-            /// Faint light from the top left, gone by mid-page.
+            /// Faint warm light from the top left, gone by mid-page.
             let glow: Color
-            /// Speckle color and strength. It is blended so it only shows where there is light.
-            let grain: Color
-            let grainOpacity: Double
+            /// A fainter, cooler light from the top right.
+            let farGlow: Color
+        }
+
+        /// The look's soft colors, after fluidvoice.com, taken from the tint the accent color setting
+        /// picks. As an edge they run across the top of a shape and fade out down its sides, with a
+        /// faint light just inside; only the one card a page leads with and the field being typed
+        /// in get it. Inside a lead card they also fill its progress bar and week dots, so all the
+        /// color on a page sits in one place. Never animated.
+        struct Aura {
+            let tint: FluidLookTint
+            /// The plain edge the colored part fades into at both ends.
+            let rest: Color
+            /// How strongly the edge glows, like neon, around a lead card's top edge; 0 hides it.
+            let haloOpacity: Double
+            /// How strongly the colors haze the page around a lead card's top edge; 0 hides it.
+            let hazeOpacity: Double
+
+            var colors: [Color] { self.tint.colors }
+
+            /// The edge's colors from left to right; the ends match the plain edge.
+            var stops: [Gradient.Stop] {
+                [
+                    .init(color: self.rest, location: 0),
+                    .init(color: self.tint.start, location: 0.25),
+                    .init(color: self.tint.middle, location: 0.55),
+                    .init(color: self.tint.end, location: 0.8),
+                    .init(color: self.rest, location: 1),
+                ]
+            }
+
+            /// The colors as one left-to-right gradient, for progress fills and chart lines.
+            var ink: LinearGradient {
+                LinearGradient(colors: self.colors, startPoint: .leading, endPoint: .trailing)
+            }
+
+            /// The color at a point along the gradient: 0 is the left end, 1 the right.
+            func color(at position: Double) -> Color {
+                let scaled = min(1, max(0, position.isFinite ? position : 0)) * 2
+                return scaled <= 1
+                    ? self.tint.start.mix(with: self.tint.middle, by: scaled)
+                    : self.tint.middle.mix(with: self.tint.end, by: scaled - 1)
+            }
         }
 
         /// Page background under the ambience.
         let canvas: Color
-        /// Pop-up background: flat, no light or grain.
+        /// Pop-up background: flat, no sky.
         let sheet: Color
         let ambience: Ambience
         /// Cards.
         let card: Lit
+        let aura: Aura
         /// Flat fill for bands inside a card or pop-up.
         let surface: Color
         /// Edges of flat groups such as metric tiles.
@@ -76,51 +118,74 @@ extension AppTheme {
         /// Every other action.
         let secondaryAction: Action
 
-        static let dark = Look(
-            canvas: Color.black,
-            sheet: Color(red: 0.071, green: 0.071, blue: 0.075),
-            ambience: Ambience(glow: Color.white.opacity(0.07), grain: Color.white, grainOpacity: 0.6),
-            card: .flat(Color.white.opacity(0.04), edge: Color.white.opacity(0.08)),
-            surface: Color.white.opacity(0.025),
-            edge: Color.white.opacity(0.08),
-            divider: Color.white.opacity(0.06),
-            text: Color.white,
-            secondaryText: Color.white.opacity(0.6),
-            tertiaryText: Color.white.opacity(0.4),
-            highlight: Color.white.opacity(0.85),
-            highlightText: Color.white.opacity(0.8),
-            highlightFill: Color.white.opacity(0.08),
-            quietFill: Color.white.opacity(0.06),
-            data: Color.white.opacity(0.85),
-            tileGlyph: Color.white.opacity(0.8),
-            selection: Color(white: 0.2),
-            switchOn: Color(white: 0.55),
-            primaryAction: Action(body: .flat(Color.white), label: Color.black),
-            secondaryAction: Action(body: .flat(Color.white.opacity(0.08)), label: Color.white.opacity(0.9))
-        )
+        static let dark = Look.dark(tint: .fluid)
+        static let light = Look.light(tint: .fluid)
 
-        static let light = Look(
-            canvas: Color(red: 0.961, green: 0.961, blue: 0.965),
-            sheet: Color.white,
-            ambience: Ambience(glow: Color.white.opacity(0.7), grain: Color.black, grainOpacity: 0.08),
-            card: .flat(Color.white, edge: Color.black.opacity(0.08)),
-            surface: Color.black.opacity(0.025),
-            edge: Color.black.opacity(0.08),
-            divider: Color.black.opacity(0.07),
-            text: Color.black.opacity(0.88),
-            secondaryText: Color.black.opacity(0.58),
-            tertiaryText: Color.black.opacity(0.42),
-            highlight: Color.black.opacity(0.8),
-            highlightText: Color.black.opacity(0.75),
-            highlightFill: Color.black.opacity(0.06),
-            quietFill: Color.black.opacity(0.05),
-            data: Color.black.opacity(0.78),
-            tileGlyph: Color.black.opacity(0.7),
-            selection: Color(white: 0.89),
-            switchOn: Color(white: 0.2),
-            primaryAction: Action(body: .flat(Color(red: 0.067, green: 0.067, blue: 0.075)), label: Color.white),
-            secondaryAction: Action(body: .flat(Color.black.opacity(0.06)), label: Color.black.opacity(0.88))
-        )
+        /// The sky is the tint's end and middle colors turned dim and grey, like fluidvoice.com's.
+        static func dark(tint: FluidLookTint) -> Look {
+            let sky = tint.map(saturation: { $0 * 0.45 }, brightness: { _ in 0.59 })
+            let farSky = tint.map(saturation: { $0 }, brightness: { _ in 0.59 })
+            return Look(
+                canvas: Color.black,
+                sheet: Color(red: 0.071, green: 0.071, blue: 0.075),
+                ambience: Ambience(
+                    glow: sky.end.opacity(0.3),
+                    farGlow: farSky.middle.opacity(0.16)
+                ),
+                card: .flat(Color.white.opacity(0.04), edge: Color.white.opacity(0.08)),
+                aura: Aura(tint: tint, rest: Color.white.opacity(0.14), haloOpacity: 0.6, hazeOpacity: 0.16),
+                surface: Color.white.opacity(0.025),
+                edge: Color.white.opacity(0.08),
+                divider: Color.white.opacity(0.06),
+                text: Color.white,
+                secondaryText: Color.white.opacity(0.6),
+                tertiaryText: Color.white.opacity(0.4),
+                highlight: Color.white.opacity(0.85),
+                highlightText: Color.white.opacity(0.8),
+                highlightFill: Color.white.opacity(0.08),
+                quietFill: Color.white.opacity(0.06),
+                data: Color.white.opacity(0.85),
+                tileGlyph: Color.white.opacity(0.8),
+                selection: Color(white: 0.2),
+                switchOn: Color(white: 0.55),
+                primaryAction: Action(body: .flat(Color.white), label: Color.black),
+                secondaryAction: Action(body: .flat(Color.white.opacity(0.08)), label: Color.white.opacity(0.9))
+            )
+        }
+
+        /// The sky is a faint wash of the tint's end and middle colors. The aura uses deeper
+        /// shades of the tint so they hold up on white.
+        static func light(tint: FluidLookTint) -> Look {
+            let sky = tint.map(saturation: { _ in 0.06 }, brightness: { _ in 1 })
+            let farSky = tint.map(saturation: { _ in 0.08 }, brightness: { _ in 1 })
+            let ink = tint.map(saturation: { min(1, $0 + 0.15) }, brightness: { $0 * 0.88 })
+            return Look(
+                canvas: Color(red: 0.961, green: 0.961, blue: 0.965),
+                sheet: Color.white,
+                ambience: Ambience(
+                    glow: sky.end.opacity(0.9),
+                    farGlow: farSky.middle.opacity(0.8)
+                ),
+                card: .flat(Color.white, edge: Color.black.opacity(0.08)),
+                aura: Aura(tint: ink, rest: Color.black.opacity(0.08), haloOpacity: 0.4, hazeOpacity: 0.1),
+                surface: Color.black.opacity(0.025),
+                edge: Color.black.opacity(0.08),
+                divider: Color.black.opacity(0.07),
+                text: Color.black.opacity(0.88),
+                secondaryText: Color.black.opacity(0.58),
+                tertiaryText: Color.black.opacity(0.42),
+                highlight: Color.black.opacity(0.8),
+                highlightText: Color.black.opacity(0.75),
+                highlightFill: Color.black.opacity(0.06),
+                quietFill: Color.black.opacity(0.05),
+                data: Color.black.opacity(0.78),
+                tileGlyph: Color.black.opacity(0.7),
+                selection: Color(white: 0.89),
+                switchOn: Color(white: 0.2),
+                primaryAction: Action(body: .flat(Color(red: 0.067, green: 0.067, blue: 0.075)), label: Color.white),
+                secondaryAction: Action(body: .flat(Color.black.opacity(0.06)), label: Color.black.opacity(0.88))
+            )
+        }
     }
 }
 

@@ -69,10 +69,25 @@ action colors. `FluidTextRole` holds its text sizes, weights and letter spacing.
 `FluidLookControls.swift` builds the pieces from them. Restyle the app by changing
 those values; never put a color, size or tracking number in a screen.
 
-The look follows fluidvoice.com: black, white and grey only. No colored glows, tints,
-hue washes or gradient buttons. The only color on a page is a maker's own logo
-(`FluidModelLogo`). Buttons are flat: a white main action, quiet grey ones, no outline
-or shadow.
+The look follows fluidvoice.com: black, white and grey, with one quiet color pattern.
+Buttons are flat: a white main action, quiet grey ones, no outline or shadow. The only
+hues are:
+
+- The sky: `.fluidCanvas()` paints a faint warm light at the top left and a fainter
+  violet one at the top right (`look.ambience`).
+- The aura (`look.aura`): a still line of three soft colors across the top of an edge,
+  fading down its sides. Only on the one card a page leads with
+  (`FluidSurfaceCard(leads: true)` or `.fluidCardButton(leads: true)`) and on the text
+  field being typed in (`.fluidFieldChrome`, automatic). Never animated. Inside the lead
+  card, `FluidAuraBar` and `FluidAuraDots` may use it too; every other chart stays in
+  `look.data`.
+- The colors follow the Accent Color setting (`FluidLookTint`): each preset has a
+  hand-picked set of three, a custom color gets soft shades of its hue, a grey one turns
+  color off.
+- No texture: the canvas is smooth.
+- A maker's own logo (`FluidModelLogo`).
+
+No other colored glows, tints, hue washes or gradient buttons.
 
 Pages move onto the look one at a time (Models first). A page on the look uses:
 

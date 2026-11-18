@@ -18,6 +18,14 @@ private final class HistoryAppIconCache {
         self.cache.countLimit = 48
     }
 
+    /// The icon already looked up for `name`: `nil` when it has not been looked up yet, `.some(nil)`
+    /// when the app has no icon.
+    func cachedIcon(for name: String) -> NSImage?? {
+        let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { return .some(nil) }
+        return self.cache.object(forKey: name as NSString).map(\.image)
+    }
+
     func icon(for name: String) async -> NSImage? {
         let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty else { return nil }
@@ -40,6 +48,13 @@ struct HistoryAppIcon: View {
     let appName: String
     @State private var image: NSImage?
 
+    /// Starts from the cached icon, so a row scrolling into view draws once instead of drawing a
+    /// placeholder and then the icon a moment later.
+    init(appName: String) {
+        self.appName = appName
+        self._image = State(initialValue: HistoryAppIconCache.shared.cachedIcon(for: appName) ?? nil)
+    }
+
     var body: some View {
         Group {
             if let image {
@@ -52,6 +67,10 @@ struct HistoryAppIcon: View {
         .accessibilityLabel(self.appName.isEmpty ? "Unknown app" : self.appName)
         .help(self.appName.isEmpty ? "Unknown app" : self.appName)
         .task(id: self.appName) {
+            if let cached = HistoryAppIconCache.shared.cachedIcon(for: self.appName) {
+                if self.image !== cached { self.image = cached }
+                return
+            }
             self.image = nil
             let image = await HistoryAppIconCache.shared.icon(for: self.appName)
             guard !Task.isCancelled else { return }

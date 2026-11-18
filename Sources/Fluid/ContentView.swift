@@ -257,7 +257,6 @@ struct ContentView: View {
     @EnvironmentObject private var appServices: AppServices
     @StateObject private var meetingHistorySnapshot = MeetingHistorySnapshot()
     @State private var meetingSummaryToResume: MeetingSessionID?
-    @StateObject private var mouseTracker = MousePositionTracker()
     @StateObject private var popupPresence = FluidPopupPresence()
     @StateObject private var commandModeService = CommandModeService()
     @StateObject private var rewriteModeService = RewriteModeService()
@@ -504,8 +503,7 @@ struct ContentView: View {
             }
         )
 
-        let tracked = layout.withMouseTracking(self.mouseTracker)
-        let env = tracked.environmentObject(self.mouseTracker).environment(\.fluidPopupPresence, self.popupPresence)
+        let env = layout.environment(\.fluidPopupPresence, self.popupPresence)
         let nav = env.onChange(of: self.menuBarManager.requestedNavigationDestination) { _, destination in
             self.handleMenuBarNavigation(destination)
         }
@@ -565,6 +563,12 @@ struct ContentView: View {
                       let page = SidebarItem.allCases.first(where: { $0.title.caseInsensitiveCompare(title) == .orderedSame })
                 else { return }
                 self.navigateToApp(page)
+            }
+            .onReceive(DistributedNotificationCenter.default().publisher(for: Notification.Name("com.FluidApp.debug.scrollPage"))) { notification in
+                // Scrolls the open page down and up, for profiling. The optional object is the
+                // number of passes.
+                guard UserDefaults.standard.bool(forKey: "FluidDebugRemoteToggleEnabled") else { return }
+                PageScrollDriver.run(cycles: (notification.object as? String).flatMap(Int.init) ?? 3)
             }
             .onReceive(DistributedNotificationCenter.default().publisher(for: Notification.Name("com.FluidApp.debug.setTheme"))) { notification in
                 guard UserDefaults.standard.bool(forKey: "FluidDebugRemoteToggleEnabled"),
