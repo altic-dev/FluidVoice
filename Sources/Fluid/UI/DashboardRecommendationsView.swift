@@ -11,19 +11,9 @@ struct DashboardRecommendationsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             if !self.controller.recommendations.isEmpty {
-                VStack(alignment: .leading, spacing: 14) {
-                    Text("Recommendations for your Mac")
-                        .font(self.theme.typography.sectionTitle)
-                        .fixedSize(horizontal: false, vertical: true)
-                    ThemedCard(style: .subtle, padding: 0) {
-                        VStack(spacing: 0) {
-                            ForEach(self.controller.recommendations) { recommendation in
-                                self.card(recommendation)
-                                if recommendation.id != self.controller.recommendations.last?.id {
-                                    Divider().padding(.horizontal, 20)
-                                }
-                            }
-                        }
+                FluidSettingsGroup(title: "Recommendations for your Mac") {
+                    ForEach(self.controller.recommendations) { recommendation in
+                        FluidSettingsBlock { self.card(recommendation) }
                     }
                 }
             }
@@ -39,20 +29,23 @@ struct DashboardRecommendationsView: View {
         let working = operation.activeID == recommendation.id
         let installed = recommendation.kind == .speech ? self.installations.isInstalled(modelID: recommendation.modelID) : recommendation.installed
         let error = operation.failedID == recommendation.id ? operation.error : nil
-        return VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .top, spacing: 10) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Label(recommendation.kind == .speech ? "Speech recognition" : "AI cleanup", systemImage: recommendation.kind == .speech ? "waveform" : "sparkles")
-                        .font(self.theme.typography.caption)
-                        .foregroundStyle(self.theme.palette.secondaryText)
+        let look = self.theme.look
+        let spacing = self.theme.metrics.spacing
+        return VStack(alignment: .leading, spacing: spacing.md) {
+            HStack(alignment: .top, spacing: spacing.sm) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(recommendation.kind == .speech ? "Speech recognition" : "AI cleanup")
+                        .fluidText(.label)
+                        .foregroundStyle(look.tertiaryText)
                     Text(recommendation.name)
-                        .font(self.theme.typography.bodyStrong)
+                        .fluidText(.rowTitle)
+                        .foregroundStyle(look.text)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: 0)
                 if !working {
                     Button { self.controller.dismiss(recommendation) } label: {
-                        Image(systemName: "xmark").font(self.theme.typography.caption)
+                        Image(systemName: "xmark").font(.fluidSystem(size: 12, weight: .semibold))
                     }
                     .fluidGlassAction(circular: true, quiet: true)
                     .disabled(operation.isBusy)
@@ -61,55 +54,57 @@ struct DashboardRecommendationsView: View {
                 }
             }
             Text(recommendation.detail)
-                .font(self.theme.typography.bodySmall)
-                .foregroundStyle(self.theme.palette.secondaryText)
+                .fluidText(.body)
+                .foregroundStyle(look.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
             if recommendation.kind == .cleanup {
                 Text("Research preview · Review your text before sending. Cleanup may make inaccurate changes.")
-                    .font(self.theme.typography.caption)
-                    .foregroundStyle(self.theme.palette.secondaryText)
+                    .fluidText(.label)
+                    .foregroundStyle(look.tertiaryText)
                     .fixedSize(horizontal: false, vertical: true)
             }
             if working {
-                VStack(alignment: .leading, spacing: 8) {
+                VStack(alignment: .leading, spacing: spacing.sm) {
                     ProgressView(value: operation.fraction)
                         .progressViewStyle(.linear)
-                        .tint(self.theme.palette.accent)
+                        .tint(look.highlight)
                         .accessibilityLabel("\(recommendation.name) progress")
                     HStack {
-                        Text(operation.message).font(self.theme.typography.caption)
-                        Spacer(minLength: 8)
+                        Text(operation.message)
+                        Spacer(minLength: spacing.sm)
                         if let fraction = operation.fraction {
-                            Text(fraction, format: .percent.precision(.fractionLength(0)))
-                                .font(self.theme.typography.caption).monospacedDigit()
+                            Text(fraction, format: .percent.precision(.fractionLength(0))).monospacedDigit()
                         }
                     }
+                    .fluidText(.label)
+                    .foregroundStyle(look.secondaryText)
                     Button("Cancel") { operation.cancel() }
-                        .fluidGlassAction()
+                        .fluidAction()
                         .disabled(operation.cancelling)
                 }
             } else {
                 if let error {
-                    Text(error).font(self.theme.typography.caption)
-                        .foregroundStyle(self.theme.palette.secondaryText)
+                    Label(error, systemImage: "exclamationmark.triangle")
+                        .fluidText(.label)
+                        .foregroundStyle(look.text)
                         .fixedSize(horizontal: false, vertical: true)
                         .accessibilityLabel("Model could not be activated. \(error)")
                 }
-                if !installed, !recommendation.downloadSize.isEmpty {
-                    Text("\(recommendation.downloadSize) download")
-                        .font(self.theme.typography.caption).foregroundStyle(.secondary)
+                HStack(spacing: spacing.md) {
+                    Button(error != nil ? "Try again" : (installed ? "Use model" : "Download & use")) {
+                        self.controller.use(recommendation)
+                    }
+                    .fluidAction()
+                    .disabled(self.controller.actionsBlocked || self.content.isProcessing || (recommendation.kind == .speech && !self.installations.canUseModelActions))
+                    .accessibilityLabel("\(installed ? "Use" : "Download and use") \(recommendation.name) for \(recommendation.kind == .speech ? "speech recognition" : "AI cleanup")")
+                    if !installed, !recommendation.downloadSize.isEmpty {
+                        Text("\(recommendation.downloadSize) download")
+                            .fluidText(.label)
+                            .foregroundStyle(look.tertiaryText)
+                    }
                 }
-                Button {
-                    self.controller.use(recommendation)
-                } label: {
-                    Label(error != nil ? "Try again" : (installed ? "Use model" : "Download & use"), systemImage: installed ? "arrow.right" : "arrow.down")
-                }
-                .fluidGlassAction(prominent: true)
-                .disabled(self.controller.actionsBlocked || self.content.isProcessing || (recommendation.kind == .speech && !self.installations.canUseModelActions))
-                .accessibilityLabel("\(installed ? "Use" : "Download and use") \(recommendation.name) for \(recommendation.kind == .speech ? "speech recognition" : "AI cleanup")")
             }
         }
-        .padding(20)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 }

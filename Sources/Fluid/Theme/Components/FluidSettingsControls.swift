@@ -28,22 +28,7 @@ struct FluidSettingsGroup<Content: View>: View {
         let look = self.theme.look
         VStack(alignment: .leading, spacing: 0) {
             if self.title != nil || self.hint != nil {
-                HStack(alignment: .firstTextBaseline, spacing: self.theme.metrics.spacing.md) {
-                    if let title {
-                        Text(title)
-                            .fluidText(.groupTitle)
-                            .foregroundStyle(look.text)
-                            .accessibilityAddTraits(.isHeader)
-                    }
-                    Spacer(minLength: 0)
-                    if let hint {
-                        Text(hint)
-                            .fluidText(.label)
-                            .foregroundStyle(look.tertiaryText)
-                    }
-                }
-                .padding(.horizontal, 4)
-                .padding(.bottom, self.theme.metrics.spacing.sm)
+                FluidGroupHeader(title: self.title, hint: self.hint)
             }
 
             VStack(spacing: 0) {
@@ -75,6 +60,48 @@ struct FluidSettingsGroup<Content: View>: View {
                     .padding(.top, self.theme.metrics.spacing.sm)
             }
         }
+    }
+}
+
+/// The title over a group, with a quiet hint or an action at the right. Settings groups and page
+/// sections both use it, so every group title sits at the same size and spacing.
+struct FluidGroupHeader<Accessory: View>: View {
+    @Environment(\.theme) private var theme
+    let title: String?
+    let hint: String?
+    let accessory: () -> Accessory
+
+    init(title: String?, hint: String? = nil, @ViewBuilder accessory: @escaping () -> Accessory) {
+        self.title = title
+        self.hint = hint
+        self.accessory = accessory
+    }
+
+    var body: some View {
+        let look = self.theme.look
+        HStack(alignment: .firstTextBaseline, spacing: self.theme.metrics.spacing.md) {
+            if let title {
+                Text(title)
+                    .fluidText(.groupTitle)
+                    .foregroundStyle(look.text)
+                    .accessibilityAddTraits(.isHeader)
+            }
+            Spacer(minLength: 0)
+            if let hint {
+                Text(hint)
+                    .fluidText(.label)
+                    .foregroundStyle(look.tertiaryText)
+            }
+            self.accessory()
+        }
+        .padding(.horizontal, 4)
+        .padding(.bottom, self.theme.metrics.spacing.sm)
+    }
+}
+
+extension FluidGroupHeader where Accessory == EmptyView {
+    init(title: String?, hint: String? = nil) {
+        self.init(title: title, hint: hint) { EmptyView() }
     }
 }
 

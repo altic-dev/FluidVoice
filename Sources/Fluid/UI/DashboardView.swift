@@ -61,15 +61,12 @@ struct DashboardView: View {
     @ObservedObject private var settings = SettingsStore.shared
     @ObservedObject private var contentState = NotchContentState.shared
     @Environment(\.theme) private var theme
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @StateObject private var recommendations: DashboardRecommendationsController
     @StateObject private var screenPermission = DictationScreenPermissionController()
     @State private var screenPermissionRequestTask: Task<Void, Never>?
     @State private var statsOwner = UUID()
     @State private var greeting = "Welcome back."
-    @State private var statisticsHovered = false
     @FocusState private var statisticsFocused: Bool
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     init(
         asr: ASRService,
@@ -98,11 +95,11 @@ struct DashboardView: View {
             let layout = DashboardLayout(width: geometry.size.width)
             Group {
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 28) {
+                    VStack(alignment: .leading, spacing: DashboardLayout.gap) {
                         self.header
                         self.finishSetup(layout: layout)
                         if layout.hasActionColumn {
-                            HStack(alignment: .top, spacing: 28) {
+                            HStack(alignment: .top, spacing: DashboardLayout.gap) {
                                 self.mainColumn(layout: layout)
                                     .frame(maxWidth: .infinity)
                                 self.actionColumn(horizontal: false)
@@ -119,7 +116,7 @@ struct DashboardView: View {
                 }
             }
         }
-        .background(self.theme.palette.contentBackground)
+        .fluidCanvas()
         .onAppear {
             self.stats.activate(self.statsOwner)
             let hour = Calendar.current.component(.hour, from: Date())
@@ -146,14 +143,11 @@ struct DashboardView: View {
     }
 
     private var header: some View {
-        Text(self.greeting)
-            .font(.fluidSystem(size: 34, weight: .regular, design: .serif))
-            .foregroundStyle(.primary)
-            .fixedSize(horizontal: false, vertical: true)
+        FluidPageHeader(title: self.greeting)
     }
 
     private func mainColumn(layout: DashboardLayout) -> some View {
-        VStack(alignment: .leading, spacing: 28) {
+        VStack(alignment: .leading, spacing: DashboardLayout.gap) {
             self.statistics(layout: layout)
             if self.stats.snapshot != nil, FluidIntelligenceInvitation.shouldShow(
                 available: PrivateAIProviderFeature.shared.isAvailable,
@@ -170,8 +164,9 @@ struct DashboardView: View {
         let today = self.history.todaySummary
         let streak = self.stats.snapshot?.usingWeekdays(self.settings.weekendsDontBreakStreak).currentStreak
         let fixed = self.stats.snapshot?.fluidFixedWords ?? 0
+        let spacing = self.theme.metrics.spacing
         return Button { self.selectedSidebarItem = .stats } label: {
-            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 20, alignment: .leading), count: layout.statisticColumns(count: fixed > 0 ? 4 : 3)), alignment: .leading, spacing: 20) {
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: spacing.xl, alignment: .leading), count: layout.statisticColumns(count: fixed > 0 ? 4 : 3)), alignment: .leading, spacing: spacing.xl) {
                 self.stat("Today", value: today.words.formatted(), detail: "words dictated")
                 self.stat("Time saved", value: today.words == 0 ? "0m" : today.formattedTimeSaved(typingWPM: self.settings.userTypingWPM), detail: "estimated today")
                 self.stat("Streak", value: streak.map { "\($0) \($0 == 1 ? "day" : "days")" } ?? "—", detail: "keep it going")
@@ -181,59 +176,45 @@ struct DashboardView: View {
                 }
             }
             .fixedSize(horizontal: false, vertical: true)
-            // Keyboard focus reuses the hover border instead of the heavy system ring,
-            // which otherwise lands on this card every time the dashboard opens.
-            .dashboardTile(hovered: self.statisticsHovered || self.statisticsFocused, horizontalPadding: 20, verticalPadding: 18, cornerRadius: 18)
         }
-        .buttonStyle(.plain)
+        // Keyboard focus shows as the hover fill instead of the heavy system ring,
+        // which otherwise lands on this card every time the dashboard opens.
+        .fluidCardButton(padding: spacing.xl, isHighlighted: self.statisticsFocused)
         .focused(self.$statisticsFocused)
         .focusEffectDisabled()
         .disabled(self.busy)
-        .onHover { self.statisticsHovered = $0 && !self.busy }
-        .animation(self.reduceMotion ? nil : .easeOut(duration: 0.15), value: self.statisticsHovered)
         .help("Open your full stats")
         .accessibilityHint("Opens the Stats page")
     }
 
     private func stat(_ title: String, value: String, detail: String) -> some View {
-        VStack(alignment: .leading, spacing: 7) {
-            Text(title).font(self.theme.typography.caption).foregroundStyle(.secondary)
-            Text(value).font(.fluidSystem(size: 27, weight: .semibold)).monospacedDigit()
+        VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xs) {
+            Text(title).fluidText(.label).foregroundStyle(self.theme.look.secondaryText)
+            Text(value).fluidText(.metric).foregroundStyle(self.theme.look.text).monospacedDigit()
                 .lineLimit(1).minimumScaleFactor(0.7)
-            Text(detail).font(self.theme.typography.caption).foregroundStyle(.secondary)
+            Text(detail).fluidText(.label).foregroundStyle(self.theme.look.tertiaryText)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .combine)
     }
 
     private var recents: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack {
-                Text("Recent dictations").font(self.theme.typography.sectionTitle)
-                Spacer()
+        VStack(alignment: .leading, spacing: 0) {
+            FluidGroupHeader(title: "Recent dictations") {
                 Button("View all") { self.selectedSidebarItem = .history }
-                    .buttonStyle(.plain).foregroundStyle(self.theme.palette.accent)
+                    .fluidGlassAction(quiet: true)
                     .disabled(self.busy)
             }
-            ThemedCard(style: .subtle, padding: 0) {
+            FluidSettingsGroup {
                 if self.history.isLoading && self.history.entries.isEmpty {
-                    ProgressView("Loading history…").frame(maxWidth: .infinity).padding(32)
-                } else if self.history.entries.isEmpty {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Image(systemName: "text.bubble").font(.fluidSystem(size: 24)).foregroundStyle(self.theme.palette.accent)
-                        Text("Your words start here").font(self.theme.typography.bodyStrong)
-                        Text("Your recent dictations will appear here after you speak.")
-                            .font(self.theme.typography.bodySmall).foregroundStyle(.secondary)
+                    FluidSettingsBlock {
+                        ProgressView("Loading history…").controlSize(.small).frame(maxWidth: .infinity)
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading).padding(24)
+                } else if self.history.entries.isEmpty {
+                    FluidSettingsRow(title: "Your words start here", description: "Your recent dictations will appear here after you speak.")
                 } else {
-                    VStack(spacing: 0) {
-                        ForEach(Array(self.history.entries.prefix(4))) { entry in
-                            DashboardRecentRow(entry: entry)
-                            if entry.id != self.history.entries.prefix(4).last?.id {
-                                Divider().opacity(0.4).padding(.horizontal, 18)
-                            }
-                        }
+                    ForEach(Array(self.history.entries.prefix(4))) { entry in
+                        DashboardRecentRow(entry: entry)
                     }
                 }
             }
@@ -278,9 +259,10 @@ struct DashboardView: View {
             screenCaptureReady: !self.supportsScreenContext || !self.screenPermission.hasChecked || self.screenPermission.isAllowed
         ).missing
         if !missing.isEmpty {
-            VStack(alignment: .leading, spacing: 14) {
-                Text("Finish setup").font(self.theme.typography.sectionTitle)
-                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: layout.setupColumns(count: missing.count)), alignment: .leading, spacing: 10) {
+            let gap = self.theme.metrics.spacing.sm
+            VStack(alignment: .leading, spacing: 0) {
+                FluidGroupHeader(title: "Finish setup")
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: gap), count: layout.setupColumns(count: missing.count)), alignment: .leading, spacing: gap) {
                     ForEach(missing, id: \.self) { requirement in
                         let item = self.setupItem(for: requirement)
                         DashboardSetupCard(title: item.title, detail: item.detail, icon: item.icon, actionTitle: item.actionTitle, action: item.action)
@@ -306,116 +288,100 @@ struct DashboardView: View {
     }
 
     private func actionColumn(horizontal: Bool) -> some View {
-        VStack(alignment: .leading, spacing: 24) {
+        VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xl) {
             self.quickActions(horizontal: horizontal)
             DashboardRecommendationsView(asr: self.asr, controller: self.recommendations)
         }
     }
 
     private func quickActions(horizontal: Bool) -> some View {
+        let spacing = self.theme.metrics.spacing
         let layout = horizontal
-            ? AnyLayout(HStackLayout(alignment: .top, spacing: 18))
-            : AnyLayout(VStackLayout(alignment: .leading, spacing: 18))
-        return VStack(alignment: .leading, spacing: 18) {
-            Text("Make it yours").font(self.theme.typography.sectionTitle)
-            FluidGlassControlGroup {
-                layout {
-                    if !self.shortcut.isEmpty {
-                        VStack(spacing: 18) {
-                            Text("YOUR SHORTCUT")
-                                .font(.fluidSystem(size: 10, weight: .semibold))
-                                .tracking(1.4).foregroundStyle(.secondary)
-                            self.shortcutKey
-                            if self.settings.primaryDictationShortcuts.count > 1 {
-                                Text("+\(self.settings.primaryDictationShortcuts.count - 1) more")
-                                    .font(self.theme.typography.caption).foregroundStyle(.secondary)
-                            }
-                            Button(action: self.openShortcutSettings) {
-                                HStack(spacing: 6) {
-                                    Text("Change shortcut")
-                                    Image(systemName: "arrow.up.right").font(.fluidSystem(size: 10, weight: .medium))
-                                }
-                                .font(self.theme.typography.captionStrong)
-                            }
-                            .fluidGlassAction()
+            ? AnyLayout(HStackLayout(alignment: .center, spacing: 0))
+            : AnyLayout(VStackLayout(alignment: .leading, spacing: 0))
+        return FluidSettingsGroup(title: "Make it yours", separated: false) {
+            layout {
+                if !self.shortcut.isEmpty {
+                    VStack(spacing: spacing.md) {
+                        Text("Your shortcut")
+                            .fluidText(.label)
+                            .foregroundStyle(self.theme.look.tertiaryText)
+                        self.shortcutKey
+                        if self.settings.primaryDictationShortcuts.count > 1 {
+                            Text("+\(self.settings.primaryDictationShortcuts.count - 1) more")
+                                .fluidText(.label)
+                                .foregroundStyle(self.theme.look.tertiaryText)
                         }
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 16).padding(.horizontal, 14)
-                        .disabled(self.busy)
-                        .frame(width: horizontal ? 220 : nil)
-                    }
-                    VStack(alignment: .leading, spacing: 0) {
-                        DashboardQuickAction(title: "Vocabulary", detail: "Names & terms", icon: "text.book.closed") {
-                            self.selectedSidebarItem = .customDictionary
-                        }
-                        .disabled(self.busy)
-                        Divider().padding(.leading, 46).padding(.trailing, 12)
-                        DashboardQuickAction(title: "Writing style", detail: "Make it sound like you", icon: "wand.and.stars") {
-                            self.selectedSidebarItem = .cleanupStyles
-                        }
-                        .disabled(self.busy)
+                        Button("Change shortcut", action: self.openShortcutSettings)
+                            .fluidAction()
                     }
                     .frame(maxWidth: .infinity)
+                    .padding(.vertical, spacing.xl)
+                    .padding(.horizontal, FluidSettingsLayout.rowInset)
+                    .disabled(self.busy)
+                    .frame(width: horizontal ? 220 : nil)
+                    FluidHairline(axis: horizontal ? .vertical : .horizontal)
                 }
-            }
-        }
-        .padding(20)
-        .background(self.reduceTransparency ? self.theme.palette.cardBackground : Color.primary.opacity(0.025), in: RoundedRectangle(cornerRadius: 24))
-        .background {
-            if !self.reduceTransparency {
-                RoundedRectangle(cornerRadius: 24).fill(.ultraThinMaterial)
+                VStack(alignment: .leading, spacing: 0) {
+                    DashboardQuickAction(title: "Vocabulary", detail: "Names & terms", icon: "text.book.closed") {
+                        self.selectedSidebarItem = .customDictionary
+                    }
+                    .disabled(self.busy)
+                    FluidHairline().padding(.leading, FluidSettingsLayout.rowInset)
+                    DashboardQuickAction(title: "Writing style", detail: "Make it sound like you", icon: "wand.and.stars") {
+                        self.selectedSidebarItem = .cleanupStyles
+                    }
+                    .disabled(self.busy)
+                }
+                .frame(maxWidth: .infinity)
             }
         }
     }
 
     private var intelligenceInvitation: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(alignment: .top) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Label("Try Fluid Intelligence", systemImage: "sparkles")
-                        .font(self.theme.typography.sectionTitle)
-                    Text("Turn spoken thoughts into lists, emails, and polished paragraphs.")
-                        .font(self.theme.typography.bodySmall).foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
+        let spacing = self.theme.metrics.spacing
+        return FluidSurfaceCard(padding: spacing.xl) {
+            VStack(alignment: .leading, spacing: spacing.md) {
+                HStack(alignment: .top, spacing: spacing.md) {
+                    VStack(alignment: .leading, spacing: spacing.xs) {
+                        Text("Try Fluid Intelligence")
+                            .fluidText(.groupTitle)
+                            .foregroundStyle(self.theme.look.text)
+                        Text("Turn spoken thoughts into lists, emails, and polished paragraphs.")
+                            .fluidText(.body)
+                            .foregroundStyle(self.theme.look.secondaryText)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer(minLength: spacing.md)
+                    Button { self.settings.fluidIntelligenceInvitationDismissed = true } label: {
+                        Image(systemName: "xmark")
+                            .font(.fluidSystem(size: 12, weight: .semibold))
+                    }
+                    .fluidGlassAction(circular: true, quiet: true)
+                    .accessibilityLabel("Dismiss Fluid Intelligence invitation")
+                    .help("Hide this invitation. You can still try it from Help.")
                 }
-                Spacer(minLength: 12)
-                Button { self.settings.fluidIntelligenceInvitationDismissed = true } label: {
-                    Image(systemName: "xmark").frame(width: 28, height: 28).contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Dismiss Fluid Intelligence invitation")
-                .help("Hide this invitation. You can still try it from Help.")
+                Button("Try it", action: self.openFluidIntelligenceDemo)
+                    .fluidAction(.primary)
+                    .disabled(self.busy || DictationPromptTestCoordinator.shared.isActive)
             }
-            Button("Try it", systemImage: "arrow.up.right", action: self.openFluidIntelligenceDemo)
-                .fluidGlassAction(prominent: true)
-                .disabled(self.busy || DictationPromptTestCoordinator.shared.isActive)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(20)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(self.theme.palette.accent.opacity(0.07), in: RoundedRectangle(cornerRadius: 18))
-        .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(self.theme.palette.accent.opacity(0.18)))
     }
 
-    @ViewBuilder
+    /// The shortcut as a key. It opens the same shortcut settings as the button under it.
     private var shortcutKey: some View {
-        let button = Button(action: self.openShortcutSettings) {
+        Button(action: self.openShortcutSettings) {
             Text(self.settings.primaryDictationShortcuts.first?.displayString ?? "Off")
-                .font(.fluidSystem(size: 25, weight: .medium))
+                .fluidText(.itemTitle)
+                .foregroundStyle(self.theme.look.text)
                 .lineLimit(2).minimumScaleFactor(0.5)
                 .multilineTextAlignment(.center)
-                .padding(.horizontal, 12)
                 .frame(width: 126, height: 64)
-                .contentShape(RoundedRectangle(cornerRadius: 18))
         }
-        .buttonStyle(.plain)
+        .fluidCardButton(padding: 0)
         .help("\(self.shortcut) — Change your dictation shortcuts")
         .accessibilityLabel("Dictation shortcuts: \(self.shortcut)")
-        if #available(macOS 26, *), !self.reduceTransparency {
-            button.glassEffect(.regular.interactive(), in: RoundedRectangle(cornerRadius: 18))
-        } else {
-            button.background(self.theme.palette.cardBackground, in: RoundedRectangle(cornerRadius: 18))
-                .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(self.theme.palette.cardBorder, lineWidth: 1))
-        }
     }
 }
 
@@ -424,9 +390,10 @@ private struct DashboardRecentRow: View {
     @Environment(\.theme) private var theme
     @State private var copied = false
     @State private var copyRevision = 0
-    @State private var hovered = false
 
     var body: some View {
+        let look = self.theme.look
+        let spacing = self.theme.metrics.spacing
         Button {
             guard let text = self.entry.clipboardText else { return }
             ClipboardAudit.record("ui_copy_begin")
@@ -435,32 +402,34 @@ private struct DashboardRecentRow: View {
             ClipboardAudit.record("ui_copy_end")
             self.copyRevision += 1
         } label: {
-            HStack(spacing: 12) {
+            HStack(spacing: spacing.md) {
                 HistoryAppIcon(appName: self.entry.appName)
-                VStack(alignment: .leading, spacing: 5) {
-                    Text(self.entry.previewText).font(self.theme.typography.bodySmall).lineLimit(2)
-                    HStack(spacing: 6) {
-                        Text(self.entry.appName.isEmpty ? "Unknown app" : self.entry.appName)
-                        Text("·")
-                        Text(self.entry.timestamp, style: .date)
-                    }
-                    .font(self.theme.typography.caption).foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: spacing.xs) {
+                    Text(self.entry.previewText)
+                        .fluidText(.body)
+                        .foregroundStyle(look.text)
+                        .lineLimit(2)
+                    Text("\(self.entry.appName.isEmpty ? "Unknown app" : self.entry.appName) · \(self.entry.timestamp.formatted(date: .long, time: .omitted))")
+                        .fluidText(.label)
+                        .foregroundStyle(look.tertiaryText)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
+                // A tick means "selected" in this look, so a copy says so in words.
                 if self.copied {
-                    Text("Copied").font(self.theme.typography.caption)
-                        .foregroundStyle(self.theme.palette.accent)
+                    Text("Copied")
+                        .fluidText(.label)
+                        .foregroundStyle(look.secondaryText)
+                } else {
+                    Image(systemName: "doc.on.doc")
+                        .foregroundStyle(look.tertiaryText)
                 }
-                Image(systemName: self.copied ? "checkmark" : "doc.on.doc")
-                    .foregroundStyle(self.copied ? self.theme.palette.accent : self.theme.palette.secondaryText)
             }
-            .padding(18)
-            .background(self.theme.palette.accent.opacity(self.hovered ? 0.06 : 0))
+            .padding(.horizontal, FluidSettingsLayout.rowInset)
+            .padding(.vertical, FluidSettingsLayout.rowVerticalPadding)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .fluidSelectableRow(isSelected: false)
         .disabled(self.entry.clipboardText == nil)
-        .onHover { self.hovered = $0 && self.entry.clipboardText != nil }
         .help(self.copied ? "Copied" : "Click anywhere to copy dictation")
         .accessibilityLabel(self.copied ? "Copied dictation" : "Copy dictation")
         .accessibilityValue(self.entry.previewText)
@@ -472,45 +441,37 @@ private struct DashboardRecentRow: View {
     }
 }
 
+/// A row that opens another page: what it is on the left, a chevron on the right.
 private struct DashboardQuickAction: View {
     let title: String
     let detail: String
     let icon: String
     let action: () -> Void
     @Environment(\.theme) private var theme
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.isEnabled) private var isEnabled
-    @State private var hovered = false
 
     var body: some View {
+        let look = self.theme.look
         Button(action: self.action) {
-            HStack(spacing: 12) {
-                Image(systemName: self.icon)
-                    .font(self.theme.typography.bodySmall)
-                    .foregroundStyle(.secondary)
-                    .frame(width: 22)
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(self.title).font(self.theme.typography.bodySmallStrong).lineLimit(1)
-                    Text(self.detail).font(self.theme.typography.caption).foregroundStyle(.secondary)
-                        .lineLimit(1)
+            HStack(spacing: self.theme.metrics.spacing.md) {
+                FluidGlyphTile(systemImage: self.icon)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(self.title).fluidText(.rowTitle).foregroundStyle(look.text).lineLimit(1)
+                    Text(self.detail).fluidText(.label).foregroundStyle(look.tertiaryText).lineLimit(1)
                 }
                 Spacer(minLength: 0)
                 Image(systemName: "chevron.right")
                     .font(.fluidSystem(size: 10, weight: .semibold))
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(look.tertiaryText)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 16)
-            .background(Color.primary.opacity(self.hovered ? 0.045 : 0), in: RoundedRectangle(cornerRadius: 12))
-            .contentShape(RoundedRectangle(cornerRadius: 12))
+            .padding(.horizontal, FluidSettingsLayout.rowInset)
+            .padding(.vertical, FluidSettingsLayout.rowVerticalPadding)
+            .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
-        .onHover { self.hovered = $0 && self.isEnabled }
-        .animation(self.reduceMotion ? nil : .easeOut(duration: 0.15), value: self.hovered)
+        .fluidSelectableRow(isSelected: false)
     }
 }
 
+/// One thing left to set up. The whole card is the button; the pill names the action.
 private struct DashboardSetupCard: View {
     let title: String
     let detail: String
@@ -518,68 +479,25 @@ private struct DashboardSetupCard: View {
     var actionTitle = "Set up"
     let action: () -> Void
     @Environment(\.theme) private var theme
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.isEnabled) private var isEnabled
-    @State private var hovered = false
 
     var body: some View {
+        let look = self.theme.look
         Button(action: self.action) {
-            HStack(spacing: 12) {
-                FluidIconTile(icon: self.icon, tint: self.theme.palette.accent)
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(self.title).font(self.theme.typography.bodySmallStrong).lineLimit(1)
-                    Text(self.detail).font(self.theme.typography.caption).foregroundStyle(.secondary)
+            HStack(spacing: self.theme.metrics.spacing.md) {
+                FluidGlyphTile(systemImage: self.icon, size: 32)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(self.title).fluidText(.rowTitle).foregroundStyle(look.text).lineLimit(1)
+                    Text(self.detail).fluidText(.label).foregroundStyle(look.secondaryText)
                         .lineLimit(3)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: 0)
-                Text(self.actionTitle)
-                    .font(self.theme.typography.captionStrong)
-                    .foregroundStyle(self.theme.palette.accent)
+                FluidActionLabel(title: self.actionTitle)
                     .fixedSize()
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-            .dashboardTile(hovered: self.hovered)
         }
-        .buttonStyle(.plain)
-        .onHover { self.hovered = $0 && self.isEnabled }
-        .animation(self.reduceMotion ? nil : .easeOut(duration: 0.15), value: self.hovered)
+        .fluidCardButton(padding: self.theme.metrics.spacing.md)
         .accessibilityLabel("\(self.title), \(self.detail)")
-    }
-}
-
-private struct DashboardTileModifier: ViewModifier {
-    let hovered: Bool
-    let horizontalPadding: CGFloat
-    let verticalPadding: CGFloat
-    let cornerRadius: CGFloat
-    @Environment(\.theme) private var theme
-
-    func body(content: Content) -> some View {
-        let shape = RoundedRectangle(cornerRadius: self.cornerRadius, style: .continuous)
-        content
-            .padding(.horizontal, self.horizontalPadding)
-            .padding(.vertical, self.verticalPadding)
-            .background(self.theme.palette.cardBackground, in: shape)
-            .overlay(shape.fill(Color.primary.opacity(self.hovered ? 0.04 : 0)))
-            .overlay(shape.strokeBorder(self.theme.palette.cardBorder.opacity(self.hovered ? 0.9 : 0.45), lineWidth: 1))
-            .contentShape(shape)
-    }
-}
-
-private extension View {
-    /// One surface for every small dashboard card so they hover and read as a set.
-    func dashboardTile(
-        hovered: Bool,
-        horizontalPadding: CGFloat = 12,
-        verticalPadding: CGFloat = 11,
-        cornerRadius: CGFloat = 14
-    ) -> some View {
-        modifier(DashboardTileModifier(
-            hovered: hovered,
-            horizontalPadding: horizontalPadding,
-            verticalPadding: verticalPadding,
-            cornerRadius: cornerRadius
-        ))
     }
 }

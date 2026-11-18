@@ -109,12 +109,14 @@ struct FluidActionLabel: View {
 
 /// A whole card that is one button: the card surface with the shared hover and press fill over
 /// all of it, a slight settle on press, and the keyboard-focus ring in the card's shape. Any
-/// `FluidActionLabel` inside lights with it. Disabled cards show no hover.
+/// `FluidActionLabel` inside lights with it. Disabled cards show no hover. `isHighlighted` shows the
+/// hover look without the pointer, for a card that marks keyboard focus that way.
 struct FluidCardButtonStyle: ButtonStyle {
     var padding: CGFloat = 14
+    var isHighlighted = false
 
     func makeBody(configuration: Configuration) -> some View {
-        CardBody(configuration: configuration, padding: self.padding)
+        CardBody(configuration: configuration, padding: self.padding, isHighlighted: self.isHighlighted)
     }
 
     private struct CardBody: View {
@@ -124,11 +126,12 @@ struct FluidCardButtonStyle: ButtonStyle {
         @State private var isHovered = false
         let configuration: Configuration
         let padding: CGFloat
+        let isHighlighted: Bool
 
         var body: some View {
             let shape = RoundedRectangle(cornerRadius: FluidSurfaceCard<EmptyView>.cornerRadius, style: .continuous)
             let interaction = FluidCardInteraction(
-                isHovered: self.isHovered && self.isEnabled,
+                isHovered: (self.isHovered || self.isHighlighted) && self.isEnabled,
                 isPressed: self.configuration.isPressed && self.isEnabled
             )
             let wash = FluidInteractionVisuals.fill(self.theme.palette, isHovered: interaction.isHovered, isPressed: interaction.isPressed)
@@ -152,8 +155,8 @@ extension View {
     }
 
     /// Makes a whole card one button. Put a `FluidActionLabel` inside to name the action.
-    func fluidCardButton(padding: CGFloat = 14) -> some View {
-        self.buttonStyle(FluidCardButtonStyle(padding: padding))
+    func fluidCardButton(padding: CGFloat = 14, isHighlighted: Bool = false) -> some View {
+        self.buttonStyle(FluidCardButtonStyle(padding: padding, isHighlighted: isHighlighted))
     }
 
     /// Paints the page background, light and grain, including under the toolbar. Only for pages
