@@ -2400,12 +2400,14 @@ struct AnalyticsConfirmationView: View {
 
         if let emailRange = text.range(of: "alticdev@gmail.com") {
             text[emailRange].link = URL(string: "mailto:alticdev@gmail.com")
-            text[emailRange].foregroundColor = self.theme.palette.accent
+            text[emailRange].foregroundColor = self.theme.look.text
+            text[emailRange].underlineStyle = .single
         }
 
         if let githubRange = text.range(of: "GitHub") {
             text[githubRange].link = URL(string: "https://github.com/altic-dev/FluidVoice")
-            text[githubRange].foregroundColor = self.theme.palette.accent
+            text[githubRange].foregroundColor = self.theme.look.text
+            text[githubRange].underlineStyle = .single
         }
 
         return text

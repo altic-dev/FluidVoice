@@ -29,7 +29,7 @@ struct ShortcutKeyField: View {
             HStack(spacing: 3) {
                 if self.isRecording {
                     Text("Press keys…")
-                        .foregroundStyle(self.theme.palette.accent)
+                        .foregroundStyle(self.theme.look.text)
                 } else if let shortcut {
                     ForEach(Array(ShortcutKeycaps.caps(for: shortcut.displayString).enumerated()), id: \.offset) { _, cap in
                         self.keycap(cap)
@@ -47,8 +47,8 @@ struct ShortcutKeyField: View {
             .fluidDropdownSurface(cornerRadius: 10)
             .overlay {
                 if self.isRecording {
-                    shape.strokeBorder(self.theme.palette.accent, lineWidth: 1)
-                        .background(shape.stroke(self.theme.palette.accent.opacity(0.25), lineWidth: 4))
+                    // Listening for keys shows as a solid edge in the text color, with no glow.
+                    shape.strokeBorder(self.theme.look.text, lineWidth: 1)
                         .allowsHitTesting(false)
                 }
             }
