@@ -57,7 +57,7 @@ nonisolated enum FluidServeSkill {
 
         - `meet list [--since 7d] [--limit N]` - recent meetings, newest first: id, date, length, speakers, title, saved summaries.
         - `meet show <id|latest> [--from MM:SS] [--to MM:SS]` - the transcript, with speaker names and timestamps.
-        - `meet summary <id|latest> [--style NAME]` - summaries already written in FluidVoice that still match the transcript.
+        - `meet summary <id|latest> [--style NAME]` - summaries already written in FluidVoice. One marked outdated predates a transcript or speaker name change; say so when you use it.
         - `meet search [--since 7d] [--limit N] text` - lines that mention the text, grouped by meeting.
         - `--json` on `list` or `show` gives structured output.
 
