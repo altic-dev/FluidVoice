@@ -1563,10 +1563,12 @@ struct ContentView: View {
         NSWorkspace.shared.open(url)
     }
 
+    /// The sidebar is a flat panel on the look's sheet color, not a see-through material.
     private var sidebarContent: some View {
         self.appSidebarView
             .clipped()
             .tint(self.theme.palette.accent)
+            .background(self.theme.look.sheet.ignoresSafeArea())
     }
 
     private var appSidebarView: some View {
@@ -1657,6 +1659,7 @@ struct ContentView: View {
             }
         }
         .listStyle(.sidebar)
+        .scrollContentBackground(.hidden)
         .accentColor(self.theme.palette.accent)
         .animation(nil, value: self.selectedSidebarItem)
     }
@@ -2169,14 +2172,7 @@ struct ContentView: View {
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
-        .background(
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .fill(Color.primary.opacity(self.isSettingsSearchFocused ? 0.10 : 0.06))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .strokeBorder(self.theme.palette.accent.opacity(self.isSettingsSearchFocused ? 0.5 : 0), lineWidth: 1)
-        )
+        .fluidFieldChrome(isFocused: self.isSettingsSearchFocused, padding: 0)
         .animation(.easeOut(duration: 0.12), value: self.isSettingsSearchFocused)
         .onChange(of: self.settingsNavigation.isPresented) { _, presented in
             if !presented { self.isSettingsSearchFocused = false }
@@ -6630,7 +6626,7 @@ private struct UpdateAvailableToolbarButton: View {
             } label: {
                 Image(systemName: "arrow.down.circle.fill")
                     .fluidToolbarIcon()
-                    .foregroundStyle(self.theme.palette.accent)
+                    .foregroundStyle(self.theme.look.text)
             }
             .buttonStyle(.automatic)
             .disabled(self.updater.isCheckingForUpdates || self.updater.isUpdateInProgress)

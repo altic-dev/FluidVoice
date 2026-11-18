@@ -697,15 +697,8 @@ struct SidebarSearchField: View {
         .font(.system(size: 14))
         .padding(.horizontal, self.theme.metrics.spacing.sm)
         .frame(height: 32)
-        .background(
-            RoundedRectangle(cornerRadius: self.theme.metrics.corners.sm, style: .continuous)
-                .fill(Color.primary.opacity(0.08))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: self.theme.metrics.corners.sm, style: .continuous)
-                .strokeBorder(self.isFocused ? self.theme.palette.accent : .clear, lineWidth: 2)
-                .allowsHitTesting(false)
-        )
+        // The look's input surface: grey fill, a hairline edge while focused, no colored ring.
+        .fluidFieldChrome(isFocused: self.isFocused, padding: 0)
     }
 
     static func owns(_ editor: NSTextView, in window: NSWindow) -> Bool {
