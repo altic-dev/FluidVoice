@@ -256,13 +256,14 @@ nonisolated enum ParakeetSpeechModelCatalog {
 
     /// One int8 encoder next to its own preprocessor, so the Mac pack is not split like Mini and Pico.
     static let proName = "Fluid Speech Pro"
+    static let proVersion1ArchiveSHA256 = "f7af24d8352757b088dd18d150dfbbd2adf37f1d5013ebb036674f507a794333"
     static let pro = Descriptor(
         modelID: "fluid-parakeet-pro",
         variant: .pro,
         folderName: "fluid-parakeet-pro-coreml",
         expectedDownloadBytes: 652_482_560,
         archiveURL: URL(string: "https://models.fluidvoice.com/parakeet/fluid-pro/1.0.0/fluid-parakeet-pro-coreml.tar"),
-        archiveSHA256: "f7af24d8352757b088dd18d150dfbbd2adf37f1d5013ebb036674f507a794333",
+        archiveSHA256: ParakeetSpeechModelCatalog.proVersion1ArchiveSHA256,
         requiredModelNames: ParakeetSpeechModelCatalog.standardModelNames,
         vocabularyFile: "parakeet_vocab.json",
         displayName: ParakeetSpeechModelCatalog.proName,

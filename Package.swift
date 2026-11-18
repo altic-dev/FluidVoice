@@ -41,6 +41,7 @@ let package = Package(
             ],
             resources: [
                 .copy("Resources/speech-model-check.pcm"),
+                .process("Resources/FluidSpeechProPreprocessor.mlpackage"),
             ],
             linkerSettings: [
                 .linkedLibrary("sqlite3"),
