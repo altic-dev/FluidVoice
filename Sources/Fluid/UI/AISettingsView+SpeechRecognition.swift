@@ -552,6 +552,24 @@ extension VoiceEngineSettingsView {
                 }
             } label: { Label(self.settings.selectedCohereLanguage.displayName, systemImage: "globe") }
                 .fluidDropdownStyle()
+        } else if model == .senseVoiceSmall {
+            Menu {
+                ForEach(SettingsStore.SenseVoiceLanguage.allCases) { language in
+                    Button {
+                        guard language != self.settings.selectedSenseVoiceLanguage else { return }
+                        // Read on every decode, so no provider reload is needed.
+                        self.settings.selectedSenseVoiceLanguage = language
+                    } label: {
+                        HStack {
+                            Text(language.displayName)
+                            if language == self.settings.selectedSenseVoiceLanguage {
+                                Image(systemName: "checkmark")
+                            }
+                        }
+                    }
+                }
+            } label: { Label(self.settings.selectedSenseVoiceLanguage.displayName, systemImage: "globe") }
+                .fluidDropdownStyle()
         } else if model == .nemotronOffline || model == .nemotronStreaming || model == .nemotronStreaming320 {
             self.nemotronLanguagePickerButton
         } else if model == .appleSpeechAnalyzer {
@@ -924,6 +942,11 @@ extension VoiceEngineSettingsView {
         }
         if brand.contains("cohere") {
             return "Provider_Cohere"
+        }
+        if brand.contains("funaudiollm") {
+            // "F" cube from the FunASR logo (modelscope/FunASR docs/images/logo.png),
+            // the toolkit SenseVoice is built on and released through.
+            return "Provider_FunAudioLLM"
         }
         if brand.contains("qwen") {
             // Official organization mark from https://github.com/QwenLM.

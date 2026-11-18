@@ -2005,6 +2005,8 @@ struct OnboardingFlowView: View {
             return "Parakeet Flash"
         case .cohereTranscribeSixBit:
             return "Cohere"
+        case .senseVoiceSmall:
+            return "SenseVoice"
         case .nemotronStreaming:
             return "Nemotron Streaming"
         case .nemotronOffline:
@@ -2124,6 +2126,8 @@ struct OnboardingFlowView: View {
             return self.settings.selectedAppleSpeechLocaleIdentifier == localeIdentifier
         case let .cohere(language):
             return self.settings.selectedCohereLanguage == language
+        case let .senseVoice(language):
+            return self.settings.selectedSenseVoiceLanguage == language
         case let .nemotron(language):
             return self.settings.selectedNemotronLanguage == language
         }
@@ -2134,6 +2138,7 @@ struct OnboardingFlowView: View {
         let oldAppleSpeechLocaleIdentifier = self.settings.selectedAppleSpeechLocaleIdentifier
         let oldCohereLanguage = self.settings.selectedCohereLanguage
         let oldNemotronLanguage = self.settings.selectedNemotronLanguage
+        let oldSenseVoiceLanguage = self.settings.selectedSenseVoiceLanguage
 
         self.selectedModelRouteID = route.id
         VoiceEngineLanguageCatalog.apply(route, to: self.settings)
@@ -2146,6 +2151,8 @@ struct OnboardingFlowView: View {
             languageChanged = oldAppleSpeechLocaleIdentifier != self.settings.selectedAppleSpeechLocaleIdentifier
         case .cohere:
             languageChanged = oldCohereLanguage != self.settings.selectedCohereLanguage
+        case .senseVoice:
+            languageChanged = oldSenseVoiceLanguage != self.settings.selectedSenseVoiceLanguage
         case .nemotron:
             languageChanged = oldNemotronLanguage != self.settings.selectedNemotronLanguage
         }
@@ -2355,6 +2362,8 @@ private extension OnboardingFlowView {
             return self.settings.selectedAppleSpeechLocaleIdentifier == localeIdentifier
         case let .cohere(language):
             return self.settings.selectedCohereLanguage == language
+        case let .senseVoice(language):
+            return self.settings.selectedSenseVoiceLanguage == language
         case let .nemotron(language):
             return self.settings.selectedNemotronLanguage == language
         }

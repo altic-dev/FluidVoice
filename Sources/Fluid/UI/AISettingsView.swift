@@ -72,6 +72,7 @@ enum SpeechProviderFilter: String, CaseIterable, Identifiable {
     case nvidia = "NVIDIA"
     case apple = "Apple"
     case cohere = "Cohere"
+    case funAudio = "FunAudioLLM"
     case openai = "OpenAI"
     case qwen = "Qwen"
 

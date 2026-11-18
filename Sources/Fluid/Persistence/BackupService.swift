@@ -20,6 +20,7 @@ struct SettingsBackupPayload: Codable, Equatable {
     let selectedWhisperLanguageCode: String?
     let selectedCohereLanguage: SettingsStore.CohereLanguage
     let selectedNemotronLanguage: SettingsStore.NemotronLanguage?
+    let selectedSenseVoiceLanguage: SettingsStore.SenseVoiceLanguage?
     let selectedAppleSpeechLocaleIdentifier: String?
     /// Stable final-meeting backend ID. Optional so backups from before backend selection decode.
     let meetingTranscriptionBackendID: String?

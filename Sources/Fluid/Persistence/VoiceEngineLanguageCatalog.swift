@@ -19,6 +19,7 @@ struct VoiceEngineLanguageRoute: Identifiable, Equatable {
         case automatic
         case appleSpeech(localeIdentifier: String)
         case cohere(SettingsStore.CohereLanguage)
+        case senseVoice(SettingsStore.SenseVoiceLanguage)
         case nemotron(SettingsStore.NemotronLanguage)
         case whisper(languageCode: String)
 
@@ -30,6 +31,8 @@ struct VoiceEngineLanguageRoute: Identifiable, Equatable {
                 return "apple-\(localeIdentifier)"
             case let .cohere(language):
                 return "cohere-\(language.rawValue)"
+            case let .senseVoice(language):
+                return "sensevoice-\(language.rawValue)"
             case let .nemotron(language):
                 return "nemotron-\(language.rawValue)"
             case let .whisper(languageCode):
@@ -148,6 +151,8 @@ enum VoiceEngineLanguageCatalog {
             settings.selectedAppleSpeechLocaleIdentifier = localeIdentifier
         case let .cohere(language):
             settings.selectedCohereLanguage = language
+        case let .senseVoice(language):
+            settings.selectedSenseVoiceLanguage = language
         case let .nemotron(language):
             settings.selectedNemotronLanguage = language
         }
@@ -170,6 +175,10 @@ enum VoiceEngineLanguageCatalog {
 
         if let cohereLanguage = Self.cohereLanguage(for: language.id) {
             routes.append(Self.route(language, .cohereTranscribeSixBit, .cohere(cohereLanguage)))
+        }
+
+        if let senseVoiceLanguage = Self.senseVoiceLanguageMap[language.id] {
+            routes.append(Self.route(language, .senseVoiceSmall, .senseVoice(senseVoiceLanguage)))
         }
 
         if let nemotronLanguage = Self.nemotronLanguage(for: language.id) {
@@ -242,6 +251,14 @@ enum VoiceEngineLanguageCatalog {
     ]
 
     nonisolated static let parakeetV3LanguageIDs = Set(ParakeetSpeechModelCatalog.v3.supportedLanguageCodes)
+
+    private static let senseVoiceLanguageMap: [String: SettingsStore.SenseVoiceLanguage] = [
+        "en": .english,
+        "ja": .japanese,
+        "ko": .korean,
+        "yue": .cantonese,
+        "zh": .mandarinChinese,
+    ]
 
     private static let cohereLanguageMap: [String: SettingsStore.CohereLanguage] = [
         "ar": .arabic,
@@ -472,6 +489,7 @@ enum VoiceEngineLanguageCatalog {
         Self.language("vi", "Vietnamese"),
         Self.language("yi", "Yiddish"),
         Self.language("yo", "Yoruba"),
+        Self.language("yue", "Cantonese", aliases: ["Yue", "Hong Kong"]),
         Self.language("zh", "Mandarin Chinese", aliases: ["Chinese", "Mandarin"]),
     ]
 
