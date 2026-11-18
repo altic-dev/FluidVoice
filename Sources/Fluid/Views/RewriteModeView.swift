@@ -15,51 +15,36 @@ struct RewriteModeView: View {
     @State private var inputText: String = ""
     @State private var showOriginal: Bool = true
     @State private var showHowTo: Bool = false
-    @State private var isHoveringHowTo: Bool = false
     @State private var isThinkingExpanded: Bool = false
+    @FocusState private var inputFocused: Bool
 
     /// Local state for available models (derived from shared AI Settings pool)
     @State private var availableModels: [String] = []
 
     var body: some View {
         VStack(spacing: 0) {
-            // Header - cleaner, just title and close
+            // The top bar already names the page, so this line carries only the note and the close button.
             HStack {
-                Image(systemName: "pencil.and.outline")
-                    .font(.fluidSystem(.title2))
-                    .foregroundStyle(self.theme.palette.accent)
-                Text("Edit Mode")
-                    .font(.fluidSystem(.title2))
-                    .fontWeight(.bold)
+                Text("Edit Mode is powered by Custom Prompts.")
+                    .fluidText(.label)
+                    .foregroundStyle(self.theme.look.secondaryText)
 
                 Spacer()
 
                 Button(action: { self.onClose?() }) {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(.secondary)
+                    Image(systemName: "xmark")
+                        .font(.fluidSystem(size: 12, weight: .semibold))
                 }
-                .buttonStyle(.plain)
-            }
-            .padding()
-            .background(self.theme.palette.windowBackground)
-
-            HStack(spacing: 6) {
-                Image(systemName: "info.circle")
-                    .font(.fluidSystem(.caption))
-                    .foregroundStyle(self.theme.palette.secondaryText)
-                Text("Edit Mode is powered by Custom Prompts.")
-                    .font(.fluidSystem(.caption))
-                    .foregroundStyle(self.theme.palette.secondaryText)
-                Spacer(minLength: 0)
+                .fluidGlassAction(circular: true, quiet: true)
+                .accessibilityLabel("Close Edit Mode")
             }
             .padding(.horizontal)
-            .padding(.bottom, 8)
-            .background(self.theme.palette.windowBackground)
+            .padding(.vertical, self.theme.metrics.spacing.sm)
 
             // How To (collapsible)
             self.howToSection
 
-            Divider()
+            FluidHairline()
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
@@ -68,45 +53,43 @@ struct RewriteModeView: View {
                         VStack(alignment: .leading, spacing: 8) {
                             HStack {
                                 Text("Original Text")
-                                    .font(.fluidSystem(.caption))
-                                    .fontWeight(.bold)
-                                    .foregroundStyle(.secondary)
+                                    .fluidText(.label)
+                                    .foregroundStyle(self.theme.look.secondaryText)
                                 Spacer()
                                 if !self.service.rewrittenText.isEmpty {
                                     Button(self.showOriginal ? "Hide" : "Show") {
                                         withAnimation { self.showOriginal.toggle() }
                                     }
-                                    .font(.fluidSystem(.caption))
-                                    .buttonStyle(.link)
+                                    .fluidGlassAction(quiet: true)
                                 }
                             }
 
                             if self.showOriginal {
                                 Text(self.service.originalText)
+                                    .fluidText(.body)
+                                    .foregroundStyle(self.theme.look.text)
                                     .padding()
                                     .frame(maxWidth: .infinity, alignment: .leading)
-                                    .background(self.theme.palette.cardBackground)
-                                    .cornerRadius(8)
+                                    .background(self.theme.look.surface, in: RoundedRectangle(cornerRadius: self.theme.metrics.corners.md, style: .continuous))
                                     .textSelection(.enabled)
                             }
                         }
                     } else {
-                        VStack(spacing: 12) {
+                        // The header already names the mode, so the empty state only says what it does.
+                        VStack(spacing: self.theme.metrics.spacing.md) {
                             Image(systemName: "text.bubble")
-                                .font(.fluidSystem(size: 48))
-                                .foregroundStyle(self.theme.palette.accent)
-                            Text("Edit Mode")
-                                .font(.fluidSystem(.title2))
-                                .fontWeight(.bold)
+                                .font(.fluidSystem(size: 40, weight: .light))
+                                .foregroundStyle(self.theme.look.tertiaryText)
+                                .accessibilityHidden(true)
                             Text("Ask the AI to write anything for you - emails, replies, summaries, answers, and more.")
-                                .foregroundStyle(.secondary)
+                                .fluidText(.body)
+                                .foregroundStyle(self.theme.look.secondaryText)
                                 .multilineTextAlignment(.center)
 
                             Text("Or select text first to rewrite existing content.")
-                                .font(.fluidSystem(.caption))
-                                .foregroundStyle(.tertiary)
+                                .fluidText(.label)
+                                .foregroundStyle(self.theme.look.tertiaryText)
                                 .multilineTextAlignment(.center)
-                                .padding(.top, 4)
                         }
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 40)
@@ -116,22 +99,22 @@ struct RewriteModeView: View {
                     if !self.service.rewrittenText.isEmpty {
                         VStack(alignment: .leading, spacing: 8) {
                             Text("Rewritten Text")
-                                .font(.fluidSystem(.caption))
-                                .fontWeight(.bold)
-                                .foregroundStyle(self.theme.palette.accent)
+                                .fluidText(.label)
+                                .foregroundStyle(self.theme.look.secondaryText)
 
                             Text(self.service.rewrittenText)
+                                .fluidText(.body)
+                                .foregroundStyle(self.theme.look.text)
                                 .padding()
                                 .frame(maxWidth: .infinity, alignment: .leading)
-                                .background(self.theme.palette.accent.opacity(0.1))
-                                .cornerRadius(8)
+                                .background(self.theme.look.highlightFill, in: RoundedRectangle(cornerRadius: self.theme.metrics.corners.md, style: .continuous))
                                 .textSelection(.enabled)
 
                             HStack {
                                 Button("Try Again") {
                                     self.service.rewrittenText = ""
                                 }
-                                .fluidOutlinedButton()
+                                .fluidAction()
 
                                 Spacer()
 
@@ -142,8 +125,7 @@ struct RewriteModeView: View {
                                     }
                                     self.onClose?()
                                 }
-                                .buttonStyle(.borderedProminent)
-                                .tint(self.theme.palette.accent)
+                                .fluidAction(.primary)
                             }
                             .padding(.top, 8)
                         }
@@ -154,27 +136,20 @@ struct RewriteModeView: View {
                     if let lastMsg = service.conversationHistory.last, lastMsg.role == .assistant,
                        service.rewrittenText.isEmpty
                     {
-                        Text(lastMsg.content) // Error message usually
-                            .foregroundStyle(.red)
+                        Label(lastMsg.content, systemImage: "exclamationmark.triangle") // Error message usually
+                            .fluidText(.body)
+                            .foregroundStyle(self.theme.look.text)
                             .padding()
-                            .background(Color.red.opacity(0.1))
-                            .cornerRadius(8)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(self.theme.look.surface, in: RoundedRectangle(cornerRadius: self.theme.metrics.corners.md, style: .continuous))
                     }
                 }
                 .padding()
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 8)
-            .background(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(self.theme.palette.cardBackground)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 14, style: .continuous)
-                            .stroke(self.theme.palette.cardBorder.opacity(0.45), lineWidth: 1)
-                    )
-            )
+            .padding(.horizontal, self.theme.metrics.spacing.lg)
+            .padding(.vertical, self.theme.metrics.spacing.sm)
 
-            Divider()
+            FluidHairline()
 
             // Input Area with model selectors inline
             HStack(spacing: 8) {
@@ -208,23 +183,27 @@ struct RewriteModeView: View {
                         : "How should I edit this?",
                     text: self.$inputText
                 )
-                .textFieldStyle(.roundedBorder)
+                .textFieldStyle(.plain)
+                .fluidText(.body)
+                .focused(self.$inputFocused)
+                .fluidFieldChrome(isFocused: self.inputFocused, padding: self.theme.metrics.spacing.sm)
                 .onSubmit(self.submitRequest)
 
                 Button(action: self.submitRequest) {
-                    Image(systemName: "arrow.up.circle.fill")
-                        .font(.fluidSystem(.title2))
+                    Image(systemName: "arrow.up")
+                        .font(.fluidSystem(size: 13, weight: .semibold))
                 }
-                .buttonStyle(.plain)
+                .fluidAction(.primary)
                 .disabled(self.inputText.isEmpty || self.service.isProcessing)
+                .accessibilityLabel("Send")
 
                 // Voice Input
                 Button(action: self.toggleRecording) {
-                    Image(systemName: self.asr.isRunning ? "stop.circle.fill" : "mic.circle.fill")
-                        .font(.fluidSystem(.title2))
-                        .foregroundStyle(self.asr.isRunning ? Color.red : self.theme.palette.accent)
+                    Image(systemName: self.asr.isRunning ? "stop.fill" : "mic")
+                        .foregroundStyle(self.theme.look.text)
                 }
-                .buttonStyle(.plain)
+                .fluidGlassAction(circular: true, quiet: true)
+                .accessibilityLabel(self.asr.isRunning ? "Stop recording" : "Speak an instruction")
 
                 if self.service.isProcessing {
                     ProgressView()
@@ -233,7 +212,6 @@ struct RewriteModeView: View {
                 }
             }
             .padding()
-            .background(self.theme.palette.windowBackground)
 
             // Thinking view (real-time, during processing)
             if self.service.isProcessing && self.settings.showThinkingTokens && !self.service.streamingThinkingText.isEmpty {
@@ -242,6 +220,7 @@ struct RewriteModeView: View {
                     .padding(.bottom, 8)
             }
         }
+        .fluidCanvas()
         .onChange(of: self.asr.finalText) { _, newText in
             if !newText.isEmpty {
                 self.inputText = newText
@@ -305,99 +284,68 @@ struct RewriteModeView: View {
     }
 
     private var howToSection: some View {
-        VStack(spacing: 0) {
-            // Toggle button with hover effect
+        let look = self.theme.look
+        return VStack(spacing: 0) {
             Button(action: { withAnimation(.easeInOut(duration: 0.2)) { self.showHowTo.toggle() } }) {
                 HStack {
-                    Image(systemName: "questionmark.circle")
-                        .font(.fluidSystem(.caption))
                     Text("How to use")
-                        .font(.fluidSystem(.caption))
                     Spacer()
                     Image(systemName: self.showHowTo ? "chevron.up" : "chevron.down")
-                        .font(.fluidSystem(.caption2))
+                        .font(.fluidSystem(size: 10, weight: .semibold))
                 }
-                .foregroundStyle(self.isHoveringHowTo ? .primary : .secondary)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 8)
-                .background(self.isHoveringHowTo ? Color.primary.opacity(0.05) : Color.clear)
-                .cornerRadius(4)
+                .fluidText(.label)
+                .foregroundStyle(look.secondaryText)
+                .padding(.horizontal, self.theme.metrics.spacing.lg)
+                .padding(.vertical, self.theme.metrics.spacing.sm)
+                .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
-            .onHover { hovering in
-                withAnimation(.easeInOut(duration: 0.15)) { self.isHoveringHowTo = hovering }
-            }
+            .fluidSelectableRow(isSelected: false)
 
             if self.showHowTo {
-                VStack(alignment: .leading, spacing: 12) {
-                    // Create new text
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Create New Text")
-                            .font(.fluidSystem(.caption))
-                            .fontWeight(.semibold)
-                            .foregroundStyle(.secondary)
-
-                        HStack(spacing: 4) {
-                            Text("Press")
-                                .font(.fluidSystem(.caption))
-                            Text(self.shortcutDisplay)
-                                .font(.fluidSystem(.caption))
-                                .fontWeight(.medium)
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 2)
-                                .background(self.theme.palette.cardBackground.opacity(0.8))
-                                .cornerRadius(4)
-                            Text("and speak what you want to write.")
-                                .font(.fluidSystem(.caption))
-                        }
-                        .foregroundStyle(.primary.opacity(0.8))
-
-                        self.howToItem("\"Write an email asking for time off\"")
-                        self.howToItem("\"Draft a thank you note\"")
-                    }
-
-                    // Edit selected text
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Edit Selected Text")
-                            .font(.fluidSystem(.caption))
-                            .fontWeight(.semibold)
-                            .foregroundStyle(.secondary)
-
-                        HStack(spacing: 4) {
-                            Text("Select text first, then press")
-                                .font(.fluidSystem(.caption))
-                            Text(self.shortcutDisplay)
-                                .font(.fluidSystem(.caption))
-                                .fontWeight(.medium)
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 2)
-                                .background(Color.primary.opacity(0.1))
-                                .cornerRadius(4)
-                            Text("and speak your instruction.")
-                                .font(.fluidSystem(.caption))
-                        }
-                        .foregroundStyle(.primary.opacity(0.8))
-
-                        self.howToItem("\"Make this more formal\"")
-                        self.howToItem("\"Fix grammar and spelling\"")
-                        self.howToItem("\"Summarize this\"")
-                    }
+                VStack(alignment: .leading, spacing: self.theme.metrics.spacing.md) {
+                    self.howToGroup(
+                        title: "Create New Text",
+                        lead: "Press",
+                        trail: "and speak what you want to write.",
+                        examples: ["\"Write an email asking for time off\"", "\"Draft a thank you note\""]
+                    )
+                    self.howToGroup(
+                        title: "Edit Selected Text",
+                        lead: "Select text first, then press",
+                        trail: "and speak your instruction.",
+                        examples: ["\"Make this more formal\"", "\"Fix grammar and spelling\"", "\"Summarize this\""]
+                    )
                 }
-                .padding(.horizontal, 16)
-                .padding(.bottom, 12)
+                .padding(.horizontal, self.theme.metrics.spacing.lg)
+                .padding(.bottom, self.theme.metrics.spacing.md)
                 .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
-        .background(self.theme.palette.contentBackground)
     }
 
-    private func howToItem(_ text: String) -> some View {
-        HStack(spacing: 6) {
-            Text("•")
-                .foregroundStyle(.secondary)
-            Text(text)
-                .font(.fluidSystem(.caption))
-                .foregroundStyle(.primary.opacity(0.8))
+    /// One way to use Edit Mode: a title, the shortcut in a sentence, then example phrases.
+    private func howToGroup(title: String, lead: String, trail: String, examples: [String]) -> some View {
+        let look = self.theme.look
+        return VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xs) {
+            Text(title)
+                .fluidText(.rowTitle)
+                .foregroundStyle(look.text)
+            HStack(spacing: self.theme.metrics.spacing.xs) {
+                Text(lead)
+                Text(self.shortcutDisplay)
+                    .foregroundStyle(look.text)
+                    .padding(.horizontal, self.theme.metrics.spacing.xs + 2)
+                    .padding(.vertical, 2)
+                    .background(look.quietFill, in: RoundedRectangle(cornerRadius: self.theme.metrics.corners.sm, style: .continuous))
+                Text(trail)
+            }
+            .fluidText(.label)
+            .foregroundStyle(look.secondaryText)
+            ForEach(examples, id: \.self) { example in
+                Text(example)
+                    .fluidText(.label)
+                    .foregroundStyle(look.tertiaryText)
+            }
         }
     }
 
@@ -413,20 +361,20 @@ struct RewriteModeView: View {
                     Spacer()
 
                     Image(systemName: self.isThinkingExpanded ? "chevron.up" : "chevron.down")
-                        .font(.fluidSystem(.caption2))
-                        .foregroundStyle(.secondary.opacity(0.6))
+                        .font(.fluidSystem(size: 10, weight: .semibold))
+                        .foregroundStyle(self.theme.look.tertiaryText)
                 }
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
             }
-            .buttonStyle(.plain)
+            .fluidSelectableRow(isSelected: false)
 
             // Expanded content
             if self.isThinkingExpanded {
                 ScrollView(.vertical, showsIndicators: true) {
                     Text(self.service.streamingThinkingText)
-                        .font(.fluidSystem(size: 11))
-                        .foregroundStyle(.secondary)
+                        .fluidText(.label)
+                        .foregroundStyle(self.theme.look.secondaryText)
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, 12)
@@ -437,15 +385,14 @@ struct RewriteModeView: View {
                 // Preview - first 100 chars
                 if !self.service.streamingThinkingText.isEmpty {
                     Text(String(self.service.streamingThinkingText.prefix(100)) + (self.service.streamingThinkingText.count > 100 ? "..." : ""))
-                        .font(.fluidSystem(size: 11))
-                        .foregroundStyle(.secondary.opacity(0.7))
+                        .fluidText(.label)
+                        .foregroundStyle(self.theme.look.tertiaryText)
                         .lineLimit(2)
                         .padding(.horizontal, 12)
                         .padding(.bottom, 8)
                 }
             }
         }
-        .background(self.theme.palette.cardBackground.opacity(0.9))
-        .cornerRadius(8)
+        .background(self.theme.look.surface, in: RoundedRectangle(cornerRadius: self.theme.metrics.corners.md, style: .continuous))
     }
 }
