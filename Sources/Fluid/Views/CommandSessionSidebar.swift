@@ -80,14 +80,14 @@ struct CommandSessionSidebar: View {
             }
             if !self.canChangeSession, let blockingReason {
                 Text(blockingReason)
-                    .font(self.theme.typography.caption)
-                    .foregroundStyle(self.theme.palette.secondaryText)
+                    .fluidText(.label)
+                    .foregroundStyle(self.theme.look.secondaryText)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(self.theme.metrics.spacing.lg)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(self.theme.palette.contentBackground)
+        .background(self.theme.look.canvas)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Command sessions")
         .onChange(of: self.scope) { _, _ in self.keyboardSessionID = nil }
@@ -143,12 +143,12 @@ struct CommandSessionSidebar: View {
                     .accessibilityHidden(true)
                 Text("New chat")
             }
-            .font(self.theme.typography.bodySmall)
-            .foregroundStyle(self.newSessionHovered ? self.theme.palette.primaryText : self.theme.palette.secondaryText)
+            .fluidText(.body)
+            .foregroundStyle(self.newSessionHovered ? self.theme.look.text : self.theme.look.secondaryText)
             .padding(.horizontal, self.theme.metrics.spacing.md)
             .frame(maxWidth: .infinity, minHeight: Self.controlHeight, alignment: .leading)
             .background(
-                self.newSessionHovered && self.canChangeSession ? self.theme.palette.cardBorder.opacity(0.25) : .clear,
+                FluidInteractionVisuals.fill(self.theme.palette, isHovered: self.newSessionHovered && self.canChangeSession),
                 in: RoundedRectangle(cornerRadius: self.theme.metrics.corners.sm)
             )
             .contentShape(Rectangle())
@@ -160,34 +160,8 @@ struct CommandSessionSidebar: View {
     }
 
     private var searchField: some View {
-        HStack(spacing: self.theme.metrics.spacing.sm) {
-            Image(systemName: "magnifyingglass")
-                .foregroundStyle(self.theme.palette.secondaryText)
-                .frame(width: Self.iconWidth)
-                .accessibilityHidden(true)
-            TextField("Search sessions", text: self.$searchText)
-                .textFieldStyle(.plain)
-                .accessibilityLabel("Search session titles and previews")
-            if !self.searchText.isEmpty {
-                Button { self.searchText = "" } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(self.theme.palette.secondaryText)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Clear session search")
-            }
-        }
-        .font(self.theme.typography.bodySmall)
-        .padding(.horizontal, self.theme.metrics.spacing.md)
-        .frame(maxWidth: .infinity, minHeight: Self.controlHeight)
-        .background {
-            RoundedRectangle(cornerRadius: self.theme.metrics.corners.md, style: .continuous)
-                .fill(self.theme.palette.elevatedCardBackground)
-                .overlay {
-                    RoundedRectangle(cornerRadius: self.theme.metrics.corners.md, style: .continuous)
-                        .strokeBorder(self.theme.palette.cardBorder)
-                }
-        }
+        FluidSearchField(text: self.$searchText, placeholder: "Search sessions")
+            .accessibilityLabel("Search session titles and previews")
     }
 
     private var sessionList: some View {
@@ -215,8 +189,8 @@ struct CommandSessionSidebar: View {
                         switch item {
                         case let .heading(group):
                             Text(group.rawValue)
-                                .font(self.theme.typography.caption)
-                                .foregroundStyle(self.theme.palette.secondaryText)
+                                .fluidText(.label)
+                                .foregroundStyle(self.theme.look.secondaryText)
                                 .padding(.horizontal, self.theme.metrics.spacing.md)
                                 .padding(.top, self.theme.metrics.spacing.lg)
                                 .padding(.bottom, self.theme.metrics.spacing.xs)
@@ -313,19 +287,19 @@ struct CommandSessionSidebar: View {
                 VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xs) {
                     HStack(spacing: 6) {
                         Text(self.row.title)
-                            .font(self.selected ? self.theme.typography.bodySmallStrong : self.theme.typography.bodySmall)
-                            .foregroundStyle(self.theme.palette.primaryText)
+                            .fluidText(self.selected ? .rowTitle : .body)
+                            .foregroundStyle(self.theme.look.text)
                             .lineLimit(1)
                         Spacer(minLength: 0)
                         Text(self.row.relativeTime)
-                            .font(self.theme.typography.captionSmall)
-                            .foregroundStyle(self.theme.palette.tertiaryText)
+                            .fluidText(.label)
+                            .foregroundStyle(self.theme.look.tertiaryText)
                             .fixedSize()
                             .opacity(self.showsActions ? 0 : 1)
                     }
                     Text(self.row.preview)
-                        .font(self.theme.typography.caption)
-                        .foregroundStyle(self.theme.palette.secondaryText)
+                        .fluidText(.label)
+                        .foregroundStyle(self.theme.look.secondaryText)
                         .lineLimit(1)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -346,13 +320,13 @@ struct CommandSessionSidebar: View {
             .overlay(alignment: .trailing) {
                 Button(action: self.performArchiveAction) {
                     Image(systemName: self.row.isArchived ? "arrow.uturn.backward" : "archivebox")
-                        .font(self.theme.typography.body)
+                        .fluidText(.body)
                         .frame(width: 28, height: 28)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .focused(self.$focusedControl, equals: .archive)
-                .foregroundStyle(self.theme.palette.secondaryText)
+                .foregroundStyle(self.theme.look.secondaryText)
                 .opacity(self.showsActions ? 1 : 0)
                 .allowsHitTesting(self.showsActions)
                 .disabled(!self.showsActions)
@@ -362,7 +336,7 @@ struct CommandSessionSidebar: View {
                 .padding(.trailing, self.theme.metrics.spacing.xs)
             }
             .background(
-                self.selected ? self.theme.palette.cardBorder.opacity(0.55) : (self.showsActions ? self.theme.palette.cardBorder.opacity(0.25) : .clear),
+                FluidInteractionVisuals.fill(self.theme.palette, isSelected: self.selected, isHovered: self.showsActions),
                 in: RoundedRectangle(cornerRadius: self.theme.metrics.corners.sm)
             )
             .contentShape(Rectangle())
@@ -382,13 +356,13 @@ struct CommandSessionSidebar: View {
         return VStack(spacing: self.theme.metrics.spacing.sm) {
             Image(systemName: isSearching ? "magnifyingglass" : (self.scope.isArchived ? "archivebox" : "bubble.left.and.bubble.right"))
                 .font(self.theme.typography.titleIcon)
-                .foregroundStyle(self.theme.palette.tertiaryText)
+                .foregroundStyle(self.theme.look.tertiaryText)
                 .accessibilityHidden(true)
             Text(title)
-                .font(self.theme.typography.bodySmallStrong)
+                .fluidText(.rowTitle)
             Text(isSearching ? "Try another title or phrase from the preview." : (self.scope.isArchived ? "Archived sessions stay here until you restore them." : "Start a new session to work with your Mac."))
-                .font(self.theme.typography.caption)
-                .foregroundStyle(self.theme.palette.secondaryText)
+                .fluidText(.label)
+                .foregroundStyle(self.theme.look.secondaryText)
         }
         .multilineTextAlignment(.center)
         .padding(self.theme.metrics.spacing.lg)

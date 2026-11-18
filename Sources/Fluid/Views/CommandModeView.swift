@@ -71,7 +71,7 @@ struct CommandModeView: View {
                         .accessibilityHidden(overlayHistory)
                     if overlayHistory {
                         Button { self.compactHistoryPresented = false } label: {
-                            self.theme.palette.windowBackground.opacity(0.65)
+                            self.theme.look.canvas.opacity(0.65)
                         }
                         .buttonStyle(.plain)
                         .accessibilityLabel("Close session history")
@@ -95,7 +95,7 @@ struct CommandModeView: View {
                         .frame(width: min(CommandWorkspaceLayout.sidebarWidth, geometry.size.width))
                         .overlay(alignment: .leading) {
                             Rectangle()
-                                .fill(self.theme.palette.separator)
+                                .fill(self.theme.look.divider)
                                 .frame(width: 1)
                                 .allowsHitTesting(false)
                                 .accessibilityHidden(true)
@@ -109,7 +109,7 @@ struct CommandModeView: View {
             }
             .onChange(of: isWide) { _, _ in self.compactHistoryPresented = false }
         }
-        .background(self.theme.palette.windowBackground)
+        .fluidCanvas()
         .clipped()
         .onFluidPagePresented { self.updatePresentationActivity(self.isActive) }
         .onDisappear {
@@ -182,7 +182,7 @@ struct CommandModeView: View {
             }
             Button { self.toggleHistory(isWide: isWide) } label: {
                 Label("Sessions", systemImage: historyVisible ? "rectangle.righthalf.inset.filled" : "sidebar.right")
-                    .foregroundStyle(historyVisible ? self.theme.palette.accent : self.theme.palette.primaryText)
+                    .foregroundStyle(self.theme.look.text)
             }
             .help(historyVisible ? "Hide sessions" : "Show sessions")
             .accessibilityLabel(historyVisible ? "Hide sessions" : "Show sessions")
@@ -202,7 +202,8 @@ struct CommandModeView: View {
                     LazyVStack(alignment: .leading, spacing: 24) {
                         if let session = self.chatStore.currentSession {
                             Text(session.title)
-                                .font(self.theme.typography.sectionTitle)
+                                .fluidText(.groupTitle)
+                                .foregroundStyle(self.theme.look.text)
                                 .editableTitle(session.title, id: session.id, enabled: self.canChangeSession) {
                                     self.chatStore.renameChat(id: session.id, to: $0)
                                 }
@@ -253,7 +254,7 @@ struct CommandModeView: View {
                     } label: {
                         Label("Latest", systemImage: "arrow.down")
                     }
-                    .fluidGlassAction()
+                    .fluidAction()
                     .padding(.bottom, 8)
                 }
             }
@@ -264,12 +265,12 @@ struct CommandModeView: View {
         VStack(alignment: .leading, spacing: 18) {
             Image(systemName: "terminal")
                 .font(self.theme.typography.titleIcon)
-                .foregroundStyle(self.theme.palette.secondaryText)
+                .foregroundStyle(self.theme.look.secondaryText)
             Text("What would you like to do?")
-                .font(self.theme.typography.title)
+                .fluidText(.detailTitle)
             Text("Ask a question, work with files, or run a command on your Mac.")
-                .font(self.theme.typography.body)
-                .foregroundStyle(self.theme.palette.secondaryText)
+                .fluidText(.body)
+                .foregroundStyle(self.theme.look.secondaryText)
             VStack(alignment: .leading, spacing: 8) {
                 self.suggestion("List files in my Downloads folder", icon: "folder")
                 self.suggestion("Show my Mac’s storage usage", icon: "internaldrive")
@@ -286,12 +287,12 @@ struct CommandModeView: View {
             self.composerFocused = true
         } label: {
             Label(text, systemImage: icon)
-                .font(self.theme.typography.bodySmall)
+                .fluidText(.body)
                 .multilineTextAlignment(.leading)
                 .padding(.vertical, 6)
         }
         .buttonStyle(.plain)
-        .foregroundStyle(self.theme.palette.secondaryText)
+        .foregroundStyle(self.theme.look.secondaryText)
         .help("Add this example to your message")
     }
 
@@ -304,22 +305,22 @@ struct CommandModeView: View {
                     ProgressView().controlSize(.small)
                 }
                 Text(self.currentStepLabel)
-                    .font(self.theme.typography.bodySmall)
+                    .fluidText(.body)
                     .lineLimit(2)
             }
-            .foregroundStyle(self.theme.palette.secondaryText)
+            .foregroundStyle(self.theme.look.secondaryText)
             if self.settings.showThinkingTokens, !self.service.streamingThinkingText.isEmpty {
                 DisclosureGroup("Thinking", isExpanded: self.$isThinkingExpanded) {
                     ScrollView {
                         Text(self.service.streamingThinkingText)
-                            .font(self.theme.typography.bodySmall)
-                            .foregroundStyle(self.theme.palette.secondaryText)
+                            .fluidText(.body)
+                            .foregroundStyle(self.theme.look.secondaryText)
                             .textSelection(.enabled)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     .frame(maxHeight: 150)
                 }
-                .font(self.theme.typography.caption)
+                .fluidText(.label)
             }
             if !self.service.streamingText.isEmpty {
                 CommandMarkdownContent(text: self.service.streamingText)
@@ -349,10 +350,10 @@ struct CommandModeView: View {
 
     private func pendingCommandView(_ pending: CommandModeService.PendingCommand) -> some View {
         VStack(alignment: .leading, spacing: 12) {
-            Label("Review command", systemImage: "checkmark.shield")
-                .font(self.theme.typography.bodyStrong)
+            Label("Review command", systemImage: "shield")
+                .fluidText(.rowTitle)
             if let purpose = pending.purpose {
-                Text(purpose).font(self.theme.typography.bodySmall).foregroundStyle(self.theme.palette.secondaryText)
+                Text(purpose).fluidText(.body).foregroundStyle(self.theme.look.secondaryText)
             }
             ScrollView {
                 Text(pending.command)
@@ -362,7 +363,7 @@ struct CommandModeView: View {
             }
             .frame(maxHeight: 88)
             if let directory = pending.workingDirectory {
-                Text(directory).font(self.theme.typography.caption).foregroundStyle(self.theme.palette.secondaryText).lineLimit(1)
+                Text(directory).fluidText(.label).foregroundStyle(self.theme.look.secondaryText).lineLimit(1)
             }
             FluidGlassControlGroup {
                 HStack(spacing: 8) {
@@ -370,7 +371,7 @@ struct CommandModeView: View {
                     Button("Cancel") {
                         guard self.service.pendingCommand?.id == pending.id, !self.service.isProcessing else { return }
                         self.service.cancelPendingCommand()
-                    }.fluidGlassAction()
+                    }.fluidAction()
                     Button {
                         Task {
                             guard self.service.pendingCommand?.id == pending.id, !self.service.isProcessing else { return }
@@ -379,13 +380,12 @@ struct CommandModeView: View {
                     } label: {
                         Label("Run command", systemImage: "play.fill")
                     }
-                    .fluidGlassAction(prominent: true)
+                    .fluidAction(.primary)
                 }
             }
         }
-        .padding(16)
-        .background(self.theme.palette.elevatedCardBackground, in: RoundedRectangle(cornerRadius: 16))
-        .overlay { RoundedRectangle(cornerRadius: 16).strokeBorder(self.theme.palette.warning.opacity(0.45)) }
+        .padding(self.theme.metrics.spacing.lg)
+        .fluidLit(self.theme.look.card, in: RoundedRectangle(cornerRadius: FluidSurfaceCard<EmptyView>.cornerRadius, style: .continuous))
     }
 
     // MARK: - Composer
@@ -394,15 +394,15 @@ struct CommandModeView: View {
         VStack(alignment: .leading, spacing: 10) {
             if let issue = self.settings.commandModeReadinessIssue {
                 HStack(spacing: 8) {
-                    Image(systemName: "exclamationmark.circle").foregroundStyle(self.theme.palette.warning)
-                    Text(issue).font(self.theme.typography.caption)
+                    Image(systemName: "exclamationmark.circle").foregroundStyle(self.theme.look.text)
+                    Text(issue).fluidText(.label)
                 }
-                .foregroundStyle(self.theme.palette.secondaryText)
+                .foregroundStyle(self.theme.look.secondaryText)
             }
             VStack(alignment: .leading, spacing: 16) {
                 TextField("Ask anything…", text: self.inputText, axis: .vertical)
                     .textFieldStyle(.plain)
-                    .font(self.theme.typography.statement)
+                    .fluidText(.subtitle)
                     .lineLimit(3...8)
                     .focused(self.$composerFocused)
                     .onSubmit { self.submitCommand() }
@@ -419,11 +419,12 @@ struct CommandModeView: View {
                     }
                 }
             }
-            .padding(20)
-            .background(self.theme.palette.elevatedCardBackground, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+            .padding(self.theme.metrics.spacing.xl)
+            .fluidLit(self.theme.look.card, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
             .overlay {
+                // Focus shows as a slightly stronger edge, never a color.
                 RoundedRectangle(cornerRadius: 24, style: .continuous)
-                    .strokeBorder(self.theme.palette.cardBorder.opacity(self.composerFocused ? 0.9 : 0.55))
+                    .strokeBorder(self.composerFocused ? self.theme.look.tertiaryText : .clear)
                     .allowsHitTesting(false)
             }
         }
@@ -437,9 +438,9 @@ struct CommandModeView: View {
             }
             .pickerStyle(.inline)
         } label: {
-            Label(self.settings.commandModeConfirmBeforeExecute ? "Ask first" : "Run directly", systemImage: self.settings.commandModeConfirmBeforeExecute ? "checkmark.shield" : "exclamationmark.shield")
+            Label(self.settings.commandModeConfirmBeforeExecute ? "Ask first" : "Run directly", systemImage: self.settings.commandModeConfirmBeforeExecute ? "shield" : "exclamationmark.shield")
         }
-        .fluidDropdownStyle(appearance: .inline, tone: self.settings.commandModeConfirmBeforeExecute ? self.theme.palette.secondaryText : self.theme.palette.warning)
+        .fluidDropdownStyle(appearance: .inline, tone: self.settings.commandModeConfirmBeforeExecute ? self.theme.look.secondaryText : self.theme.look.text)
         .accessibilityLabel("Command approval")
         .accessibilityValue(self.settings.commandModeConfirmBeforeExecute ? "Ask before risky commands" : "Run without asking")
         .help("Choose whether potentially destructive commands require your approval")
@@ -454,7 +455,7 @@ struct CommandModeView: View {
                         Image(systemName: self.ownsASRRecording ? "mic.fill" : "mic")
                             .font(.fluidSystem(size: 20))
                             .frame(width: 24, height: 24)
-                            .foregroundStyle(self.ownsASRRecording ? Color.red : self.theme.palette.secondaryText)
+                            .foregroundStyle(self.ownsASRRecording ? self.theme.look.text : self.theme.look.secondaryText)
                     }
                     .fluidGlassAction(circular: true, quiet: true)
                     .disabled(self.isSubmissionPending || self.service.isProcessing || self.service.pendingCommand != nil || self.isASRStartPending || self.isASRStopPending || (self.asr.isRunning && !self.ownsASRRecording))
@@ -464,11 +465,10 @@ struct CommandModeView: View {
                         if self.ownsASRRecording { self.toggleRecording() } else { self.submitCommand() }
                     } label: {
                         Image(systemName: self.ownsASRRecording ? "stop.fill" : "arrow.up")
-                            .font(.fluidSystem(size: 17, weight: .semibold))
-                            .frame(width: 24, height: 24)
-                            .foregroundStyle(self.theme.palette.windowBackground)
+                            .font(.fluidSystem(size: 15, weight: .semibold))
+                            .frame(height: 20)
                     }
-                    .fluidGlassAction(prominent: true, circular: true, tone: self.theme.palette.primaryText)
+                    .fluidAction(.primary)
                     .disabled(self.ownsASRRecording ? self.isASRStopPending : !self.canSubmitCommand)
                     .help(self.ownsASRRecording ? "Stop recording and send" : "Send message")
                     .accessibilityLabel(self.ownsASRRecording ? "Stop recording and send" : "Send message")
@@ -487,8 +487,8 @@ struct CommandModeView: View {
                     .lineLimit(1).truncationMode(.middle)
                 FluidDropdownChevron()
             }
-            .font(self.theme.typography.statement)
-            .foregroundStyle(self.theme.palette.secondaryText)
+            .fluidText(.subtitle)
+            .foregroundStyle(self.theme.look.secondaryText)
             .padding(.horizontal, 12)
             .frame(width: 220, height: 36)
             .fluidDropdownSurface(appearance: .inline)

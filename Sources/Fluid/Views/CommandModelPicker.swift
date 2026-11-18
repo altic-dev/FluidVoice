@@ -45,7 +45,7 @@ struct CommandModelPicker: View {
         let rows = self.pickerRows(for: filtered)
         VStack(spacing: 0) {
             self.searchField
-            Divider()
+            FluidHairline()
             if self.options.isEmpty {
                 self.emptyState(
                     title: "No models available",
@@ -61,7 +61,7 @@ struct CommandModelPicker: View {
             }
         }
         .frame(width: 350)
-        .foregroundStyle(self.theme.palette.primaryText)
+        .foregroundStyle(self.theme.look.text)
         .onAppear {
             self.resetHighlight(preferSelected: true)
             self.searchFocused = true
@@ -83,7 +83,7 @@ struct CommandModelPicker: View {
     private var searchField: some View {
         HStack(spacing: self.theme.metrics.spacing.sm) {
             Image(systemName: "magnifyingglass")
-                .foregroundStyle(self.theme.palette.secondaryText)
+                .foregroundStyle(self.theme.look.secondaryText)
                 .accessibilityHidden(true)
             TextField("Search all models…", text: self.$searchText)
                 .textFieldStyle(.plain)
@@ -104,13 +104,13 @@ struct CommandModelPicker: View {
                     self.searchFocused = true
                 } label: {
                     Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(self.theme.palette.secondaryText)
+                        .foregroundStyle(self.theme.look.secondaryText)
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Clear model search")
             }
         }
-        .font(self.theme.typography.bodySmall)
+        .fluidText(.body)
         .searchablePickerSearchFieldChrome()
         .padding(self.theme.metrics.spacing.sm)
     }
@@ -127,8 +127,8 @@ struct CommandModelPicker: View {
                         switch row {
                         case let .provider(_, name):
                             Text(name)
-                                .font(self.theme.typography.captionStrong)
-                                .foregroundStyle(self.theme.palette.secondaryText)
+                                .fluidText(.label)
+                                .foregroundStyle(self.theme.look.secondaryText)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .padding(.horizontal, 12)
                                 .padding(.top, 10)
@@ -173,21 +173,21 @@ struct CommandModelPicker: View {
                 HStack(spacing: self.theme.metrics.spacing.sm) {
                     VStack(alignment: .leading, spacing: 3) {
                         Text(self.option.displayName)
-                            .font(self.theme.typography.bodySmall)
+                            .fluidText(.body)
                             .lineLimit(1)
                             .truncationMode(.middle)
                         if self.option.modelID != self.option.displayName {
                             Text(self.option.modelID)
-                                .font(self.theme.typography.captionSmall)
-                                .foregroundStyle(self.theme.palette.secondaryText)
+                                .fluidText(.label)
+                                .foregroundStyle(self.theme.look.secondaryText)
                                 .lineLimit(1)
                                 .truncationMode(.middle)
                         }
                     }
                     Spacer(minLength: 0)
                     Image(systemName: "checkmark")
-                        .font(self.theme.typography.captionStrong)
-                        .foregroundStyle(self.theme.palette.accent)
+                        .fluidText(.label)
+                        .foregroundStyle(self.theme.look.text)
                         .opacity(self.selected ? 1 : 0)
                         .frame(width: 16)
                         .accessibilityHidden(true)
@@ -214,10 +214,10 @@ struct CommandModelPicker: View {
 
     private func emptyState(title: String, message: String) -> some View {
         VStack(spacing: self.theme.metrics.spacing.sm) {
-            Text(title).font(self.theme.typography.bodySmallStrong)
+            Text(title).fluidText(.rowTitle)
             Text(message)
-                .font(self.theme.typography.caption)
-                .foregroundStyle(self.theme.palette.secondaryText)
+                .fluidText(.label)
+                .foregroundStyle(self.theme.look.secondaryText)
         }
         .multilineTextAlignment(.center)
         .padding(24)

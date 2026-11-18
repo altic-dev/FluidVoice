@@ -254,8 +254,8 @@ struct CommandMarkdownContent: View {
                 self.blockView(block.content)
             }
         }
-        .font(self.theme.typography.body)
-        .foregroundStyle(self.theme.palette.primaryText)
+        .fluidText(.body)
+        .foregroundStyle(self.theme.look.text)
         .lineSpacing(5)
         .textSelection(.enabled)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -271,19 +271,19 @@ struct CommandMarkdownContent: View {
             Text(text).fixedSize(horizontal: false, vertical: true)
         case let .heading(text, level):
             Text(text)
-                .font(level == 1 ? self.theme.typography.title : (level == 2 ? self.theme.typography.statement.weight(.semibold) : self.theme.typography.sectionTitle))
+                .font(level == 1 ? FluidTextRole.detailTitle.font : (level == 2 ? FluidTextRole.itemTitle.font : FluidTextRole.groupTitle.font))
                 .padding(.top, 6)
                 .accessibilityAddTraits(.isHeader)
         case let .listItem(text, marker, depth):
             HStack(alignment: .firstTextBaseline, spacing: 10) {
-                Text(marker).foregroundStyle(self.theme.palette.secondaryText).frame(minWidth: 14, alignment: .trailing)
+                Text(marker).foregroundStyle(self.theme.look.secondaryText).frame(minWidth: 14, alignment: .trailing)
                 Text(text).fixedSize(horizontal: false, vertical: true)
             }
             .padding(.leading, CGFloat(depth) * 18)
         case let .quote(text):
             HStack(alignment: .top, spacing: 12) {
-                Rectangle().fill(self.theme.palette.separator).frame(width: 3)
-                Text(text).foregroundStyle(self.theme.palette.secondaryText).fixedSize(horizontal: false, vertical: true)
+                Rectangle().fill(self.theme.look.divider).frame(width: 3)
+                Text(text).foregroundStyle(self.theme.look.secondaryText).fixedSize(horizontal: false, vertical: true)
             }
             .fixedSize(horizontal: false, vertical: true)
         case let .code(code, language):
@@ -291,7 +291,7 @@ struct CommandMarkdownContent: View {
         case let .table(headers, rows):
             self.table(headers: headers, rows: rows)
         case .divider:
-            Divider().padding(.vertical, 4)
+            FluidHairline().padding(.vertical, 4)
         }
     }
 
@@ -303,24 +303,24 @@ struct CommandMarkdownContent: View {
                         self.tableCell(headers[index], heading: true)
                     }
                 }
-                .background(self.theme.palette.cardBackground)
+                .background(self.theme.look.surface)
                 ForEach(rows.indices, id: \.self) { index in
                     GridRow {
                         ForEach(rows[index].indices, id: \.self) { column in
                             self.tableCell(rows[index][column], heading: false)
                         }
                     }
-                    .overlay(alignment: .top) { Rectangle().fill(self.theme.palette.separator).frame(height: 0.5) }
+                    .overlay(alignment: .top) { Rectangle().fill(self.theme.look.divider).frame(height: 0.5) }
                 }
             }
             .clipShape(RoundedRectangle(cornerRadius: 8))
-            .overlay { RoundedRectangle(cornerRadius: 8).stroke(self.theme.palette.cardBorder, lineWidth: 1) }
+            .overlay { RoundedRectangle(cornerRadius: 8).strokeBorder(self.theme.look.edge, lineWidth: 1) }
         }
     }
 
     private func tableCell(_ text: AttributedString, heading: Bool) -> some View {
         Text(text)
-            .font(heading ? self.theme.typography.bodySmallStrong : self.theme.typography.bodySmall)
+            .font(heading ? FluidTextRole.rowTitle.font : FluidTextRole.body.font)
             .frame(width: 172, alignment: .leading)
             .fixedSize(horizontal: false, vertical: true)
             .padding(12)
@@ -336,14 +336,14 @@ struct CommandCodeBlock: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
                 Text(self.language.isEmpty ? "Code" : self.language)
-                    .font(self.theme.typography.caption)
-                    .foregroundStyle(self.theme.palette.secondaryText)
+                    .fluidText(.label)
+                    .foregroundStyle(self.theme.look.secondaryText)
                 Spacer()
                 CommandCopyButton(text: self.code, label: "Copy code")
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 5)
-            Divider()
+            FluidHairline()
             ScrollView([.horizontal, .vertical]) {
                 Text(verbatim: self.code)
                     .font(.fluidSystem(size: 12, design: .monospaced))
@@ -355,9 +355,9 @@ struct CommandCodeBlock: View {
             }
             .frame(height: min(320, CGFloat(self.code.reduce(1) { $1 == "\n" ? $0 + 1 : $0 }) * 19 + 24))
         }
-        .background(self.theme.palette.cardBackground)
+        .background(self.theme.look.surface)
         .clipShape(RoundedRectangle(cornerRadius: 10))
-        .overlay { RoundedRectangle(cornerRadius: 10).stroke(self.theme.palette.cardBorder.opacity(0.6), lineWidth: 1) }
+        .overlay { RoundedRectangle(cornerRadius: 10).strokeBorder(self.theme.look.edge, lineWidth: 1) }
     }
 }
 
@@ -374,7 +374,7 @@ struct CommandCopyButton: View {
                 .font(.fluidSystem(size: 11))
                 .foregroundStyle(.secondary)
         }
-        .fluidGlassAction(circular: true)
+        .fluidGlassAction(circular: true, quiet: true)
         .help(self.copied ? "Copied" : self.label)
         .accessibilityLabel(self.copied ? "Copied" : self.label)
         .task(id: self.copied) {

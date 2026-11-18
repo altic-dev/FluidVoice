@@ -35,13 +35,14 @@ struct CommandMessageView: View {
             Spacer(minLength: 36)
             VStack(alignment: .trailing, spacing: 5) {
                 Text(verbatim: self.message.content)
-                    .font(self.theme.typography.body)
+                    .fluidText(.body)
                     .lineSpacing(4)
                     .textSelection(.enabled)
                     .padding(.horizontal, 16)
                     .padding(.vertical, 12)
-                    .background(self.theme.palette.cardBackground)
-                    .clipShape(RoundedRectangle(cornerRadius: 16))
+                    .foregroundStyle(self.theme.look.text)
+                    .background(self.theme.look.quietFill)
+                    .clipShape(RoundedRectangle(cornerRadius: FluidSurfaceCard<EmptyView>.cornerRadius, style: .continuous))
                 CommandCopyButton(text: self.message.content, label: "Copy message")
             }
             .frame(maxWidth: 620, alignment: .trailing)
@@ -63,8 +64,8 @@ struct CommandMessageView: View {
                 if !self.message.content.isEmpty {
                     if self.message.stepType == .failure {
                         Label("Couldn’t complete this step", systemImage: "exclamationmark.circle")
-                            .font(self.theme.typography.captionStrong)
-                            .foregroundStyle(self.theme.palette.warning)
+                            .fluidText(.label)
+                            .foregroundStyle(self.theme.look.text)
                     }
                     CommandMarkdownContent(text: self.message.content)
                 }
@@ -73,8 +74,8 @@ struct CommandMessageView: View {
                         CommandCopyButton(text: self.message.content, label: "Copy response")
                         if self.message.stepType == .success {
                             Label("Completed", systemImage: "checkmark.circle")
-                                .font(self.theme.typography.captionSmall)
-                                .foregroundStyle(self.theme.palette.secondaryText)
+                                .fluidText(.label)
+                                .foregroundStyle(self.theme.look.secondaryText)
                         }
                     }
                 }
@@ -89,8 +90,8 @@ struct CommandMessageView: View {
             if self.thinkingExpanded {
                 ScrollView {
                     Text(verbatim: text)
-                        .font(self.theme.typography.bodySmall)
-                        .foregroundStyle(self.theme.palette.secondaryText)
+                        .fluidText(.body)
+                        .foregroundStyle(self.theme.look.secondaryText)
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.leading, 24)
@@ -114,8 +115,8 @@ struct CommandMessageView: View {
                 CommandCodeBlock(code: tool.command, language: "Shell")
                 if let directory = tool.workingDirectory, !directory.isEmpty {
                     Label(directory, systemImage: "folder")
-                        .font(self.theme.typography.caption)
-                        .foregroundStyle(self.theme.palette.secondaryText)
+                        .fluidText(.label)
+                        .foregroundStyle(self.theme.look.secondaryText)
                         .textSelection(.enabled)
                 }
             }
@@ -135,16 +136,16 @@ struct CommandMessageView: View {
                 )
                 if let duration = self.toolOutput?.executionTime, duration > 0 {
                     Text(duration < 1000 ? "\(duration) ms" : String(format: "%.1f s", Double(duration) / 1000))
-                        .font(self.theme.typography.captionSmall)
-                        .foregroundStyle(self.theme.palette.tertiaryText)
+                        .fluidText(.label)
+                        .foregroundStyle(self.theme.look.tertiaryText)
                         .monospacedDigit()
                         .fixedSize()
                 }
             }
             if failed, !self.outputExpanded, let error = self.toolOutput?.error, !error.isEmpty {
                 Text(error)
-                    .font(self.theme.typography.bodySmall)
-                    .foregroundStyle(self.theme.palette.warning)
+                    .fluidText(.body)
+                    .foregroundStyle(self.theme.look.text)
                     .lineLimit(3)
                     .textSelection(.enabled)
                     .padding(.leading, 24)
@@ -156,14 +157,14 @@ struct CommandMessageView: View {
                     }
                     if let error = parsed.error, !error.isEmpty {
                         Text(verbatim: error)
-                            .font(self.theme.typography.bodySmall)
-                            .foregroundStyle(self.theme.palette.warning)
+                            .fluidText(.body)
+                            .foregroundStyle(self.theme.look.text)
                             .textSelection(.enabled)
                     }
                     if parsed.output.isEmpty, parsed.error?.isEmpty != false {
                         Text("No output")
-                            .font(self.theme.typography.caption)
-                            .foregroundStyle(self.theme.palette.secondaryText)
+                            .fluidText(.label)
+                            .foregroundStyle(self.theme.look.secondaryText)
                     }
                 } else {
                     CommandCodeBlock(code: self.message.content, language: "Output")
@@ -185,8 +186,8 @@ struct CommandMessageView: View {
                     .font(.fluidSystem(size: 9, weight: .semibold))
                 Spacer(minLength: 0)
             }
-            .font(self.theme.typography.bodySmall)
-            .foregroundStyle(failed ? self.theme.palette.warning : self.theme.palette.secondaryText)
+            .fluidText(.body)
+            .foregroundStyle(failed ? self.theme.look.text : self.theme.look.secondaryText)
             .padding(.vertical, 5)
             .contentShape(Rectangle())
         }
