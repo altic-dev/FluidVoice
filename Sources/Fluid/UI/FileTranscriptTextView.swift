@@ -16,8 +16,8 @@ struct FileTranscriptTextView: NSViewRepresentable {
         view.display(
             entryID: self.entryID,
             text: self.text,
-            font: .fluidSystemFont(ofSize: 14),
-            color: NSColor(self.theme.palette.primaryText),
+            font: .fluidSystemFont(ofSize: FluidTextRole.body.size),
+            color: NSColor(self.theme.look.text),
             inset: self.theme.metrics.spacing.lg
         )
     }

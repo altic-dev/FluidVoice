@@ -64,6 +64,32 @@ extension View {
     }
 }
 
+/// The hover and selected fill for a list row that holds buttons of its own, so it cannot be one
+/// button itself. A row that is one button uses `fluidSelectableRow` instead.
+private struct FluidListRowFill: ViewModifier {
+    @Environment(\.theme) private var theme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var isHovered = false
+    let isSelected: Bool
+    let cornerRadius: CGFloat
+
+    func body(content: Content) -> some View {
+        content
+            .background(
+                FluidInteractionVisuals.fill(self.theme.palette, isSelected: self.isSelected, isHovered: self.isHovered),
+                in: RoundedRectangle(cornerRadius: self.cornerRadius, style: .continuous)
+            )
+            .onHover { self.isHovered = $0 }
+            .animation(self.reduceMotion ? nil : .easeOut(duration: 0.12), value: self.isHovered)
+    }
+}
+
+extension View {
+    func fluidListRowFill(isSelected: Bool, cornerRadius: CGFloat = FluidSettingsLayout.cornerRadius) -> some View {
+        self.modifier(FluidListRowFill(isSelected: isSelected, cornerRadius: cornerRadius))
+    }
+}
+
 enum FluidChipStyle {
     /// Positive mark, e.g. a supported language.
     case highlight
