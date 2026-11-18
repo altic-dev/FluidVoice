@@ -183,6 +183,10 @@ enum VoiceEngineLanguageCatalog {
             }
         }
 
+        if Self.qwenLanguageIDs.contains(language.id) {
+            routes.append(Self.route(language, .qwen3Asr17B, .automatic))
+        }
+
         if let appleSpeechAnalyzerLocale = Self.appleSpeechAnalyzerLocaleIdentifier(for: language.id) {
             routes.append(Self.route(language, .appleSpeechAnalyzer, .appleSpeech(localeIdentifier: appleSpeechAnalyzerLocale)))
         }
@@ -242,6 +246,13 @@ enum VoiceEngineLanguageCatalog {
     ]
 
     nonisolated static let parakeetV3LanguageIDs = Set(ParakeetSpeechModelCatalog.v3.supportedLanguageCodes)
+
+    /// Qwen3-ASR's 30 recognition languages in this catalog's IDs (Qwen calls Filipino "fil"; Cantonese has no entry here).
+    nonisolated static let qwenLanguageIDs: Set<String> = [
+        "ar", "cs", "da", "de", "el", "en", "es", "fa", "fi", "fr",
+        "hi", "hu", "id", "it", "ja", "ko", "mk", "ms", "nl", "pl",
+        "pt", "ro", "ru", "sv", "th", "tl", "tr", "vi", "zh",
+    ]
 
     private static let cohereLanguageMap: [String: SettingsStore.CohereLanguage] = [
         "ar": .arabic,

@@ -64,7 +64,7 @@ final class DashboardRecommendationsController: ObservableObject {
                 kind: .speech,
                 modelID: model.id,
                 name: model.humanReadableName,
-                detail: model == .fluidParakeetPro ? "Our most accurate speech model, running privately on your Mac." : "Accurate on-device dictation with a lighter memory footprint.",
+                detail: Self.speechDetail(for: model, languageID: selection.language),
                 downloadSize: model.downloadSize,
                 installed: false
             ))
@@ -99,6 +99,19 @@ final class DashboardRecommendationsController: ObservableObject {
         }
         guard !Task.isCancelled, !self.operation.isBusy, revision == self.refreshRevision, selection == Selection(settings: self.settings) else { return }
         self.recommendations = result
+    }
+
+    static func speechDetail(for model: SettingsStore.SpeechModel, languageID: String?) -> String {
+        switch model {
+        case .fluidParakeetPro:
+            return "Our most accurate speech model, running privately on your Mac."
+        case .fluidParakeetMini:
+            return "Accurate on-device dictation with a lighter memory footprint."
+        default:
+            let language = languageID.flatMap { VoiceEngineLanguageCatalog.language(id: $0)?.displayName }
+            let match = language.map { "The best match for \($0) on your Mac." } ?? "A strong match for your language."
+            return model.supportsStreaming ? match : "\(match) Your words appear when you stop talking."
+        }
     }
 
     func dismiss(_ recommendation: DashboardModelRecommendation) {

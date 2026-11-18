@@ -14,19 +14,39 @@ struct DashboardModelRecommendation: Identifiable, Equatable {
 }
 
 enum DashboardModelRecommendationPolicy {
+    /// Pro's languages use Pro or Mini by memory. Other languages use Qwen, or Whisper Large Turbo where a
+    /// Mac FLEURS comparison showed Whisper clearly ahead or Qwen lacks the language. Below 8 GB nothing is recommended.
     static func speechModel(memoryBytes: UInt64, language: String?, available: [SettingsStore.SpeechModel]) -> SettingsStore.SpeechModel? {
-        guard let language, VoiceEngineLanguageCatalog.parakeetV3LanguageIDs.contains(language) else { return nil }
         let gib: UInt64 = 1024 * 1024 * 1024
-        let model: SettingsStore.SpeechModel = memoryBytes >= 16 * gib ? .fluidParakeetPro : .fluidParakeetMini
-        guard memoryBytes >= 8 * gib, available.contains(model) else { return nil }
-        return model
+        guard let language, memoryBytes >= 8 * gib else { return nil }
+        let candidates: [SettingsStore.SpeechModel]
+        if VoiceEngineLanguageCatalog.parakeetV3LanguageIDs.contains(language) {
+            candidates = [memoryBytes >= 16 * gib ? .fluidParakeetPro : .fluidParakeetMini]
+        } else if VoiceEngineLanguageCatalog.qwenLanguageIDs.contains(language), !self.whisperPreferredLanguageIDs.contains(language) {
+            candidates = [.qwen3Asr17B, .whisperLargeTurbo]
+        } else if VoiceEngineLanguageCatalog.whisperLanguageCode(for: language) != nil {
+            candidates = [.whisperLargeTurbo]
+        } else {
+            return nil
+        }
+        return candidates.first { available.contains($0) }
     }
+
+    /// Filipino and Turkish: Whisper Large Turbo clearly beat Qwen3-ASR 1.7B.
+    private static let whisperPreferredLanguageIDs: Set<String> = ["tl", "tr"]
+
+    /// A more accurate sibling of the recommended model already covers the user, so suggesting it would be a downgrade.
+    private static let strongerSiblings: [SettingsStore.SpeechModel: SettingsStore.SpeechModel] = [
+        .fluidParakeetMini: .fluidParakeetPro,
+        .whisperLargeTurbo: .whisperLarge,
+    ]
 
     /// Do not infer a language from the UI locale or stale onboarding preferences.
     static func speechLanguage(settings: SettingsStore) -> String? {
         let model = settings.selectedSpeechModel
         if model.parakeetDescriptor != nil || model == .parakeetRealtime { return "en" } // Same 25-language family (or English).
-        if model.whisperModelFile != nil { return settings.selectedWhisperLanguageCode }
+        // Qwen detects the language itself, so the saved Whisper language says nothing about what the user speaks.
+        if model.isWhisperModel { return settings.selectedWhisperLanguageCode }
         switch model {
         case .appleSpeech, .appleSpeechAnalyzer:
             return settings.selectedAppleSpeechLocaleIdentifier.split(separator: "-").first.map(String.init)
@@ -48,8 +68,8 @@ enum DashboardModelRecommendationPolicy {
     }
 
     static func shouldSuggestSpeech(targetID: String, selectedID: String, dismissedID: String?) -> Bool {
-        // A user already on Pro should not be nudged down to Mini on a smaller Mac.
-        selectedID != SettingsStore.SpeechModel.fluidParakeetPro.id && self.shouldShow(targetID: targetID, selectedID: selectedID, dismissedID: dismissedID)
+        let stronger = SettingsStore.SpeechModel(rawValue: targetID).flatMap { self.strongerSiblings[$0] }
+        return selectedID != stronger?.id && self.shouldShow(targetID: targetID, selectedID: selectedID, dismissedID: dismissedID)
     }
 
     static func shouldShow(targetID: String, selectedID: String, dismissedID: String?) -> Bool {
