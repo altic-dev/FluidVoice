@@ -5,6 +5,11 @@ import XCTest
 
 @MainActor
 final class SpokenSendTests: XCTestCase {
+    func testShortCountdownWaitsForTheRemainingSilence() {
+        XCTAssertEqual(SpokenSendParser.remainingSilence(since: 0.25, now: 0.5), 0.1, accuracy: 0.00001)
+        XCTAssertEqual(SpokenSendParser.remainingSilence(since: 0.25, now: 0.61), 0)
+    }
+
     func testDisabledFeatureLeavesTextUntouched() {
         XCTAssertEqual(
             SpokenSendParser.parse("Hello send it", phrase: "send it", enabled: false),

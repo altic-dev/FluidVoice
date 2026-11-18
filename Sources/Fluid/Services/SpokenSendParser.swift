@@ -38,6 +38,10 @@ enum SpokenSendParser {
     static let immediateStopVoiceActivityGraceDuration: TimeInterval = 0.35
     static let immediateStopVoiceActivityLevelThreshold: CGFloat = 0.12
 
+    static func remainingSilence(since lastActivity: TimeInterval, now: TimeInterval) -> TimeInterval {
+        max(0, self.immediateStopRequiredSilenceDuration - (now - lastActivity))
+    }
+
     static func shouldStopImmediately(
         _ text: String,
         phrase: String,

@@ -259,6 +259,29 @@ final class DashboardRecommendationTests: XCTestCase {
         XCTAssertTrue(suggest(.whisperLargeTurbo, from: .whisperSmall))
     }
 
+    func testWhisperActivationAppliesRecommendedLanguageAndRestoresItOnFailure() async throws {
+        let settings = SettingsStore.shared
+        let (model, language) = (settings.selectedSpeechModel, settings.selectedWhisperLanguageCode)
+        defer {
+            settings.selectedSpeechModel = model
+            settings.selectedWhisperLanguageCode = language
+        }
+        settings.selectedSpeechModel = .appleSpeech
+        settings.selectedWhisperLanguageCode = "en"
+        do {
+            try await DashboardRecommendationsController.activateSpeech(.whisperLargeTurbo, languageID: "tr", settings: settings, reset: {}) {
+                XCTAssertEqual(settings.selectedWhisperLanguageCode, "tr")
+                throw CancellationError()
+            }
+            XCTFail("Preparation should fail")
+        } catch is CancellationError {}
+        XCTAssertEqual(settings.selectedSpeechModel, .appleSpeech)
+        XCTAssertEqual(settings.selectedWhisperLanguageCode, "en")
+        try await DashboardRecommendationsController.activateSpeech(.whisperLargeTurbo, languageID: "tr", settings: settings, reset: {}, prepare: {})
+        XCTAssertEqual(settings.selectedWhisperLanguageCode, "tr")
+        XCTAssertEqual(settings.selectedSpeechModel, .whisperLargeTurbo)
+    }
+
     func testQwenUsersAreNotJudgedByAStaleWhisperLanguage() {
         let settings = SettingsStore.shared
         let (model, whisperLanguage) = (settings.selectedSpeechModel, settings.selectedWhisperLanguageCode)

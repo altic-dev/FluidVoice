@@ -10,6 +10,7 @@ struct DashboardModelRecommendation: Identifiable, Equatable {
     let detail: String
     let downloadSize: String
     let installed: Bool
+    var languageID: String? = nil
     var id: String { "\(self.kind.rawValue):\(self.modelID)" }
 }
 

@@ -4035,6 +4035,10 @@ struct ContentView: View {
         self.spokenSendAutoStopTask = Task { @MainActor in
             // Keep one countdown across harmless streaming refinements such as punctuation or casing.
             try? await Task.sleep(for: .seconds(wait))
+            guard !Task.isCancelled else { return }
+            // Audio at the tail of the phrase can overlap the shortest wait.
+            let silenceStillNeeded = SpokenSendParser.remainingSilence(since: self.spokenSendLastVoiceActivityAt, now: ProcessInfo.processInfo.systemUptime)
+            if silenceStillNeeded > 0 { try? await Task.sleep(for: .seconds(silenceStillNeeded)) }
             let quietDuration = ProcessInfo.processInfo.systemUptime - self.spokenSendLastVoiceActivityAt
             guard !Task.isCancelled,
                   self.overlayLifecycleID == expectedOverlayLifecycleID,
