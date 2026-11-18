@@ -8,14 +8,14 @@ using namespace metal;
     float x = position.x / size.x;
     float y = position.y - size.y * 0.5;
 
-    // Strands fade in and out at both ends instead of stopping at a hard edge.
-    float ends = smoothstep(0.0, 0.18, x) * smoothstep(1.0, 0.82, x);
+    // Strands fade in and out at both ends instead of stopping at a hard edge, and their glow
+    // fades out before the top and bottom so the frame never shows as a box.
+    float ends = smoothstep(0.0, 0.18, x) * smoothstep(1.0, 0.82, x)
+        * (1.0 - smoothstep(0.55, 1.0, abs(y) / (size.y * 0.5)));
     float envelope = sin(M_PI_F * x);
 
-    float3 cyan = float3(0.25, 0.92, 1.0);
-    float3 blue = float3(0.18, 0.48, 1.0);
-    float3 violet = float3(0.58, 0.36, 1.0);
-    float3 tint = x < 0.5 ? mix(cyan, blue, x * 2.0) : mix(blue, violet, (x - 0.5) * 2.0);
+    // The ribbon takes its ink from the color it paints over, so the theme owns it.
+    float3 tint = color.a > 0.0h ? float3(color.rgb) / float(color.a) : float3(1.0);
 
     float amplitude = size.y * (0.26 + 0.14 * energy);
     float glowWidth = 9.0 + 6.0 * energy;
@@ -45,18 +45,15 @@ using namespace metal;
     float bloom = exp(-dot(centre, centre) * 2.2) * (0.22 + 0.12 * energy);
 
     if (dark < 0.5) {
-        // Added light only washes out on a light background. Paint deeper, saturated ink instead:
-        // opacity comes from the strands' strength, so the colour itself can stay rich.
-        float3 teal = float3(0.0, 0.58, 0.82);
-        float3 deepBlue = float3(0.10, 0.33, 0.93);
-        float3 deepViolet = float3(0.45, 0.22, 0.90);
-        float3 ink = x < 0.5 ? mix(teal, deepBlue, x * 2.0) : mix(deepBlue, deepViolet, (x - 0.5) * 2.0);
+        // Added light only washes out on a light background. Paint the ink instead:
+        // opacity comes from the strands' strength, so the ink itself stays solid.
+        float3 ink = tint;
         float coverage = saturate(coreSum * 0.95 + glowSum * (0.22 + 0.08 * energy) + bloom * 0.35) * ends;
         float3 shade = mix(ink, ink * 0.78, saturate(hot));
         return half4(half3(shade * coverage), half(coverage));
     }
 
-    light += mix(blue, cyan, 0.4) * bloom;
+    light += tint * bloom;
 
     light += float3(1.0) * hot * 0.75;
     light *= ends;

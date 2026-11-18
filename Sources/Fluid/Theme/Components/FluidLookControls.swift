@@ -322,7 +322,6 @@ struct FluidSearchField: View {
 
     var body: some View {
         let look = self.theme.look
-        let shape = RoundedRectangle(cornerRadius: self.theme.metrics.corners.md, style: .continuous)
         HStack(spacing: self.theme.metrics.spacing.xs + 2) {
             Image(systemName: "magnifyingglass")
                 .foregroundStyle(look.tertiaryText)
@@ -342,8 +341,32 @@ struct FluidSearchField: View {
         .fluidText(.body)
         .padding(.leading, self.theme.metrics.spacing.sm + 2)
         .frame(height: 32)
-        .background(look.quietFill, in: shape)
-        .overlay(shape.strokeBorder(self.isFocused ? look.tertiaryText : .clear, lineWidth: 1).allowsHitTesting(false))
+        .fluidFieldChrome(isFocused: self.isFocused, padding: 0)
+    }
+}
+
+/// The surface of a text field or editor: a quiet grey fill, and a hairline edge while it has
+/// keyboard focus instead of a colored ring. The caller owns the focus state.
+private struct FluidFieldChrome: ViewModifier {
+    @Environment(\.theme) private var theme
+    let isFocused: Bool
+    let padding: CGFloat?
+
+    func body(content: Content) -> some View {
+        let look = self.theme.look
+        let shape = RoundedRectangle(cornerRadius: self.theme.metrics.corners.md, style: .continuous)
+        content
+            .padding(self.padding ?? self.theme.metrics.spacing.md)
+            .background(look.quietFill, in: shape)
+            .overlay(shape.strokeBorder(self.isFocused ? look.tertiaryText : .clear, lineWidth: 1).allowsHitTesting(false))
+    }
+}
+
+extension View {
+    /// Puts a text field or editor on the look's input surface. `padding` defaults to the
+    /// theme's medium spacing; pass 0 when the content lays out its own insets.
+    func fluidFieldChrome(isFocused: Bool, padding: CGFloat? = nil) -> some View {
+        self.modifier(FluidFieldChrome(isFocused: isFocused, padding: padding))
     }
 }
 

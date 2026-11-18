@@ -72,8 +72,8 @@ struct DictionaryWordWizard: View {
                         .disabled(self.processing || self.starting)
                         .help("Pause automatic recording to review or edit spellings (Esc)")
                 } else if self.step != .spelling, self.step != .saved {
-                    Button(action: self.onBack) { Label("Change word", systemImage: "chevron.left") }
-                        .fluidGlassAction()
+                    Button("Change word", action: self.onBack)
+                        .fluidAction()
                         .disabled(self.busy)
                 }
                 Spacer()
@@ -84,23 +84,21 @@ struct DictionaryWordWizard: View {
             .frame(minHeight: 32)
             .overlay {
                 Text(self.step == .saved ? "Word saved" : "Step \(self.step.position) of 3")
-                    .font(self.theme.typography.caption)
-                    .foregroundStyle(self.theme.palette.secondaryText)
+                    .fluidText(.label)
+                    .foregroundStyle(self.theme.look.tertiaryText)
                     .allowsHitTesting(false)
             }
-            FluidGlassControlGroup {
-                VStack(spacing: self.theme.metrics.spacing.lg) {
-                    switch self.step {
-                    case .spelling: self.spelling
-                    case .recording, .review: self.capture
-                    case .saved: self.saved
-                    case .manual: EmptyView()
-                    }
+            VStack(spacing: self.theme.metrics.spacing.lg) {
+                switch self.step {
+                case .spelling: self.spelling
+                case .recording, .review: self.capture
+                case .saved: self.saved
+                case .manual: EmptyView()
                 }
-                .frame(maxWidth: self.step == .recording || self.step == .review ? .infinity : 420)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, self.theme.metrics.spacing.sm)
             }
+            .frame(maxWidth: self.step == .recording || self.step == .review ? .infinity : 420)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, self.theme.metrics.spacing.sm)
         }
         .alert("Discard these recordings and try again?", isPresented: self.$confirmingRedo) {
             Button("Cancel", role: .cancel) {}
@@ -126,7 +124,8 @@ struct DictionaryWordWizard: View {
         VStack(spacing: self.theme.metrics.spacing.lg) {
             DictionaryVoiceWave(active: false, height: 96)
             Text("Which word does FluidVoice keep getting wrong?")
-                .font(self.theme.typography.sectionTitle)
+                .fluidText(.itemTitle)
+                .foregroundStyle(self.theme.look.text)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
             TextField("For example, FluidVoice", text: Binding(get: { self.word }, set: { value in
@@ -136,14 +135,9 @@ struct DictionaryWordWizard: View {
                 } else { self.word = value }
             }))
             .textFieldStyle(.plain)
-            .padding(14)
-            .background(self.theme.palette.contentBackground, in: RoundedRectangle(cornerRadius: self.theme.metrics.corners.md))
-            .overlay {
-                RoundedRectangle(cornerRadius: self.theme.metrics.corners.md)
-                    .stroke(self.wordFocused ? self.theme.palette.accent.opacity(0.7) : self.theme.palette.cardBorder, lineWidth: 1)
-                    .allowsHitTesting(false)
-            }
-            .font(self.theme.typography.body)
+            .fluidText(.body)
+            .foregroundStyle(self.theme.look.text)
+            .fluidFieldChrome(isFocused: self.wordFocused)
             .focused(self.$wordFocused)
             .dictionaryDictationInput(focused: self.wordFocused)
             .accessibilityLabel("Word to learn")
@@ -176,8 +170,8 @@ struct DictionaryWordWizard: View {
     private var manualAlternative: some View {
         HStack(spacing: self.theme.metrics.spacing.md) {
             Text("Prefer typing?")
-                .font(self.theme.typography.body)
-                .foregroundStyle(self.theme.palette.secondaryText)
+                .fluidText(.body)
+                .foregroundStyle(self.theme.look.secondaryText)
             self.manualButton.disabled(self.busy)
         }
         .frame(maxWidth: .infinity)
@@ -186,10 +180,11 @@ struct DictionaryWordWizard: View {
     private var captureStage: some View {
         VStack(spacing: self.theme.metrics.spacing.lg) {
             Text(self.step == .review ? (self.pronunciationIncomplete ? "Your spellings are ready" : "Your word is ready") : (self.voiceSupported ? "Learn your pronunciation" : "Learn the spelling of"))
-                .font(self.theme.typography.body)
-                .foregroundStyle(self.theme.palette.accent)
+                .fluidText(.body)
+                .foregroundStyle(self.theme.look.secondaryText)
             Text("“\(self.word)”")
-                .font(self.theme.typography.title)
+                .fluidText(.detailTitle)
+                .foregroundStyle(self.theme.look.text)
                 .fixedSize(horizontal: false, vertical: true)
             DictionaryVoiceWave(
                 active: self.isListening,
@@ -234,81 +229,77 @@ struct DictionaryWordWizard: View {
                 self.hasViewedTips = true
             }
         } label: {
-            HStack(spacing: self.theme.metrics.spacing.sm) {
-                Image(systemName: "lightbulb")
+            HStack(spacing: self.theme.metrics.spacing.xs + 2) {
                 Text("Tips")
                 Image(systemName: "chevron.down")
+                    .font(.fluidSystem(size: 10, weight: .semibold))
                     .rotationEffect(.degrees(self.showingRecordingTips ? 180 : 0))
                     .accessibilityHidden(true)
             }
         }
-        .fluidGlassAction(prominent: !self.hasViewedTips || self.showingRecordingTips, tone: self.theme.palette.accent)
+        .fluidAction()
         .accessibilityValue(self.showingRecordingTips ? "Expanded" : "Collapsed")
         .accessibilityHint("Shows or hides guidance beside the learning area")
     }
 
     private var guidanceCard: some View {
-        self.captureGuidance
-            .padding(self.theme.metrics.spacing.xl)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(self.theme.palette.contentBackground, in: RoundedRectangle(cornerRadius: self.theme.metrics.corners.lg))
-            .overlay {
-                RoundedRectangle(cornerRadius: self.theme.metrics.corners.lg)
-                    .stroke(self.theme.palette.cardBorder.opacity(0.6), lineWidth: 1)
-                    .allowsHitTesting(false)
-            }
+        FluidSurfaceCard(padding: self.theme.metrics.spacing.xl) {
+            self.captureGuidance
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
     }
 
     private var captureGuidance: some View {
         VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xxl) {
             Text(self.step == .review ? "Your word, your way" : "For best results")
-                .font(self.theme.typography.title)
+                .fluidText(.groupTitle)
+                .foregroundStyle(self.theme.look.text)
             if self.step == .review {
                 Text(self.alreadyCorrect ? "FluidVoice recognised your word in each recording." : "Your recordings are ready. Save this word to use it in future dictations.")
-                    .font(self.theme.typography.statement)
-                    .foregroundStyle(self.theme.palette.secondaryText)
-                Divider()
+                    .fluidText(.body)
+                    .foregroundStyle(self.theme.look.secondaryText)
+                FluidHairline()
                 Text("Want to add another example?")
-                    .font(self.theme.typography.sectionTitle)
+                    .fluidText(.rowTitle)
+                    .foregroundStyle(self.theme.look.text)
                 Text("You can record more before saving. Keep saying the word in your normal voice.")
-                    .font(self.theme.typography.body)
-                    .foregroundStyle(self.theme.palette.secondaryText)
+                    .fluidText(.body)
+                    .foregroundStyle(self.theme.look.secondaryText)
             } else {
                 self.instruction(1, title: "Say only the word", detail: "Use your normal voice. No sentence needed.")
                 self.instruction(2, title: "Wait when you finish", detail: "Recording stops automatically.")
                 self.instruction(3, title: "Wait for the next recording", detail: "Speak again when “Recording” appears.")
-                Divider()
-                Label("Choose a quiet place and keep a comfortable distance from your microphone.", systemImage: "ear")
-                    .font(self.theme.typography.body)
-                    .foregroundStyle(self.theme.palette.secondaryText)
+                FluidHairline()
+                Text("Choose a quiet place and keep a comfortable distance from your microphone.")
+                    .fluidText(.body)
+                    .foregroundStyle(self.theme.look.secondaryText)
             }
         }
         .fixedSize(horizontal: false, vertical: true)
-        .padding(.vertical, self.theme.metrics.spacing.lg)
         .accessibilityElement(children: .contain)
     }
 
     private func instruction(_ number: Int, title: String, detail: String) -> some View {
         HStack(alignment: .top, spacing: self.theme.metrics.spacing.md) {
             Text("\(number)")
-                .font(self.theme.typography.bodyStrong)
-                .foregroundStyle(self.theme.palette.accent)
+                .fluidText(.rowTitle)
+                .foregroundStyle(self.theme.look.text)
                 .frame(width: 28, height: 28)
-                .background(self.theme.palette.accent.opacity(0.1), in: Circle())
+                .background(self.theme.look.quietFill, in: Circle())
                 .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
-                Text(title).font(self.theme.typography.sectionTitle)
-                Text(detail).font(self.theme.typography.body)
-                    .foregroundStyle(self.theme.palette.secondaryText)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).fluidText(.rowTitle).foregroundStyle(self.theme.look.text)
+                Text(detail).fluidText(.body)
+                    .foregroundStyle(self.theme.look.secondaryText)
             }
         }
     }
 
     @ViewBuilder private var captureError: some View {
         if let error {
-            Text(error)
-                .font(self.theme.typography.body)
-                .foregroundStyle(self.theme.palette.warning)
+            Label(error, systemImage: "exclamationmark.triangle")
+                .fluidText(.body)
+                .foregroundStyle(self.theme.look.text)
                 .frame(maxWidth: .infinity)
                 .multilineTextAlignment(.center)
                 .accessibilityLabel("Recording issue: \(error)")
@@ -320,8 +311,8 @@ struct DictionaryWordWizard: View {
             if self.step == .review {
                 if self.pronunciationIncomplete, let pronunciationNotice {
                     Text(pronunciationNotice)
-                        .font(self.theme.typography.body)
-                        .foregroundStyle(self.theme.palette.secondaryText)
+                        .fluidText(.body)
+                        .foregroundStyle(self.theme.look.secondaryText)
                         .multilineTextAlignment(.center)
                         .frame(maxWidth: .infinity)
                 }
@@ -331,12 +322,12 @@ struct DictionaryWordWizard: View {
                     Text("Say only the word, then pause.").hidden().accessibilityHidden(true)
                     Text(self.captureInstruction)
                 }
-                .font(self.theme.typography.title)
-                .foregroundStyle(self.theme.palette.primaryText)
+                .fluidText(.itemTitle)
+                .foregroundStyle(self.theme.look.text)
                 .fixedSize(horizontal: false, vertical: true)
                 Text("Recording stops automatically.")
-                    .font(self.theme.typography.body)
-                    .foregroundStyle(self.theme.palette.secondaryText)
+                    .fluidText(.body)
+                    .foregroundStyle(self.theme.look.secondaryText)
                 self.captureRecordActions
             }
         }
@@ -352,13 +343,13 @@ struct DictionaryWordWizard: View {
                         guard !self.busy, !self.captureActive else { return }
                         self.onRecord()
                     } label: {
-                        Label(DictionaryCaptureAction.title(failed: self.error != nil, count: self.count), systemImage: "mic.fill")
+                        Text(DictionaryCaptureAction.title(failed: self.error != nil, count: self.count))
                     }
-                    .buttonStyle(FluidRecordInvitationStyle(inviting: self.count < 1, recording: false))
+                    .fluidAction(.primary, size: .large)
                     .disabled(self.busy)
                 }
             }
-            .frame(minHeight: FluidButtonSize.large.controlHeight)
+            .frame(minHeight: 36)
             self.redoButton
                 .hidden()
                 .accessibilityHidden(true)
@@ -376,15 +367,13 @@ struct DictionaryWordWizard: View {
 
     private var redoButton: some View {
         Button("Redo recordings") { self.confirmingRedo = true }
-            .fluidGlassAction()
+            .fluidAction()
             .disabled(self.busy)
     }
 
     private var manualButton: some View {
-        Button(action: self.onManual) {
-            Label("Add manually", systemImage: "keyboard")
-        }
-        .fluidGlassAction()
+        Button("Add manually", action: self.onManual)
+            .fluidAction()
     }
 
     private var reviewActions: some View {
@@ -395,7 +384,7 @@ struct DictionaryWordWizard: View {
 
     @ViewBuilder private var reviewButtons: some View {
         Button("Redo recordings") { self.confirmingRedo = true }
-            .buttonStyle(FluidRecordInvitationStyle(inviting: false, recording: false, prominent: false, fillsWidth: true))
+            .fluidAction(size: .large)
             .disabled(self.busy)
         Button(action: self.onSave) {
             ZStack {
@@ -403,17 +392,17 @@ struct DictionaryWordWizard: View {
                 Text(self.busy ? "Saving…" : (self.pronunciationIncomplete ? "Save spelling corrections" : "Add to dictionary"))
             }
         }
-        .buttonStyle(FluidRecordInvitationStyle(inviting: self.step == .review && !self.busy, recording: false, fillsWidth: true))
+        .fluidAction(.primary, size: .large)
         .disabled(self.busy || !self.canSave)
         if self.count < CustomDictionaryTrainingMerge.maxSamples {
             VStack(spacing: self.theme.metrics.spacing.sm) {
                 Button("Record more", action: self.onRecord)
-                    .buttonStyle(FluidRecordInvitationStyle(inviting: false, recording: false, prominent: false, fillsWidth: true))
+                    .fluidAction(size: .large)
                     .disabled(self.busy)
                 if self.pronunciationIncomplete {
                     Text("Finish pronunciation learning")
-                        .font(self.theme.typography.caption)
-                        .foregroundStyle(self.theme.palette.secondaryText)
+                        .fluidText(.label)
+                        .foregroundStyle(self.theme.look.secondaryText)
                         .frame(maxWidth: 190)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -425,7 +414,7 @@ struct DictionaryWordWizard: View {
         VStack(spacing: self.theme.metrics.spacing.lg) {
             DictionaryWordPlayground(word: self.savedWord, onPracticeMore: self.onPracticeMore, busy: self.$playgroundBusy)
             Button("Add another word", action: self.onNewWord)
-                .fluidGlassAction()
+                .fluidAction()
                 .disabled(self.playgroundBusy)
         }
     }
@@ -441,7 +430,8 @@ struct DictionaryWordWizard: View {
         VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
             HStack {
                 Text("Spelling corrections")
-                    .font(self.theme.typography.bodyStrong)
+                    .fluidText(.rowTitle)
+                    .foregroundStyle(self.theme.look.text)
                 Spacer()
                 if self.onAddSpelling != nil {
                     Button {
@@ -459,16 +449,16 @@ struct DictionaryWordWizard: View {
             }
             if self.capturedSpellings.isEmpty {
                 Text(self.heard.caseInsensitiveCompare(self.word) == .orderedSame ? "“\(self.word)” was recognised correctly." : "No spelling corrections yet.")
-                    .font(self.theme.typography.caption)
-                    .foregroundStyle(self.theme.palette.secondaryText)
+                    .fluidText(.label)
+                    .foregroundStyle(self.theme.look.secondaryText)
             } else {
                 FlowLayout(spacing: 6) {
                     ForEach(self.capturedSpellings, id: \.self) { variant in
                         HStack(spacing: 4) {
-                            Text(variant).font(self.theme.typography.bodySmall)
+                            Text(variant).fluidText(.body).foregroundStyle(self.theme.look.text)
                             if let onRemoveSpelling {
                                 Button { onRemoveSpelling(variant) } label: {
-                                    Image(systemName: "xmark").font(self.theme.typography.caption)
+                                    Image(systemName: "xmark").font(.fluidSystem(size: 10, weight: .semibold))
                                 }
                                 .fluidGlassAction(circular: true, quiet: true)
                                 .disabled(self.busy || self.captureActive)
@@ -479,7 +469,7 @@ struct DictionaryWordWizard: View {
                         .padding(.leading, 10)
                         .padding(.trailing, self.onRemoveSpelling == nil ? 10 : 0)
                         .padding(.vertical, self.onRemoveSpelling == nil ? 6 : 0)
-                        .background(self.theme.palette.accent.opacity(0.08), in: Capsule())
+                        .background(self.theme.look.quietFill, in: Capsule())
                     }
                 }
             }
@@ -492,20 +482,20 @@ struct DictionaryWordWizard: View {
 
     private var addSpellingPopover: some View {
         VStack(alignment: .leading, spacing: self.theme.metrics.spacing.md) {
-            Text("Add a spelling correction").font(self.theme.typography.sectionTitle)
+            Text("Add a spelling correction").fluidText(.rowTitle).foregroundStyle(self.theme.look.text)
             TextField("What FluidVoice types instead", text: self.$newSpelling)
                 .textFieldStyle(.roundedBorder)
                 .onSubmit { self.addSpelling() }
             if let spellingError {
-                Text(spellingError)
-                    .font(self.theme.typography.caption)
-                    .foregroundStyle(self.theme.palette.warning)
+                Label(spellingError, systemImage: "exclamationmark.triangle")
+                    .fluidText(.label)
+                    .foregroundStyle(self.theme.look.text)
             }
             HStack {
-                Button("Cancel") { self.showingAddSpelling = false }.fluidGlassAction()
+                Button("Cancel") { self.showingAddSpelling = false }.fluidAction()
                 Spacer()
                 Button("Add") { self.addSpelling() }
-                    .fluidGlassAction(prominent: true)
+                    .fluidAction(.primary)
                     .disabled(self.newSpelling.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || self.busy || self.captureActive)
             }
         }
@@ -522,20 +512,9 @@ struct DictionaryWordWizard: View {
         }
     }
 
-    private func heading(_ title: String, detail: String) -> some View {
-        VStack(spacing: self.theme.metrics.spacing.sm) {
-            Text(title).font(self.theme.typography.sectionTitle)
-            Text(detail).font(self.theme.typography.bodySmall).foregroundStyle(self.theme.palette.secondaryText)
-        }
-        .multilineTextAlignment(.center)
-        .fixedSize(horizontal: false, vertical: true)
-    }
-
     private func primary(_ title: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Text(title)
-        }
-        .fluidGlassAction(prominent: true, tone: self.theme.palette.accent)
+        Button(title, action: action)
+            .fluidAction(.primary, size: .large)
     }
 }
 
@@ -608,10 +587,11 @@ private struct DictionaryVoiceWave: View {
             )
             if self.reduceTransparency {
                 DictionaryWaveShape(phase: frame.phase, amplitude: 0.45 + CGFloat(frame.energy) * 0.4, frequency: 1)
-                    .stroke(self.theme.palette.accent, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                    .stroke(self.theme.look.data, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
             } else {
+                // The shader draws in the color it paints over: the theme's data ink.
                 Rectangle()
-                    .fill(.white)
+                    .fill(self.theme.look.data)
                     .visualEffect { content, proxy in
                         content.colorEffect(ShaderLibrary.dictionaryVoiceWave(
                             .float2(proxy.size),
@@ -723,31 +703,31 @@ private struct DictionaryCaptureSlots: View {
         let pending = heard == nil && index == self.attempts.count ? self.pendingStatus : nil
         return VStack(spacing: 2) {
             Text("Try \(index + 1)")
-                .font(self.theme.typography.caption)
-                .foregroundStyle(self.theme.palette.secondaryText)
+                .fluidText(.label)
+                .foregroundStyle(self.theme.look.tertiaryText)
             HStack(spacing: 4) {
-                if matches {
-                    Image(systemName: "checkmark").accessibilityHidden(true)
-                } else if pending == "Listening…" {
-                    Circle().fill(Color(nsColor: .systemRed)).frame(width: 7, height: 7).accessibilityHidden(true)
+                // A dot marks the try that is listening now.
+                if pending == "Listening…" {
+                    Circle().fill(self.theme.look.text).frame(width: 7, height: 7).accessibilityHidden(true)
                 }
                 Text(heard ?? pending ?? "—")
                     .lineLimit(1)
                     .truncationMode(.middle)
             }
-            .font(heard == nil ? self.theme.typography.body : self.theme.typography.bodyStrong)
-            .foregroundStyle(matches ? self.theme.palette.accent : (heard == nil ? self.theme.palette.tertiaryText : self.theme.palette.primaryText))
+            .fluidText(heard == nil ? .body : .rowTitle)
+            .foregroundStyle(heard == nil ? self.theme.look.tertiaryText : self.theme.look.text)
         }
-        .padding(.vertical, 10)
-        .padding(.horizontal, 12)
+        .padding(.vertical, self.theme.metrics.spacing.sm + 2)
+        .padding(.horizontal, self.theme.metrics.spacing.md)
         .frame(maxWidth: .infinity)
+        // A try that heard the word right gets the highlight fill; the others stay quiet.
         .background(
-            matches ? self.theme.palette.accent.opacity(0.1) : self.theme.palette.contentBackground,
-            in: RoundedRectangle(cornerRadius: self.theme.metrics.corners.md)
+            matches ? self.theme.look.highlightFill : self.theme.look.quietFill,
+            in: RoundedRectangle(cornerRadius: self.theme.metrics.corners.md, style: .continuous)
         )
         .overlay {
-            RoundedRectangle(cornerRadius: self.theme.metrics.corners.md)
-                .stroke(matches || pending != nil ? self.theme.palette.accent.opacity(0.5) : self.theme.palette.cardBorder, lineWidth: 1)
+            RoundedRectangle(cornerRadius: self.theme.metrics.corners.md, style: .continuous)
+                .strokeBorder(matches || pending != nil ? self.theme.look.tertiaryText : .clear, lineWidth: 1)
                 .allowsHitTesting(false)
         }
         .accessibilityElement(children: .ignore)
@@ -781,47 +761,44 @@ struct DictionaryWordPlayground: View {
     var body: some View {
         VStack(alignment: .leading, spacing: self.theme.metrics.spacing.md) {
             Text("Test “\(self.word)”")
-                .font(self.theme.typography.title)
+                .fluidText(.detailTitle)
+                .foregroundStyle(self.theme.look.text)
             ZStack(alignment: .topLeading) {
                 TextEditor(text: Binding(get: { self.test.text }, set: { self.test.edit($0) }))
-                    .font(self.theme.typography.body)
+                    .fluidText(.body)
+                    .foregroundStyle(self.theme.look.text)
                     .scrollContentBackground(.hidden)
                     .focused(self.$editorFocused)
                     .padding(10)
                     .accessibilityLabel("Dictionary test text")
                 if self.test.text.isEmpty {
                     Text(self.test.phase == .recording ? "Listening…" : (self.test.phase == .processing ? "Checking…" : "Use \(self.shortcut) and say something with “\(self.word)”."))
-                        .font(self.theme.typography.body)
-                        .foregroundStyle(self.theme.palette.secondaryText)
+                        .fluidText(.body)
+                        .foregroundStyle(self.theme.look.tertiaryText)
                         .padding(15)
                         .allowsHitTesting(false)
                 }
             }
             .frame(height: 150)
-            .background(self.theme.palette.contentBackground, in: RoundedRectangle(cornerRadius: self.theme.metrics.corners.md))
-            .overlay {
-                RoundedRectangle(cornerRadius: self.theme.metrics.corners.md)
-                    .stroke(self.editorFocused ? self.theme.palette.accent.opacity(0.5) : self.theme.palette.cardBorder, lineWidth: 1)
-                    .allowsHitTesting(false)
-            }
+            .fluidFieldChrome(isFocused: self.editorFocused, padding: 0)
             switch self.test.result {
             case .recognized:
                 Text("“\(self.word)” recognized" + (self.test.successes > 1 ? " · \(self.test.successes) times" : ""))
-                    .font(self.theme.typography.bodyStrong)
-                    .foregroundStyle(self.theme.palette.accent)
+                    .fluidText(.rowTitle)
+                    .foregroundStyle(self.theme.look.text)
             case .missed:
                 Text("We didn’t catch “\(self.word)”. Try your shortcut again.")
-                    .font(self.theme.typography.body)
-                    .foregroundStyle(self.theme.palette.secondaryText)
+                    .fluidText(.body)
+                    .foregroundStyle(self.theme.look.secondaryText)
                 if let onPracticeMore {
                     Button("Record more examples", action: onPracticeMore)
-                        .fluidGlassAction()
+                        .fluidAction()
                         .disabled(self.busy)
                 }
             case .empty:
                 Text("No words came through. Try your shortcut again.")
-                    .font(self.theme.typography.body)
-                    .foregroundStyle(self.theme.palette.secondaryText)
+                    .fluidText(.body)
+                    .foregroundStyle(self.theme.look.secondaryText)
             case .none:
                 EmptyView()
             }
