@@ -88,23 +88,30 @@ final class SpokenSendTests: XCTestCase {
         )
     }
 
-    func testImmediateStopRequiresChildOption() {
+    func testImmediateStopFollowsSpokenSendSwitchOnly() {
         XCTAssertTrue(
             SpokenSendParser.shouldStopImmediately(
                 "Ready, send it.",
                 phrase: "send it",
-                spokenSendEnabled: true,
-                sendImmediatelyEnabled: true
+                spokenSendEnabled: true
             )
         )
         XCTAssertFalse(
             SpokenSendParser.shouldStopImmediately(
                 "Ready, send it.",
                 phrase: "send it",
-                spokenSendEnabled: true,
-                sendImmediatelyEnabled: false
+                spokenSendEnabled: false
             )
         )
+    }
+
+    func testEveryWaitLeavesRoomForTheSilenceCheck() {
+        XCTAssertEqual(SettingsStore.SpokenSendWait.allCases.map(\.seconds), [0.5, 1.5, 3])
+        for wait in SettingsStore.SpokenSendWait.allCases {
+            // A shorter wait could never see enough quiet to send, or would cancel on the phrase's own echo.
+            XCTAssertGreaterThanOrEqual(wait.seconds, SpokenSendParser.immediateStopRequiredSilenceDuration, wait.displayName)
+            XCTAssertGreaterThan(wait.seconds, SpokenSendParser.immediateStopVoiceActivityGraceDuration, wait.displayName)
+        }
     }
 
     func testImmediateStopDoesNotTriggerForPhraseInMiddle() {
@@ -112,8 +119,7 @@ final class SpokenSendTests: XCTestCase {
             SpokenSendParser.shouldStopImmediately(
                 "Send it when you are ready",
                 phrase: "send it",
-                spokenSendEnabled: true,
-                sendImmediatelyEnabled: true
+                spokenSendEnabled: true
             )
         )
     }
@@ -123,24 +129,21 @@ final class SpokenSendTests: XCTestCase {
             SpokenSendParser.shouldStopImmediately(
                 "Ready, send it",
                 phrase: "send it",
-                spokenSendEnabled: true,
-                sendImmediatelyEnabled: true
+                spokenSendEnabled: true
             )
         )
         XCTAssertTrue(
             SpokenSendParser.shouldStopImmediately(
                 "Ready, SEND IT.",
                 phrase: "send it",
-                spokenSendEnabled: true,
-                sendImmediatelyEnabled: true
+                spokenSendEnabled: true
             )
         )
         XCTAssertFalse(
             SpokenSendParser.shouldStopImmediately(
                 "Ready, send it after I finish this sentence.",
                 phrase: "send it",
-                spokenSendEnabled: true,
-                sendImmediatelyEnabled: true
+                spokenSendEnabled: true
             )
         )
     }
@@ -170,7 +173,6 @@ final class SpokenSendTests: XCTestCase {
                 "Ready, sent it.",
                 phrase: "send it",
                 spokenSendEnabled: true,
-                sendImmediatelyEnabled: true,
                 quietDuration: SpokenSendParser.immediateStopRequiredSilenceDuration,
                 armedText: "Ready, send it."
             )
@@ -180,7 +182,6 @@ final class SpokenSendTests: XCTestCase {
                 "Ready, send it after I finish this sentence.",
                 phrase: "send it",
                 spokenSendEnabled: true,
-                sendImmediatelyEnabled: true,
                 quietDuration: SpokenSendParser.immediateStopRequiredSilenceDuration,
                 armedText: "Ready, send it."
             )
@@ -384,8 +385,7 @@ final class SpokenSendTests: XCTestCase {
         let arguments = (
             text: "Ready, send it.",
             phrase: "send it",
-            spokenSendEnabled: true,
-            sendImmediatelyEnabled: true
+            spokenSendEnabled: true
         )
 
         XCTAssertFalse(
@@ -393,7 +393,6 @@ final class SpokenSendTests: XCTestCase {
                 arguments.text,
                 phrase: arguments.phrase,
                 spokenSendEnabled: arguments.spokenSendEnabled,
-                sendImmediatelyEnabled: arguments.sendImmediatelyEnabled,
                 quietDuration: 0
             )
         )
@@ -402,7 +401,6 @@ final class SpokenSendTests: XCTestCase {
                 arguments.text,
                 phrase: arguments.phrase,
                 spokenSendEnabled: arguments.spokenSendEnabled,
-                sendImmediatelyEnabled: arguments.sendImmediatelyEnabled,
                 quietDuration: SpokenSendParser.immediateStopRequiredSilenceDuration
             )
         )
@@ -414,7 +412,6 @@ final class SpokenSendTests: XCTestCase {
                 "Ready, send it after I finish this sentence.",
                 phrase: "send it",
                 spokenSendEnabled: true,
-                sendImmediatelyEnabled: true,
                 quietDuration: 2
             )
         )
@@ -616,25 +613,196 @@ final class SpokenSendTests: XCTestCase {
     func testSettingsBackupIncludesSpokenSendConfiguration() async throws {
         let settings = SettingsStore.shared
         let originalEnabled = settings.spokenSendEnabled
-        let originalImmediate = settings.spokenSendImmediatelyEnabled
         let originalPhrase = settings.spokenSendPhrase
         let originalKey = settings.spokenSendKey
+        let originalWait = settings.spokenSendWait
         defer {
             settings.spokenSendEnabled = originalEnabled
-            settings.spokenSendImmediatelyEnabled = originalImmediate
             settings.spokenSendPhrase = originalPhrase
             settings.spokenSendKey = originalKey
+            settings.spokenSendWait = originalWait
         }
 
         settings.spokenSendEnabled = true
-        settings.spokenSendImmediatelyEnabled = false
         settings.spokenSendPhrase = "ship it"
         settings.spokenSendKey = .commandEnter
+        settings.spokenSendWait = .long
 
         let document = try await BackupService.shared.makeBackupDocument()
         XCTAssertEqual(document.settings.spokenSendEnabled, true)
-        XCTAssertEqual(document.settings.spokenSendImmediatelyEnabled, false)
         XCTAssertEqual(document.settings.spokenSendPhrase, "ship it")
         XCTAssertEqual(document.settings.spokenSendKey, .commandEnter)
+        XCTAssertEqual(document.settings.spokenSendWait, .long)
+    }
+}
+
+@MainActor
+final class DictationAutoSendTests: XCTestCase {
+    func testAutoSendIndicatorIsIndependentOfSpokenSendAndSurvivesProcessing() {
+        let state = NotchContentState.shared
+        let previous = (state.isAutoSendArmed, state.mode, state.isProcessing, state.spokenSendIndicatorState, state.isAIProcessingFailureVisible, state.isTextDeliveryFailureVisible)
+        defer {
+            state.isAutoSendArmed = previous.0
+            state.mode = previous.1
+            state.isProcessing = previous.2
+            state.setSpokenSendIndicatorState(previous.3)
+            state.isAIProcessingFailureVisible = previous.4
+            state.isTextDeliveryFailureVisible = previous.5
+        }
+        state.isAutoSendArmed = false
+        state.mode = .dictation
+        state.setSpokenSendIndicatorState(.hidden)
+        state.isAIProcessingFailureVisible = false
+        state.isTextDeliveryFailureVisible = false
+        XCTAssertEqual(state.sendIndicatorState(spokenSendEnabled: false), .hidden)
+        state.isAutoSendArmed = true
+        XCTAssertEqual(state.sendIndicatorState(spokenSendEnabled: false), .detected)
+        state.setProcessing(true)
+        state.setSpokenSendIndicatorState(.detected)
+        XCTAssertEqual(state.sendIndicatorState(spokenSendEnabled: false), .detected)
+        state.setSpokenSendIndicatorState(.hidden)
+        XCTAssertEqual(state.sendIndicatorState(spokenSendEnabled: false), .detected)
+        for phase: SpokenSendIndicatorState in [.sending, .sent, .failed] {
+            state.setSpokenSendIndicatorState(phase)
+            XCTAssertEqual(state.sendIndicatorState(spokenSendEnabled: false), phase)
+        }
+        state.setSpokenSendIndicatorState(.hidden)
+        state.isAIProcessingFailureVisible = true
+        XCTAssertEqual(state.sendIndicatorState(spokenSendEnabled: false), .hidden)
+        state.isAIProcessingFailureVisible = false
+        for mode: OverlayMode in [.command, .edit, .rewrite, .write] {
+            state.mode = mode
+            XCTAssertEqual(state.sendIndicatorState(spokenSendEnabled: true), .hidden)
+        }
+        state.mode = .dictation
+        state.isAutoSendArmed = false
+        XCTAssertEqual(state.sendIndicatorState(spokenSendEnabled: false), .hidden)
+        state.setSpokenSendIndicatorState(.detected)
+        XCTAssertEqual(state.sendIndicatorState(spokenSendEnabled: true), .detected)
+        XCTAssertEqual(state.sendIndicatorState(spokenSendEnabled: false), .hidden)
+    }
+
+    func testPostInsertionWaitHonorsCancellationBeforeAndDuringThePause() async {
+        var valid = false
+        var waits = 0
+        let rejectedBefore = await TypingService.preparePostInsertionAction(wait: { waits += 1 }, isOutputValid: { valid })
+        XCTAssertFalse(rejectedBefore)
+        XCTAssertEqual(waits, 0)
+
+        valid = true
+        let rejectedDuring = await TypingService.preparePostInsertionAction(wait: {
+            waits += 1
+            await Task.yield()
+            valid = false
+        }, isOutputValid: { valid })
+        XCTAssertFalse(rejectedDuring, "Escape during the review pause must suppress Enter")
+        XCTAssertEqual(waits, 1)
+
+        valid = true
+        let startedAt = ProcessInfo.processInfo.systemUptime
+        let allowed = await TypingService.preparePostInsertionAction(wait: {
+            try? await Task.sleep(for: .seconds(DictationAutoSendPolicy.sendDelay))
+        }, isOutputValid: { valid })
+        XCTAssertTrue(allowed)
+        XCTAssertEqual(DictationAutoSendPolicy.sendDelay, 1)
+        XCTAssertGreaterThanOrEqual(ProcessInfo.processInfo.systemUptime - startedAt, 0.95)
+        let immediate = await TypingService.preparePostInsertionAction(wait: nil, isOutputValid: { valid })
+        XCTAssertTrue(immediate, "Existing spoken-send callers require no review pause")
+    }
+
+    func testPreferencesDefaultOffAndPersistIndependentlyWithoutChangingBindings() throws {
+        let suite = "DictationAutoSendTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set("unchanged", forKey: "PrimaryDictationShortcuts")
+        let store = DictationAutoSendPreferences(defaults: defaults)
+        let first = HotkeyShortcut(keyCode: 61, modifierFlags: [])
+        let second = HotkeyShortcut(keyCode: 58, modifierFlags: [])
+        XCTAssertFalse(store.isEnabled(for: first))
+        XCTAssertFalse(store.isEnabled(for: nil))
+        store.shortcuts = [first, first]
+        let reloaded = DictationAutoSendPreferences(defaults: defaults)
+        XCTAssertEqual(reloaded.shortcuts, [first])
+        XCTAssertTrue(reloaded.isEnabled(for: first))
+        XCTAssertFalse(reloaded.isEnabled(for: second))
+        store.shortcuts = [first, second]
+        store.retain([second])
+        XCTAssertFalse(store.isEnabled(for: first))
+        XCTAssertTrue(store.isEnabled(for: second))
+        XCTAssertEqual(defaults.string(forKey: "PrimaryDictationShortcuts"), "unchanged")
+        defaults.set(Data("invalid".utf8), forKey: DictationAutoSendPreferences.key)
+        XCTAssertFalse(store.isEnabled(for: second))
+    }
+
+    func testAutoSendOnlySendsNewTextOnNormalUncancelledDelivery() {
+        for enabled in [false, true] {
+            for cancelled in [false, true] {
+                for route: ContentView.DictationOutputRoute in [.normal, .historyOnly, .onboardingSandbox] {
+                    for text in ["", " \n", "A new sentence."] {
+                        let result = DictationAutoSendPolicy.shouldSend(enabled: enabled, route: route, cancelled: cancelled, text: text)
+                        XCTAssertEqual(result, enabled && !cancelled && route == .normal && text == "A new sentence.")
+                    }
+                }
+            }
+        }
+        let ordinary = "I will send it tomorrow."
+        XCTAssertTrue(DictationAutoSendPolicy.shouldSend(enabled: true, route: .normal, cancelled: false, text: ordinary))
+        XCTAssertEqual(SpokenSendParser.parse(ordinary, phrase: "send it", enabled: false).text, ordinary)
+    }
+
+    func testHotkeyCallbacksIdentifyEachStartingShortcutInToggleAndHoldModes() async throws {
+        let first = HotkeyShortcut(keyCode: 2, modifierFlags: [.control, .command])
+        let second = HotkeyShortcut(keyCode: 3, modifierFlags: [.control, .command])
+        for mode: HotkeyActivationMode in [.toggle, .hold] {
+            let asr = ASRService()
+            weak var currentManager: GlobalHotkeyManager?
+            var observed: [HotkeyShortcut?] = []
+            var stops = 0
+            var started: XCTestExpectation?
+            var stopped: XCTestExpectation?
+            let onStart: () async -> Void = {
+                observed.append(currentManager?.shortcutForCurrentRecordingAction(.transcription))
+                asr.isRunning = true
+                started?.fulfill()
+            }
+            let manager = GlobalHotkeyManager(
+                asrService: asr,
+                primaryShortcuts: [first, second],
+                promptModeShortcut: first,
+                commandModeShortcut: nil,
+                rewriteModeShortcut: first,
+                promptModeShortcutEnabled: false,
+                commandModeShortcutEnabled: false,
+                rewriteModeShortcutEnabled: false,
+                startRecordingCallback: onStart,
+                dictationModeCallback: onStart,
+                stopAndProcessCallback: { _ in stops += 1; asr.isRunning = false; stopped?.fulfill() },
+                isDictateRecordingProvider: { true },
+                isSessionLockedProvider: { false }
+            )
+            currentManager = manager
+            manager.setHotkeyMode(mode)
+            defer { asr.isRunning = false }
+            for shortcut in [first, second] {
+                let start = self.expectation(description: "Start \(mode) \(shortcut.keyCode)")
+                let stop = self.expectation(description: "Stop \(mode) \(shortcut.keyCode)")
+                started = start
+                stopped = stop
+                let down = try XCTUnwrap(CGEvent(keyboardEventSource: nil, virtualKey: shortcut.keyCode, keyDown: true))
+                down.flags = [.maskControl, .maskCommand]
+                let up = try XCTUnwrap(CGEvent(keyboardEventSource: nil, virtualKey: shortcut.keyCode, keyDown: false))
+                _ = manager.handleKeyEvent(type: .keyDown, event: down)
+                if mode == .toggle { _ = manager.handleKeyEvent(type: .keyUp, event: up) }
+                await self.fulfillment(of: [start], timeout: 3)
+                XCTAssertEqual(try XCTUnwrap(observed.last), shortcut)
+                XCTAssertNil(manager.shortcutForCurrentRecordingAction(.transcription), "Callback context must not leak into UI recording starts")
+                if mode == .toggle { _ = manager.handleKeyEvent(type: .keyDown, event: down) }
+                _ = manager.handleKeyEvent(type: .keyUp, event: up)
+                await self.fulfillment(of: [stop], timeout: 3)
+                XCTAssertFalse(asr.isRunning)
+            }
+            XCTAssertEqual(observed, [first, second])
+            XCTAssertEqual(stops, 2)
+        }
     }
 }

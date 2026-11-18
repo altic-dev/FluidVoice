@@ -302,6 +302,7 @@ struct ContentView: View {
     @State private var isRecordingForCommand: Bool = false // Track if current recording is for command mode
     @State private var promptModeOverrideText: String? // System prompt text to use when in prompt mode
     @State private var activeDictationShortcutSlot: SettingsStore.DictationShortcutSlot? = nil
+    @State private var activeDictationAutoSend = false
     @State private var activeRecordingMode: ActiveRecordingMode = .none
     private struct PendingAIReprocess {
         let text: String
@@ -2461,15 +2462,32 @@ struct ContentView: View {
         toggleStopRequestedAt: TimeInterval?,
         preserveTranscriptOnClipboard: Bool,
         stopSnapshot: DictationStopSnapshot? = nil,
+        sendKey: SettingsStore.SpokenSendKey? = nil,
+        waitsBeforeAutoSend: Bool = false,
         isOutputValid: @escaping @MainActor () -> Bool = { true }
     ) async -> TypingService.DeliveryOutcome {
         let sendsExistingDraft = outputPlan.plainText.isEmpty
+        let beforeSend: (@MainActor () async -> Void)?
+        if waitsBeforeAutoSend {
+            beforeSend = {
+                guard isOutputValid() else { return }
+                NotchContentState.shared.beginSpokenSendCountdown(duration: DictationAutoSendPolicy.sendDelay)
+                NotchOverlayManager.shared.updateTranscriptionText("Sending in 1 second · Esc to cancel")
+                try? await Task.sleep(for: .seconds(DictationAutoSendPolicy.sendDelay))
+                guard isOutputValid() else { return }
+                NotchContentState.shared.setSpokenSendIndicatorState(.sending)
+                NotchOverlayManager.shared.updateTranscriptionText("Sending")
+            }
+        } else {
+            beforeSend = nil
+        }
         let outcome = await self.asr.typeOutputPlanToActiveFieldAndWait(
             outputPlan,
             preferredTargetPID: targetPID,
             textReadyAt: textReadyAt,
             toggleStopRequestedAt: toggleStopRequestedAt,
-            postInsertionKey: self.settings.spokenSendKey,
+            postInsertionKey: sendKey ?? self.settings.spokenSendKey,
+            beforePostInsertionAction: beforeSend,
             requiredFocusTarget: stopSnapshot == nil ? self.recordingFocusTarget : stopSnapshot?.focusTarget,
             preserveTranscriptOnClipboard: preserveTranscriptOnClipboard,
             isOutputValid: isOutputValid
@@ -2477,7 +2495,7 @@ struct ContentView: View {
         guard isOutputValid() else { return outcome }
         if outcome.didDispatchAction {
             NotchContentState.shared.setSpokenSendIndicatorState(.sent)
-            try? await Task.sleep(nanoseconds: 350_000_000)
+            if !waitsBeforeAutoSend { try? await Task.sleep(nanoseconds: 350_000_000) }
             return outcome
         }
 
@@ -3158,6 +3176,7 @@ struct ContentView: View {
         let wasRewriteMode = modeAtStop == .edit || self.isRecordingForRewrite
         let wasCommandMode = modeAtStop == .command || self.isRecordingForCommand
         let activeDictationSlot = self.currentDictationShortcutSlot(for: modeAtStop)
+        let autoSendAtStop = self.activeDictationAutoSend && activeDictationSlot != nil
         let promptOverride = self.promptModeOverrideText
         let promptTest = DictationPromptTestCoordinator.shared
         let promptTestSessionID = promptTest.isActive ? promptTest.sessionID : nil
@@ -3167,7 +3186,7 @@ struct ContentView: View {
             DictationAIPostProcessingGate.isConfigured(for: $0, appBundleID: self.recordingAppInfo?.bundleId)
         } ?? DictationAIPostProcessingGate.isConfigured(for: .primary, appBundleID: self.recordingAppInfo?.bundleId)
         let shouldHideOverlayOnStop = route == .historyOnly || self.cancelledOutputLifecycleID == expectedOverlayLifecycleID || (route == .normal && !wasRewriteMode && !wasCommandMode
-            && !promptTest.isActive && !shouldUseAIOnStop && !self.settings.spokenSendEnabled)
+            && !promptTest.isActive && !shouldUseAIOnStop && !self.settings.spokenSendEnabled && !autoSendAtStop)
         DebugLogger.shared.info(
             "Routing decision snapshot | activeMode=\(modeAtStop.rawValue) | rewrite=\(wasRewriteMode) | command=\(wasCommandMode) | overlay=\(NotchContentState.shared.mode.rawValue)",
             source: "ContentView"
@@ -3300,6 +3319,13 @@ struct ContentView: View {
         let finalDictionaryRules = ASRService.caseSensitiveDictionaryRules()
         let textNormalizer = await DictationTextNormalizationService.shared.formatter(for: spokenSendParse.text)
         let normalizedTranscribedText = textNormalizer.normalize(spokenSendParse.text, phase: .beforeCleanup)
+        let autoSendRequested = DictationAutoSendPolicy.shouldSend(
+            enabled: autoSendAtStop && !promptTest.isActive,
+            route: route,
+            cancelled: cancelledAtASRStop,
+            text: normalizedTranscribedText
+        )
+        if autoSendRequested { self.updateSpokenSendIndicatorForFinalParse(shouldSend: true) }
         var sendsExistingDraft = spokenSendParse.shouldSend &&
             normalizedTranscribedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
 
@@ -3539,7 +3565,7 @@ struct ContentView: View {
         if shouldTypeExternally {
             let typingTarget = stopSnapshot.map { (pid: $0.target?.pid, shouldRestoreOriginalFocus: true) }
                 ?? self.resolveTypingTargetPID(returnToStartingField: self.settings.returnDictationToStartingField)
-            let spokenSendRequested = spokenSendParse.shouldSend
+            let spokenSendRequested = spokenSendParse.shouldSend || autoSendRequested
             let sendFocus = stopSnapshot == nil ? self.recordingFocusTarget : stopSnapshot?.focusTarget
             let targetMatchesRecordingFocus = typingTarget.pid != nil
                 && typingTarget.pid == sendFocus?.pid
@@ -3564,7 +3590,7 @@ struct ContentView: View {
                 return
             }
 
-            if spokenSendAllowed {
+            if spokenSendAllowed, !autoSendRequested {
                 NotchContentState.shared.setSpokenSendIndicatorState(.sending)
                 NotchOverlayManager.shared.updateTranscriptionText("Sending")
             }
@@ -3583,6 +3609,8 @@ struct ContentView: View {
                     toggleStopRequestedAt: toggleStopRequestedAt,
                     preserveTranscriptOnClipboard: shouldCopyToClipboard,
                     stopSnapshot: stopSnapshot,
+                    sendKey: autoSendRequested ? self.settings.spokenSendKey : nil,
+                    waitsBeforeAutoSend: autoSendRequested,
                     isOutputValid: { self.cancelledOutputLifecycleID != expectedOverlayLifecycleID }
                 )
                 self.logPipelineCompletion(
@@ -3979,13 +4007,6 @@ struct ContentView: View {
             phrase: self.settings.spokenSendPhrase
         )
 
-        guard self.settings.spokenSendImmediatelyEnabled else {
-            if isEligible {
-                NotchContentState.shared.setSpokenSendIndicatorState(isArmed ? .detected : .hidden)
-            }
-            return
-        }
-
         guard isArmed else {
             self.spokenSendAutoStopTask?.cancel()
             self.spokenSendAutoStopTask = nil
@@ -4008,10 +4029,12 @@ struct ContentView: View {
         self.spokenSendCountdownStartedAt = countdownStartedAt
         self.spokenSendLastVoiceActivityAt = countdownStartedAt
         self.startSpokenSendVoiceActivityMonitoring()
-        let expectedCountdownID = NotchContentState.shared.beginSpokenSendCountdown()
+        // Read once, so changing the setting mid-countdown can't make the ring and the send disagree.
+        let wait = self.settings.spokenSendWait.seconds
+        let expectedCountdownID = NotchContentState.shared.beginSpokenSendCountdown(duration: wait)
         self.spokenSendAutoStopTask = Task { @MainActor in
             // Keep one countdown across harmless streaming refinements such as punctuation or casing.
-            try? await Task.sleep(nanoseconds: SpokenSendParser.immediateStopSettleNanoseconds)
+            try? await Task.sleep(for: .seconds(wait))
             let quietDuration = ProcessInfo.processInfo.systemUptime - self.spokenSendLastVoiceActivityAt
             guard !Task.isCancelled,
                   self.overlayLifecycleID == expectedOverlayLifecycleID,
@@ -4024,7 +4047,6 @@ struct ContentView: View {
                       self.asr.partialTranscription,
                       phrase: self.settings.spokenSendPhrase,
                       spokenSendEnabled: self.settings.spokenSendEnabled,
-                      sendImmediatelyEnabled: self.settings.spokenSendImmediatelyEnabled,
                       quietDuration: quietDuration,
                       armedText: self.spokenSendArming.armedText
                   )
@@ -4660,6 +4682,7 @@ struct ContentView: View {
 
     private func setActiveRecordingMode(_ mode: ActiveRecordingMode) {
         if mode == .command || mode == .edit { self.cancelDictationContextCapture() }
+        if mode == .command || mode == .edit { NotchContentState.shared.isAutoSendArmed = false }
         if mode != .dictate, mode != .promptMode {
             self.clearActiveDictationShortcutState()
         }
@@ -4782,7 +4805,7 @@ struct ContentView: View {
     }
 
     /// Capture app context at start to avoid mismatches if the user switches apps mid-session
-    private func startRecording() -> Task<Void, Never>? {
+    private func startRecording(autoSend: Bool = false) -> Task<Void, Never>? {
         guard !self.isSavingCancelledRecording, self.processingDictationLifecycleID == nil else { return nil }
         // Browsing the demo must not send dictation to a previously focused app.
         guard !self.showsFluidIntelligenceDemo || (DictationPromptTestCoordinator.shared.isActive && !DictationPromptTestCoordinator.shared.isProcessing) else { return nil }
@@ -4796,6 +4819,8 @@ struct ContentView: View {
             DebugLogger.shared.debug("ContentView: start ignored because capture is already active", source: "ContentView")
             return nil
         }
+        self.activeDictationAutoSend = autoSend
+        NotchContentState.shared.isAutoSendArmed = autoSend
         self.advanceOverlayLifecycle()
         self.setActiveRecordingMode(.dictate)
         let shouldShowDictationOverlay = !self.isRecordingForCommand
@@ -4840,6 +4865,10 @@ struct ContentView: View {
                 return
             }
             if startOutcome == .failed {
+                if self.overlayLifecycleID == captureOverlayLifecycleID {
+                    self.activeDictationAutoSend = false
+                    NotchContentState.shared.isAutoSendArmed = false
+                }
                 self.cancelDictationContextCapture()
                 self.menuBarManager.hideRecordingOverlayImmediately(reason: "asr_start_failed")
             }
@@ -5203,7 +5232,7 @@ struct ContentView: View {
             rewriteModeShortcutEnabled: self.isRewriteModeShortcutEnabled,
             startRecordingCallback: {
                 DebugLogger.shared.debug("ContentView: startRecordingCallback invoked by hotkey", source: "ContentView")
-                await self.awaitCaptureStart(self.startRecording())
+                await self.awaitCaptureStart(self.startRecording(autoSend: self.autoSendForCurrentHotkey(.transcription)))
             },
             dictationModeCallback: {
                 DebugLogger.shared.info("Dictate mode triggered", source: "ContentView")
@@ -5211,7 +5240,7 @@ struct ContentView: View {
                     "ContentView: selected model for dictate hotkey=\(SettingsStore.shared.selectedSpeechModel.displayName)",
                     source: "ContentView"
                 )
-                await self.awaitCaptureStart(self.beginDictationRecording(for: .primary, mode: .dictate))
+                await self.awaitCaptureStart(self.beginDictationRecording(for: .primary, mode: .dictate, autoSend: self.autoSendForCurrentHotkey(.transcription)))
             },
             stopAndProcessCallback: { toggleStopRequestedAt in
                 let route = self.currentDictationOutputRouteForHotkeyStop()
@@ -5223,11 +5252,11 @@ struct ContentView: View {
             },
             promptModeCallback: {
                 DebugLogger.shared.info("Prompt mode triggered", source: "ContentView")
-                await self.awaitCaptureStart(self.beginDictationRecording(for: .secondary, mode: .promptMode))
+                await self.awaitCaptureStart(self.beginDictationRecording(for: .secondary, mode: .promptMode, autoSend: self.autoSendForCurrentHotkey(.promptMode)))
             },
             promptSelectionCallback: { selection in
                 DebugLogger.shared.info("Prompt selection shortcut triggered", source: "ContentView")
-                await self.awaitCaptureStart(self.beginDictationRecording(for: selection, mode: .promptMode))
+                await self.awaitCaptureStart(self.beginDictationRecording(for: selection, mode: .promptMode, autoSend: self.autoSendForCurrentHotkey(.promptAssignment)))
             },
             commandModeCallback: {
                 await self.beginCommandRecording()
@@ -5526,8 +5555,13 @@ extension ContentView {
         }
     }
 
+    private func autoSendForCurrentHotkey(_ type: HotkeyHoldModeType) -> Bool {
+        self.settings.autoSendEnabled(for: self.hotkeyManager?.shortcutForCurrentRecordingAction(type))
+    }
+
     private func clearActiveDictationShortcutState() {
         self.activeDictationShortcutSlot = nil
+        self.activeDictationAutoSend = false
         self.promptModeOverrideText = nil
         NotchContentState.shared.activeDictationShortcutSlot = nil
         NotchContentState.shared.promptModeOverrideProfileName = nil
@@ -5590,11 +5624,16 @@ extension ContentView {
     private func beginDictationRecording(
         for slot: SettingsStore.DictationShortcutSlot,
         mode: ActiveRecordingMode,
-        startMethod: AnalyticsOnboardingTryoutStartMethod = .hotkey
+        startMethod: AnalyticsOnboardingTryoutStartMethod = .hotkey,
+        autoSend: Bool = false
     ) -> Task<Void, Never>? {
         guard self.canBeginDictationRecording() else { return nil }
         let switchesOwnedCapture = self.canSwitchActiveDictationCaptureMode
         let previousMode = self.activeRecordingMode
+        if !switchesOwnedCapture {
+            self.activeDictationAutoSend = autoSend
+            NotchContentState.shared.isAutoSendArmed = autoSend
+        }
         DebugLogger.shared.debug("Begin dictation recording for slot \(slot.rawValue)", source: "ContentView")
         DebugLogger.shared.debug("CLOSE_DETAIL nextStartRequested uptime=\(ProcessInfo.processInfo.systemUptime)", source: "StopTiming")
         self.appBench("begin_recording slot=\(slot.rawValue) mode=\(mode.rawValue)")
@@ -5655,6 +5694,10 @@ extension ContentView {
                 return
             }
             if startOutcome == .failed {
+                if self.overlayLifecycleID == captureOverlayLifecycleID {
+                    self.activeDictationAutoSend = false
+                    NotchContentState.shared.isAutoSendArmed = false
+                }
                 self.cancelDictationContextCapture()
                 self.menuBarManager.hideRecordingOverlayImmediately(reason: "asr_start_failed")
                 if isOnboardingTryout {
@@ -5672,11 +5715,11 @@ extension ContentView {
         }
     }
 
-    private func beginDictationRecording(for selection: SettingsStore.DictationPromptSelection, mode: ActiveRecordingMode) -> Task<Void, Never>? {
+    private func beginDictationRecording(for selection: SettingsStore.DictationPromptSelection, mode: ActiveRecordingMode, autoSend: Bool = false) -> Task<Void, Never>? {
         guard self.canBeginDictationRecording() else { return nil }
         let settings = SettingsStore.shared
         settings.setDictationPromptSelection(selection, for: .secondary)
-        return self.beginDictationRecording(for: .secondary, mode: mode)
+        return self.beginDictationRecording(for: .secondary, mode: mode, autoSend: autoSend)
     }
 
     private func benchmarkLoadAverage() -> String {

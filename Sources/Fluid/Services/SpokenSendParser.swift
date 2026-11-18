@@ -34,8 +34,6 @@ struct SpokenSendArmingState: Equatable {
 }
 
 enum SpokenSendParser {
-    static let immediateStopSettleDuration: TimeInterval = 1.5
-    static let immediateStopSettleNanoseconds: UInt64 = 1_500_000_000
     static let immediateStopRequiredSilenceDuration: TimeInterval = 0.35
     static let immediateStopVoiceActivityGraceDuration: TimeInterval = 0.35
     static let immediateStopVoiceActivityLevelThreshold: CGFloat = 0.12
@@ -44,18 +42,15 @@ enum SpokenSendParser {
         _ text: String,
         phrase: String,
         spokenSendEnabled: Bool,
-        sendImmediatelyEnabled: Bool,
         armedText: String? = nil
     ) -> Bool {
-        sendImmediatelyEnabled &&
-            self.isArmed(text, armedText: armedText, phrase: phrase, enabled: spokenSendEnabled)
+        self.isArmed(text, armedText: armedText, phrase: phrase, enabled: spokenSendEnabled)
     }
 
     static func canCompleteImmediateStop(
         _ text: String,
         phrase: String,
         spokenSendEnabled: Bool,
-        sendImmediatelyEnabled: Bool,
         quietDuration: TimeInterval,
         armedText: String? = nil
     ) -> Bool {
@@ -64,7 +59,6 @@ enum SpokenSendParser {
                 text,
                 phrase: phrase,
                 spokenSendEnabled: spokenSendEnabled,
-                sendImmediatelyEnabled: sendImmediatelyEnabled,
                 armedText: armedText
             )
     }

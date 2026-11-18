@@ -477,6 +477,7 @@ final class SettingsStore: ObservableObject {
             } else {
                 self.defaults.removeObject(forKey: Keys.dictationPromptConfigurations)
             }
+            self.pruneAutoSendDictationShortcuts()
         }
     }
 
@@ -548,7 +549,7 @@ final class SettingsStore: ObservableObject {
     func dictationPromptConfigurationKey(for selection: DictationPromptSelection) -> String? {
         switch selection {
         case .off:
-            return nil
+            return "__off__"
         case .privateAI:
             return "__privateAI__"
         case .default:
@@ -560,6 +561,9 @@ final class SettingsStore: ObservableObject {
     }
 
     func dictationPromptSelection(forConfigurationKey key: String) -> DictationPromptSelection? {
+        if key == "__off__" {
+            return .off
+        }
         if key == "__privateAI__" {
             return .privateAI
         }
@@ -609,19 +613,10 @@ final class SettingsStore: ObservableObject {
 
     func dictationPromptShortcutAssignments() -> [(selection: DictationPromptSelection, shortcut: HotkeyShortcut)] {
         self.dictationPromptConfigurations.compactMap { key, configuration in
-            guard let shortcut = configuration.shortcut, !shortcut.requiresModifierForRecording else { return nil }
-            if key == "__default__" {
-                return (.default, shortcut)
-            }
-            if key == "__privateAI__" {
-                return (.privateAI, shortcut)
-            }
-            if key.hasPrefix("profile:") {
-                let id = String(key.dropFirst("profile:".count))
-                guard self.dictationPromptProfiles.contains(where: { $0.id == id && $0.mode.normalized == .dictate }) else { return nil }
-                return (.profile(id), shortcut)
-            }
-            return nil
+            guard let shortcut = configuration.shortcut, !shortcut.requiresModifierForRecording,
+                  let selection = self.dictationPromptSelection(forConfigurationKey: key)
+            else { return nil }
+            return (selection, shortcut)
         }
     }
 
@@ -1883,6 +1878,30 @@ final class SettingsStore: ObservableObject {
         }
     }
 
+    var autoSendDictationShortcuts: [HotkeyShortcut] {
+        get { DictationAutoSendPreferences(defaults: self.defaults).shortcuts }
+        set {
+            self.objectWillChange.send()
+            DictationAutoSendPreferences(defaults: self.defaults).shortcuts = newValue
+            self.pruneAutoSendDictationShortcuts()
+        }
+    }
+
+    func autoSendEnabled(for shortcut: HotkeyShortcut?) -> Bool {
+        DictationAutoSendPreferences(defaults: self.defaults).isEnabled(for: shortcut)
+    }
+
+    func setAutoSendEnabled(_ enabled: Bool, for shortcut: HotkeyShortcut) {
+        var shortcuts = self.autoSendDictationShortcuts.filter { $0 != shortcut }
+        if enabled { shortcuts.append(shortcut) }
+        self.autoSendDictationShortcuts = shortcuts
+    }
+
+    private func pruneAutoSendDictationShortcuts() {
+        let configured = self.primaryDictationShortcuts + self.dictationPromptShortcutAssignments().map(\.shortcut) + [self.promptModeHotkeyShortcut]
+        DictationAutoSendPreferences(defaults: self.defaults).retain(configured)
+    }
+
     private static var defaultPrimaryDictationShortcut: HotkeyShortcut {
         HotkeyShortcut(keyCode: 61, modifierFlags: [])
     }
@@ -1909,6 +1928,7 @@ final class SettingsStore: ObservableObject {
     private func storePrimaryDictationShortcuts(_ shortcuts: [HotkeyShortcut]) {
         if let data = try? JSONEncoder().encode(shortcuts) {
             self.defaults.set(data, forKey: Keys.primaryDictationShortcutsKey)
+            self.pruneAutoSendDictationShortcuts()
         }
     }
 
@@ -3223,6 +3243,7 @@ final class SettingsStore: ObservableObject {
             objectWillChange.send()
             if let data = try? JSONEncoder().encode(newValue) {
                 self.defaults.set(data, forKey: Keys.promptModeHotkeyShortcut)
+                self.pruneAutoSendDictationShortcuts()
             }
         }
     }
@@ -3825,9 +3846,9 @@ final class SettingsStore: ObservableObject {
             copyTranscriptionToClipboard: self.copyTranscriptionToClipboard,
             textInsertionMode: self.textInsertionMode,
             spokenSendEnabled: self.spokenSendEnabled,
-            spokenSendImmediatelyEnabled: self.spokenSendImmediatelyEnabled,
             spokenSendPhrase: self.spokenSendPhrase,
             spokenSendKey: self.spokenSendKey,
+            spokenSendWait: self.spokenSendWait,
             preferredInputDeviceUID: self.preferredInputDeviceUID,
             microphonePriority: self.microphonePriority,
             suppressedMicrophoneUIDs: self.suppressedMicrophoneUIDs.sorted(),
@@ -3886,7 +3907,8 @@ final class SettingsStore: ObservableObject {
             meetingRecordingDefaults: self.meetingRecordingDefaults,
             privateAIIdleUnload: self.privateAIIdleUnload,
             dictationPromptConfigurations: self.dictationPromptConfigurations,
-            automaticDictionaryPromptDelay: self.automaticDictionaryPromptDelay
+            automaticDictionaryPromptDelay: self.automaticDictionaryPromptDelay,
+            autoSendDictationShortcuts: self.autoSendDictationShortcuts
         )
     }
 
@@ -4000,14 +4022,14 @@ final class SettingsStore: ObservableObject {
         if let spokenSendEnabled = payload.spokenSendEnabled {
             self.spokenSendEnabled = spokenSendEnabled
         }
-        if let spokenSendImmediatelyEnabled = payload.spokenSendImmediatelyEnabled {
-            self.spokenSendImmediatelyEnabled = spokenSendImmediatelyEnabled
-        }
         if let spokenSendPhrase = payload.spokenSendPhrase {
             self.spokenSendPhrase = spokenSendPhrase
         }
         if let spokenSendKey = payload.spokenSendKey {
             self.spokenSendKey = spokenSendKey
+        }
+        if let spokenSendWait = payload.spokenSendWait {
+            self.spokenSendWait = spokenSendWait
         }
         self.preferredInputDeviceUID = payload.preferredInputDeviceUID
         self.suppressedMicrophoneUIDs = Set(payload.suppressedMicrophoneUIDs ?? [])
@@ -4137,6 +4159,7 @@ final class SettingsStore: ObservableObject {
         }
         self.purgeRetiredAppleIntelligenceState()
         self.makeEditModeIndependentIfNeeded()
+        if let shortcuts = payload.autoSendDictationShortcuts { self.autoSendDictationShortcuts = shortcuts }
     }
 
     // MARK: - Private Methods
@@ -4421,7 +4444,7 @@ final class SettingsStore: ObservableObject {
 
     private func normalizeDictationPromptConfigurationsIfNeeded() {
         let validKeys = Set(
-            ["__default__", "__privateAI__"] + self.dictationPromptProfiles
+            ["__off__", "__default__", "__privateAI__"] + self.dictationPromptProfiles
                 .filter { $0.mode.normalized == .dictate }
                 .map { "profile:\($0.id)" }
         )
@@ -6193,9 +6216,9 @@ private extension SettingsStore {
         static let copyTranscriptionToClipboard = "CopyTranscriptionToClipboard"
         static let textInsertionMode = "TextInsertionMode"
         static let spokenSendEnabled = "SpokenSendEnabled"
-        static let spokenSendImmediatelyEnabled = "SpokenSendImmediatelyEnabled"
         static let spokenSendPhrase = "SpokenSendPhrase"
         static let spokenSendKey = "SpokenSendKey"
+        static let spokenSendWait = "SpokenSendWait"
         static let reliablePasteMigrationV1 = "TextInsertionModeMigratedToReliablePasteV1"
         static let autoUpdateCheckEnabled = UpdateKeys.autoUpdateCheckEnabled
         static let showUpdatePopups = UpdateKeys.showUpdatePopups
@@ -6368,19 +6391,44 @@ extension SettingsStore {
         }
     }
 
+    /// How long Spoken Send waits after the phrase before it stops and sends.
+    enum SpokenSendWait: String, CaseIterable, Identifiable, Codable {
+        case short
+        case normal
+        case long
+
+        var id: String {
+            self.rawValue
+        }
+
+        var seconds: TimeInterval {
+            switch self {
+            case .short:
+                return 0.5
+            case .normal:
+                return 1.5
+            case .long:
+                return 3
+            }
+        }
+
+        var displayName: String {
+            switch self {
+            case .short:
+                return "0.5 seconds"
+            case .normal:
+                return "1.5 seconds"
+            case .long:
+                return "3 seconds"
+            }
+        }
+    }
+
     var spokenSendEnabled: Bool {
         get { self.defaults.object(forKey: Keys.spokenSendEnabled) as? Bool ?? false }
         set {
             objectWillChange.send()
             self.defaults.set(newValue, forKey: Keys.spokenSendEnabled)
-        }
-    }
-
-    var spokenSendImmediatelyEnabled: Bool {
-        get { self.defaults.object(forKey: Keys.spokenSendImmediatelyEnabled) as? Bool ?? true }
-        set {
-            objectWillChange.send()
-            self.defaults.set(newValue, forKey: Keys.spokenSendImmediatelyEnabled)
         }
     }
 
@@ -6404,6 +6452,21 @@ extension SettingsStore {
         set {
             objectWillChange.send()
             self.defaults.set(newValue.rawValue, forKey: Keys.spokenSendKey)
+        }
+    }
+
+    var spokenSendWait: SpokenSendWait {
+        get {
+            guard let raw = self.defaults.string(forKey: Keys.spokenSendWait),
+                  let wait = SpokenSendWait(rawValue: raw)
+            else {
+                return .normal
+            }
+            return wait
+        }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue.rawValue, forKey: Keys.spokenSendWait)
         }
     }
 
