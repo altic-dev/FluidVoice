@@ -20,12 +20,12 @@ struct MeetingRecordingCanvas: View {
                         self.isStopping ? "Saving recording" : "Recording",
                         systemImage: self.isStopping ? "stop.circle.fill" : "record.circle.fill"
                     )
-                    .font(self.theme.typography.captionStrong)
-                    .foregroundStyle(self.isStopping ? self.theme.palette.warning : Color(nsColor: .systemRed))
+                    .fluidText(.label)
+                    .foregroundStyle(self.theme.look.text)
                     Spacer(minLength: 0)
                     Text(Self.durationText(context.date.timeIntervalSince(self.session.startedAt)))
                         .font(self.theme.typography.codeCaption)
-                        .foregroundStyle(self.theme.palette.secondaryText)
+                        .foregroundStyle(self.theme.look.secondaryText)
                 }
                 .accessibilityElement(children: .combine)
                 .accessibilityLabel(
@@ -48,16 +48,16 @@ struct MeetingRecordingCanvas: View {
                     )
                     .accessibilityIdentifier("meeting-recording-title")
                 Text(self.sourceSummary)
-                    .font(self.theme.typography.caption)
-                    .foregroundStyle(self.theme.palette.secondaryText)
+                    .fluidText(.label)
+                    .foregroundStyle(self.theme.look.secondaryText)
                     .lineLimit(1)
                     .help(self.sourceSummary)
             }
 
             if let errorMessage, !errorMessage.isEmpty {
                 Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
-                    .font(self.theme.typography.bodySmall)
-                    .foregroundStyle(self.theme.palette.warning)
+                    .fluidText(.body)
+                    .foregroundStyle(self.theme.look.text)
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("meeting-recording-action-error")
             }
@@ -67,7 +67,7 @@ struct MeetingRecordingCanvas: View {
                     HStack(spacing: self.theme.metrics.spacing.xl) { self.sourceHealth }
                     VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) { self.sourceHealth }
                 }
-                Divider()
+                FluidHairline()
             }
 
             if let warning = self.session.microphoneEchoWarning {
@@ -79,7 +79,7 @@ struct MeetingRecordingCanvas: View {
             }
             MeetingLiveTranscriptCard(snapshot: self.liveTranscript)
 
-            Divider()
+            FluidHairline()
             FluidGlassControlGroup {
                 ViewThatFits(in: .horizontal) {
                     HStack(spacing: self.theme.metrics.spacing.lg) {
@@ -103,8 +103,8 @@ struct MeetingRecordingCanvas: View {
         Text(self.isStopping
             ? "Saving your recording before transcription begins."
             : "Speaker labels are added after recording.")
-            .font(self.theme.typography.caption)
-            .foregroundStyle(self.theme.palette.secondaryText)
+            .fluidText(.label)
+            .foregroundStyle(self.theme.look.secondaryText)
             .fixedSize(horizontal: false, vertical: true)
     }
 
@@ -119,7 +119,7 @@ struct MeetingRecordingCanvas: View {
                 Label("Stop & Transcribe", systemImage: "stop.fill")
             }
         }
-        .meetingGlassAction(prominent: true, tone: Color(nsColor: .systemRed))
+        .meetingGlassAction(prominent: true)
         .disabled(self.isStopping)
     }
 
@@ -161,8 +161,8 @@ private struct MeetingLiveTranscriptCard: View {
         VStack(alignment: .leading, spacing: self.theme.metrics.spacing.lg) {
             HStack {
                 Text("Live transcript")
-                    .font(self.theme.typography.sectionTitle)
-                    .foregroundStyle(self.theme.palette.primaryText)
+                    .fluidText(.groupTitle)
+                    .foregroundStyle(self.theme.look.text)
                 Spacer()
                 FluidGlassControlGroup {
                     Button {
@@ -178,18 +178,18 @@ private struct MeetingLiveTranscriptCard: View {
 
             if let indicator = self.availabilityIndicator {
                 Label(indicator, systemImage: "exclamationmark.circle")
-                    .font(self.theme.typography.caption)
-                    .foregroundStyle(self.theme.palette.warning)
+                    .fluidText(.label)
+                    .foregroundStyle(self.theme.look.text)
                     .fixedSize(horizontal: false, vertical: true)
             }
             if self.rows.isEmpty {
                 VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
                     Text(self.availabilityIndicator == nil ? "Listening for conversation" : "Waiting for captions")
-                        .font(self.theme.typography.body)
-                        .foregroundStyle(self.theme.palette.secondaryText)
+                        .fluidText(.body)
+                        .foregroundStyle(self.theme.look.secondaryText)
                     Text("Your conversation will appear here as people speak.")
-                        .font(self.theme.typography.caption)
-                        .foregroundStyle(self.theme.palette.tertiaryText)
+                        .fluidText(.label)
+                        .foregroundStyle(self.theme.look.tertiaryText)
                 }
                 .padding(.top, self.theme.metrics.spacing.sm)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -239,34 +239,34 @@ struct MeetingProcessingCanvas: View {
                     .controlSize(.small)
                     .fixedSize()
                 Text("Preparing your transcript")
-                    .font(self.theme.typography.captionStrong)
-                    .foregroundStyle(self.theme.palette.secondaryText)
+                    .fluidText(.label)
+                    .foregroundStyle(self.theme.look.secondaryText)
             }
 
             VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
                 MeetingDocumentTitle(title: self.session.title)
                 Text("You can close this window. Processing continues on this Mac.")
-                    .font(self.theme.typography.bodySmall)
-                    .foregroundStyle(self.theme.palette.secondaryText)
+                    .fluidText(.body)
+                    .foregroundStyle(self.theme.look.secondaryText)
             }
 
-            Divider()
+            FluidHairline()
             VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xxl) {
                 ForEach(Array(self.stages.enumerated()), id: \.element) { index, stage in
                     HStack(spacing: self.theme.metrics.spacing.md) {
                         Image(systemName: self.icon(for: stage, index: index))
                             .foregroundStyle(self.color(for: stage, index: index))
-                            .font(self.theme.typography.sectionTitle)
+                            .fluidText(.groupTitle)
                             .frame(width: 24)
                         VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xs) {
                             Text(Self.title(for: stage))
-                                .font(self.theme.typography.bodyStrong)
+                                .fluidText(.rowTitle)
                                 .foregroundStyle(self.stage != .completed && index > self.activeIndex
-                                    ? self.theme.palette.secondaryText : self.theme.palette.primaryText)
+                                    ? self.theme.look.secondaryText : self.theme.look.text)
                             if stage == self.stage {
                                 Text(Self.detail(for: stage))
-                                    .font(self.theme.typography.caption)
-                                    .foregroundStyle(self.theme.palette.secondaryText)
+                                    .fluidText(.label)
+                                    .foregroundStyle(self.theme.look.secondaryText)
                                     .fixedSize(horizontal: false, vertical: true)
                             }
                         }
@@ -285,15 +285,16 @@ struct MeetingProcessingCanvas: View {
     }
 
     private func icon(for stage: MeetingProcessingStage, index: Int) -> String {
-        if self.stage == .completed || index < self.activeIndex { return "checkmark.circle.fill" }
+        // A tick means "selected" in this look, so finished steps are filled circles.
+        if self.stage == .completed || index < self.activeIndex { return "circle.fill" }
         if stage == self.stage { return "circle.dotted" }
         return "circle"
     }
 
     private func color(for stage: MeetingProcessingStage, index: Int) -> Color {
-        if self.stage == .completed || index < self.activeIndex { return self.theme.palette.success }
-        if stage == self.stage { return self.theme.palette.accent }
-        return self.theme.palette.tertiaryText
+        if self.stage == .completed || index < self.activeIndex { return self.theme.look.text }
+        if stage == self.stage { return self.theme.look.text }
+        return self.theme.look.tertiaryText
     }
 
     private func accessibilityStatus(for stage: MeetingProcessingStage, index: Int) -> String {
@@ -355,11 +356,11 @@ private struct MeetingDocumentActionLabel: View {
             Text(self.title)
             if self.disclosure {
                 Image(systemName: "chevron.down")
-                    .font(self.theme.typography.captionSmall)
+                    .fluidText(.label)
                     .frame(width: 10, height: 14)
             }
         }
-        .font(self.theme.typography.bodySmallStrong)
+        .fluidText(.rowTitle)
         .frame(height: 20)
         .contentShape(Rectangle())
     }
@@ -414,11 +415,13 @@ struct MeetingResultCanvas: View {
     }
 
     private func chipTint(for speaker: MeetingSessionSpeaker) -> Color? {
-        speaker.isLocalUser ? self.theme.palette.accent : self.speakerTints[speaker.id]
+        speaker.isLocalUser ? self.theme.look.text : self.speakerTints[speaker.id]
     }
 
+    /// Speakers read in grey ink: named people in full text, the unnamed microphone bucket in a
+    /// lighter grey. Names, not colors, tell people apart.
     private var speakerTints: [SessionSpeakerID: Color] {
-        MeetingSpeakerPalette.tints(for: self.session.activeSpeakers)
+        MeetingSpeakerPalette.tintIndices(for: self.session.activeSpeakers).mapValues { _ in self.theme.look.text }
     }
 
     private var hasEchoSegments: Bool {
@@ -492,17 +495,17 @@ struct MeetingResultCanvas: View {
 
                     if let errorMessage = self.playback.errorMessage {
                         Label(errorMessage, systemImage: "exclamationmark.triangle")
-                            .font(self.theme.typography.caption)
-                            .foregroundStyle(self.theme.palette.warning)
+                            .fluidText(.label)
+                            .foregroundStyle(self.theme.look.text)
                     }
                     if visibleSegments.isEmpty {
                         VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
                             Text("No transcript text")
-                                .font(self.theme.typography.bodyStrong)
-                                .foregroundStyle(self.theme.palette.primaryText)
+                                .fluidText(.rowTitle)
+                                .foregroundStyle(self.theme.look.text)
                             Text(self.emptyTranscriptDescription)
-                                .font(self.theme.typography.body)
-                                .foregroundStyle(self.theme.palette.secondaryText)
+                                .fluidText(.body)
+                                .foregroundStyle(self.theme.look.secondaryText)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
                         .padding(.vertical, self.theme.metrics.spacing.sm)
@@ -633,7 +636,7 @@ struct MeetingResultCanvas: View {
                     ($0.id, MeetingAssignSpeakersQuoteSource.sampleQuotes(for: $0.id, in: self.session.transcriptSegments))
                 }),
                 tints: self.speakerTints,
-                accentColor: self.theme.palette.accent,
+                accentColor: self.theme.look.text,
                 focusedSpeakerID: self.assignSpeakersFocus,
                 onSave: self.onAssignSpeakers,
                 onCancel: { self.isShowingAssignSpeakers = false }
@@ -668,7 +671,7 @@ struct MeetingResultCanvas: View {
 
     private var documentStatus: some View {
         Label(self.statusText, systemImage: self.statusIcon)
-            .font(self.theme.typography.caption)
+            .fluidText(.label)
             .foregroundStyle(self.statusColor)
             .fixedSize()
     }
@@ -691,8 +694,8 @@ struct MeetingResultCanvas: View {
         } icon: {
             Image(systemName: speakerCount > Self.reliableSpeakerLimit ? "exclamationmark.circle" : "info.circle")
         }
-        .font(self.theme.typography.caption)
-        .foregroundStyle(self.theme.palette.tertiaryText)
+        .fluidText(.label)
+        .foregroundStyle(self.theme.look.tertiaryText)
         .accessibilityElement(children: .combine)
     }
 
@@ -700,13 +703,13 @@ struct MeetingResultCanvas: View {
         VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
             HStack(spacing: self.theme.metrics.spacing.sm) {
                 Text("Speakers")
-                    .font(self.theme.typography.caption)
-                    .foregroundStyle(self.theme.palette.tertiaryText)
+                    .fluidText(.label)
+                    .foregroundStyle(self.theme.look.tertiaryText)
                 Spacer(minLength: 0)
                 Button("Edit speakers", systemImage: "pencil") {
                     self.presentAssignSpeakers(focusing: nil)
                 }
-                .fluidGlassAction()
+                .fluidAction()
                 .disabled(!self.isQuiescent)
             }
             ScrollView(.horizontal, showsIndicators: false) {
@@ -716,7 +719,7 @@ struct MeetingResultCanvas: View {
                             title: self.displayName(for: speaker),
                             systemImage: speaker.isLocalUser
                                 ? "person.crop.circle.badge.checkmark" : "person.crop.circle",
-                            tint: self.chipTint(for: speaker) ?? self.theme.palette.primaryText,
+                            tint: self.chipTint(for: speaker) ?? self.theme.look.text,
                             action: { self.presentAssignSpeakers(focusing: speaker.id) }
                         )
                         .disabled(!self.isQuiescent)
@@ -833,8 +836,8 @@ struct MeetingResultCanvas: View {
                 .lineLimit(1)
                 .help("Transcript language")
         }
-        .font(self.theme.typography.caption)
-        .foregroundStyle(self.theme.palette.secondaryText)
+        .fluidText(.label)
+        .foregroundStyle(self.theme.look.secondaryText)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(
             "\(self.session.startedAt.formatted(date: .abbreviated, time: .shortened)), " +
@@ -890,11 +893,11 @@ struct MeetingResultCanvas: View {
 
     private var statusColor: Color {
         switch self.session.state {
-        case .completed: self.theme.palette.success
-        case .failed: Color(nsColor: .systemRed)
-        case .interrupted: self.theme.palette.warning
-        case .processing: self.theme.palette.accent
-        case .recording, .recordingDegraded, .preparing, .stopping: self.theme.palette.warning
+        case .completed: self.theme.look.text
+        case .failed: self.theme.look.text
+        case .interrupted: self.theme.look.text
+        case .processing: self.theme.look.secondaryText
+        case .recording, .recordingDegraded, .preparing, .stopping: self.theme.look.text
         }
     }
 
@@ -947,8 +950,8 @@ struct MeetingFailureCanvas: View {
         VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xl) {
             HStack(spacing: self.theme.metrics.spacing.lg) {
                 Label(self.title, systemImage: "exclamationmark.circle")
-                    .font(self.theme.typography.captionStrong)
-                    .foregroundStyle(self.theme.palette.warning)
+                    .fluidText(.label)
+                    .foregroundStyle(self.theme.look.text)
                     .fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 0)
                 if let onClose {
@@ -958,25 +961,25 @@ struct MeetingFailureCanvas: View {
                 }
             }
             MeetingDocumentTitle(title: self.session?.title ?? "Recording setup")
-            Divider()
+            FluidHairline()
             VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xl) {
                 Text(self.message)
-                    .font(self.theme.typography.body)
-                    .foregroundStyle(self.theme.palette.primaryText)
+                    .fluidText(.body)
+                    .foregroundStyle(self.theme.look.text)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
                 if self.hasRecoverableAudio {
                     Label {
                         VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xs) {
                             Text("Your captured audio is preserved")
-                                .font(self.theme.typography.bodyStrong)
+                                .fluidText(.rowTitle)
                             Text("Retry transcription, or open the audio files on this Mac.")
-                                .font(self.theme.typography.caption)
-                                .foregroundStyle(self.theme.palette.secondaryText)
+                                .fluidText(.label)
+                                .foregroundStyle(self.theme.look.secondaryText)
                         }
                     } icon: {
                         Image(systemName: "checkmark.shield")
-                            .foregroundStyle(self.theme.palette.success)
+                            .foregroundStyle(self.theme.look.text)
                     }
                     .fixedSize(horizontal: false, vertical: true)
                 }
@@ -1026,8 +1029,8 @@ private struct MeetingAudioTranscriptNotice: View {
 
     var body: some View {
         Label(self.text, systemImage: self.isSubtle ? "info.circle" : "exclamationmark.triangle")
-            .font(self.theme.typography.caption)
-            .foregroundStyle(self.isSubtle ? self.theme.palette.secondaryText : self.theme.palette.warning)
+            .fluidText(.label)
+            .foregroundStyle(self.isSubtle ? self.theme.look.secondaryText : self.theme.look.text)
             .fixedSize(horizontal: false, vertical: true)
             .help(self.detail ?? self.text)
     }
@@ -1052,9 +1055,9 @@ private struct MeetingTrackHealthRow: View {
 
     private var statusColor: Color {
         switch self.health.status {
-        case .healthy: self.theme.palette.success
-        case .degraded, .unavailable: self.theme.palette.warning
-        case .waiting, .stopped: self.theme.palette.secondaryText
+        case .healthy: self.theme.look.text
+        case .degraded, .unavailable: self.theme.look.text
+        case .waiting, .stopped: self.theme.look.secondaryText
         }
     }
 
@@ -1071,22 +1074,22 @@ private struct MeetingTrackHealthRow: View {
         VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xs) {
             HStack(spacing: self.theme.metrics.spacing.sm) {
                 Label(self.title, systemImage: self.systemImage)
-                    .font(self.theme.typography.captionStrong)
-                    .foregroundStyle(self.theme.palette.secondaryText)
+                    .fluidText(.label)
+                    .foregroundStyle(self.theme.look.secondaryText)
                     .fixedSize()
                 ProgressView(value: min(max(Double(self.health.level), 0), 1))
                     .progressViewStyle(.linear)
                     .frame(width: 44)
                     .accessibilityLabel("\(self.title) level")
                 Image(systemName: self.statusIcon)
-                    .font(self.theme.typography.caption)
+                    .fluidText(.label)
                     .foregroundStyle(self.statusColor)
                     .accessibilityLabel(self.statusText)
             }
             if self.health.status == .degraded || self.health.status == .unavailable {
                 Text(self.statusText)
-                    .font(self.theme.typography.caption)
-                    .foregroundStyle(self.theme.palette.warning)
+                    .fluidText(.label)
+                    .foregroundStyle(self.theme.look.text)
                     .lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -1108,9 +1111,9 @@ private struct MeetingSpeakerChip: View {
                 Label(self.title, systemImage: self.systemImage)
                 Image(systemName: "chevron.right")
                     .font(.fluidSystem(size: 9, weight: .semibold))
-                    .foregroundStyle(self.theme.palette.secondaryText)
+                    .foregroundStyle(self.theme.look.secondaryText)
             }
-            .font(self.theme.typography.captionStrong)
+            .fluidText(.label)
             .foregroundStyle(self.tint)
         }
         .buttonStyle(.borderless)
@@ -1145,7 +1148,7 @@ private struct MeetingTranscriptSegmentRow: View {
         HStack(alignment: .top, spacing: self.theme.metrics.spacing.lg) {
             Text(MeetingTranscriptExporter.timestampText(self.segment.start.seconds))
                 .font(self.theme.typography.codeCaption)
-                .foregroundStyle(self.theme.palette.secondaryText)
+                .foregroundStyle(self.theme.look.secondaryText)
                 .frame(width: 58, alignment: .leading)
                 .frame(height: 28)
             VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
@@ -1165,7 +1168,7 @@ private struct MeetingTranscriptSegmentRow: View {
                         } label: {
                             Label("Assign speaker", systemImage: "tag")
                         }
-                        .fluidGlassAction()
+                        .fluidAction()
                         .disabled(!self.isQuiescent || self.isEditingText)
                         .help("Tag this unknown paragraph with a speaker")
                         .accessibilityLabel("Assign speaker to unknown paragraph")
@@ -1176,7 +1179,7 @@ private struct MeetingTranscriptSegmentRow: View {
                         Label(self.isAudioExpanded ? "Close" : "Audio", systemImage: self.isAudioExpanded ? "xmark" : "play.fill")
                             .frame(minWidth: 54)
                     }
-                    .fluidGlassAction()
+                    .fluidAction()
                     .disabled(!self.canPlayAudio && !self.isAudioExpanded)
                     .help(self.isAudioExpanded ? "Close audio player" : (self.canPlayAudio ? "Play this speaker chunk" : "Audio unavailable"))
                     .accessibilityLabel(self.isAudioExpanded ? "Close audio player" : "Play audio chunk for \(self.speakerName)")
@@ -1190,8 +1193,8 @@ private struct MeetingTranscriptSegmentRow: View {
                     )
                 } else {
                     Text(self.segment.text)
-                        .font(self.theme.typography.body)
-                        .foregroundStyle(self.theme.palette.primaryText)
+                        .fluidText(.body)
+                        .foregroundStyle(self.theme.look.text)
                         .lineSpacing(5)
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1200,7 +1203,7 @@ private struct MeetingTranscriptSegmentRow: View {
                         .accessibilityAction(named: Text("Edit text")) { self.beginEditing() }
                 }
                 if self.segment.isEcho {
-                    Text("Probable echo").font(self.theme.typography.caption).foregroundStyle(.secondary)
+                    Text("Probable echo").fluidText(.label).foregroundStyle(.secondary)
                 }
                 if self.isAudioExpanded {
                     MeetingSegmentAudioPlayer(playback: self.playback, isLoading: self.isLoadingAudio)
@@ -1240,12 +1243,12 @@ private struct MeetingTranscriptSegmentRow: View {
         Text(self.speakerName)
             .foregroundColor(self.nameColor)
             .fontWeight(.semibold)
-            .font(self.theme.typography.bodySmallStrong)
+            .fluidText(.rowTitle)
     }
 
     private var nameColor: Color {
-        if self.isLocalUser { return self.theme.palette.accent }
-        return self.speakerTint ?? self.theme.palette.tertiaryText
+        if self.isLocalUser { return self.theme.look.text }
+        return self.speakerTint ?? self.theme.look.tertiaryText
     }
 }
 
@@ -1270,16 +1273,11 @@ struct MeetingTranscriptTextEditor: View {
         VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
             TextField("Transcript text", text: self.$text, axis: .vertical)
                 .textFieldStyle(.plain)
-                .font(self.theme.typography.body)
-                .foregroundStyle(self.theme.palette.primaryText)
+                .fluidText(.body)
+                .foregroundStyle(self.theme.look.text)
                 .lineSpacing(5)
                 .lineLimit(1...20)
-                .padding(self.theme.metrics.spacing.sm)
-                .background(self.theme.palette.cardBackground, in: RoundedRectangle(cornerRadius: self.theme.metrics.corners.sm))
-                .overlay {
-                    RoundedRectangle(cornerRadius: self.theme.metrics.corners.sm)
-                        .strokeBorder(self.theme.palette.accent.opacity(0.45), lineWidth: 1)
-                }
+                .fluidFieldChrome(isFocused: true, padding: self.theme.metrics.spacing.sm)
                 .focused(self.$isFocused)
                 .disabled(self.isSaving)
                 .accessibilityLabel("Edit transcript paragraph")
@@ -1296,21 +1294,21 @@ struct MeetingTranscriptTextEditor: View {
                 }
             if let errorMessage {
                 Text(errorMessage)
-                    .font(self.theme.typography.caption)
-                    .foregroundStyle(self.theme.palette.warning)
+                    .fluidText(.label)
+                    .foregroundStyle(self.theme.look.text)
             }
             HStack(spacing: self.theme.metrics.spacing.sm) {
                 Text("Enter to save · Escape to cancel")
-                    .font(self.theme.typography.caption)
-                    .foregroundStyle(self.theme.palette.secondaryText)
+                    .fluidText(.label)
+                    .foregroundStyle(self.theme.look.secondaryText)
                 Spacer(minLength: 0)
                 FluidGlassControlGroup {
                     HStack(spacing: self.theme.metrics.spacing.sm) {
                         Button("Cancel", action: self.onCancel)
-                            .fluidGlassAction()
+                            .fluidAction()
                             .disabled(self.isSaving)
                         Button(self.isSaving ? "Saving…" : "Save", action: self.save)
-                            .fluidGlassAction(prominent: true)
+                            .fluidAction(.primary)
                             .keyboardShortcut(.return, modifiers: .command)
                             .disabled(self.isSaving || self.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     }
@@ -1344,10 +1342,10 @@ private struct MeetingRetranscriptionLanguageSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: self.theme.metrics.spacing.lg) {
             Text("Redo transcript")
-                .font(self.theme.typography.title)
+                .fluidText(.detailTitle)
             Text("Transcribe saved audio again with your latest saved replacements. Keep the current language or choose another. This replaces the transcript.")
-                .font(self.theme.typography.body)
-                .foregroundStyle(self.theme.palette.secondaryText)
+                .fluidText(.body)
+                .foregroundStyle(self.theme.look.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
             Menu {
                 Picker("Language", selection: self.$selection) {
@@ -1382,7 +1380,7 @@ private struct MeetingRetranscriptionLanguageSheet: View {
         }
         .padding(self.theme.metrics.spacing.xl)
         .frame(width: 460)
-        .background(self.theme.palette.windowBackground)
+        .background(self.theme.look.sheet)
         .interactiveDismissDisabled(self.isBusy)
     }
 }

@@ -31,7 +31,7 @@ struct MeetingSegmentAudioPlayer: View {
                             }
                             .frame(width: 16, height: 16)
                         }
-                        .fluidGlassAction(circular: true)
+                        .fluidGlassAction(circular: true, quiet: true)
                         .disabled(self.isLoading)
                         .accessibilityLabel(self.progress.isPlaying ? "Pause audio chunk" : "Play audio chunk")
                         self.action("Forward 5 seconds", symbol: "goforward.5") { self.playback.skip(by: 5) }
@@ -40,7 +40,7 @@ struct MeetingSegmentAudioPlayer: View {
                 Spacer(minLength: self.theme.metrics.spacing.sm)
                 Text(self.isLoading ? "Loading…" : "\(Self.time(self.isScrubbing ? self.scrubPosition : self.progress.elapsed)) / \(Self.time(self.progress.duration))")
                     .font(self.theme.typography.codeCaption)
-                    .foregroundStyle(self.theme.palette.secondaryText)
+                    .foregroundStyle(self.theme.look.secondaryText)
                     .monospacedDigit()
                     .fixedSize()
                     .accessibilityLabel("Playback time")
@@ -65,7 +65,7 @@ struct MeetingSegmentAudioPlayer: View {
                     }
                 }
             )
-            .tint(self.theme.palette.accent)
+            .tint(self.theme.look.switchOn)
             .disabled(self.isLoading || self.progress.duration <= 0)
             .accessibilityLabel("Audio chunk position")
             .accessibilityValue(Self.time(self.isScrubbing ? self.scrubPosition : self.progress.elapsed))
@@ -76,7 +76,7 @@ struct MeetingSegmentAudioPlayer: View {
 
     private func action(_ title: String, symbol: String, action: @escaping () -> Void) -> some View {
         Button(action: action) { Image(systemName: symbol) }
-            .fluidGlassAction(circular: true)
+            .fluidGlassAction(circular: true, quiet: true)
             .disabled(self.isLoading)
             .help(title)
             .accessibilityLabel(title)

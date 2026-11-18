@@ -117,13 +117,13 @@ struct MeetingSummaryView: View {
         VStack(alignment: .leading, spacing: self.theme.metrics.spacing.md) {
             HStack(alignment: .firstTextBaseline) {
                 Text("Your meeting, summed up.")
-                    .font(.system(.title3, design: .serif).weight(.medium))
-                    .foregroundStyle(self.theme.palette.primaryText)
+                    .fluidText(.groupTitle)
+                    .foregroundStyle(self.theme.look.text)
                     .accessibilityAddTraits(.isHeader)
                 Spacer()
                 if !self.catalog.isEmpty {
                     Button("Manage providers") { AppNavigationRouter.shared.request(.aiEnhancements) }
-                        .buttonStyle(.link)
+                        .fluidGlassAction(quiet: true)
                         .disabled(self.busy)
                 }
             }
@@ -157,39 +157,39 @@ struct MeetingSummaryView: View {
                 self.actions
                 if self.usesOnDevice, self.controller.downloading {
                     Text(PrivateAIModelDownloadProgressText.detailText(for: self.controller.progress))
-                        .font(self.theme.typography.caption)
-                        .foregroundStyle(self.theme.palette.secondaryText)
+                        .fluidText(.label)
+                        .foregroundStyle(self.theme.look.secondaryText)
                 }
                 if self.session == nil {
                     Text("Open a completed meeting to summarize its transcript.")
-                        .font(self.theme.typography.bodySmall)
-                        .foregroundStyle(self.theme.palette.secondaryText)
+                        .fluidText(.body)
+                        .foregroundStyle(self.theme.look.secondaryText)
                 }
                 Label(self.destination, systemImage: self.usesOnDevice ? "lock" : "network")
-                    .font(self.theme.typography.caption)
-                    .foregroundStyle(self.theme.palette.secondaryText)
+                    .fluidText(.label)
+                    .foregroundStyle(self.theme.look.secondaryText)
             }
             if let error = self.controller.error ?? self.generationError ?? (self.hasChoices ? self.readinessIssue : nil) {
                 Text(error)
-                    .font(self.theme.typography.bodySmall)
-                    .foregroundStyle(self.theme.palette.warning)
+                    .fluidText(.body)
+                    .foregroundStyle(self.theme.look.text)
                     .fixedSize(horizontal: false, vertical: true)
                     .textSelection(.enabled)
             }
         }
         .padding(self.theme.metrics.spacing.lg)
-        .background(RoundedRectangle(cornerRadius: 12).fill(self.theme.palette.primaryText.opacity(0.025)))
-        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(self.theme.palette.primaryText.opacity(0.1)))
+        .background(RoundedRectangle(cornerRadius: 12).fill(self.theme.look.text.opacity(0.025)))
+        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(self.theme.look.text.opacity(0.1)))
     }
 
     private var setupPrompt: some View {
         VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
             Text("Summaries use a provider from AI Settings. Add and verify one to summarize this meeting.")
-                .font(self.theme.typography.bodySmall)
-                .foregroundStyle(self.theme.palette.secondaryText)
+                .fluidText(.body)
+                .foregroundStyle(self.theme.look.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
             Button("Set up a provider", systemImage: "gearshape") { AppNavigationRouter.shared.request(.aiEnhancements) }
-                .fluidGlassAction(prominent: true)
+                .fluidAction(.primary)
         }
     }
 
@@ -225,7 +225,7 @@ struct MeetingSummaryView: View {
     /// One searchable list across providers, the same chooser Command Mode uses.
     private var modelChooser: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("Model").font(self.theme.typography.caption)
+            Text("Model").fluidText(.label)
             Button {
                 self.showModelPicker.toggle()
             } label: {
@@ -233,16 +233,16 @@ struct MeetingSummaryView: View {
                     if let option = self.selectedOption {
                         Text(option.displayName).lineLimit(1).truncationMode(.middle)
                         Text(option.providerName)
-                            .foregroundStyle(self.theme.palette.secondaryText)
+                            .foregroundStyle(self.theme.look.secondaryText)
                             .lineLimit(1)
                     } else {
-                        Text("Choose model").foregroundStyle(self.theme.palette.secondaryText)
+                        Text("Choose model").foregroundStyle(self.theme.look.secondaryText)
                     }
                     Spacer(minLength: 0)
                     FluidDropdownChevron()
                 }
-                .font(self.theme.typography.bodySmall)
-                .foregroundStyle(self.theme.palette.primaryText)
+                .fluidText(.body)
+                .foregroundStyle(self.theme.look.text)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 9)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -266,8 +266,8 @@ struct MeetingSummaryView: View {
             }
             if self.usesOnDevice, let memoryWarning = self.memoryWarning {
                 Label(memoryWarning, systemImage: "exclamationmark.triangle")
-                    .font(self.theme.typography.caption)
-                    .foregroundStyle(self.theme.palette.warning)
+                    .fluidText(.label)
+                    .foregroundStyle(self.theme.look.text)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
@@ -282,7 +282,7 @@ struct MeetingSummaryView: View {
 
     private var kindPicker: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("Summary type").font(self.theme.typography.caption)
+            Text("Summary type").fluidText(.label)
             FluidDropdownPicker("Summary type", selectedTitle: self.kind.title, selection: self.$kind) {
                 ForEach(MeetingSummaryKind.allCases) { kind in Text(kind.title).tag(kind) }
             }
@@ -294,16 +294,15 @@ struct MeetingSummaryView: View {
     private var thinkingRow: some View {
         HStack(alignment: .center, spacing: self.theme.metrics.spacing.lg) {
             VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xs) {
-                Text("Think first").font(self.theme.typography.bodySmallStrong)
+                Text("Think first").fluidText(.rowTitle).foregroundStyle(self.theme.look.text)
                 Text("The model reasons about the transcript before it writes. More careful, a little slower.")
-                    .font(self.theme.typography.caption)
-                    .foregroundStyle(self.theme.palette.secondaryText)
+                    .fluidText(.label)
+                    .foregroundStyle(self.theme.look.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             Toggle("Think first", isOn: self.$preferences.thinksFirst)
-                .labelsHidden()
-                .toggleStyle(.switch)
+                .fluidSwitch()
                 .accessibilityLabel("Think before summarizing")
         }
     }
@@ -314,18 +313,18 @@ struct MeetingSummaryView: View {
 
     private var customPromptEditor: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("Custom prompt").font(self.theme.typography.caption)
+            Text("Custom prompt").fluidText(.label)
             TextEditor(text: self.$preferences.customPrompt)
-                .font(self.theme.typography.body)
+                .fluidText(.body)
                 .scrollContentBackground(.hidden)
                 .background(DictationTextTarget())
                 .padding(self.theme.metrics.spacing.sm)
-                .background(self.theme.palette.cardBackground, in: RoundedRectangle(cornerRadius: self.theme.metrics.corners.sm))
+                .fluidFieldChrome(isFocused: false, padding: 0)
                 .overlay(alignment: .topLeading) {
                     if self.preferences.customPrompt.isEmpty {
                         Text("For example: Write a short recap email to the client with next steps and owners.")
-                            .font(self.theme.typography.body)
-                            .foregroundStyle(self.theme.palette.tertiaryText)
+                            .fluidText(.body)
+                            .foregroundStyle(self.theme.look.tertiaryText)
                             .padding(self.theme.metrics.spacing.sm)
                             .padding(.leading, 5)
                             .allowsHitTesting(false)
@@ -335,8 +334,8 @@ struct MeetingSummaryView: View {
                 .disabled(self.busy)
                 .accessibilityLabel("Custom summary prompt")
             Text("Saved for every meeting. Replaces the summary type instructions; the transcript is still treated as source material only.")
-                .font(self.theme.typography.caption)
-                .foregroundStyle(self.theme.palette.secondaryText)
+                .fluidText(.label)
+                .foregroundStyle(self.theme.look.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
         }
     }
@@ -346,8 +345,8 @@ struct MeetingSummaryView: View {
             HStack(spacing: self.theme.metrics.spacing.sm) {
                 if self.isGenerating {
                     ProgressView().controlSize(.small)
-                    Text("Summarizing…").font(self.theme.typography.bodySmall)
-                    Button("Cancel") { self.generation.cancel() }.fluidGlassAction()
+                    Text("Summarizing…").fluidText(.body)
+                    Button("Cancel") { self.generation.cancel() }.fluidAction()
                 } else if self.controller.checking {
                     ProgressView().controlSize(.small)
                 } else if self.usesOnDevice, self.controller.downloading {
@@ -360,23 +359,23 @@ struct MeetingSummaryView: View {
                                 .controlSize(.mini)
                         }
                     }
-                    .fluidGlassAction()
+                    .fluidAction()
                     .disabled(true)
-                    Button("Cancel") { self.controller.cancelModelOperation() }.fluidGlassAction()
+                    Button("Cancel") { self.controller.cancelModelOperation() }.fluidAction()
                 } else if self.usesOnDevice, self.controller.deleting {
                     ProgressView().controlSize(.small)
-                    Text("Deleting download…").font(self.theme.typography.bodySmall)
+                    Text("Deleting download…").fluidText(.body)
                 } else if self.usesOnDevice, !self.controller.installed {
                     Button(self.downloadSize.map { "Download · \($0)" } ?? "Download", systemImage: "arrow.down.circle") {
                         self.controller.download()
                     }
-                    .fluidGlassAction(prominent: true)
+                    .fluidAction(.primary)
                     .disabled(!self.isQuiescent)
                 } else {
                     Button(self.controller.output.isEmpty ? "Generate summary" : "Regenerate summary", systemImage: "sparkles") {
                         self.generate()
                     }
-                    .fluidGlassAction(prominent: true)
+                    .fluidAction(.primary)
                     .disabled(self.generateDisabled)
                 }
                 if self.usesOnDevice, self.controller.installed {
@@ -387,7 +386,7 @@ struct MeetingSummaryView: View {
                         .disabled(self.busy || self.controller.checking || !self.isQuiescent)
                     } label: { Image(systemName: "ellipsis") }
                         .menuIndicator(.hidden)
-                        .fluidGlassAction(circular: true)
+                        .fluidGlassAction(circular: true, quiet: true)
                         .accessibilityLabel("Summary model actions")
                         .disabled(self.busy)
                 }
@@ -428,18 +427,18 @@ struct MeetingSummaryView: View {
             } icon: {
                 Image(systemName: "exclamationmark.triangle.fill")
             }
-            .font(self.theme.typography.bodySmall)
-            .foregroundStyle(self.theme.palette.warning)
+            .fluidText(.body)
+            .foregroundStyle(self.theme.look.text)
             .frame(maxWidth: .infinity, alignment: .leading)
             if !self.isGenerating {
                 Button("Regenerate", systemImage: "arrow.clockwise") { self.generate() }
-                    .fluidGlassAction()
+                    .fluidAction()
                     .disabled(self.generateDisabled)
             }
         }
         .padding(self.theme.metrics.spacing.md)
-        .background(RoundedRectangle(cornerRadius: 12).fill(self.theme.palette.warning.opacity(0.08)))
-        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(self.theme.palette.warning.opacity(0.3)))
+        .background(RoundedRectangle(cornerRadius: 12).fill(self.theme.look.text.opacity(0.08)))
+        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(self.theme.look.text.opacity(0.3)))
         .accessibilityElement(children: .contain)
     }
 
@@ -455,26 +454,26 @@ struct MeetingSummaryView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(self.kind.title).font(.headline).accessibilityAddTraits(.isHeader)
                     Text("Generated with \(self.controller.outputProvenance)")
-                        .font(self.theme.typography.caption)
-                        .foregroundStyle(self.theme.palette.secondaryText)
+                        .fluidText(.label)
+                        .foregroundStyle(self.theme.look.secondaryText)
                 }
                 Spacer()
                 Button("Copy", systemImage: "doc.on.doc") {
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(self.controller.output, forType: .string)
                 }
-                .labelStyle(.iconOnly).fluidGlassAction(circular: true)
+                .labelStyle(.iconOnly).fluidGlassAction(circular: true, quiet: true)
                 .help("Copy summary")
             }
             CommandMarkdownContent(text: self.controller.output)
             Text(self.controller.outputNotice)
-                .font(self.theme.typography.caption)
-                .foregroundStyle(self.theme.palette.secondaryText)
+                .fluidText(.label)
+                .foregroundStyle(self.theme.look.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
         }
         .padding(self.theme.metrics.spacing.lg)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(self.theme.palette.primaryText.opacity(0.1)))
+        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(self.theme.look.text.opacity(0.1)))
     }
 
     private func selectModel(_ option: CommandModelOption) {

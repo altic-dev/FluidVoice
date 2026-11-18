@@ -97,7 +97,7 @@ struct MeetingAssignSpeakersSheet: View {
         VStack(spacing: 0) {
             self.header
 
-            Divider()
+            FluidHairline()
 
             ScrollViewReader { proxy in
                 ScrollView {
@@ -116,16 +116,16 @@ struct MeetingAssignSpeakersSheet: View {
             }
 
             if let errorMessage {
-                Divider()
+                FluidHairline()
                 Label(errorMessage, systemImage: "exclamationmark.circle")
-                    .font(self.theme.typography.caption)
-                    .foregroundStyle(self.theme.palette.warning)
+                    .fluidText(.label)
+                    .foregroundStyle(self.theme.look.text)
                     .padding(.horizontal, self.theme.metrics.spacing.xl)
                     .padding(.vertical, self.theme.metrics.spacing.sm)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
 
-            Divider()
+            FluidHairline()
 
             FluidGlassControlGroup {
                 HStack(spacing: self.theme.metrics.spacing.md) {
@@ -144,7 +144,7 @@ struct MeetingAssignSpeakersSheet: View {
         }
         .frame(minWidth: 480, idealWidth: 560, maxWidth: 560)
         .frame(minHeight: 420, idealHeight: 560)
-        .background(self.theme.palette.windowBackground)
+        .background(self.theme.look.sheet)
         .alert(
             "Merge speakers?",
             isPresented: Binding(
@@ -167,10 +167,10 @@ struct MeetingAssignSpeakersSheet: View {
         HStack(alignment: .top, spacing: self.theme.metrics.spacing.md) {
             VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xs) {
                 Text("Edit speakers")
-                    .font(self.theme.typography.title)
+                    .fluidText(.detailTitle)
                 Text("Rename voices or merge duplicate speakers. Changes apply when you save.")
-                    .font(self.theme.typography.bodySmall)
-                    .foregroundStyle(self.theme.palette.secondaryText)
+                    .fluidText(.body)
+                    .foregroundStyle(self.theme.look.secondaryText)
             }
             Spacer()
             Button("Close", systemImage: "xmark") { self.onCancel() }
@@ -185,7 +185,7 @@ struct MeetingAssignSpeakersSheet: View {
 
     @ViewBuilder
     private func row(for speaker: MeetingSessionSpeaker) -> some View {
-        let tint = speaker.isLocalUser ? self.accentColor : (self.tints[speaker.id] ?? self.theme.palette.tertiaryText)
+        let tint = speaker.isLocalUser ? self.accentColor : (self.tints[speaker.id] ?? self.theme.look.tertiaryText)
         let targets = self.mergeTargets(for: speaker)
         VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
             HStack(spacing: self.theme.metrics.spacing.sm) {
@@ -193,17 +193,17 @@ struct MeetingAssignSpeakersSheet: View {
                     .fill(tint)
                     .frame(width: 10, height: 10)
                 Text(speaker.displayName)
-                    .font(self.theme.typography.captionSmall)
+                    .fluidText(.label)
                     .tracking(1.1)
                     .textCase(.uppercase)
-                    .foregroundStyle(self.theme.palette.secondaryText)
+                    .foregroundStyle(self.theme.look.secondaryText)
             }
 
             let quotes = self.quotesBySpeaker[speaker.id] ?? []
             if quotes.isEmpty {
                 Text("No transcript sample")
-                    .font(self.theme.typography.bodySmall)
-                    .foregroundStyle(self.theme.palette.tertiaryText)
+                    .fluidText(.body)
+                    .foregroundStyle(self.theme.look.tertiaryText)
                     .padding(.leading, self.theme.metrics.spacing.md)
                     .overlay(alignment: .leading) {
                         Rectangle().fill(tint.opacity(0.35)).frame(width: 2)
@@ -212,8 +212,8 @@ struct MeetingAssignSpeakersSheet: View {
                 VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xs) {
                     ForEach(Array(quotes.enumerated()), id: \.offset) { _, quote in
                         Text(quote)
-                            .font(self.theme.typography.bodySmall)
-                            .foregroundStyle(self.theme.palette.secondaryText)
+                            .fluidText(.body)
+                            .foregroundStyle(self.theme.look.secondaryText)
                             .padding(.leading, self.theme.metrics.spacing.md)
                             .overlay(alignment: .leading) {
                                 Rectangle().fill(tint.opacity(0.35)).frame(width: 2)
@@ -255,8 +255,8 @@ struct MeetingAssignSpeakersSheet: View {
             if let target = self.edits.merges[speaker.id] {
                 HStack(spacing: self.theme.metrics.spacing.md) {
                     Text("Will merge into \(self.speakerName(target))")
-                        .font(self.theme.typography.caption)
-                        .foregroundStyle(self.theme.palette.secondaryText)
+                        .fluidText(.label)
+                        .foregroundStyle(self.theme.look.secondaryText)
                         .fixedSize(horizontal: false, vertical: true)
                     Spacer(minLength: 0)
                     Button("Cancel merge") { self.edits.setMerge(source: speaker.id, into: nil) }
@@ -266,8 +266,8 @@ struct MeetingAssignSpeakersSheet: View {
             } else if speaker.isLocalUser || targets.isEmpty {
                 Text(speaker.isLocalUser ? "Your microphone voice is kept separate" :
                     (speaker.trackKind == .microphone ? "No other microphone speakers" : "No other meeting-audio speakers"))
-                    .font(self.theme.typography.caption)
-                    .foregroundStyle(self.theme.palette.tertiaryText)
+                    .fluidText(.label)
+                    .foregroundStyle(self.theme.look.tertiaryText)
             }
         }
     }

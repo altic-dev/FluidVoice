@@ -335,7 +335,7 @@ struct MeetingTranscriptionView: View {
                 self.canvas(for: state)
             }
         }
-        .background(self.theme.palette.contentBackground)
+        .fluidCanvas()
         .clipped()
         .onFluidPagePresented { MeetingDiarizationModelStore.shared.prepareInBackground() }
         .task { await self.refreshPageData() }
@@ -1585,7 +1585,6 @@ struct MeetingTranscriptionCanvas: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(self.theme.palette.windowBackground)
     }
 
     @ViewBuilder
@@ -1628,8 +1627,8 @@ struct MeetingTranscriptionCanvas: View {
                 VStack(alignment: .leading, spacing: self.theme.metrics.spacing.md) {
                     if let errorMessage, !errorMessage.isEmpty {
                         Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
-                            .font(self.theme.typography.bodySmall)
-                            .foregroundStyle(self.theme.palette.warning)
+                            .fluidText(.body)
+                            .foregroundStyle(self.theme.look.text)
                             .fixedSize(horizontal: false, vertical: true)
                             .frame(maxWidth: 760, alignment: .leading)
                             .frame(maxWidth: .infinity, alignment: .center)
@@ -1768,7 +1767,13 @@ private struct MeetingHeaderIconButton: View {
                 .foregroundStyle(self.theme.palette.primaryText)
         }
         .labelStyle(.iconOnly)
-        .fluidGlassAction(circular: true)
+        .fluidGlassAction(circular: true, quiet: true)
+        // An open panel keeps a quiet fill behind its toggle instead of a colored icon.
+        .background {
+            if self.isSelected {
+                Circle().fill(self.theme.look.highlightFill).allowsHitTesting(false)
+            }
+        }
         .help(self.label)
         .accessibilityLabel(self.label)
     }
@@ -1845,8 +1850,8 @@ private struct MeetingSetupCanvas: View {
             VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
                 MeetingDocumentTitle(title: "Be in the conversation.")
                 Text("Record your meeting. Come back to every word.")
-                    .font(self.theme.typography.body)
-                    .foregroundStyle(self.theme.palette.secondaryText)
+                    .fluidText(.body)
+                    .foregroundStyle(self.theme.look.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)
             }
 
@@ -1856,7 +1861,7 @@ private struct MeetingSetupCanvas: View {
 
     private var recordingSetup: some View {
         VStack(alignment: .leading, spacing: self.theme.metrics.spacing.lg) {
-            ThemedCard(style: .standard, padding: self.theme.metrics.spacing.xl) {
+            FluidSurfaceCard(padding: self.theme.metrics.spacing.xl) {
                 VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xl) {
                     self.plan
                     FluidGlassControlGroup {
@@ -1881,10 +1886,10 @@ private struct MeetingSetupCanvas: View {
             VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xs) {
                 Text(self.planHeadline)
                     .font(.system(.title2, design: .serif).weight(.medium))
-                    .foregroundStyle(self.theme.palette.primaryText)
+                    .foregroundStyle(self.theme.look.text)
                 Text(self.planDetail)
-                    .font(self.theme.typography.body)
-                    .foregroundStyle(self.theme.palette.secondaryText)
+                    .fluidText(.body)
+                    .foregroundStyle(self.theme.look.secondaryText)
             }
             .fixedSize(horizontal: false, vertical: true)
             .accessibilityElement(children: .combine)
@@ -1971,26 +1976,26 @@ private struct MeetingSetupCanvas: View {
                     : "Stays on this Mac. Place it where everyone can be heard.",
                 systemImage: "lock"
             )
-            .font(self.theme.typography.caption)
-            .foregroundStyle(self.theme.palette.secondaryText)
+            .fluidText(.label)
+            .foregroundStyle(self.theme.look.secondaryText)
             .fixedSize(horizontal: false, vertical: true)
 
             if let errorMessage, !errorMessage.isEmpty {
                 Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
-                    .font(self.theme.typography.bodySmall)
-                    .foregroundStyle(self.theme.palette.warning)
+                    .fluidText(.body)
+                    .foregroundStyle(self.theme.look.text)
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityLabel("Could not start recording. \(errorMessage)")
             }
 
             if let recentSession {
-                Divider()
+                FluidHairline()
                 HStack(spacing: self.theme.metrics.spacing.md) {
                     Image(systemName: "clock.arrow.circlepath")
-                        .foregroundStyle(self.theme.palette.secondaryText)
+                        .foregroundStyle(self.theme.look.secondaryText)
                     VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xs) {
-                        Text("Last meeting").font(self.theme.typography.caption).foregroundStyle(.secondary)
-                        Text(recentSession.title).font(self.theme.typography.bodyStrong).lineLimit(2)
+                        Text("Last meeting").fluidText(.label).foregroundStyle(.secondary)
+                        Text(recentSession.title).fluidText(.rowTitle).lineLimit(2)
                     }
                     Spacer()
                     Text(Self.durationText(recentSession.duration))
@@ -2049,7 +2054,7 @@ private struct MeetingHomeStatus: View {
                 if self.kind == .checking {
                     ProgressView().controlSize(.mini)
                 } else {
-                    Circle().fill(self.theme.palette.warning)
+                    Circle().fill(self.theme.look.text)
                 }
             }
             .frame(width: 12, height: 12)
@@ -2058,11 +2063,11 @@ private struct MeetingHomeStatus: View {
 
             VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xs) {
                 Text(self.title)
-                    .font(self.theme.typography.bodyStrong)
-                    .foregroundStyle(self.theme.palette.primaryText)
+                    .fluidText(.rowTitle)
+                    .foregroundStyle(self.theme.look.text)
                 Text(self.detail)
-                    .font(self.theme.typography.caption)
-                    .foregroundStyle(self.theme.palette.secondaryText)
+                    .fluidText(.label)
+                    .foregroundStyle(self.theme.look.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }

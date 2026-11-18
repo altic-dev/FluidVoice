@@ -7,36 +7,36 @@ struct MeetingSummaryComingSoon: View {
     var body: some View {
         VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xl) {
             Text("Coming soon")
-                .font(self.theme.typography.captionStrong)
-                .foregroundStyle(self.theme.palette.secondaryText)
+                .fluidText(.label)
+                .foregroundStyle(self.theme.look.secondaryText)
                 .padding(.horizontal, self.theme.metrics.spacing.sm)
                 .padding(.vertical, self.theme.metrics.spacing.xs)
-                .background(self.theme.palette.primaryText.opacity(0.06), in: Capsule())
+                .background(self.theme.look.text.opacity(0.06), in: Capsule())
 
             VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
                 Text("Your meeting, summed up.")
                     .font(.system(.title, design: .serif).weight(.medium))
-                    .foregroundStyle(self.theme.palette.primaryText)
+                    .foregroundStyle(self.theme.look.text)
                     .accessibilityAddTraits(.isHeader)
                 Text("The recap, the decisions, and the follow-ups—without rereading the transcript.")
-                    .font(self.theme.typography.body)
-                    .foregroundStyle(self.theme.palette.secondaryText)
+                    .fluidText(.body)
+                    .foregroundStyle(self.theme.look.secondaryText)
             }
             .fixedSize(horizontal: false, vertical: true)
 
             VStack(alignment: .leading, spacing: self.theme.metrics.spacing.lg) {
                 self.feature("text.alignleft", title: "Catch up quickly", detail: "Get a short recap or a detailed summary of the discussion.")
-                Divider()
+                FluidHairline()
                 self.feature("checkmark.circle", title: "See what was decided", detail: "Find the key decisions and outcomes in one place.")
-                Divider()
+                FluidHairline()
                 self.feature("checklist", title: "Know what happens next", detail: "See action items and who owns them, when mentioned.")
             }
             .padding(self.theme.metrics.spacing.xl)
-            .background(self.theme.palette.primaryText.opacity(0.025), in: RoundedRectangle(cornerRadius: self.theme.metrics.corners.lg))
+            .background(self.theme.look.text.opacity(0.025), in: RoundedRectangle(cornerRadius: self.theme.metrics.corners.lg))
 
             Label("Private, on-device summaries · English", systemImage: "lock")
-                .font(self.theme.typography.caption)
-                .foregroundStyle(self.theme.palette.secondaryText)
+                .fluidText(.label)
+                .foregroundStyle(self.theme.look.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
         }
         .frame(maxWidth: 620, alignment: .leading)
@@ -47,17 +47,17 @@ struct MeetingSummaryComingSoon: View {
     private func feature(_ icon: String, title: String, detail: String) -> some View {
         HStack(alignment: .top, spacing: self.theme.metrics.spacing.lg) {
             Image(systemName: icon)
-                .font(self.theme.typography.bodySmallStrong)
-                .foregroundStyle(self.theme.palette.secondaryText)
+                .fluidText(.rowTitle)
+                .foregroundStyle(self.theme.look.secondaryText)
                 .frame(width: 20, height: 20)
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xs) {
                 Text(title)
-                    .font(self.theme.typography.bodySmallStrong)
-                    .foregroundStyle(self.theme.palette.primaryText)
+                    .fluidText(.rowTitle)
+                    .foregroundStyle(self.theme.look.text)
                 Text(detail)
-                    .font(self.theme.typography.caption)
-                    .foregroundStyle(self.theme.palette.secondaryText)
+                    .fluidText(.label)
+                    .foregroundStyle(self.theme.look.secondaryText)
             }
             .fixedSize(horizontal: false, vertical: true)
         }

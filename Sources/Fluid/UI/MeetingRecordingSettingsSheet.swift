@@ -120,11 +120,11 @@ struct MeetingRecordingSettingsSheet: View {
     var body: some View {
         VStack(spacing: 0) {
             self.header
-            Divider()
+            FluidHairline()
 
             HStack(spacing: 0) {
                 self.sectionRail
-                Divider()
+                FluidHairline(axis: .vertical)
                 ScrollView {
                     VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xl) {
                         self.sectionHeading
@@ -142,22 +142,22 @@ struct MeetingRecordingSettingsSheet: View {
                 }
             }
 
-            Divider()
+            FluidHairline()
             self.footer
         }
         .frame(width: 820)
         .frame(minHeight: 540, idealHeight: 640)
-        .background(self.theme.palette.windowBackground)
+        .background(self.theme.look.sheet)
     }
 
     private var header: some View {
         VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xs) {
             Text("FluidMeet settings")
-                .font(self.theme.typography.sectionTitle)
-                .foregroundStyle(self.theme.palette.primaryText)
+                .fluidText(.groupTitle)
+                .foregroundStyle(self.theme.look.text)
             Text("Audio and transcripts stay on this Mac.")
-                .font(self.theme.typography.caption)
-                .foregroundStyle(self.theme.palette.secondaryText)
+                .fluidText(.label)
+                .foregroundStyle(self.theme.look.secondaryText)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, self.theme.metrics.spacing.xxl)
@@ -173,30 +173,22 @@ struct MeetingRecordingSettingsSheet: View {
                     HStack(spacing: self.theme.metrics.spacing.sm) {
                         Image(systemName: section.symbol)
                             .frame(width: self.theme.metrics.spacing.lg)
-                            .foregroundStyle(self.selectedSection == section ? self.theme.palette.accent : self.theme.palette.secondaryText)
+                            .foregroundStyle(self.selectedSection == section ? self.theme.look.text : self.theme.look.secondaryText)
                         Text(section.rawValue)
-                            .font(self.selectedSection == section ? self.theme.typography.bodySmallStrong : self.theme.typography.bodySmall)
-                            .foregroundStyle(self.theme.palette.primaryText)
+                            .fluidText(self.selectedSection == section ? .rowTitle : .body)
+                            .foregroundStyle(self.theme.look.text)
                             .fixedSize(horizontal: false, vertical: true)
                         Spacer(minLength: 0)
                     }
                     .padding(.horizontal, self.theme.metrics.spacing.md)
                     .frame(maxWidth: .infinity, minHeight: 42, alignment: .leading)
                     .padding(.vertical, self.theme.metrics.spacing.xs)
-                    // The selected tab uses the app's selected-row tint, so it reads as "you are here"
-                    // and not as one more hover outline.
-                    .background(
-                        self.selectedSection == section
-                            ? self.theme.palette.accent.opacity(self.theme.metrics.pickerControl.selectedRowOpacity)
-                            : Color.clear,
-                        in: RoundedRectangle(cornerRadius: self.theme.metrics.corners.sm)
-                    )
                     .contentShape(RoundedRectangle(cornerRadius: self.theme.metrics.corners.sm))
                 }
-                .buttonStyle(.plain)
+                // The selected tab keeps the shared selected fill, so it reads as "you are here".
+                .fluidSelectableRow(isSelected: self.selectedSection == section, cornerRadius: self.theme.metrics.corners.sm)
                 // The keyboard focus ring otherwise sits on the first tab whichever tab is open.
                 .focusEffectDisabled()
-                .meetingHoverFeedback(cornerRadius: self.theme.metrics.corners.sm)
                 .accessibilityAddTraits(self.selectedSection == section ? .isSelected : [])
             }
             Spacer(minLength: 0)
@@ -205,24 +197,24 @@ struct MeetingRecordingSettingsSheet: View {
         .padding(.top, self.theme.metrics.spacing.sm)
         .frame(width: 164)
         .frame(maxHeight: .infinity)
-        .background(self.theme.palette.sidebarBackground)
+        .background(self.theme.look.surface)
     }
 
     private var sectionHeading: some View {
         VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xs) {
             Text(self.selectedSection.rawValue)
-                .font(self.theme.typography.sectionTitle)
-                .foregroundStyle(self.theme.palette.primaryText)
+                .fluidText(.groupTitle)
+                .foregroundStyle(self.theme.look.text)
             Text(self.selectedSection.guidance)
-                .font(self.theme.typography.bodySmall)
-                .foregroundStyle(self.theme.palette.secondaryText)
+                .fluidText(.body)
+                .foregroundStyle(self.theme.look.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
         }
     }
 
     private var recordingSettings: some View {
         VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xl) {
-            FluidManagementGroup(title: "Audio sources") {
+            MeetingSettingsGroup(title: "Audio sources") {
                 VStack(spacing: 0) {
                     Group {
                         MeetingAdaptiveSetupRow(
@@ -250,7 +242,7 @@ struct MeetingRecordingSettingsSheet: View {
                         }
                     }
 
-                    Divider()
+                    FluidHairline()
                     MeetingAdaptiveSetupRow(
                         title: "Microphone",
                         detail: "Capture your side of the conversation."
@@ -272,16 +264,14 @@ struct MeetingRecordingSettingsSheet: View {
                 }
             }
             .overlay(alignment: .topTrailing) {
-                Button(self.readiness.isCheckingSources ? "Refreshing…" : "Refresh", systemImage: "arrow.clockwise", action: self.onRefreshSources)
-                    .buttonStyle(.plain)
-                    .font(self.theme.typography.captionStrong)
-                    .foregroundStyle(self.theme.palette.accent)
+                Button(self.readiness.isCheckingSources ? "Refreshing…" : "Refresh", action: self.onRefreshSources)
+                    .fluidGlassAction(quiet: true)
                     .disabled(self.readiness.isCheckingSources)
                     .help("Rescan meeting apps and microphones.")
                     .accessibilityLabel("Refresh audio sources")
             }
 
-            FluidManagementGroup(title: "Transcript language") {
+            MeetingSettingsGroup(title: "Transcript language") {
                 MeetingAdaptiveSetupRow(
                     title: "Language",
                     detail: "Final transcripts support 25 languages. Live captions are English-only."
@@ -304,10 +294,10 @@ struct MeetingRecordingSettingsSheet: View {
             MeetingModelSettingsSection(onModelImported: self.onModelImported)
 
             if self.readiness.showMicrophoneSettingsAction || self.readiness.showScreenRecordingSettingsAction {
-                FluidManagementGroup(title: "Permissions need attention") {
+                MeetingSettingsGroup(title: "Permissions need attention") {
                     Text("Allow the requested access in macOS Settings, then refresh your sources.")
-                        .font(self.theme.typography.bodySmall)
-                        .foregroundStyle(self.theme.palette.secondaryText)
+                        .fluidText(.body)
+                        .foregroundStyle(self.theme.look.secondaryText)
                     FluidGlassControlGroup {
                         ViewThatFits(in: .horizontal) {
                             HStack(spacing: self.theme.metrics.spacing.sm) { self.repairActions }
@@ -368,7 +358,7 @@ struct MeetingRecordingSettingsSheet: View {
 
     private var automationSettings: some View {
         VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xl) {
-            FluidManagementGroup(title: "Your preferences") {
+            MeetingSettingsGroup(title: "Your preferences") {
                 VStack(spacing: 0) {
                     MeetingAdaptiveSetupRow(
                         title: "Keep recordings",
@@ -388,30 +378,26 @@ struct MeetingRecordingSettingsSheet: View {
                         .accessibilityLabel("Audio retention")
                     }
 
-                    Divider()
+                    FluidHairline()
                     MeetingAdaptiveSetupRow(
                         title: "Detect meetings automatically",
                         detail: "Offer to record Zoom, Teams, and Webex meetings. Recording always starts with you.",
                         trailingSwitch: true
                     ) {
                         Toggle("Detect meetings automatically", isOn: self.$draft.autoDetectEnabled)
-                            .labelsHidden()
-                            .toggleStyle(.switch)
-                            .meetingHoverFeedback()
+                            .fluidSwitch()
                             .accessibilityLabel("Detect meetings automatically")
                     }
 
                     if self.draft.autoDetectEnabled {
-                        Divider()
+                        FluidHairline()
                         MeetingAdaptiveSetupRow(
                             title: "Include browser meetings",
                             detail: "Check the frontmost tab for supported meeting sites. Tab addresses are never stored or sent.",
                             trailingSwitch: true
                         ) {
                             Toggle("Include browser meetings", isOn: self.$draft.browserDetectionEnabled)
-                                .labelsHidden()
-                                .toggleStyle(.switch)
-                                .meetingHoverFeedback()
+                                .fluidSwitch()
                                 .accessibilityLabel("Also check browser tabs")
                         }
                     }
@@ -433,10 +419,10 @@ struct MeetingRecordingSettingsSheet: View {
             }
 
             if self.dismissalAdvisor.shouldSuggest {
-                FluidManagementGroup(title: "Fewer interruptions") {
+                MeetingSettingsGroup(title: "Fewer interruptions") {
                     Text("You’ve dismissed several meeting prompts recently. You can turn off detection and still record manually.")
-                        .font(self.theme.typography.bodySmall)
-                        .foregroundStyle(self.theme.palette.secondaryText)
+                        .fluidText(.body)
+                        .foregroundStyle(self.theme.look.secondaryText)
                     FluidGlassControlGroup {
                         HStack(spacing: self.theme.metrics.spacing.sm) {
                             Button("Turn off detection") {
@@ -455,8 +441,8 @@ struct MeetingRecordingSettingsSheet: View {
             }
 
             Text("Expired audio is removed while FluidVoice is running.")
-                .font(self.theme.typography.caption)
-                .foregroundStyle(self.theme.palette.secondaryText)
+                .fluidText(.label)
+                .foregroundStyle(self.theme.look.secondaryText)
         }
     }
 
@@ -465,8 +451,8 @@ struct MeetingRecordingSettingsSheet: View {
             MeetingAgentIntegrations()
 
             Label("A meeting an agent reads is sent to that agent.", systemImage: "lock.fill")
-                .font(self.theme.typography.caption)
-                .foregroundStyle(self.theme.palette.secondaryText)
+                .fluidText(.label)
+                .foregroundStyle(self.theme.look.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
         }
     }
@@ -475,8 +461,8 @@ struct MeetingRecordingSettingsSheet: View {
         VStack(alignment: .leading, spacing: self.theme.metrics.spacing.md) {
             if let saveHelp {
                 Label(saveHelp, systemImage: "exclamationmark.circle")
-                    .font(self.theme.typography.caption)
-                    .foregroundStyle(self.theme.palette.warning)
+                    .fluidText(.label)
+                    .foregroundStyle(self.theme.look.text)
             }
             FluidGlassControlGroup {
                 HStack(spacing: self.theme.metrics.spacing.md) {
@@ -562,13 +548,28 @@ private struct MeetingAdaptiveSetupRow<Content: View>: View {
     private var label: some View {
         VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xs) {
             Text(self.title)
-                .font(self.theme.typography.bodyStrong)
-                .foregroundStyle(self.theme.palette.primaryText)
+                .fluidText(.rowTitle)
+                .foregroundStyle(self.theme.look.text)
             if let detail {
                 Text(detail)
-                    .font(self.theme.typography.caption)
-                    .foregroundStyle(self.theme.palette.secondaryText)
+                    .fluidText(.label)
+                    .foregroundStyle(self.theme.look.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+}
+
+/// A titled card of meeting settings on the shared look.
+private struct MeetingSettingsGroup<Content: View>: View {
+    @Environment(\.theme) private var theme
+    let title: String
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        FluidSettingsGroup(title: self.title, separated: false) {
+            FluidSettingsBlock {
+                VStack(alignment: .leading, spacing: self.theme.metrics.spacing.lg, content: self.content)
             }
         }
     }

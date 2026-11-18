@@ -11,7 +11,7 @@ struct MeetingHoverHighlight: View {
     var body: some View {
         let highlighted = self.isHovered && self.isEnabled
         RoundedRectangle(cornerRadius: self.cornerRadius, style: .continuous)
-            .fill(self.theme.palette.primaryText.opacity(0.08))
+            .fill(FluidInteractionVisuals.fill(self.theme.palette, isHovered: true))
             .opacity(highlighted ? 1 : 0)
             .animation(self.reduceMotion ? nil : .easeOut(duration: 0.14), value: highlighted)
             .allowsHitTesting(false)
@@ -43,9 +43,15 @@ extension View {
         self.modifier(MeetingHoverFeedback(cornerRadius: cornerRadius))
     }
 
-    func meetingGlassAction(prominent: Bool = false, circular: Bool = false, tone: Color? = nil, spacious: Bool = false) -> some View {
-        self.fluidGlassAction(prominent: prominent, circular: circular, tone: tone, spacious: spacious)
-            .meetingHoverFeedback()
+    /// Meeting actions in the shared look: a white main action, grey ones otherwise, and the quiet
+    /// circle for icon-only actions. `tone` is ignored: the look carries no colored buttons.
+    @ViewBuilder
+    func meetingGlassAction(prominent: Bool = false, circular: Bool = false, tone _: Color? = nil, spacious: Bool = false) -> some View {
+        if circular {
+            self.fluidGlassAction(circular: true, quiet: true)
+        } else {
+            self.fluidAction(prominent ? .primary : .secondary, size: spacious ? .large : .regular)
+        }
     }
 }
 
@@ -61,8 +67,8 @@ struct MeetingDocumentTitle: View {
 
     var body: some View {
         Text(self.title)
-            .font(.system(.largeTitle, design: .serif).weight(.medium))
-            .foregroundStyle(self.theme.palette.primaryText)
+            .fluidText(.pageTitle)
+            .foregroundStyle(self.theme.look.text)
             .fixedSize(horizontal: false, vertical: true)
             .accessibilityAddTraits(.isHeader)
     }
@@ -83,11 +89,8 @@ struct MeetingDocumentTabs: View {
         }
         .overlay(alignment: .bottom) {
             // Divider inherits its axis from the surrounding layout, including the toolbar's HStack.
-            Rectangle()
-                .fill(self.theme.palette.separator)
-                .frame(height: 1)
+            FluidHairline()
                 .allowsHitTesting(false)
-                .accessibilityHidden(true)
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Meeting document views")
@@ -99,7 +102,7 @@ struct MeetingDocumentTabs: View {
                 Image(systemName: icon)
                 Text(title)
             }
-            .font(self.theme.typography.bodySmallStrong)
+            .fluidText(.rowTitle)
             .frame(height: 20)
             .contentShape(Rectangle())
         }
@@ -128,14 +131,12 @@ private struct MeetingDocumentTabButtonStyle: ButtonStyle {
         var body: some View {
             let highlighted = self.isEnabled && (self.isHovered || self.configuration.isPressed)
             self.configuration.label
-                .foregroundStyle(self.isSelected || highlighted ? self.theme.palette.primaryText : self.theme.palette.secondaryText)
+                .foregroundStyle(self.isSelected || highlighted ? self.theme.look.text : self.theme.look.secondaryText)
                 .padding(.horizontal, self.theme.metrics.spacing.md)
                 .frame(height: FluidButtonSize.medium.controlHeight)
                 .background {
                     Capsule()
-                        .fill(self.theme.palette.elevatedCardBackground)
-                        .overlay { Capsule().strokeBorder(self.theme.palette.separator.opacity(0.5), lineWidth: 1) }
-                        .shadow(color: .black.opacity(0.12), radius: 3, y: 1)
+                        .fill(FluidInteractionVisuals.fill(self.theme.palette, isHovered: !self.configuration.isPressed, isPressed: self.configuration.isPressed))
                         .opacity(highlighted ? 1 : 0)
                         .allowsHitTesting(false)
                         .accessibilityHidden(true)
@@ -144,7 +145,7 @@ private struct MeetingDocumentTabButtonStyle: ButtonStyle {
                 .padding(.bottom, self.theme.metrics.spacing.sm)
                 .overlay(alignment: .bottom) {
                     Capsule()
-                        .fill(self.theme.palette.primaryText)
+                        .fill(self.theme.look.text)
                         .frame(height: 2)
                         .opacity(self.isSelected ? 1 : 0)
                         .allowsHitTesting(false)
