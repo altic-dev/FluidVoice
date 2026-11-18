@@ -274,7 +274,8 @@ private struct OverlayAppearanceSample: View {
         .padding(.vertical, self.layout.vPadding)
         .frame(width: self.layout.containerWidth)
         .bottomOverlaySurface(self.appearance, cornerRadius: self.layout.cornerRadius, castsShadow: true)
-        .preferredColorScheme(.dark)
+        // Only the sample is dark; preferredColorScheme would turn the whole Settings window dark.
+        .environment(\.colorScheme, .dark)
     }
 }
 
