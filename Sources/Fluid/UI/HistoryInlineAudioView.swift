@@ -14,46 +14,49 @@ struct HistoryInlineAudioView: View {
     @State private var timeObserver: Any?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Recording").font(self.theme.typography.bodyStrong).foregroundStyle(.secondary)
-            if let errorMessage {
-                Label(errorMessage, systemImage: "exclamationmark.triangle")
-                    .font(.fluidSystem(.callout)).foregroundStyle(.secondary)
-            } else if let player {
-                HStack(spacing: 12) {
-                    Button {
-                        if self.isPlaying {
-                            player.pause()
-                            self.isPlaying = false
-                        } else {
-                            if self.elapsed >= self.duration - 0.1 {
-                                player.seek(to: .zero)
-                                self.elapsed = 0
+        let look = self.theme.look
+        FluidSettingsGroup(title: "Recording") {
+            FluidSettingsBlock {
+                if let errorMessage {
+                    Label(errorMessage, systemImage: "exclamationmark.triangle")
+                        .fluidText(.body)
+                        .foregroundStyle(look.text)
+                } else if let player {
+                    HStack(spacing: self.theme.metrics.spacing.md) {
+                        Button {
+                            if self.isPlaying {
+                                player.pause()
+                                self.isPlaying = false
+                            } else {
+                                if self.elapsed >= self.duration - 0.1 {
+                                    player.seek(to: .zero)
+                                    self.elapsed = 0
+                                }
+                                player.play()
+                                self.isPlaying = true
                             }
-                            player.play()
-                            self.isPlaying = true
+                        } label: {
+                            Image(systemName: self.isPlaying ? "pause.fill" : "play.fill")
                         }
-                    } label: {
-                        Image(systemName: self.isPlaying ? "pause.fill" : "play.fill")
-                    }
-                    .fluidGlassAction(circular: true)
-                    .accessibilityLabel(self.isPlaying ? "Pause recording" : "Play recording")
-                    Text(Self.timeLabel(self.elapsed)).monospacedDigit().frame(width: 42)
-                    Slider(value: self.$elapsed, in: 0...max(self.duration, 0.01)) { editing in
-                        self.isSeeking = editing
-                        if !editing {
-                            player.seek(to: CMTime(seconds: self.elapsed, preferredTimescale: 600))
+                        .fluidGlassAction(circular: true, quiet: true)
+                        .accessibilityLabel(self.isPlaying ? "Pause recording" : "Play recording")
+                        Text(Self.timeLabel(self.elapsed)).monospacedDigit().frame(width: 42)
+                        Slider(value: self.$elapsed, in: 0...max(self.duration, 0.01)) { editing in
+                            self.isSeeking = editing
+                            if !editing {
+                                player.seek(to: CMTime(seconds: self.elapsed, preferredTimescale: 600))
+                            }
                         }
+                        .tint(look.switchOn)
+                        .accessibilityLabel("Recording position")
+                        Text(Self.timeLabel(self.duration)).monospacedDigit().frame(width: 42)
                     }
-                    .tint(self.theme.palette.accent)
-                    .accessibilityLabel("Recording position")
-                    Text(Self.timeLabel(self.duration)).monospacedDigit().frame(width: 42)
+                    .fluidText(.label)
+                    .foregroundStyle(look.secondaryText)
+                    .frame(minHeight: 40)
+                } else {
+                    ProgressView("Loading recording…").controlSize(.small)
                 }
-                .font(self.theme.typography.caption)
-                .foregroundStyle(.secondary)
-                .frame(minHeight: 40)
-            } else {
-                ProgressView("Loading recording…").controlSize(.small)
             }
         }
         .task(id: self.entry.id) {

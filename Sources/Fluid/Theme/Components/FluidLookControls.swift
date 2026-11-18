@@ -312,6 +312,41 @@ struct FluidHairline: View {
     }
 }
 
+/// A search box inside a page or list: a quiet grey field with a clear button once there is text.
+/// Keyboard focus shows as a hairline edge, not a colored ring.
+struct FluidSearchField: View {
+    @Environment(\.theme) private var theme
+    @Binding var text: String
+    let placeholder: String
+    @FocusState private var isFocused: Bool
+
+    var body: some View {
+        let look = self.theme.look
+        let shape = RoundedRectangle(cornerRadius: self.theme.metrics.corners.md, style: .continuous)
+        HStack(spacing: self.theme.metrics.spacing.xs + 2) {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(look.tertiaryText)
+                .accessibilityHidden(true)
+            TextField(self.placeholder, text: self.$text)
+                .textFieldStyle(.plain)
+                .foregroundStyle(look.text)
+                .focused(self.$isFocused)
+            if !self.text.isEmpty {
+                Button { self.text = "" } label: {
+                    Image(systemName: "xmark.circle.fill")
+                }
+                .fluidGlassAction(circular: true, quiet: true)
+                .accessibilityLabel("Clear search")
+            }
+        }
+        .fluidText(.body)
+        .padding(.leading, self.theme.metrics.spacing.sm + 2)
+        .frame(height: 32)
+        .background(look.quietFill, in: shape)
+        .overlay(shape.strokeBorder(self.isFocused ? look.tertiaryText : .clear, lineWidth: 1).allowsHitTesting(false))
+    }
+}
+
 /// A symbol on a neutral rounded tile.
 struct FluidGlyphTile: View {
     @Environment(\.theme) private var theme

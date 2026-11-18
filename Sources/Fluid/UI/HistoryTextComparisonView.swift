@@ -10,18 +10,21 @@ struct HistoryTextComparisonView: View {
     @State private var hasCompared = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 20) {
+        VStack(alignment: .leading, spacing: FluidSettingsLayout.groupSpacing) {
             if self.entry.wasAIProcessed {
-                HStack {
+                HStack(spacing: self.theme.metrics.spacing.sm) {
                     if self.showChanges, let message = self.comparisonMessage {
-                        Text(message).foregroundStyle(.secondary)
+                        Text(message)
                             .lineLimit(1).help(message)
                     }
                     Spacer()
-                    Toggle("Show changes", isOn: self.$showChanges).toggleStyle(.switch).controlSize(.small)
-                        .fixedSize()
+                    Text("Show changes")
+                        .accessibilityHidden(true)
+                    Toggle("Show changes", isOn: self.$showChanges)
+                        .fluidSwitch()
                 }
-                .font(self.theme.typography.caption)
+                .fluidText(.label)
+                .foregroundStyle(self.theme.look.secondaryText)
                 .frame(height: 24)
             }
             self.section(title: "Final text", content: self.entry.clipboardText ?? "", isOriginal: false)
@@ -47,29 +50,26 @@ struct HistoryTextComparisonView: View {
     }
 
     private func section(title: String, content: String, isOriginal: Bool) -> some View {
-        VStack(alignment: .leading, spacing: 16) {
-            HStack(spacing: 8) {
-                Text(title).font(self.theme.typography.bodyStrong)
+        let look = self.theme.look
+        return VStack(alignment: .leading, spacing: 0) {
+            FluidGroupHeader(title: title) {
                 if !isOriginal, self.entry.wasAIProcessed {
-                    Text("AI enhanced").font(self.theme.typography.caption)
-                        .foregroundStyle(self.theme.palette.accent)
-                        .padding(.horizontal, 8).padding(.vertical, 4)
-                        .background(self.theme.palette.accent.opacity(0.1), in: Capsule())
+                    FluidChip(text: "AI enhanced")
                 }
-                Spacer()
                 Button { self.copy(content) } label: { Image(systemName: "doc.on.doc") }
-                    .buttonStyle(.plain).foregroundStyle(.secondary)
+                    .fluidGlassAction(circular: true, quiet: true)
                     .help(isOriginal ? "Copy raw text" : "Copy final text")
                     .accessibilityLabel(isOriginal ? "Copy raw text" : "Copy final text")
             }
-            self.text(content, isOriginal: isOriginal)
-                .font(self.theme.typography.body).lineSpacing(5)
-                .foregroundStyle(isOriginal ? self.theme.palette.secondaryText : self.theme.palette.primaryText)
-                .textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
+            FluidSettingsGroup {
+                FluidSettingsBlock {
+                    self.text(content, isOriginal: isOriginal)
+                        .fluidText(.body).lineSpacing(5)
+                        .foregroundStyle(isOriginal ? look.secondaryText : look.text)
+                        .textSelection(.enabled)
+                }
+            }
         }
-        .padding(20)
-        .background(self.theme.palette.cardBackground, in: RoundedRectangle(cornerRadius: 16))
-        .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(self.theme.palette.cardBorder.opacity(0.5)))
     }
 
     private func text(_ content: String, isOriginal: Bool) -> Text {
@@ -78,9 +78,11 @@ struct HistoryTextComparisonView: View {
         var text = AttributedString()
         for run in runs {
             var part = AttributedString(run.text)
+            // Changes stand out by weight of ink, not hue: removed words are struck through,
+            // added words are underlined, both on the look's highlight fill.
             if run.changed {
-                part.foregroundColor = isOriginal ? .red : .green
-                part.backgroundColor = (isOriginal ? Color.red : Color.green).opacity(0.1)
+                part.foregroundColor = isOriginal ? self.theme.look.tertiaryText : self.theme.look.text
+                part.backgroundColor = self.theme.look.highlightFill
                 if isOriginal {
                     part.strikethroughStyle = .single
                 } else {
