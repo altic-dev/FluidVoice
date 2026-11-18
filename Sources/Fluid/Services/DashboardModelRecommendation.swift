@@ -17,11 +17,10 @@ enum DashboardModelRecommendationPolicy {
     /// Pro's languages use Pro or Mini by memory. Other languages use Qwen, or Whisper Large Turbo where a
     /// Mac FLEURS comparison showed Whisper clearly ahead or Qwen lacks the language. Below 8 GB nothing is recommended.
     static func speechModel(memoryBytes: UInt64, language: String?, available: [SettingsStore.SpeechModel]) -> SettingsStore.SpeechModel? {
-        let gib: UInt64 = 1024 * 1024 * 1024
-        guard let language, memoryBytes >= 8 * gib else { return nil }
+        guard let language else { return nil }
         let candidates: [SettingsStore.SpeechModel]
         if VoiceEngineLanguageCatalog.parakeetV3LanguageIDs.contains(language) {
-            candidates = [memoryBytes >= 16 * gib ? .fluidParakeetPro : .fluidParakeetMini]
+            candidates = [.fluidParakeetPro, .fluidParakeetMini]
         } else if VoiceEngineLanguageCatalog.qwenLanguageIDs.contains(language), !self.whisperPreferredLanguageIDs.contains(language) {
             candidates = [.qwen3Asr17B, .whisperLargeTurbo]
         } else if VoiceEngineLanguageCatalog.whisperLanguageCode(for: language) != nil {
@@ -29,7 +28,19 @@ enum DashboardModelRecommendationPolicy {
         } else {
             return nil
         }
-        return candidates.first { available.contains($0) }
+        return candidates.first { model in
+            guard let minimum = self.minimumMemoryGB(for: model), available.contains(model) else { return false }
+            return memoryBytes >= UInt64(minimum) * 1024 * 1024 * 1024
+        }
+    }
+
+    /// Smallest Mac memory each recommendable speech model is suggested for; nil means never suggested.
+    static func minimumMemoryGB(for model: SettingsStore.SpeechModel) -> Int? {
+        switch model {
+        case .fluidParakeetPro: 16
+        case .fluidParakeetMini, .qwen3Asr17B, .whisperLargeTurbo: 8
+        default: nil
+        }
     }
 
     /// Filipino and Turkish: Whisper Large Turbo clearly beat Qwen3-ASR 1.7B.
@@ -45,18 +56,9 @@ enum DashboardModelRecommendationPolicy {
     static func speechLanguage(settings: SettingsStore) -> String? {
         let model = settings.selectedSpeechModel
         if model.parakeetDescriptor != nil || model == .parakeetRealtime { return "en" } // Same 25-language family (or English).
-        // Qwen detects the language itself, so the saved Whisper language says nothing about what the user speaks.
-        if model.isWhisperModel { return settings.selectedWhisperLanguageCode }
-        switch model {
-        case .appleSpeech, .appleSpeechAnalyzer:
-            return settings.selectedAppleSpeechLocaleIdentifier.split(separator: "-").first.map(String.init)
-        case .cohereTranscribeSixBit:
-            return settings.selectedCohereLanguage.rawValue
-        case .nemotronOffline, .nemotronStreaming, .nemotronStreaming320:
-            return settings.selectedNemotronLanguage.rawValue.split(separator: "-").first.map(String.init)
-        default:
-            return nil // Automatic 30/99-language routes must not silently lose language coverage.
-        }
+        // Qwen detects the language itself, so a saved Whisper language says nothing about what the user speaks.
+        // Automatic 30/99-language routes return nil so they never silently lose language coverage.
+        return VoiceEngineLanguageCatalog.boundLanguageID(settings: settings)
     }
 
     /// Either current cleanup model is a valid choice. A saved ID alone is not activation.

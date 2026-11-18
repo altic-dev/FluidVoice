@@ -108,6 +108,22 @@ enum VoiceEngineLanguageCatalog {
         self.allLanguages(availableModels: availableModels).first { $0.id == id }
     }
 
+    /// The language the selected model's own setting fixes, or nil when the model detects it.
+    static func boundLanguageID(settings: SettingsStore) -> String? {
+        let model = settings.selectedSpeechModel
+        if model.isWhisperModel { return settings.selectedWhisperLanguageCode }
+        switch model {
+        case .appleSpeech, .appleSpeechAnalyzer:
+            return settings.selectedAppleSpeechLocaleIdentifier.split(separator: "-").first.map(String.init)
+        case .cohereTranscribeSixBit:
+            return settings.selectedCohereLanguage.rawValue
+        case .nemotronOffline, .nemotronStreaming, .nemotronStreaming320:
+            return self.languageID(forNemotronLanguage: settings.selectedNemotronLanguage)
+        default:
+            return nil
+        }
+    }
+
     static var whisperLanguages: [VoiceEngineLanguage] {
         self.languageDefinitions.filter { self.whisperLanguageCode(for: $0.id) != nil }
     }

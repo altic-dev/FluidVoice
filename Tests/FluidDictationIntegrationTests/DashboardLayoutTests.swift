@@ -209,6 +209,7 @@ final class DashboardRecommendationTests: XCTestCase {
         XCTAssertEqual(DashboardModelRecommendationPolicy.speechModel(memoryBytes: 16 * gib, language: "en", available: available), .fluidParakeetPro)
         XCTAssertEqual(DashboardModelRecommendationPolicy.speechModel(memoryBytes: 8 * gib, language: "de", available: available), .fluidParakeetMini)
         XCTAssertNil(DashboardModelRecommendationPolicy.speechModel(memoryBytes: 4 * gib, language: "en", available: available))
+        XCTAssertEqual(DashboardModelRecommendationPolicy.speechModel(memoryBytes: 32 * gib, language: "en", available: [.fluidParakeetMini]), .fluidParakeetMini)
         XCTAssertNil(DashboardModelRecommendationPolicy.speechModel(memoryBytes: 32 * gib, language: "en", available: [.whisperSmall]))
         for language: String? in [nil, "auto", "ta", "zh", "unknown"] {
             XCTAssertNil(DashboardModelRecommendationPolicy.speechModel(memoryBytes: 32 * gib, language: language, available: available))
