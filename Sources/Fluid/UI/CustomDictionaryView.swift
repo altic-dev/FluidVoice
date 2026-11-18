@@ -1514,7 +1514,8 @@ struct CustomDictionaryView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     HStack(spacing: 8) {
                         Text("Spoken Formatting")
-                            .font(self.theme.typography.sectionTitle)
+                            .fluidText(.groupTitle)
+                            .foregroundStyle(self.theme.look.text)
 
                         Button {
                             withAnimation(self.reduceMotion ? nil : .easeOut(duration: 0.14)) {
@@ -1523,16 +1524,15 @@ struct CustomDictionaryView: View {
                         } label: {
                             Image(systemName: "info.circle")
                                 .font(.fluidSystem(size: 12, weight: .semibold))
-                                .frame(width: 28, height: 28)
                         }
-                        .buttonStyle(SquareIconButtonStyle())
+                        .fluidGlassAction(circular: true, quiet: true)
                         .help("About spoken formatting")
                         .accessibilityLabel("About spoken formatting")
                     }
 
                     Text("Use one start word for formatting actions, punctuation, and symbols.")
-                        .font(self.theme.typography.caption)
-                        .foregroundStyle(self.theme.palette.secondaryText)
+                        .fluidText(.label)
+                        .foregroundStyle(self.theme.look.secondaryText)
                 }
 
                 Spacer()
@@ -1541,10 +1541,10 @@ struct CustomDictionaryView: View {
                     self.closePunctuationDictionary()
                 } label: {
                     Image(systemName: "xmark")
-                        .font(.fluidSystem(size: 11, weight: .bold))
-                        .frame(width: 28, height: 28)
+                        .font(.fluidSystem(size: 12, weight: .semibold))
                 }
-                .buttonStyle(SquareIconButtonStyle())
+                .fluidGlassAction(circular: true, quiet: true)
+                .accessibilityLabel("Close")
                 .help("Close")
             }
             .padding(.horizontal, self.theme.metrics.spacing.lg)
@@ -1560,24 +1560,26 @@ struct CustomDictionaryView: View {
                     }
 
                     HStack(alignment: .top, spacing: self.theme.metrics.spacing.md) {
-                        VStack(alignment: .leading, spacing: 6) {
+                        VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xs + 2) {
                             Text("Start Word")
-                                .font(self.theme.typography.captionStrong)
+                                .fluidText(.label)
+                                .foregroundStyle(self.theme.look.secondaryText)
                             Text("Say this first so normal words do not change.")
-                                .font(self.theme.typography.caption)
-                                .foregroundStyle(self.theme.palette.secondaryText)
+                                .fluidText(.label)
+                                .foregroundStyle(self.theme.look.tertiaryText)
                             TextField("literal", text: self.$punctuationPrefix)
                                 .dictionaryInputChrome()
                                 .onSubmit { self.savePunctuationDictionaryPrefix() }
                         }
                         .frame(maxWidth: .infinity, alignment: .topLeading)
 
-                        VStack(alignment: .leading, spacing: 6) {
+                        VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xs + 2) {
                             Text("Try Saying")
-                                .font(self.theme.typography.captionStrong)
+                                .fluidText(.label)
+                                .foregroundStyle(self.theme.look.secondaryText)
                             Text("Examples of what FluidVoice will type.")
-                                .font(self.theme.typography.caption)
-                                .foregroundStyle(self.theme.palette.secondaryText)
+                                .fluidText(.label)
+                                .foregroundStyle(self.theme.look.tertiaryText)
                             self.punctuationTrySayingPreview
                         }
                         .frame(maxWidth: .infinity, alignment: .topLeading)
@@ -1591,7 +1593,7 @@ struct CustomDictionaryView: View {
                         Button("Reset All Defaults") {
                             self.isFormattingResetAlertPresented = true
                         }
-                        .fluidButton(.compact, size: .compact)
+                        .fluidAction()
                     }
                 }
                 .padding(.horizontal, self.theme.metrics.spacing.lg)
@@ -1600,6 +1602,7 @@ struct CustomDictionaryView: View {
             .frame(maxHeight: 650)
         }
         .frame(width: 680, alignment: .leading)
+        .background(self.theme.look.sheet)
         .onDisappear {
             self.savePunctuationDictionaryPrefix()
         }
@@ -1618,55 +1621,41 @@ struct CustomDictionaryView: View {
 
     private var spokenFormattingStatusRow: some View {
         HStack(spacing: self.theme.metrics.spacing.md) {
-            Image(systemName: self.punctuationAutoConvertEnabled ? "checkmark.circle.fill" : "pause.circle.fill")
-                .foregroundStyle(
-                    self.punctuationAutoConvertEnabled
-                        ? self.theme.palette.accent
-                        : self.theme.palette.secondaryText
-                )
-
             VStack(alignment: .leading, spacing: 2) {
                 Text(self.punctuationAutoConvertEnabled ? "Spoken Formatting is On" : "Spoken Formatting is Off")
-                    .font(self.theme.typography.bodySmallStrong)
+                    .fluidText(.rowTitle)
+                    .foregroundStyle(self.theme.look.text)
                 Text(
                     self.punctuationAutoConvertEnabled
                         ? "Formatting actions and punctuation will run after the start word."
                         : "Your rules stay saved, but they will not change dictated text."
                 )
-                .font(self.theme.typography.caption)
-                .foregroundStyle(self.theme.palette.secondaryText)
+                .fluidText(.label)
+                .foregroundStyle(self.theme.look.secondaryText)
             }
 
             Spacer()
 
             Toggle("Spoken Formatting", isOn: self.$punctuationAutoConvertEnabled)
-                .labelsHidden()
-                .toggleStyle(.switch)
-                .tint(self.theme.palette.accent)
+                .fluidSwitch()
                 .accessibilityLabel("Spoken Formatting")
                 .onChange(of: self.punctuationAutoConvertEnabled) { _, newValue in
                     SettingsStore.shared.autoConvertPunctuationEnabled = newValue
                 }
         }
         .padding(self.theme.metrics.spacing.md)
-        .background(
-            RoundedRectangle(cornerRadius: self.theme.metrics.corners.md, style: .continuous)
-                .fill(self.theme.palette.contentBackground.opacity(0.5))
-                .overlay(
-                    RoundedRectangle(cornerRadius: self.theme.metrics.corners.md, style: .continuous)
-                        .stroke(self.theme.palette.cardBorder.opacity(0.25), lineWidth: 1)
-                )
-        )
+        .background(self.theme.look.surface, in: RoundedRectangle(cornerRadius: self.theme.metrics.corners.md, style: .continuous))
     }
 
     private var formattingActionsSection: some View {
         VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
             VStack(alignment: .leading, spacing: 2) {
                 Text("Formatting Actions")
-                    .font(self.theme.typography.bodySmallStrong)
+                    .fluidText(.rowTitle)
+                    .foregroundStyle(self.theme.look.text)
                 Text("Fixed invisible actions with spoken phrases you can personalize.")
-                    .font(self.theme.typography.caption)
-                    .foregroundStyle(self.theme.palette.secondaryText)
+                    .fluidText(.label)
+                    .foregroundStyle(self.theme.look.secondaryText)
             }
 
             VStack(spacing: self.theme.metrics.spacing.sm) {
@@ -1686,21 +1675,20 @@ struct CustomDictionaryView: View {
             HStack(alignment: .center) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Punctuation")
-                        .font(self.theme.typography.bodySmallStrong)
+                        .fluidText(.rowTitle)
+                        .foregroundStyle(self.theme.look.text)
                     Text("Spoken names that type punctuation or symbols after the start word.")
-                        .font(self.theme.typography.caption)
-                        .foregroundStyle(self.theme.palette.secondaryText)
+                        .fluidText(.label)
+                        .foregroundStyle(self.theme.look.secondaryText)
                 }
 
                 Spacer()
 
                 if !self.isPunctuationRuleEditorPresented {
-                    Button {
+                    Button("Add Rule") {
                         self.startAddingPunctuationRule()
-                    } label: {
-                        Label("Add Rule", systemImage: "plus")
                     }
-                    .fluidButton(.accent, size: .small)
+                    .fluidAction()
                 }
             }
 
@@ -1731,20 +1719,18 @@ struct CustomDictionaryView: View {
         let rule = self.formattingActionRule(for: action)
         return HStack(spacing: self.theme.metrics.spacing.md) {
             Text(action.displaySymbol)
-                .font(.fluidSystem(size: 18, weight: .semibold, design: .rounded))
-                .foregroundStyle(self.theme.palette.accent)
+                .fluidText(.groupTitle)
+                .foregroundStyle(self.theme.look.tileGlyph)
                 .frame(width: 32, height: 32)
-                .background(
-                    RoundedRectangle(cornerRadius: self.theme.metrics.corners.sm, style: .continuous)
-                        .fill(self.theme.palette.contentBackground.opacity(0.7))
-                )
+                .background(self.theme.look.quietFill, in: RoundedRectangle(cornerRadius: self.theme.metrics.corners.sm, style: .continuous))
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(action.title)
-                    .font(self.theme.typography.bodySmallStrong)
+                    .fluidText(.rowTitle)
+                    .foregroundStyle(self.theme.look.text)
                 Text(rule.aliases.isEmpty ? "No spoken phrases set" : rule.aliases.joined(separator: ", "))
-                    .font(self.theme.typography.caption)
-                    .foregroundStyle(self.theme.palette.secondaryText)
+                    .fluidText(.label)
+                    .foregroundStyle(self.theme.look.secondaryText)
                     .lineLimit(1)
             }
 
@@ -1753,37 +1739,28 @@ struct CustomDictionaryView: View {
             Button("Edit") {
                 self.startEditingFormattingAction(action)
             }
-            .fluidButton(.compact, size: .compact)
+            .fluidAction()
 
             Toggle(action.title, isOn: self.formattingActionEnabledBinding(for: action))
-                .labelsHidden()
-                .toggleStyle(.switch)
-                .tint(self.theme.palette.accent)
+                .fluidSwitch()
                 .disabled(rule.aliases.isEmpty)
                 .help(rule.aliases.isEmpty ? "Add a spoken phrase before enabling this action." : "Enable \(action.title)")
         }
         .padding(.horizontal, self.theme.metrics.spacing.md)
-        .padding(.vertical, 8)
-        .background(
-            RoundedRectangle(cornerRadius: self.theme.metrics.corners.md, style: .continuous)
-                .fill(self.theme.palette.contentBackground.opacity(0.5))
-                .overlay(
-                    RoundedRectangle(cornerRadius: self.theme.metrics.corners.md, style: .continuous)
-                        .stroke(self.theme.palette.cardBorder.opacity(0.25), lineWidth: 1)
-                )
-        )
+        .padding(.vertical, self.theme.metrics.spacing.sm)
+        .background(self.theme.look.surface, in: RoundedRectangle(cornerRadius: self.theme.metrics.corners.md, style: .continuous))
     }
 
     private func formattingActionEditor(_ action: SettingsStore.SpokenFormattingAction) -> some View {
         VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
             Text("Edit \(action.title) Phrases")
-                .font(self.theme.typography.captionStrong)
+                .fluidText(.rowTitle)
+                .foregroundStyle(self.theme.look.text)
             Text("Enter one phrase per line. Clearing every phrase disables this action.")
-                .font(self.theme.typography.caption)
-                .foregroundStyle(self.theme.palette.secondaryText)
+                .fluidText(.label)
+                .foregroundStyle(self.theme.look.secondaryText)
 
             TextEditor(text: self.$formattingActionAliasesText)
-                .font(self.theme.typography.bodySmall)
                 .frame(minHeight: 68, maxHeight: 92)
                 .scrollContentBackground(.hidden)
                 .dictionaryInputChrome(minHeight: 68)
@@ -1794,45 +1771,31 @@ struct CustomDictionaryView: View {
                 Button("Cancel") {
                     self.dismissFormattingActionEditor()
                 }
-                .fluidButton(.compact, size: .compact)
+                .fluidAction()
 
                 Button("Save Phrases") {
                     self.saveFormattingActionAliases(action)
                 }
-                .fluidButton(.accent, size: .small)
+                .fluidAction(.primary)
             }
         }
         .padding(self.theme.metrics.spacing.md)
-        .background(
-            RoundedRectangle(cornerRadius: self.theme.metrics.corners.md, style: .continuous)
-                .fill(self.theme.palette.contentBackground.opacity(0.5))
-                .overlay(
-                    RoundedRectangle(cornerRadius: self.theme.metrics.corners.md, style: .continuous)
-                        .stroke(self.theme.palette.accent.opacity(0.35), lineWidth: 1)
-                )
-        )
+        .background(self.theme.look.surface, in: RoundedRectangle(cornerRadius: self.theme.metrics.corners.md, style: .continuous))
     }
 
     private var punctuationDictionaryInfoPanel: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xs + 2) {
             Text("Say the start word first, then a formatting action or punctuation name.")
             Text("When you say \"\(self.punctuationPreviewPrefix) next line\", it starts a new line.")
             Text("When you say \"\(self.punctuationPreviewPrefix) comma\", it types \",\".")
             Text("Add one spoken phrase per line. Formatting actions always keep their fixed output.")
         }
-        .font(self.theme.typography.caption)
-        .foregroundStyle(self.theme.palette.secondaryText)
+        .fluidText(.label)
+        .foregroundStyle(self.theme.look.secondaryText)
         .fixedSize(horizontal: false, vertical: true)
         .padding(self.theme.metrics.spacing.md)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: self.theme.metrics.corners.md, style: .continuous)
-                .fill(self.theme.palette.contentBackground.opacity(0.5))
-                .overlay(
-                    RoundedRectangle(cornerRadius: self.theme.metrics.corners.md, style: .continuous)
-                        .stroke(self.theme.palette.cardBorder.opacity(0.25), lineWidth: 1)
-                )
-        )
+        .background(self.theme.look.surface, in: RoundedRectangle(cornerRadius: self.theme.metrics.corners.md, style: .continuous))
     }
 
     private var punctuationTrySayingPreview: some View {
@@ -1846,36 +1809,30 @@ struct CustomDictionaryView: View {
                 typed: "New Line"
             )
         }
-        .font(self.theme.typography.caption)
+        .fluidText(.label)
         .fixedSize(horizontal: false, vertical: true)
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, self.theme.metrics.spacing.md)
-        .padding(.vertical, 7)
-        .background(
-            RoundedRectangle(cornerRadius: self.theme.metrics.corners.sm, style: .continuous)
-                .fill(self.theme.palette.contentBackground.opacity(0.5))
-                .overlay(
-                    RoundedRectangle(cornerRadius: self.theme.metrics.corners.sm, style: .continuous)
-                        .stroke(self.theme.palette.cardBorder.opacity(0.25), lineWidth: 1)
-                )
-        )
+        .padding(.vertical, self.theme.metrics.spacing.sm)
+        .background(self.theme.look.surface, in: RoundedRectangle(cornerRadius: self.theme.metrics.corners.md, style: .continuous))
     }
 
     private func punctuationExampleText(spoken: String, typed: String) -> Text {
         Text("When you say ")
-            .foregroundStyle(self.theme.palette.secondaryText) +
+            .foregroundStyle(self.theme.look.secondaryText) +
             Text("\"\(spoken)\"")
-            .foregroundStyle(self.theme.palette.accent) +
+            .foregroundStyle(self.theme.look.text) +
             Text(", it types ")
-            .foregroundStyle(self.theme.palette.secondaryText) +
+            .foregroundStyle(self.theme.look.secondaryText) +
             Text("\"\(typed)\"")
-            .foregroundStyle(self.theme.palette.accent)
+            .foregroundStyle(self.theme.look.text)
     }
 
     private var punctuationRuleEditor: some View {
         VStack(alignment: .leading, spacing: self.theme.metrics.spacing.md) {
             Text(self.punctuationEditorTitle)
-                .font(self.theme.typography.captionStrong)
+                .fluidText(.rowTitle)
+                .foregroundStyle(self.theme.look.text)
 
             ViewThatFits(in: .horizontal) {
                 HStack(alignment: .top, spacing: self.theme.metrics.spacing.md) {
@@ -1895,43 +1852,35 @@ struct CustomDictionaryView: View {
                 Button("Clear") {
                     self.clearPunctuationRuleFields()
                 }
-                .fluidButton(.compact, size: .compact)
+                .fluidAction()
 
                 Spacer()
 
                 Button("Cancel") {
                     self.dismissPunctuationRuleEditor()
                 }
-                .fluidButton(.compact, size: .compact)
+                .fluidAction()
 
                 Button("Save Rule") {
                     self.savePunctuationRuleIfValid()
                 }
-                .fluidButton(.accent, size: .small)
+                .fluidAction(.primary)
                 .disabled(!self.canSavePunctuationRule)
-                .opacity(self.canSavePunctuationRule ? 1 : 0.45)
             }
         }
         .padding(self.theme.metrics.spacing.md)
-        .background(
-            RoundedRectangle(cornerRadius: self.theme.metrics.corners.md, style: .continuous)
-                .fill(self.theme.palette.contentBackground.opacity(0.5))
-                .overlay(
-                    RoundedRectangle(cornerRadius: self.theme.metrics.corners.md, style: .continuous)
-                        .stroke(self.theme.palette.cardBorder.opacity(0.25), lineWidth: 1)
-                )
-        )
+        .background(self.theme.look.surface, in: RoundedRectangle(cornerRadius: self.theme.metrics.corners.md, style: .continuous))
     }
 
     private var punctuationAliasesEditor: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xs + 2) {
             Text("What You Say")
-                .font(self.theme.typography.captionStrong)
+                .fluidText(.label)
+                .foregroundStyle(self.theme.look.secondaryText)
             Text("One way per line, like comma or full stop.")
-                .font(self.theme.typography.caption)
-                .foregroundStyle(self.theme.palette.secondaryText)
+                .fluidText(.label)
+                .foregroundStyle(self.theme.look.secondaryText)
             TextEditor(text: self.$punctuationAliasesText)
-                .font(self.theme.typography.bodySmall)
                 .frame(minHeight: 64, maxHeight: 86)
                 .scrollContentBackground(.hidden)
                 .dictionaryInputChrome(minHeight: 64)
@@ -1940,16 +1889,16 @@ struct CustomDictionaryView: View {
     }
 
     private var punctuationSymbolEditor: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xs + 2) {
             Text("What It Types")
-                .font(self.theme.typography.captionStrong)
+                .fluidText(.label)
+                .foregroundStyle(self.theme.look.secondaryText)
             TextField(",", text: self.$punctuationSymbolText)
-                .font(self.theme.typography.bodySmallStrong)
                 .dictionaryInputChrome()
                 .frame(width: 92)
             Text("One punctuation symbol, like , or ?.")
-                .font(self.theme.typography.caption)
-                .foregroundStyle(self.theme.palette.secondaryText)
+                .fluidText(.label)
+                .foregroundStyle(self.theme.look.secondaryText)
         }
     }
 
@@ -3818,21 +3767,22 @@ private struct PunctuationDictionaryRuleRow: View {
     @Environment(\.theme) private var theme
 
     var body: some View {
+        let look = self.theme.look
         HStack(alignment: .center, spacing: self.theme.metrics.spacing.sm) {
             Text(self.rule.aliases.joined(separator: ", "))
-                .font(self.theme.typography.captionStrong)
-                .foregroundStyle(self.theme.palette.primaryText)
+                .fluidText(.body)
+                .foregroundStyle(look.text)
                 .lineLimit(1)
                 .truncationMode(.tail)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
             Image(systemName: "arrow.right")
-                .font(self.theme.typography.caption)
-                .foregroundStyle(self.theme.palette.tertiaryText)
+                .font(.fluidSystem(size: 11, weight: .medium))
+                .foregroundStyle(look.tertiaryText)
 
             Text(self.rule.symbol)
-                .font(self.theme.typography.bodySmallStrong)
-                .foregroundStyle(self.theme.palette.accent)
+                .fluidText(.rowTitle)
+                .foregroundStyle(look.text)
                 .frame(width: 60, alignment: .leading)
                 .lineLimit(1)
 
@@ -3842,32 +3792,25 @@ private struct PunctuationDictionaryRuleRow: View {
                 } label: {
                     Image(systemName: "slider.horizontal.3")
                         .font(.fluidSystem(size: 12, weight: .semibold))
-                        .frame(width: 32, height: 32)
                 }
-                .buttonStyle(SquareIconButtonStyle())
+                .fluidGlassAction(circular: true, quiet: true)
+                .accessibilityLabel("Edit punctuation rule")
                 .help("Edit punctuation rule")
 
                 Button(role: .destructive) {
                     self.onDelete()
                 } label: {
                     Image(systemName: "trash")
-                        .font(.fluidSystem(size: 12, weight: .semibold))
-                        .frame(width: 32, height: 32)
+                        .font(.fluidSystem(size: 12, weight: .regular))
                 }
-                .buttonStyle(SquareIconButtonStyle(foreground: .red, borderColor: .red))
+                .fluidGlassAction(circular: true, quiet: true)
+                .accessibilityLabel("Delete punctuation rule")
                 .help("Delete punctuation rule")
             }
         }
         .padding(.horizontal, self.theme.metrics.spacing.md)
-        .padding(.vertical, 9)
-        .background(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(self.theme.palette.contentBackground.opacity(0.52))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .stroke(self.theme.palette.cardBorder.opacity(0.28), lineWidth: 1)
-                )
-        )
+        .padding(.vertical, self.theme.metrics.spacing.xs)
+        .background(look.surface, in: RoundedRectangle(cornerRadius: self.theme.metrics.corners.md, style: .continuous))
     }
 }
 
