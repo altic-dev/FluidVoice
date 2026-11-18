@@ -163,9 +163,10 @@ actor OriginalAudioEmbeddingExtractor {
         else {
             throw PronunciationDictionaryStoreError.outdatedModelRevision
         }
-        let models = try await AsrModels.loadLocalOnly(
+        let models = try await LocalParakeetModelLoader.load(
             from: directory,
-            version: version
+            version: version,
+            archiveSHA256: descriptor.archiveSHA256
         )
         try Task.checkCancellation()
         guard descriptor.installationRevisionMatches(at: directory) else {

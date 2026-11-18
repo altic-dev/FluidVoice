@@ -87,7 +87,11 @@ nonisolated enum CompactSpeechModelRuntimeCheck {
         let samples = try self.samples()
         do {
             try await self.withDeadline {
-                let stagedModels = try await AsrModels.loadLocalOnly(from: directory, version: descriptor.asrModelVersion)
+                let stagedModels = try await LocalParakeetModelLoader.load(
+                    from: directory,
+                    version: descriptor.asrModelVersion,
+                    archiveSHA256: descriptor.archiveSHA256
+                )
                 let manager = AsrManager(config: ASRConfig.default)
                 do {
                     try await manager.initialize(models: stagedModels)
@@ -577,7 +581,11 @@ final class FluidAudioProvider: TranscriptionProvider {
                 }
                 try Task.checkCancellation()
                 progressRelay.report(.loading)
-                models = try await AsrModels.loadLocalOnly(from: modelCacheDirectory, version: asrModelVersion)
+                models = try await LocalParakeetModelLoader.load(
+                    from: modelCacheDirectory,
+                    version: asrModelVersion,
+                    archiveSHA256: installedHash ?? descriptor.archiveSHA256
+                )
             } else {
                 models = try await AsrModels.downloadAndLoad(
                     version: asrModelVersion,

@@ -80,8 +80,9 @@ nonisolated struct LocalAPIRouter: HTTPResponder {
 
     private static func handle(_ request: Request, with handler: any LocalAPIRouteHandler) async throws -> Response {
         if let length = request.headers[.contentLength], let count = UInt64(length),
-           count > LocalAPI.maxRequestBytes {
-            return Self.makeResponse(LocalAPI.error("Request too large.", status: 413))
+           count > LocalAPI.maxRequestBytes
+        {
+            return self.makeResponse(LocalAPI.error("Request too large.", status: 413))
         }
 
         let body: ByteBuffer
