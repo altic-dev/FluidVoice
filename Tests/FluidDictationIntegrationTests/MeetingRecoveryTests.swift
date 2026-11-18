@@ -115,6 +115,95 @@ final class MeetingRecoveryTests: XCTestCase {
         XCTAssertTrue(saved?.failures.isEmpty == true)
     }
 
+    /// The meeting app disappearing (for example the host ends a Zoom call, or Zoom quits) is the
+    /// normal end of a meeting. The preserved audio must be transcribed without a manual retry.
+    func testSourceApplicationEndedTranscribesPreservedAudioWithoutManualRetry() async throws {
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MeetingSessionStore(rootDirectory: dir)
+        let capture = StubCaptureController()
+        let microphone = self.makeMicrophoneTrack(chunks: [self.makeFinalizedChunk()])
+        capture.startResult = MeetingCaptureStartResult(tracks: [microphone], firstPresentationTime: nil)
+        let arbiter = StubArbiter()
+        let coordinator = MeetingSessionCoordinator(
+            store: store, capture: capture, processing: StubProcessingController(), audioArbiter: arbiter
+        )
+        let session = try await coordinator.startRecording(configuration: self.makeConfiguration())
+        try await Task.sleep(nanoseconds: 100_000_000) // Let startup retention maintenance finish.
+        capture.stopResult = MeetingCaptureStopResult(tracks: [microphone], stoppedAt: Date())
+        capture.emit(.sourceApplicationEnded(detail: "Zoom is no longer available to record."))
+        for _ in 0..<400 {
+            if coordinator.state == .completed(session.id) { break }
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+        XCTAssertEqual(coordinator.state, .completed(session.id), "Ended source must not wait for Retry")
+        XCTAssertEqual(capture.stopCount, 1)
+        let loaded = try await store.load(id: session.id)
+        let saved = try XCTUnwrap(loaded)
+        XCTAssertEqual(saved.state, .completed)
+        XCTAssertEqual(
+            saved.events.filter { $0.kind == .captureStoppedUnexpectedly }.map(\.detail),
+            ["Zoom is no longer available to record."],
+            "The persisted event history keeps today's schema"
+        )
+        XCTAssertTrue(saved.processingAttempts.allSatisfy { $0.completedAt != nil }, "No attempt may stay pending")
+        XCTAssertEqual(saved.processingAttempts.last?.stage, .completed)
+        XCTAssertEqual(arbiter.acquireCount, arbiter.releaseCount)
+        await coordinator.shutdownForTermination()
+    }
+
+    /// The capture engine's give-up decision: only a meeting app that can no longer be found ends the
+    /// meeting. Every other exhausted recovery stays an unexpected stop that waits for Retry.
+    func testExhaustedRecoveryEndsMeetingOnlyWhenTheMeetingAppIsUnavailable() {
+        let ended = MeetingCaptureEvent.rebuildExhausted(MeetingCaptureError.applicationUnavailable("Zoom"))
+        guard case let .sourceApplicationEnded(detail) = ended else {
+            return XCTFail("An unavailable meeting app must end the meeting, got \(ended)")
+        }
+        XCTAssertEqual(detail, "Zoom is no longer available to record.")
+        let others: [Error] = [
+            MeetingCaptureError.applicationAmbiguous("Zoom"),
+            MeetingCaptureError.noCaptureDisplay,
+            NSError(domain: "Fixture", code: -3808),
+        ]
+        for error in others {
+            let stopped = MeetingCaptureEvent.rebuildExhausted(error)
+            guard case let .interrupted(kind, trackID, detail) = stopped else {
+                return XCTFail("\(error) must stay an unexpected stop, got \(stopped)")
+            }
+            XCTAssertEqual(kind, .captureStoppedUnexpectedly)
+            XCTAssertNil(trackID)
+            XCTAssertEqual(detail, error.localizedDescription)
+        }
+    }
+
+    /// Without finalized audio there is nothing to transcribe, so the session stays an interrupted
+    /// offer exactly as before.
+    func testSourceApplicationEndedWithoutFinalizedAudioStaysInterrupted() async throws {
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MeetingSessionStore(rootDirectory: dir)
+        let capture = StubCaptureController()
+        capture.startResult = MeetingCaptureStartResult(
+            tracks: [self.makeMicrophoneTrack(chunks: [])], firstPresentationTime: nil
+        )
+        let arbiter = StubArbiter()
+        let coordinator = MeetingSessionCoordinator(
+            store: store, capture: capture, processing: StubProcessingController(), audioArbiter: arbiter
+        )
+        let session = try await coordinator.startRecording(configuration: self.makeConfiguration())
+        capture.emit(.sourceApplicationEnded(detail: "Zoom is no longer available to record."))
+        for _ in 0..<200 {
+            if coordinator.isQuiescent, coordinator.state == .interrupted(session.id) { break }
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+        try await Task.sleep(nanoseconds: 50_000_000)
+        XCTAssertEqual(coordinator.state, .interrupted(session.id))
+        let saved = try await store.load(id: session.id)
+        XCTAssertEqual(saved?.state, .interrupted)
+        XCTAssertEqual(arbiter.acquireCount, arbiter.releaseCount)
+        await coordinator.shutdownForTermination()
+    }
+
     func testEchoWarningRendersWithoutInvokingRecordingActions() throws {
         var session = self.makeSession(state: .recording)
         session.mode = .onlineCall

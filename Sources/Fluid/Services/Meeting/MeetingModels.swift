@@ -1440,6 +1440,10 @@ nonisolated enum MeetingCaptureEvent: Sendable {
     case microphoneEchoProtectionChanged(MeetingMicrophoneEchoProtection)
     case chunkFinalized(trackID: MeetingAudioTrackID, chunk: MeetingAudioChunk, format: MeetingAudioFormat)
     case interrupted(kind: MeetingInterruptionKind, trackID: MeetingAudioTrackID?, detail: String?)
+    /// The captured meeting app is no longer available to capture (for example the host ended the call),
+    /// and stream recovery could not re-attach to it. Persisted as `captureStoppedUnexpectedly`, but the call is over: the coordinator
+    /// transcribes the preserved audio instead of waiting for a manual retry.
+    case sourceApplicationEnded(detail: String?)
     /// `ack` is `nil` for downgrades — the mic is already dead, no race to gate on.
     case captureMethodChanged(trackID: MeetingAudioTrackID, method: MeetingAudioTrackCaptureMethod, ack: MeetingCaptureMethodChangeAck?)
 }

@@ -483,7 +483,7 @@ final class MeetingSessionCoordinator: ObservableObject {
                 eventHandler: { [weak self] event in
                     // Preserve failure/recovery emission order across the capture-to-main hop.
                     DispatchQueue.main.async { [weak self] in
-                        self?.handleCaptureEvent(event, generation: generation)
+                        self?.routeCaptureEvent(event, generation: generation)
                     }
                 },
                 liveAudioHandler: { [weak liveTranscriptionCoordinator] kind, sampleBuffer in
@@ -1924,6 +1924,7 @@ final class MeetingSessionCoordinator: ObservableObject {
         guard self.captureGeneration == generation, var session = self.activeSession else { return }
         self.liveTranscriptionCoordinator?.recordComparisonCaptureEvent(event)
         switch event {
+        case .sourceApplicationEnded: return // routeCaptureEvent converts it before it gets here.
         case let .audioComparisonProbeStarted(probe):
             self.liveTranscriptionCoordinator?.attachComparisonProbe(probe)
             return // Diagnostic-only: no recording, persistence, navigation or transcript writes.
@@ -2430,5 +2431,35 @@ extension MeetingSessionCoordinator {
         if let current = self.activeSession, current.id == sessionID { return current }
         if let completed = self.latestCompletedSession, completed.id == sessionID { return completed }
         return session
+    }
+}
+
+private extension MeetingSessionCoordinator {
+    /// A meeting app that can no longer be captured cannot resume the call. Stop like any other
+    /// unexpected stop, then transcribe the preserved audio through the same path as the Retry button.
+    /// If that cannot start, the session keeps its usual retry offer.
+    func routeCaptureEvent(_ event: MeetingCaptureEvent, generation: UUID) {
+        guard case let .sourceApplicationEnded(detail) = event else {
+            self.handleCaptureEvent(event, generation: generation)
+            return
+        }
+        guard self.captureGeneration == generation, let sessionID = self.activeSession?.id else { return }
+        self.handleCaptureEvent(
+            .interrupted(kind: .captureStoppedUnexpectedly, trackID: nil, detail: detail),
+            generation: generation
+        )
+        guard let interruption = self.interruptionTask else { return }
+        Task { @MainActor [weak self] in
+            await interruption.value
+            guard let self, self.terminationTask == nil,
+                  let session = self.activeSession, session.id == sessionID,
+                  session.state == .interrupted, session.hasRetryableAudio
+            else { return }
+            do {
+                _ = try await self.retryProcessing(sessionID: sessionID)
+            } catch {
+                DebugLogger.shared.log("Meeting \(sessionID): transcription after the meeting app ended did not start: \(error)")
+            }
+        }
     }
 }
