@@ -38,6 +38,24 @@ final class MeetingOverlayGeometryTests: XCTestCase {
         XCTAssertEqual(next.bottomY, self.screen.minY + 30)
     }
 
+    func testDraggedAnchorFollowsPointerAndLayoutKeepsPillOnScreen() {
+        let start = MeetingOverlayVisibleAnchor(centerX: 300, bottomY: 450)
+        let moved = MeetingOverlayGeometry.draggedAnchor(
+            from: start,
+            pointerStart: CGPoint(x: 310, y: 460),
+            pointer: CGPoint(x: 350, y: 430)
+        )
+        XCTAssertEqual(moved, MeetingOverlayVisibleAnchor(centerX: 340, bottomY: 420))
+
+        let offscreen = MeetingOverlayGeometry.draggedAnchor(
+            from: start,
+            pointerStart: .zero,
+            pointer: CGPoint(x: -5000, y: -5000)
+        )
+        let layout = MeetingOverlayGeometry.layout(anchor: offscreen, visibleSize: self.pill, padding: 24, screenVisible: self.screen)
+        XCTAssertEqual(layout.visibleSurfaceFrame.origin, self.screen.origin)
+    }
+
     func testCanonicalPresentationVisibleSizes() {
         XCTAssertGreaterThan(self.captions.width, self.pill.width)
         XCTAssertGreaterThan(self.captions.height, self.pill.height)
@@ -360,6 +378,40 @@ final class MeetingOverlayPresentationReducerTests: XCTestCase {
         XCTAssertEqual(reducer.presentation, .captions)
         reducer.apply(.toggleRequested)
         XCTAssertEqual(reducer.presentation, .pill)
+    }
+
+    func testDismissedPillStaysHiddenThroughDegradeAndResetsForNextMeeting() {
+        var reducer = MeetingOverlayPresentationReducer(preference: .pill)
+        let session = UUID()
+        reducer.apply(.pillDismissed)
+        XCTAssertFalse(reducer.isPillDismissed)
+
+        reducer.apply(.recordingStarted(sessionID: session))
+        reducer.apply(.pillDismissed)
+        XCTAssertTrue(reducer.isPillDismissed)
+
+        reducer.apply(.recordingDegraded)
+        reducer.apply(.recordingStarted(sessionID: session))
+        XCTAssertTrue(reducer.isPillDismissed)
+
+        reducer.apply(.recordingStarted(sessionID: UUID()))
+        XCTAssertFalse(reducer.isPillDismissed)
+
+        reducer.apply(.pillDismissed)
+        reducer.apply(.recordingStopped)
+        XCTAssertFalse(reducer.isPillDismissed)
+    }
+
+    func testOpeningCaptionsClearsPillDismissal() {
+        var reducer = MeetingOverlayPresentationReducer(preference: .pill)
+        reducer.apply(.recordingStarted(sessionID: UUID()))
+        reducer.apply(.pillDismissed)
+        reducer.apply(.toggleRequested)
+        XCTAssertEqual(reducer.presentation, .captions)
+        XCTAssertFalse(reducer.isPillDismissed)
+
+        reducer.apply(.pillDismissed)
+        XCTAssertFalse(reducer.isPillDismissed)
     }
 
     func testPreferenceRoundTripAndCaseIterable() throws {
