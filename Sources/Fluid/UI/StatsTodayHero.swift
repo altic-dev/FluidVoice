@@ -18,19 +18,20 @@ struct StatsTodayHero: View {
     }
 
     var body: some View {
-        ThemedCard(style: .prominent, padding: 28, hoverEffect: false) {
-            VStack(alignment: .leading, spacing: 24) {
+        let spacing = self.theme.metrics.spacing
+        FluidSurfaceCard(padding: spacing.xxl) {
+            VStack(alignment: .leading, spacing: spacing.xl) {
                 ViewThatFits(in: .horizontal) {
                     HStack(alignment: .center, spacing: 40) {
                         self.headline.frame(minWidth: 300, maxWidth: .infinity, alignment: .leading)
                         self.momentum.frame(width: 240)
                     }
-                    VStack(alignment: .leading, spacing: 24) {
+                    VStack(alignment: .leading, spacing: spacing.xl) {
                         self.headline
                         self.momentum
                     }
                 }
-                Divider().opacity(0.35)
+                FluidHairline()
                 self.nextStep
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -38,42 +39,45 @@ struct StatsTodayHero: View {
     }
 
     private var headline: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        let look = self.theme.look
+        return VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xs) {
             if self.words > 0, self.savedMinutes > 0 {
                 Text(self.savedTime)
-                    .font(.fluidSystem(size: 56, weight: .semibold, design: .rounded))
+                    .fluidText(.pageTitle)
+                    .foregroundStyle(look.text)
                     .monospacedDigit()
                 Text("back in your day.")
-                    .font(self.theme.typography.title)
+                    .fluidText(.subtitle)
+                    .foregroundStyle(look.secondaryText)
             } else {
                 Text(self.words == 0 ? "Great ideas\nstart with a word." : "Look at you go.")
-                    .font(self.theme.typography.displayTitle)
+                    .fluidText(.pageTitle)
+                    .foregroundStyle(look.text)
                     .fixedSize(horizontal: false, vertical: true)
                 Text(self.words == 0 ? "Make a little space for your next big thought." : "\(self.words.formatted()) words captured, without the typing.")
-                    .font(self.theme.typography.bodySmall)
-                    .foregroundStyle(.secondary)
+                    .fluidText(.subtitle)
+                    .foregroundStyle(look.secondaryText)
             }
         }
     }
 
     private var momentum: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Image(systemName: "flame.fill")
-                    .font(self.theme.typography.titleIcon)
-                    .foregroundStyle(self.theme.palette.warning)
+        let look = self.theme.look
+        return VStack(alignment: .leading, spacing: self.theme.metrics.spacing.md) {
+            HStack(alignment: .firstTextBaseline, spacing: self.theme.metrics.spacing.xs + 2) {
                 Text("\(self.streak)")
-                    .font(self.theme.typography.displayTitle)
+                    .fluidText(.detailTitle)
+                    .foregroundStyle(look.text)
                     .monospacedDigit()
                 Text("day streak")
-                    .font(self.theme.typography.bodySmall)
-                    .foregroundStyle(.secondary)
+                    .fluidText(.body)
+                    .foregroundStyle(look.secondaryText)
             }
             Text(self.streak == 0 ? "Your next streak starts with today." : "One day at a time. Look how far you've come.")
-                .font(self.theme.typography.caption)
-                .foregroundStyle(.secondary)
+                .fluidText(.label)
+                .foregroundStyle(look.tertiaryText)
                 .fixedSize(horizontal: false, vertical: true)
-            HStack(spacing: 8) {
+            HStack(spacing: self.theme.metrics.spacing.sm) {
                 ForEach(Array(self.activity.enumerated()), id: \.element.date) { index, day in
                     StatsStreakDay(
                         date: day.date,
@@ -86,35 +90,36 @@ struct StatsTodayHero: View {
     }
 
     private var nextStep: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        let look = self.theme.look
+        return VStack(alignment: .leading, spacing: self.theme.metrics.spacing.md) {
             Text(self.nextTarget.map { "You're \(($0 - self.words).formatted()) words from your next win." } ?? "Look how far your voice has taken you today.")
-                .font(.fluidSystem(size: 30, weight: .semibold, design: .rounded))
+                .fluidText(.detailTitle)
+                .foregroundStyle(look.text)
                 .fixedSize(horizontal: false, vertical: true)
             HStack(alignment: .firstTextBaseline) {
                 Text(self.nextTarget.map { "\(self.words.formatted()) spoken. Let's make it \($0.formatted())." } ?? "\(self.words.formatted()) words spoken. Keep your ideas coming.")
-                    .font(self.theme.typography.statement)
-                    .foregroundStyle(.secondary)
-                Spacer(minLength: 12)
+                    .fluidText(.body)
+                    .foregroundStyle(look.secondaryText)
+                Spacer(minLength: self.theme.metrics.spacing.md)
                 Text("\(Int(self.progress * 100))%")
-                    .font(self.theme.typography.title)
-                    .foregroundStyle(self.theme.palette.accent)
+                    .fluidText(.value)
+                    .foregroundStyle(look.text)
                     .monospacedDigit()
             }
             GeometryReader { geometry in
                 ZStack(alignment: .leading) {
-                    Capsule().fill(self.theme.palette.primaryText.opacity(0.08))
+                    Capsule().fill(look.quietFill)
                     Capsule()
-                        .fill(self.theme.palette.accent.gradient)
+                        .fill(look.data)
                         .frame(width: geometry.size.width * self.progress)
                 }
             }
-            .frame(height: 14)
+            .frame(height: 8)
             .accessibilityLabel("Today's word milestone")
             .accessibilityValue("\(Int(self.progress * 100)) percent")
-            Label("\(self.sessions.formatted()) dictations", systemImage: "waveform")
-                .font(self.theme.typography.caption)
-                .foregroundStyle(.secondary)
-                .padding(.top, 4)
+            Text("\(self.sessions.formatted()) dictations")
+                .fluidText(.label)
+                .foregroundStyle(look.tertiaryText)
         }
     }
 }
@@ -128,38 +133,53 @@ private struct StatsStreakDay: View {
     @State private var isHovered = false
 
     var body: some View {
-        VStack(spacing: 6) {
-            Image(systemName: self.words > 0 ? "checkmark" : "minus")
-                .font(self.theme.typography.badge)
-                .foregroundStyle(self.words > 0 ? self.theme.palette.accent : self.theme.palette.secondaryText)
+        let look = self.theme.look
+        VStack(spacing: self.theme.metrics.spacing.xs + 2) {
+            // A filled circle marks a day you dictated; an empty one a quiet day.
+            Circle()
+                .fill(self.words > 0 ? look.data : look.quietFill)
+                .frame(width: 12, height: 12)
                 .frame(width: 24, height: 24)
-                .background(self.theme.palette.accent.opacity(self.words > 0 ? 0.15 : 0.04), in: Circle())
             Text(self.date.formatted(.dateTime.weekday(.narrow)))
-                .font(self.theme.typography.captionSmall)
-                .foregroundStyle(.secondary)
+                .fluidText(.label)
+                .foregroundStyle(look.tertiaryText)
         }
         .contentShape(Rectangle())
         .overlay(alignment: self.tooltipAlignment) {
             if self.isHovered {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(self.date.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day()))
-                        .foregroundStyle(.secondary)
-                    Text("\(self.words.formatted()) words")
-                        .font(self.theme.typography.captionStrong)
-                }
-                .font(self.theme.typography.caption)
-                .padding(10)
-                .background(self.theme.palette.elevatedCardBackground, in: RoundedRectangle(cornerRadius: self.theme.metrics.corners.sm))
-                .overlay(RoundedRectangle(cornerRadius: self.theme.metrics.corners.sm).strokeBorder(self.theme.palette.cardBorder))
-                .fixedSize()
-                .offset(y: -60)
-                .allowsHitTesting(false)
-                .accessibilityHidden(true)
+                StatsTooltip(title: self.date.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day()), value: "\(self.words.formatted()) words")
+                    .offset(y: -60)
             }
         }
         .zIndex(self.isHovered ? 1 : 0)
         .onHover { self.isHovered = $0 }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(self.date.formatted(date: .complete, time: .omitted)), \(self.words) words")
+    }
+}
+
+/// The small label that follows the pointer over a chart square or day: what it is, then its value.
+struct StatsTooltip: View {
+    @Environment(\.theme) private var theme
+    let title: String
+    let value: String
+
+    var body: some View {
+        let look = self.theme.look
+        let shape = RoundedRectangle(cornerRadius: self.theme.metrics.corners.sm, style: .continuous)
+        VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xs) {
+            Text(self.title)
+                .fluidText(.label)
+                .foregroundStyle(look.secondaryText)
+            Text(self.value)
+                .fluidText(.rowTitle)
+                .foregroundStyle(look.text)
+        }
+        .padding(self.theme.metrics.spacing.sm + 2)
+        .background(look.sheet, in: shape)
+        .overlay(shape.strokeBorder(look.edge))
+        .fixedSize()
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
     }
 }

@@ -61,8 +61,11 @@ extension AppTheme {
         let highlight: Color
         let highlightText: Color
         let highlightFill: Color
-        /// Neutral fill for tiles and plain chips.
+        /// Neutral fill for tiles and plain chips. Also the empty track of a bar or heatmap.
         let quietFill: Color
+        /// Ink for data: chart bars and lines, filled heatmap squares and progress fills.
+        /// Lighter steps of it show less; the track under it is `quietFill`.
+        let data: Color
         let tileGlyph: Color
         /// The selected row in a sidebar. Opaque, because the system list paints it as a solid fill.
         let selection: Color
@@ -88,6 +91,7 @@ extension AppTheme {
             highlightText: Color.white.opacity(0.8),
             highlightFill: Color.white.opacity(0.08),
             quietFill: Color.white.opacity(0.06),
+            data: Color.white.opacity(0.85),
             tileGlyph: Color.white.opacity(0.8),
             selection: Color(white: 0.2),
             switchOn: Color(white: 0.55),
@@ -110,6 +114,7 @@ extension AppTheme {
             highlightText: Color.black.opacity(0.75),
             highlightFill: Color.black.opacity(0.06),
             quietFill: Color.black.opacity(0.05),
+            data: Color.black.opacity(0.78),
             tileGlyph: Color.black.opacity(0.7),
             selection: Color(white: 0.89),
             switchOn: Color(white: 0.2),

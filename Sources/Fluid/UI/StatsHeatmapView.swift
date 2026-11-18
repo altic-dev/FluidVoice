@@ -39,8 +39,8 @@ struct StatsHeatmapView: View {
                 Color.clear.frame(height: 16)
                 ForEach(0..<7) { row in
                     Text(row.isMultiple(of: 2) ? calendar.shortWeekdaySymbols[(calendar.firstWeekday - 1 + row) % 7] : "")
-                        .font(self.theme.typography.captionSmall)
-                        .foregroundStyle(.secondary)
+                        .fluidText(.label)
+                        .foregroundStyle(self.theme.look.tertiaryText)
                         .frame(width: 30, height: 16)
                 }
             }
@@ -51,8 +51,8 @@ struct StatsHeatmapView: View {
                     ForEach(columns.indices, id: \.self) { column in
                         VStack(spacing: 4) {
                             Text(period.monthLabel(for: column))
-                                .font(self.theme.typography.captionSmall)
-                                .foregroundStyle(.secondary)
+                                .fluidText(.label)
+                                .foregroundStyle(self.theme.look.tertiaryText)
                                 .fixedSize()
                                 .frame(width: width, height: 16, alignment: .leading)
                             ForEach(0..<7) { row in
@@ -102,27 +102,15 @@ struct StatsHeatmapView: View {
             let level = day.words == 0 ? 0 : max(1, min(4, Int(ceil(Double(day.words) / Double(max(1, maximum)) * 4))))
             let highlighted = self.hoveredDate == day.date
             RoundedRectangle(cornerRadius: 3)
-                .fill(self.cellColor(level))
+                .fill(Self.cellColor(level, look: self.theme.look))
                 .overlay {
                     RoundedRectangle(cornerRadius: 3)
-                        .strokeBorder(highlighted ? self.theme.palette.primaryText : .clear, lineWidth: 2)
+                        .strokeBorder(highlighted ? self.theme.look.text : .clear, lineWidth: 2)
                 }
                 .overlay(alignment: tooltipAlignment) {
                     if self.hoveredDate == day.date {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(self.labels[day.date]?.shortDate ?? "")
-                                .font(self.theme.typography.caption)
-                                .foregroundStyle(.secondary)
-                            Text(self.labels[day.date]?.words ?? "")
-                                .font(self.theme.typography.bodySmallStrong)
-                        }
-                        .padding(10)
-                        .background(self.theme.palette.elevatedCardBackground, in: RoundedRectangle(cornerRadius: self.theme.metrics.corners.sm))
-                        .overlay(RoundedRectangle(cornerRadius: self.theme.metrics.corners.sm).strokeBorder(self.theme.palette.cardBorder))
-                        .fixedSize()
-                        .offset(y: -62)
-                        .allowsHitTesting(false)
-                        .accessibilityHidden(true)
+                        StatsTooltip(title: self.labels[day.date]?.shortDate ?? "", value: self.labels[day.date]?.words ?? "")
+                            .offset(y: -62)
                     }
                 }
                 .zIndex(self.hoveredDate == day.date ? 1 : 0)
@@ -134,7 +122,8 @@ struct StatsHeatmapView: View {
         }
     }
 
-    private func cellColor(_ level: Int) -> Color {
-        level == 0 ? self.theme.palette.primaryText.opacity(0.07) : self.theme.palette.accent.opacity(0.25 + Double(level) * 0.18)
+    /// Empty days use the track; busier days use darker steps of the data ink. The legend uses the same steps.
+    static func cellColor(_ level: Int, look: AppTheme.Look) -> Color {
+        level == 0 ? look.quietFill : look.data.opacity(0.1 + Double(level) * 0.225)
     }
 }

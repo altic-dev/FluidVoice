@@ -237,24 +237,30 @@ struct StatsShareSheet: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        let look = self.theme.look
+        let spacing = self.theme.metrics.spacing
+        VStack(alignment: .leading, spacing: spacing.lg) {
             HStack {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("Flex your FluidVoice stats").font(self.theme.typography.sectionTitle)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Flex your FluidVoice stats")
+                        .fluidText(.sheetTitle)
+                        .foregroundStyle(look.text)
                     Text("Post it, send it to a friend, start a streak war.")
-                        .font(self.theme.typography.caption).foregroundStyle(.secondary)
+                        .fluidText(.body)
+                        .foregroundStyle(look.secondaryText)
                 }
                 Spacer()
-                Button("Done", action: self.close).fluidGlassAction()
+                Button("Done", action: self.close).fluidAction()
             }
 
             self.card
-                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(self.theme.palette.cardBorder, lineWidth: 1))
+                .clipShape(RoundedRectangle(cornerRadius: FluidSurfaceCard<EmptyView>.cornerRadius, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: FluidSurfaceCard<EmptyView>.cornerRadius, style: .continuous).strokeBorder(look.edge, lineWidth: 1))
 
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: spacing.sm) {
                 Text("Show on card · up to \(StatsShareStat.maxSelected)")
-                    .font(self.theme.typography.caption).foregroundStyle(.secondary)
+                    .fluidText(.label)
+                    .foregroundStyle(look.secondaryText)
                 FlowChips(spacing: 6) {
                     ForEach(StatsShareStat.allCases.filter { $0.isAvailable(in: self.content) }) { stat in
                         let isOn = self.selection.contains(stat)
@@ -268,47 +274,46 @@ struct StatsShareSheet: View {
                 }
             }
 
-            HStack(spacing: 8) {
+            HStack(spacing: spacing.sm) {
                 if let image {
                     ShareLink(
                         item: Image(nsImage: image),
                         preview: SharePreview("My FluidVoice stats", image: Image(nsImage: image))
                     ) {
-                        Label("Share…", systemImage: "square.and.arrow.up")
+                        Text("Share…")
                     }
-                    .fluidGlassAction(prominent: true)
+                    .fluidAction(.primary, size: .large)
                 }
-                Button(self.copied ? "Copied" : "Copy image", systemImage: self.copied ? "checkmark" : "doc.on.doc", action: self.copy)
-                    .fluidGlassAction()
-                Button("Save…", systemImage: "arrow.down.to.line", action: self.save)
-                    .fluidGlassAction()
+                Button(self.copied ? "Copied" : "Copy image", action: self.copy)
+                    .fluidAction(size: .large)
+                Button("Save…", action: self.save)
+                    .fluidAction(size: .large)
                 Spacer()
             }
         }
-        .padding(20)
-        .frame(width: StatsShareCard.size.width + 40)
+        .padding(spacing.xl)
+        .frame(width: StatsShareCard.size.width + spacing.xl * 2)
+        .background(look.sheet)
         .onChange(of: self.storedSelection) { _, _ in self.copied = false }
         .onChange(of: self.showsActivity) { _, _ in self.copied = false }
     }
 
+    /// An on/off chip: a tick and full ink when it is on the card, a plus when it can be added.
     private func chip(_ title: String, isOn: Bool, isEnabled: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
+        let look = self.theme.look
+        return Button(action: action) {
             HStack(spacing: 5) {
                 Image(systemName: isOn ? "checkmark" : "plus")
                     .font(.fluidSystem(size: 9, weight: .bold))
-                Text(title).font(self.theme.typography.captionStrong)
+                Text(title).fluidText(.label)
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .foregroundStyle(isOn ? self.theme.palette.accent : .secondary)
-            .background(
-                isOn ? self.theme.palette.accent.opacity(0.14) : self.theme.palette.cardBackground,
-                in: Capsule()
-            )
-            .overlay(Capsule().strokeBorder(isOn ? self.theme.palette.accent.opacity(0.4) : self.theme.palette.cardBorder, lineWidth: 1))
+            .padding(.horizontal, self.theme.metrics.spacing.sm + 2)
+            .padding(.vertical, self.theme.metrics.spacing.xs + 2)
+            .foregroundStyle(isOn ? look.text : look.secondaryText)
+            .background(look.quietFill, in: Capsule())
             .contentShape(Capsule())
         }
-        .buttonStyle(.plain)
+        .fluidSelectableRow(isSelected: isOn, cornerRadius: 999, fillsWidth: false)
         .disabled(!isEnabled)
         .opacity(isEnabled ? 1 : 0.4)
         .accessibilityAddTraits(isOn ? .isSelected : [])

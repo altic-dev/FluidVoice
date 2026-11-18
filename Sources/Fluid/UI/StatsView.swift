@@ -21,29 +21,23 @@ struct StatsView: View {
                 ProgressView("Loading statistics…")
                     .frame(maxWidth: .infinity, minHeight: 240)
             } else {
-                VStack(spacing: 16) {
+                VStack(spacing: self.theme.metrics.spacing.lg) {
                     self.todayHeaderCard
 
                     StatsActivityView(snapshot: self.stats)
 
-                    Divider()
-                        .opacity(0.4)
+                    FluidHairline()
 
-                    HStack {
-                        Text("All-time impact")
-                            .font(self.theme.typography.sectionTitle)
-                        Spacer()
-                        Text("From your saved history")
-                            .font(self.theme.typography.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 280), spacing: 16)], spacing: 16) {
-                        self.timeSavedCard
-                        self.totalWordsCard
-                        self.streakCard
-                        self.transcriptionsCard
-                        self.fluidIntelligenceCard
-                        self.keystrokesCard
+                    VStack(spacing: 0) {
+                        FluidGroupHeader(title: "All-time impact", hint: "From your saved history")
+                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 280), spacing: self.theme.metrics.spacing.lg)], spacing: self.theme.metrics.spacing.lg) {
+                            self.timeSavedCard
+                            self.totalWordsCard
+                            self.streakCard
+                            self.transcriptionsCard
+                            self.fluidIntelligenceCard
+                            self.keystrokesCard
+                        }
                     }
 
                     StatsHighlightsView(snapshot: self.stats)
@@ -54,7 +48,7 @@ struct StatsView: View {
                 .fluidPageContent(width: .overview)
             }
         }
-        .background(self.theme.palette.contentBackground)
+        .fluidCanvas()
         .fluidPageActions {
             Button("Share my stats", systemImage: "square.and.arrow.up") { self.showShareSheet = true }
                 .disabled(self.statsStore.snapshot == nil)
@@ -98,25 +92,21 @@ struct StatsView: View {
     // MARK: - Time Saved Card
 
     private var timeSavedCard: some View {
-        StatCard(title: "ESTIMATED TIME SAVED", icon: "clock.fill") {
+        StatCard(title: "Estimated time saved") {
             VStack(alignment: .leading, spacing: 8) {
                 Text(self.stats.formattedTimeSaved(typingWPM: self.settings.userTypingWPM))
-                    .font(.fluidSystem(size: 32, weight: .bold, design: .rounded))
-                    .foregroundStyle(.primary)
+                    .fluidText(.metric)
+                    .foregroundStyle(self.theme.look.text)
 
                 Button {
                     self.editingWPM = "\(self.settings.userTypingWPM)"
                     self.showWPMEditor = true
                 } label: {
-                    HStack(spacing: 4) {
-                        Text("Based on \(self.settings.userTypingWPM) WPM typing")
-                            .font(.fluidSystem(size: 11))
-                        Image(systemName: "pencil")
-                            .font(.fluidSystem(size: 9))
-                    }
-                    .foregroundStyle(.secondary)
+                    Label("Based on \(self.settings.userTypingWPM) WPM typing", systemImage: "pencil")
+                        .fluidText(.label)
                 }
-                .buttonStyle(.plain)
+                .fluidGlassAction(quiet: true)
+                .help("Change your typing speed")
             }
         }
         .popover(isPresented: self.$showWPMEditor) {
@@ -125,9 +115,11 @@ struct StatsView: View {
     }
 
     private var wpmEditorPopover: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        let look = self.theme.look
+        return VStack(alignment: .leading, spacing: self.theme.metrics.spacing.md) {
             Text("Your Typing Speed")
-                .font(.fluidSystem(size: 13, weight: .semibold))
+                .fluidText(.rowTitle)
+                .foregroundStyle(look.text)
 
             HStack {
                 TextField("WPM", text: self.$editingWPM)
@@ -136,19 +128,19 @@ struct StatsView: View {
                     .multilineTextAlignment(.center)
 
                 Text("words per minute")
-                    .font(.fluidSystem(size: 12))
-                    .foregroundStyle(.secondary)
+                    .fluidText(.label)
+                    .foregroundStyle(look.secondaryText)
             }
 
             Text("Average typing: 40 WPM\nProfessional: 65-75 WPM")
-                .font(.fluidSystem(size: 10))
-                .foregroundStyle(.tertiary)
+                .fluidText(.label)
+                .foregroundStyle(look.tertiaryText)
 
-            HStack {
+            HStack(spacing: self.theme.metrics.spacing.sm) {
                 Button("Cancel") {
                     self.showWPMEditor = false
                 }
-                .fluidGlassAction()
+                .fluidAction()
 
                 Button("Save") {
                     if let wpm = Int(editingWPM), wpm > 0 {
@@ -156,31 +148,31 @@ struct StatsView: View {
                     }
                     self.showWPMEditor = false
                 }
-                .fluidGlassAction(prominent: true)
+                .fluidAction(.primary)
             }
         }
-        .padding(16)
+        .padding(self.theme.metrics.spacing.lg)
         .frame(width: 220)
     }
 
     // MARK: - Total Words Card
 
     private var totalWordsCard: some View {
-        StatCard(title: "TOTAL WORDS", icon: "text.word.spacing") {
+        StatCard(title: "Total words") {
             VStack(alignment: .leading, spacing: 8) {
                 Text(self.formatNumber(self.stats.totalWords))
-                    .font(.fluidSystem(size: 32, weight: .bold, design: .rounded))
-                    .foregroundStyle(.primary)
+                    .fluidText(.metric)
+                    .foregroundStyle(self.theme.look.text)
 
                 let today = self.historyStore.wordsToday
                 if today > 0 {
                     Text("+\(self.formatNumber(today)) today")
-                        .font(.fluidSystem(size: 11))
-                        .foregroundStyle(self.theme.palette.success)
+                        .fluidText(.label)
+                        .foregroundStyle(self.theme.look.secondaryText)
                 } else {
                     Text("Start dictating")
-                        .font(.fluidSystem(size: 11))
-                        .foregroundStyle(.secondary)
+                        .fluidText(.label)
+                        .foregroundStyle(self.theme.look.secondaryText)
                 }
             }
         }
@@ -189,21 +181,21 @@ struct StatsView: View {
     // MARK: - Streak Card
 
     private var streakCard: some View {
-        StatCard(title: "CURRENT STREAK", icon: "flame.fill") {
+        StatCard(title: "Current streak") {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(alignment: .firstTextBaseline, spacing: 4) {
                     Text("\(self.stats.currentStreak)")
-                        .font(.fluidSystem(size: 32, weight: .bold, design: .rounded))
-                        .foregroundStyle(self.stats.currentStreak > 0 ? self.theme.palette.warning : .primary)
+                        .fluidText(.metric)
+                        .foregroundStyle(self.theme.look.text)
 
                     Text(self.stats.currentStreak == 1 ? "day" : "days")
-                        .font(.fluidSystem(size: 14, weight: .medium))
-                        .foregroundStyle(.secondary)
+                        .fluidText(.body)
+                        .foregroundStyle(self.theme.look.secondaryText)
                 }
 
                 Text("Best: \(self.stats.bestStreak) days")
-                    .font(.fluidSystem(size: 11))
-                    .foregroundStyle(.secondary)
+                    .fluidText(.label)
+                    .foregroundStyle(self.theme.look.secondaryText)
             }
         }
     }
@@ -211,43 +203,43 @@ struct StatsView: View {
     // MARK: - Transcriptions Card
 
     private var fluidIntelligenceCard: some View {
-        StatCard(title: "FLUID INTELLIGENCE", icon: "sparkles") {
+        StatCard(title: "Fluid Intelligence") {
             VStack(alignment: .leading, spacing: 8) {
                 Text(self.formatNumber(self.stats.fluidFixedWords))
-                    .font(.fluidSystem(size: 32, weight: .bold, design: .rounded))
-                    .foregroundStyle(.primary)
+                    .fluidText(.metric)
+                    .foregroundStyle(self.theme.look.text)
 
                 Text(self.stats.fluidFixedWords == 0 ? "Words fixed by Smart mode show up here" : "words fixed for you by Smart mode")
-                    .font(.fluidSystem(size: 11))
-                    .foregroundStyle(.secondary)
+                    .fluidText(.label)
+                    .foregroundStyle(self.theme.look.secondaryText)
             }
         }
     }
 
     private var keystrokesCard: some View {
-        StatCard(title: "KEYSTROKES SAVED", icon: "keyboard") {
+        StatCard(title: "Keystrokes saved") {
             VStack(alignment: .leading, spacing: 8) {
                 Text(self.formatNumber(self.stats.totalCharacters))
-                    .font(.fluidSystem(size: 32, weight: .bold, design: .rounded))
-                    .foregroundStyle(.primary)
+                    .fluidText(.metric)
+                    .foregroundStyle(self.theme.look.text)
 
                 Text("keys you never had to press")
-                    .font(.fluidSystem(size: 11))
-                    .foregroundStyle(.secondary)
+                    .fluidText(.label)
+                    .foregroundStyle(self.theme.look.secondaryText)
             }
         }
     }
 
     private var transcriptionsCard: some View {
-        StatCard(title: "TRANSCRIPTIONS", icon: "doc.text.fill") {
+        StatCard(title: "Transcriptions") {
             VStack(alignment: .leading, spacing: 8) {
                 Text("\(self.historyStore.entries.count)")
-                    .font(.fluidSystem(size: 32, weight: .bold, design: .rounded))
-                    .foregroundStyle(.primary)
+                    .fluidText(.metric)
+                    .foregroundStyle(self.theme.look.text)
 
                 Text("Avg: \(self.stats.averageWordsPerTranscription) words each")
-                    .font(.fluidSystem(size: 11))
-                    .foregroundStyle(.secondary)
+                    .fluidText(.label)
+                    .foregroundStyle(self.theme.look.secondaryText)
             }
         }
     }
@@ -258,20 +250,15 @@ struct StatsView: View {
         HStack {
             Spacer()
 
-            Button {
+            Button("Reset All Stats") {
                 self.showResetConfirmation = true
-            } label: {
-                Label("Reset All Stats", systemImage: "trash")
-                    .font(.fluidSystem(size: 12, weight: .medium))
-                    .foregroundStyle(.secondary)
             }
-            .buttonStyle(.plain)
-            .opacity(self.historyStore.entries.isEmpty ? 0.3 : 0.7)
+            .fluidGlassAction(quiet: true)
             .disabled(self.historyStore.entries.isEmpty)
 
             Spacer()
         }
-        .padding(.top, 8)
+        .padding(.top, self.theme.metrics.spacing.sm)
         .alert("Reset All Stats", isPresented: self.$showResetConfirmation) {
             Button("Cancel", role: .cancel) {}
             Button("Reset Everything", role: .destructive) {
@@ -295,17 +282,18 @@ struct StatsView: View {
 
 // MARK: - Stat Card Component
 
+/// One all-time number: what it counts on top, the number and a short note under it.
 private struct StatCard<Content: View>: View {
+    @Environment(\.theme) private var theme
     let title: String
-    let icon: String
     @ViewBuilder let content: Content
 
     var body: some View {
-        ThemedCard(style: .standard, padding: 16, hoverEffect: false) {
-            VStack(alignment: .leading, spacing: 10) {
-                Label(self.title, systemImage: self.icon)
-                    .font(.fluidSystem(size: 11, weight: .semibold))
-                    .foregroundStyle(.secondary)
+        FluidSurfaceCard(padding: self.theme.metrics.spacing.lg) {
+            VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
+                Text(self.title)
+                    .fluidText(.label)
+                    .foregroundStyle(self.theme.look.secondaryText)
 
                 self.content
             }

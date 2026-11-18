@@ -17,14 +17,15 @@ struct StatsActivityView: View {
 
     var body: some View {
         let period = self.period
-        VStack(spacing: 16) {
+        let gap = self.theme.metrics.spacing.lg
+        VStack(spacing: gap) {
             self.calendarCard(period)
             ViewThatFits(in: .horizontal) {
-                HStack(alignment: .top, spacing: 16) {
+                HStack(alignment: .top, spacing: gap) {
                     self.growthCard(period).frame(minWidth: 280)
                     self.rhythmCard(period).frame(minWidth: 240)
                 }
-                VStack(spacing: 16) {
+                VStack(spacing: gap) {
                     self.growthCard(period)
                     self.rhythmCard(period)
                 }
@@ -44,15 +45,17 @@ struct StatsActivityView: View {
     }
 
     private func calendarCard(_ period: StatsActivityPeriod) -> some View {
-        ThemedCard(style: .standard, padding: 20, hoverEffect: false) {
-            VStack(alignment: .leading, spacing: 20) {
+        let look = self.theme.look
+        return FluidSurfaceCard(padding: self.theme.metrics.spacing.xl) {
+            VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xl) {
                 HStack(alignment: .top) {
-                    VStack(alignment: .leading, spacing: 5) {
+                    VStack(alignment: .leading, spacing: 2) {
                         Text("A little every day")
-                            .font(self.theme.typography.title)
+                            .fluidText(.itemTitle)
+                            .foregroundStyle(look.text)
                         Text("Small moments. A growing habit.")
-                            .font(self.theme.typography.bodySmall)
-                            .foregroundStyle(.secondary)
+                            .fluidText(.body)
+                            .foregroundStyle(look.secondaryText)
                     }
                     Spacer(minLength: 12)
                     Menu {
@@ -70,13 +73,14 @@ struct StatsActivityView: View {
                     .frame(width: 112)
                     .accessibilityLabel("Activity period")
                 }
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                HStack(alignment: .firstTextBaseline, spacing: self.theme.metrics.spacing.sm) {
                     Text(period.totalWords.formatted())
-                        .font(self.theme.typography.displayTitle)
+                        .fluidText(.pageTitle)
+                        .foregroundStyle(look.text)
                         .monospacedDigit()
                     Text("words in \(self.days) days")
-                        .font(self.theme.typography.bodySmall)
-                        .foregroundStyle(.secondary)
+                        .fluidText(.body)
+                        .foregroundStyle(look.secondaryText)
                     Spacer()
                 }
                 ViewThatFits(in: .horizontal) {
@@ -94,26 +98,27 @@ struct StatsActivityView: View {
                     }
                 }
                 Text("Hover a square for details.")
-                    .font(self.theme.typography.caption)
-                    .foregroundStyle(.secondary)
+                    .fluidText(.label)
+                    .foregroundStyle(look.tertiaryText)
                 HStack {
                     Text("\(period.activeDays) active days")
-                        .font(self.theme.typography.captionStrong)
+                        .foregroundStyle(look.secondaryText)
                     Spacer()
-                    Text("Less").font(self.theme.typography.captionSmall)
+                    Text("Less")
                     ForEach(0..<5) { level in
                         RoundedRectangle(cornerRadius: 3)
-                            .fill(self.cellColor(level))
+                            .fill(StatsHeatmapView.cellColor(level, look: look))
                             .frame(width: 10, height: 10)
                             .accessibilityHidden(true)
                     }
-                    Text("More").font(self.theme.typography.captionSmall)
+                    Text("More")
                 }
-                .foregroundStyle(.secondary)
+                .fluidText(.label)
+                .foregroundStyle(look.tertiaryText)
                 if period.totalWords == 0 {
                     Text("Your first dictation lights up a square. Come back to see your progress grow.")
-                        .font(self.theme.typography.bodySmall)
-                        .foregroundStyle(.secondary)
+                        .fluidText(.body)
+                        .foregroundStyle(look.secondaryText)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -121,7 +126,7 @@ struct StatsActivityView: View {
     }
 
     private func periodHighlights(_ period: StatsActivityPeriod) -> some View {
-        VStack(alignment: .leading, spacing: 20) {
+        VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xl) {
             self.periodMetric("Best day", words: period.peakWords)
             self.periodMetric("Per active day", words: period.totalWords / max(1, period.activeDays))
         }
@@ -129,13 +134,13 @@ struct StatsActivityView: View {
     }
 
     private func dailyChart(_ period: StatsActivityPeriod) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
             Text(self.selectedDay(period).map { "\($0.date.formatted(.dateTime.month(.abbreviated).day())) · \($0.words.formatted()) words" } ?? "Day by day · hover to explore")
-                .font(self.theme.typography.captionStrong)
-                .foregroundStyle(.secondary)
+                .fluidText(.label)
+                .foregroundStyle(self.theme.look.secondaryText)
             Chart(period.days) { day in
                 BarMark(x: .value("Date", day.date, unit: .day), y: .value("Words", day.words))
-                    .foregroundStyle(self.theme.palette.accent.opacity(0.7))
+                    .foregroundStyle(self.theme.look.data.opacity(0.7))
                     .cornerRadius(2)
                     .opacity(self.hoveredDate == nil && self.selectedDate == nil || day.date == (self.hoveredDate ?? self.selectedDate) ? 1 : 0.35)
             }
@@ -147,16 +152,17 @@ struct StatsActivityView: View {
     }
 
     private func periodMetric(_ title: String, words: Int) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 2) {
             Text(title)
-                .font(self.theme.typography.caption)
-                .foregroundStyle(.secondary)
+                .fluidText(.label)
+                .foregroundStyle(self.theme.look.secondaryText)
             Text(words.formatted())
-                .font(self.theme.typography.title)
+                .fluidText(.metric)
+                .foregroundStyle(self.theme.look.text)
                 .monospacedDigit()
             Text("words")
-                .font(self.theme.typography.captionSmall)
-                .foregroundStyle(.secondary)
+                .fluidText(.label)
+                .foregroundStyle(self.theme.look.tertiaryText)
         }
     }
 
@@ -170,30 +176,23 @@ struct StatsActivityView: View {
         }
     }
 
-    private func cellColor(_ level: Int) -> Color {
-        level == 0 ? self.theme.palette.primaryText.opacity(0.07) : self.theme.palette.accent.opacity(0.25 + Double(level) * 0.18)
-    }
-
     private func growthCard(_ period: StatsActivityPeriod) -> some View {
         let selected = self.selectedDay(period)
-        return ThemedCard(style: .standard, padding: 20, hoverEffect: false) {
-            VStack(alignment: .leading, spacing: 12) {
-                Text("Words add up").font(self.theme.typography.sectionTitle)
-                Text(self.growthCaption(period))
-                    .font(self.theme.typography.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+        let look = self.theme.look
+        return FluidSurfaceCard(padding: self.theme.metrics.spacing.xl) {
+            VStack(alignment: .leading, spacing: self.theme.metrics.spacing.md) {
+                self.chartHeading("Words add up", caption: self.growthCaption(period))
                 Chart(period.days) { day in
                     AreaMark(x: .value("Date", day.date), y: .value("Words", day.cumulativeWords))
-                        .foregroundStyle(LinearGradient(colors: [self.theme.palette.accent.opacity(0.24), self.theme.palette.accent.opacity(0.01)], startPoint: .top, endPoint: .bottom))
+                        .foregroundStyle(look.quietFill)
                     LineMark(x: .value("Date", day.date), y: .value("Words", day.cumulativeWords))
-                        .foregroundStyle(self.theme.palette.accent)
+                        .foregroundStyle(look.data)
                         .lineStyle(StrokeStyle(lineWidth: 2))
                     if selected?.date == day.date {
                         RuleMark(x: .value("Date", day.date))
-                            .foregroundStyle(self.theme.palette.secondaryText.opacity(0.4))
+                            .foregroundStyle(look.tertiaryText)
                         PointMark(x: .value("Date", day.date), y: .value("Words", day.cumulativeWords))
-                            .foregroundStyle(self.theme.palette.accent)
+                            .foregroundStyle(look.data)
                     }
                 }
                 .statsChartInteraction(onInspect: { x, proxy, pin in self.inspectDate(x, proxy: proxy, pin: pin) }, onExit: { self.hoveredDate = nil })
@@ -202,8 +201,8 @@ struct StatsActivityView: View {
                 .chartYAxis { AxisMarks(position: .leading, values: .automatic(desiredCount: 3)) }
                 .frame(height: 150)
                 Text("Cumulative words · selected period")
-                    .font(self.theme.typography.captionSmall)
-                    .foregroundStyle(.secondary)
+                    .fluidText(.label)
+                    .foregroundStyle(look.tertiaryText)
             }
         }
     }
@@ -228,16 +227,13 @@ struct StatsActivityView: View {
     }
 
     private func rhythmCard(_ period: StatsActivityPeriod) -> some View {
-        ThemedCard(style: .standard, padding: 20, hoverEffect: false) {
-            VStack(alignment: .leading, spacing: 12) {
-                Text("Your weekly rhythm").font(self.theme.typography.sectionTitle)
-                Text(self.weekdayCaption(period))
-                    .font(self.theme.typography.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+        let look = self.theme.look
+        return FluidSurfaceCard(padding: self.theme.metrics.spacing.xl) {
+            VStack(alignment: .leading, spacing: self.theme.metrics.spacing.md) {
+                self.chartHeading("Your weekly rhythm", caption: self.weekdayCaption(period))
                 Chart(period.weekdays) { day in
                     BarMark(x: .value("Weekday", day.label), y: .value("Average words", day.averageWords))
-                        .foregroundStyle(self.theme.palette.accent.opacity(day.averageWords == period.peakWeekdayAverage ? 1 : 0.35))
+                        .foregroundStyle(look.data.opacity(day.averageWords == period.peakWeekdayAverage ? 1 : 0.35))
                         .cornerRadius(4)
                         .opacity(self.hoveredWeekday == nil && self.pinnedWeekday == nil || day.label == (self.hoveredWeekday ?? self.pinnedWeekday) ? 1 : 0.4)
                         .accessibilityLabel(day.fullLabel)
@@ -255,9 +251,22 @@ struct StatsActivityView: View {
                 .chartYAxis { AxisMarks(position: .leading, values: .automatic(desiredCount: 3)) }
                 .frame(height: 150)
                 Text("Average words per weekday · includes quiet days")
-                    .font(self.theme.typography.captionSmall)
-                    .foregroundStyle(.secondary)
+                    .fluidText(.label)
+                    .foregroundStyle(look.tertiaryText)
             }
+        }
+    }
+
+    /// A chart card's title and the one line under it that follows the pointer.
+    private func chartHeading(_ title: String, caption: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title)
+                .fluidText(.groupTitle)
+                .foregroundStyle(self.theme.look.text)
+            Text(caption)
+                .fluidText(.label)
+                .foregroundStyle(self.theme.look.secondaryText)
+                .lineLimit(1)
         }
     }
 }
