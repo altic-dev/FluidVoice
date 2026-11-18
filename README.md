@@ -162,6 +162,7 @@ Whisper supports up to 99 languages, depending on the model size you choose.
 2. **Grant permissions** — FluidVoice will ask for microphone and accessibility access. Both are required for dictation and typing into other apps.
 
 3. **Set your hotkey** — pick a global hotkey in settings that triggers voice capture from anywhere.
+   See [Hotkey troubleshooting](docs/HOTKEY_TROUBLESHOOTING.md) for mouse buttons and F13–F19.
 
 4. **Go through onboarding** — choose your voice model based on your language and latency needs. Models range from zero-download Apple Speech to high-accuracy Nemotron and Whisper.
 

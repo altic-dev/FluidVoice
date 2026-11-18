@@ -19,7 +19,7 @@ FluidVoice's hotkey field records an actual keyboard event. Typing or pasting th
 F13–F19 work only when your keyboard, Stream Deck setup, or remapping tool can emit those function-key events. If your physical keyboard has no F18 key, use one of these options:
 
 - Choose a low-conflict shortcut your keyboard can produce directly.
-- Use Karabiner-Elements to map an unused key or key combination to `F18`, then trigger that mapping while FluidVoice is recording the shortcut.
-- To use `F18` with Stream Deck, use the remapped key to enter `F18` in Stream Deck's Hotkey action field, then press that Stream Deck button while FluidVoice is recording its shortcut.
+- Map an unused key to `F18`, then press the mapped key while FluidVoice is recording the shortcut. [Karabiner-Elements remapping guide](https://karabiner-elements.pqrs.org/docs/manual/configuration/configure-simple-modifications/)
+- Set up a Stream Deck Hotkey action. Enter `F18` in that action by pressing an `F18` key or a key you mapped to `F18`. Then press the Stream Deck button while FluidVoice is recording the shortcut. [Stream Deck Hotkey guide](https://help.elgato.com/hc/en-us/articles/360028234471-Elgato-Stream-Deck-System-Actions-Hotkey-Open-Website-Multimedia)
 
 After FluidVoice records F18, any device configured to emit the same F18 event can trigger dictation.
