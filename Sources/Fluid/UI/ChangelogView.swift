@@ -19,8 +19,8 @@ struct ChangelogView: View {
             VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xl) {
                 if let errorMessage {
                     Label(errorMessage, systemImage: "wifi.exclamationmark")
-                        .font(self.theme.typography.caption)
-                        .foregroundStyle(self.theme.palette.warning)
+                        .fluidText(.label)
+                        .foregroundStyle(self.theme.look.text)
                 }
 
                 if self.releases.isEmpty, self.isRefreshing {
@@ -43,6 +43,7 @@ struct ChangelogView: View {
             }
             .fluidPageContent(width: .reading)
         }
+        .fluidCanvas()
         .fluidPageActions {
             Button {
                 Task { await self.refreshReleases(force: true) }
@@ -76,41 +77,37 @@ struct ChangelogView: View {
     }
 
     private var loadingCard: some View {
-        ThemedCard(style: .standard, hoverEffect: false) {
+        FluidSurfaceCard(padding: self.theme.metrics.spacing.xl) {
             HStack(spacing: self.theme.metrics.spacing.md) {
                 ProgressView()
                     .controlSize(.small)
                 Text("Loading release notes...")
-                    .font(self.theme.typography.body)
-                    .foregroundStyle(self.theme.palette.secondaryText)
+                    .fluidText(.body)
+                    .foregroundStyle(self.theme.look.secondaryText)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
     private var emptyCard: some View {
-        ThemedCard(style: .standard, hoverEffect: false) {
-            VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
+        FluidSurfaceCard(padding: self.theme.metrics.spacing.xl) {
+            VStack(alignment: .leading, spacing: 2) {
                 Text("No changelog available")
-                    .font(self.theme.typography.sectionTitle)
-                    .foregroundStyle(self.theme.palette.primaryText)
+                    .fluidText(.groupTitle)
+                    .foregroundStyle(self.theme.look.text)
                 Text("FluidVoice could not load GitHub release notes right now.")
-                    .font(self.theme.typography.bodySmall)
-                    .foregroundStyle(self.theme.palette.secondaryText)
+                    .fluidText(.body)
+                    .foregroundStyle(self.theme.look.secondaryText)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
     private var footer: some View {
         HStack {
             if let url = URL(string: "https://github.com/\(self.owner)/\(self.repo)/releases") {
-                Link(destination: url) {
-                    Label("View older release notes on GitHub", systemImage: "arrow.up.right.square")
-                        .font(self.theme.typography.bodySmallStrong)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 9)
-                }
-                .fluidButton(.glass, size: .medium)
-                .buttonHoverEffect()
+                Link("View older release notes on GitHub", destination: url)
+                    .fluidAction()
             }
 
             Spacer()
@@ -189,44 +186,28 @@ private struct ChangelogReleaseCard: View {
     let theme: AppTheme
 
     var body: some View {
-        ThemedCard(style: self.isLatest ? .prominent : .standard, hoverEffect: false) {
+        FluidSurfaceCard(padding: self.theme.metrics.spacing.xl) {
             VStack(alignment: .leading, spacing: self.theme.metrics.spacing.md) {
                 HStack(alignment: .firstTextBaseline, spacing: self.theme.metrics.spacing.sm) {
                     VStack(alignment: .leading, spacing: 4) {
                         HStack(spacing: self.theme.metrics.spacing.sm) {
                             Text(self.release.title)
-                                .font(self.theme.typography.sectionTitle)
-                                .foregroundStyle(self.theme.palette.primaryText)
+                                .fluidText(.groupTitle)
+                                .foregroundStyle(self.theme.look.text)
                                 .lineLimit(2)
 
                             if self.isLatest {
-                                Text("Latest")
-                                    .font(self.theme.typography.badge)
-                                    .foregroundStyle(self.theme.palette.accent)
-                                    .padding(.horizontal, 8)
-                                    .padding(.vertical, 3)
-                                    .background(
-                                        Capsule()
-                                            .fill(self.theme.palette.accent.opacity(0.12))
-                                    )
+                                FluidChip(text: "Latest")
                             }
 
                             if self.release.isPrerelease {
-                                Text("Beta")
-                                    .font(self.theme.typography.badge)
-                                    .foregroundStyle(self.theme.palette.warning)
-                                    .padding(.horizontal, 8)
-                                    .padding(.vertical, 3)
-                                    .background(
-                                        Capsule()
-                                            .fill(self.theme.palette.warning.opacity(0.12))
-                                    )
+                                FluidChip(text: "Beta", style: .outlined)
                             }
                         }
 
                         Text(self.metadataText)
-                            .font(self.theme.typography.caption)
-                            .foregroundStyle(self.theme.palette.tertiaryText)
+                            .fluidText(.label)
+                            .foregroundStyle(self.theme.look.tertiaryText)
                     }
 
                     Spacer()
@@ -234,11 +215,11 @@ private struct ChangelogReleaseCard: View {
                     if let url = self.release.url {
                         Link(destination: url) {
                             Image(systemName: "arrow.up.right")
-                                .font(self.theme.typography.captionStrong)
-                                .padding(7)
+                                .font(.fluidSystem(size: 12, weight: .semibold))
                         }
-                        .buttonStyle(.borderless)
+                        .fluidGlassAction(circular: true, quiet: true)
                         .help("Open this release on GitHub")
+                        .accessibilityLabel("Open this release on GitHub")
                     }
                 }
 
@@ -328,23 +309,14 @@ private struct ChangelogNoteBlock: View {
         switch self.block.kind {
         case .heading:
             Text(self.block.text)
-                .font(self.theme.typography.bodySmallStrong)
-                .foregroundStyle(self.theme.palette.primaryText)
+                .fluidText(.rowTitle)
+                .foregroundStyle(self.theme.look.text)
                 .padding(.top, 2)
-        case .bullet:
-            HStack(alignment: .firstTextBaseline, spacing: self.theme.metrics.spacing.sm) {
-                Circle()
-                    .fill(self.theme.palette.accent.opacity(0.75))
-                    .frame(width: 4, height: 4)
-                Text(self.markdownAttributedString(from: self.block.text))
-                    .font(self.theme.typography.bodySmall)
-                    .foregroundStyle(self.theme.palette.secondaryText)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        case .paragraph:
+        case .bullet, .paragraph:
+            // Each note is its own line; the look has no decorative bullets.
             Text(self.markdownAttributedString(from: self.block.text))
-                .font(self.theme.typography.bodySmall)
-                .foregroundStyle(self.theme.palette.secondaryText)
+                .fluidText(.body)
+                .foregroundStyle(self.theme.look.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
         }
     }
