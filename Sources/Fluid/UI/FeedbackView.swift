@@ -22,6 +22,7 @@ struct FeedbackView: View {
     @State private var error: String?
     @State private var showsFilledInNote = false
     @FocusState private var messageFocused: Bool
+    @FocusState private var emailFocused: Bool
 
     private static let starURL = URL(string: "https://github.com/altic-dev/Fluid-oss")
     private static let sponsorURL = URL(string: "https://github.com/sponsors/altic-dev")
@@ -43,14 +44,7 @@ struct FeedbackView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xl) {
-                VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
-                    Text("Make FluidVoice better.")
-                        .font(self.theme.typography.title)
-                        .foregroundStyle(self.theme.palette.primaryText)
-                    Text("Something in your way? Have an idea? Tell us.")
-                        .font(self.theme.typography.body)
-                        .foregroundStyle(self.theme.palette.secondaryText)
-                }
+                FluidPageHeader(title: "Make FluidVoice better.", subtitle: "Something in your way? Have an idea? Tell us.")
 
                 if self.sent {
                     self.confirmation
@@ -63,7 +57,7 @@ struct FeedbackView: View {
             }
             .fluidPageContent(width: .form, alignment: .center)
         }
-        .background(self.theme.palette.contentBackground)
+        .fluidCanvas()
         .onAppear(perform: self.takePendingDraft)
         .onChange(of: self.pendingDraft) { _, _ in self.takePendingDraft() }
     }
@@ -80,8 +74,8 @@ struct FeedbackView: View {
     }
 
     private var filledInNote: some View {
-        Label("We filled this in for you. Add anything you noticed, or just send it.", systemImage: "checkmark")
-            .font(self.theme.typography.caption)
+        Text("We filled this in for you. Add anything you noticed, or just send it.")
+            .fluidText(.label)
             .foregroundStyle(self.theme.look.highlightText)
             .padding(.horizontal, self.theme.metrics.spacing.md)
             .padding(.vertical, self.theme.metrics.spacing.sm)
@@ -108,16 +102,14 @@ struct FeedbackView: View {
                 self.messageFocused = true
             } label: {
                 Label(category.rawValue, systemImage: category.icon)
-                    .font(self.theme.typography.bodySmallStrong)
-                    .foregroundStyle(selected ? self.theme.palette.primaryText : self.theme.palette.secondaryText)
+                    .fluidText(.rowTitle)
+                    .foregroundStyle(selected ? self.theme.look.text : self.theme.look.secondaryText)
                     .padding(.horizontal, self.theme.metrics.spacing.lg)
                     .frame(height: 34)
-                    .background(self.theme.palette.primaryText.opacity(selected ? 0.10 : 0.04), in: Capsule())
-                    .overlay(Capsule().strokeBorder(self.theme.palette.separator.opacity(selected ? 0.9 : 0.5), lineWidth: 1))
+                    .background(self.theme.look.quietFill, in: Capsule())
                     .contentShape(Capsule())
             }
-            .buttonStyle(.plain)
-            .meetingHoverFeedback()
+            .fluidSelectableRow(isSelected: selected, cornerRadius: 999, fillsWidth: false)
             .accessibilityAddTraits(selected ? .isSelected : [])
         }
     }
@@ -139,9 +131,7 @@ struct FeedbackView: View {
             }
             .padding(self.theme.metrics.spacing.xl)
 
-            Rectangle()
-                .fill(self.theme.palette.separator)
-                .frame(height: 1)
+            FluidHairline()
 
             self.sendRow
                 .padding(.horizontal, self.theme.metrics.spacing.xl)
@@ -154,12 +144,13 @@ struct FeedbackView: View {
     private var messageField: some View {
         VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
             Text(self.category.prompt)
-                .font(self.theme.typography.bodyStrong)
-                .foregroundStyle(self.theme.palette.primaryText)
+                .fluidText(.rowTitle)
+                .foregroundStyle(self.theme.look.text)
 
             ZStack(alignment: .topLeading) {
                 TextEditor(text: self.$message)
-                    .font(self.theme.typography.body)
+                    .fluidText(.body)
+                    .foregroundStyle(self.theme.look.text)
                     .scrollContentBackground(.hidden)
                     .focused(self.$messageFocused)
                     .padding(self.theme.metrics.spacing.sm)
@@ -167,26 +158,26 @@ struct FeedbackView: View {
                     .accessibilityLabel(self.category.prompt)
                 if self.message.isEmpty {
                     Text(self.category.hint)
-                        .font(self.theme.typography.body)
-                        .foregroundStyle(self.theme.palette.tertiaryText)
+                        .fluidText(.body)
+                        .foregroundStyle(self.theme.look.tertiaryText)
                         .padding(.horizontal, self.theme.metrics.spacing.md + 1)
                         .padding(.vertical, self.theme.metrics.spacing.lg)
                         .allowsHitTesting(false)
                 }
             }
-            .background(self.fieldSurface(focused: self.messageFocused))
+            .fluidFieldChrome(isFocused: self.messageFocused, padding: 0)
 
             HStack(alignment: .firstTextBaseline) {
                 Text(self.overLimit ? "Please shorten your message before sending." : "Leave out passwords and private information.")
-                    .foregroundStyle(self.overLimit ? self.theme.palette.warning : self.theme.palette.tertiaryText)
+                    .foregroundStyle(self.overLimit ? self.theme.look.text : self.theme.look.tertiaryText)
                 Spacer(minLength: self.theme.metrics.spacing.sm)
                 if self.nearLimit {
                     Text("\(self.messageCount) / \(FeedbackSubmission.messageLimit)")
                         .monospacedDigit()
-                        .foregroundStyle(self.overLimit ? self.theme.palette.warning : self.theme.palette.tertiaryText)
+                        .foregroundStyle(self.overLimit ? self.theme.look.text : self.theme.look.tertiaryText)
                 }
             }
-            .font(self.theme.typography.caption)
+            .fluidText(.label)
         }
     }
 
@@ -194,45 +185,46 @@ struct FeedbackView: View {
         VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
             HStack(spacing: self.theme.metrics.spacing.sm) {
                 Text("Email")
-                    .font(self.theme.typography.bodyStrong)
-                    .foregroundStyle(self.theme.palette.primaryText)
+                    .fluidText(.rowTitle)
+                    .foregroundStyle(self.theme.look.text)
                 Text("optional")
-                    .font(self.theme.typography.caption)
-                    .foregroundStyle(self.theme.palette.tertiaryText)
+                    .fluidText(.label)
+                    .foregroundStyle(self.theme.look.tertiaryText)
             }
-            TextField("", text: self.$email, prompt: Text("you@example.com").foregroundColor(self.theme.palette.tertiaryText))
+            TextField("", text: self.$email, prompt: Text(verbatim: "you@example.com").foregroundColor(self.theme.look.tertiaryText))
                 .textFieldStyle(.plain)
-                .font(self.theme.typography.body)
+                .fluidText(.body)
+                .foregroundStyle(self.theme.look.text)
+                .focused(self.$emailFocused)
                 .padding(.horizontal, self.theme.metrics.spacing.md)
                 .frame(height: 38)
-                .background(self.fieldSurface(focused: false))
+                .fluidFieldChrome(isFocused: self.emailFocused, padding: 0)
                 .accessibilityLabel("Your email, optional")
             if self.emailLooksWrong {
-                Text("That doesn’t look like an email address.")
-                    .font(self.theme.typography.caption)
-                    .foregroundStyle(self.theme.palette.warning)
+                Label("That doesn’t look like an email address.", systemImage: "exclamationmark.triangle")
+                    .fluidText(.label)
+                    .foregroundStyle(self.theme.look.text)
             }
         }
     }
 
     private var detailsRow: some View {
         VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
-            Toggle(isOn: self.$includeDetails) {
-                HStack(spacing: self.theme.metrics.spacing.sm) {
-                    Text("Include app and macOS versions")
-                        .font(self.theme.typography.bodySmall)
-                        .foregroundStyle(self.theme.palette.primaryText)
-                    Text("No recordings or logs.")
-                        .font(self.theme.typography.caption)
-                        .foregroundStyle(self.theme.palette.tertiaryText)
-                }
+            HStack(spacing: self.theme.metrics.spacing.sm) {
+                Text("Include app and macOS versions")
+                    .fluidText(.body)
+                    .foregroundStyle(self.theme.look.text)
+                Text("No recordings or logs.")
+                    .fluidText(.label)
+                    .foregroundStyle(self.theme.look.tertiaryText)
+                Spacer(minLength: self.theme.metrics.spacing.sm)
+                Toggle("Include app and macOS versions", isOn: self.$includeDetails)
+                    .fluidSwitch()
             }
-            .toggleStyle(.switch)
-            .controlSize(.small)
             if self.includeDetails {
                 Text(FeedbackSubmission.appDetails)
                     .font(self.theme.typography.codeCaption)
-                    .foregroundStyle(self.theme.palette.secondaryText)
+                    .foregroundStyle(self.theme.look.secondaryText)
                     .textSelection(.enabled)
             }
         }
@@ -254,14 +246,14 @@ struct FeedbackView: View {
 
     @ViewBuilder private var deliveryNote: some View {
         if let error {
-            Label(error, systemImage: "exclamationmark.circle")
-                .font(self.theme.typography.caption)
-                .foregroundStyle(self.theme.palette.warning)
+            Label(error, systemImage: "exclamationmark.triangle")
+                .fluidText(.label)
+                .foregroundStyle(self.theme.look.text)
                 .fixedSize(horizontal: false, vertical: true)
         } else {
             Text(self.sending ? "Sending…" : "Goes straight to the FluidVoice team.")
-                .font(self.theme.typography.caption)
-                .foregroundStyle(self.theme.palette.tertiaryText)
+                .fluidText(.label)
+                .foregroundStyle(self.theme.look.tertiaryText)
         }
     }
 
@@ -272,7 +264,7 @@ struct FeedbackView: View {
                 Text(self.error == nil ? "Send feedback" : "Try again")
             }
         }
-        .fluidGlassAction(prominent: true)
+        .fluidAction(.primary)
         .disabled(!self.draft.isValid || self.sending)
         .keyboardShortcut(.return, modifiers: .command)
     }
@@ -281,20 +273,16 @@ struct FeedbackView: View {
 
     private var confirmation: some View {
         VStack(alignment: .leading, spacing: self.theme.metrics.spacing.lg) {
-            Image(systemName: "checkmark.circle.fill")
-                .font(.system(size: 28, weight: .regular))
-                .foregroundStyle(self.theme.palette.success)
-                .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xs) {
                 Text("Thank you. It’s in.")
-                    .font(self.theme.typography.title)
-                    .foregroundStyle(self.theme.palette.primaryText)
+                    .fluidText(.detailTitle)
+                    .foregroundStyle(self.theme.look.text)
                 Text("If we need more detail, we’ll reach you by email.")
-                    .font(self.theme.typography.body)
-                    .foregroundStyle(self.theme.palette.secondaryText)
+                    .fluidText(.body)
+                    .foregroundStyle(self.theme.look.secondaryText)
             }
             Button("Send another") { self.sent = false }
-                .fluidGlassAction()
+                .fluidAction()
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(self.theme.metrics.spacing.xxl)
@@ -309,33 +297,28 @@ struct FeedbackView: View {
             Text("Enjoying FluidVoice?")
             if let url = Self.starURL {
                 Link("Star it on GitHub", destination: url)
+                    .fluidGlassAction(quiet: true)
             }
             if let url = Self.sponsorURL {
-                Text("·").accessibilityHidden(true)
                 Link("Support development", destination: url)
+                    .fluidGlassAction(quiet: true)
             }
         }
-        .font(self.theme.typography.caption)
-        .foregroundStyle(self.theme.palette.tertiaryText)
-        .tint(self.theme.palette.secondaryText)
+        .fluidText(.label)
+        .foregroundStyle(self.theme.look.tertiaryText)
         .padding(.top, self.theme.metrics.spacing.sm)
     }
 
     // MARK: - Surfaces
 
-    /// Flat: a hairline, no shadow, no material. The page stays quiet around the message.
+    /// The shared card: flat, a hairline, no shadow. The page stays quiet around the message.
     private var surface: some View {
-        let shape = RoundedRectangle(cornerRadius: self.theme.metrics.corners.lg, style: .continuous)
-        return shape
-            .fill(self.theme.palette.cardBackground)
-            .overlay(shape.strokeBorder(self.theme.palette.separator, lineWidth: 1))
-    }
-
-    private func fieldSurface(focused: Bool) -> some View {
-        let shape = RoundedRectangle(cornerRadius: self.theme.metrics.corners.md, style: .continuous)
-        return shape
-            .fill(self.theme.palette.contentBackground)
-            .overlay(shape.strokeBorder(focused ? self.theme.palette.secondaryText.opacity(0.5) : self.theme.palette.separator, lineWidth: 1))
+        RoundedRectangle(cornerRadius: FluidSurfaceCard<EmptyView>.cornerRadius, style: .continuous)
+            .fill(self.theme.look.card.top)
+            .overlay(
+                RoundedRectangle(cornerRadius: FluidSurfaceCard<EmptyView>.cornerRadius, style: .continuous)
+                    .strokeBorder(self.theme.look.card.edgeTop, lineWidth: 1)
+            )
     }
 
     // MARK: - Submit
