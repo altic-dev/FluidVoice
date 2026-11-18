@@ -1567,7 +1567,7 @@ struct ContentView: View {
     private var sidebarContent: some View {
         self.appSidebarView
             .clipped()
-            .tint(self.theme.palette.accent)
+            .tint(self.theme.look.text)
             .background(self.theme.look.sheet.ignoresSafeArea())
     }
 
@@ -1660,7 +1660,7 @@ struct ContentView: View {
         }
         .listStyle(.sidebar)
         .scrollContentBackground(.hidden)
-        .accentColor(self.theme.palette.accent)
+        .accentColor(self.theme.look.selection)
         .animation(nil, value: self.selectedSidebarItem)
     }
 
@@ -1755,8 +1755,7 @@ struct ContentView: View {
                     .tag(section)
                     .sidebarOptionHover(
                         isSelected: isSelected,
-                        reduceMotion: self.accessibilityReduceMotion,
-                        selectedFill: self.theme.look.selection
+                        reduceMotion: self.accessibilityReduceMotion
                     )
                 }
             }
@@ -1908,12 +1907,12 @@ struct ContentView: View {
                     .renderingMode(.template)
                     .resizable()
                     .scaledToFit()
-                    .foregroundStyle(isSelected ? Color.white.opacity(0.9) : Color.secondary)
+                    .foregroundStyle(isSelected ? self.theme.look.text : self.theme.look.secondaryText)
                     .frame(width: 16, height: 16)
                     .accessibilityHidden(true)
 
                 Text(title)
-                    .foregroundStyle(isSelected ? Color.white : Color.primary)
+                    .foregroundStyle(self.theme.look.text)
             }
             .font(self.theme.typography.sidebarItem)
             .padding(.vertical, self.theme.metrics.spacing.xs / 2)
@@ -6320,16 +6319,15 @@ private struct SidebarChromeButtonStyle: ButtonStyle {
 }
 
 extension View {
-    /// `selectedFill` replaces the accent fill on the selected row, for sidebars on the refined look.
-    func sidebarOptionHover(isSelected: Bool, reduceMotion: Bool, selectedFill: Color? = nil) -> some View {
-        modifier(SidebarOptionHoverModifier(isSelected: isSelected, reduceMotion: reduceMotion, selectedFill: selectedFill))
+    /// Sidebar row hover and selection. The selected row is the look's grey selection in every sidebar.
+    func sidebarOptionHover(isSelected: Bool, reduceMotion: Bool) -> some View {
+        modifier(SidebarOptionHoverModifier(isSelected: isSelected, reduceMotion: reduceMotion))
     }
 }
 
 private struct SidebarOptionHoverModifier: ViewModifier {
     let isSelected: Bool
     let reduceMotion: Bool
-    let selectedFill: Color?
 
     @Environment(\.theme) private var theme
     @State private var isHovered = false
@@ -6352,7 +6350,7 @@ private struct SidebarOptionHoverModifier: ViewModifier {
 
     private var backgroundColor: Color {
         if self.isSelected {
-            return self.selectedFill ?? self.theme.palette.accent
+            return self.theme.look.selection
         }
         return Color.primary.opacity(self.isHovered ? 0.08 : 0)
     }

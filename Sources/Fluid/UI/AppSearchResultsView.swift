@@ -131,11 +131,11 @@ struct AppSearchResultsView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(hit.title)
                     .font(self.theme.typography.sidebarItem)
-                    .foregroundStyle(isSelected ? Color.white : Color.primary)
+                    .foregroundStyle(self.theme.look.text)
                     .lineLimit(1)
                 Text(hit.snippet)
                     .font(.caption)
-                    .foregroundStyle(isSelected ? Color.white.opacity(0.85) : Color.secondary)
+                    .foregroundStyle(isSelected ? self.theme.look.text : self.theme.look.secondaryText)
                     .lineLimit(2)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
