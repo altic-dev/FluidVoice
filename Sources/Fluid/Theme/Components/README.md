@@ -92,6 +92,16 @@ Pages move onto the look one at a time (Models first). A page on the look uses:
   for the rest; `size: .large` in footers. Hover, press, disabled, keyboard focus and
   Reduce Motion are built in.
 - `.fluidDropdownStyle(appearance: .text)` for a selector inside a line of small text.
+- `FluidGroupHeader(title:hint:accessory:)` for a group title, with a quiet hint or an action at
+  the right. `FluidSettingsGroup` uses it, so page sections and settings groups line up.
+- `FluidSearchField(text:placeholder:)` for a search box in a page or list, and
+  `.fluidFieldChrome(isFocused:)` for any other text field or editor: grey fill, hairline on focus.
+- `.fluidListRowFill(isSelected:)` for a list row that holds its own buttons; a row that is one
+  button uses `.fluidSelectableRow(isSelected:)`.
+- `theme.look.data` for chart bars and lines, heatmap squares and progress fills, on a
+  `quietFill` track. Lighter steps of it show less.
+- Warnings and errors use `exclamationmark.triangle` in `look.text`; the look has no red, orange
+  or green. A tick only ever means "selected".
 
 Once every page has moved, the window paints `look.canvas`, `.fluidCanvas()` and the
 older palette roles are removed.
