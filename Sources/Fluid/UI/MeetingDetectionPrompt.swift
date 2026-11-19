@@ -18,7 +18,7 @@ private enum MeetingPromptLayout {
 }
 
 /// Floating "Meeting detected" prompt — a NEW controller, deliberately separate from
-/// `MeetingRecordingPillController`. The pill's contract (state-driven order-out, fixed 84×32
+/// `MeetingRecordingPillController`. The pill's contract (state-driven order-out, fixed
 /// size, recording a11y label) fights a prompt mode, so this reuses only the shared panel
 /// factory, not the pill's controller.
 @MainActor
