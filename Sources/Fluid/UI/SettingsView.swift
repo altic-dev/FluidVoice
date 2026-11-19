@@ -170,7 +170,8 @@ struct SettingsView: View {
         } label: {
             Text(title).lineLimit(1)
         }
-        .fluidDropdownStyle()
+        .fluidDropdownStyle(fillsWidth: true)
+        .frame(width: Self.dictationStyleColumnWidth)
         .disabled(self.isRecordingAnyShortcut)
         .accessibilityLabel("Cleanup style for \(package.key.displayString)")
         .accessibilityValue(title)
@@ -240,514 +241,6 @@ struct SettingsView: View {
 
                 self.dictationPage
                     .shownInSettingsSection(.dictation, selectedSection: self.selectedSection)
-                }
-
-                // Shortcuts page, or dictation behavior. Without Accessibility access the
-                // shortcuts page shows the permission card instead.
-                if self.selectedSection == .shortcuts, self.accessibilityEnabled {
-                    self.shortcutsPage
-                } else {
-                    ThemedCard(style: .standard) {
-                        VStack(alignment: .leading, spacing: 14) {
-                            HStack(spacing: 8) {
-                                Label(self.selectedSection == .shortcuts ? "Shortcuts" : "Dictation behavior", systemImage: self.selectedSection == .shortcuts ? "keyboard" : "mic")
-                                    .font(.fluidSystem(.headline))
-                                    .foregroundStyle(.primary)
-
-                                Spacer()
-                            }
-                            .settingsSearchTarget(self.selectedSection == .shortcuts ? .globalHotkey : .dictation)
-
-                            if self.accessibilityEnabled {
-                                VStack(alignment: .leading, spacing: 12) {
-                                    if self.selectedSection == .dictation {
-                                        // MARK: - Options Section
-
-                                    // MARK: - Shortcuts Section
-
-                                    VStack(alignment: .leading, spacing: 16) {
-                                        self.dictationShortcutPackages
-                                            .settingsSearchTarget(.primaryDictationShortcuts)
-                                        self.shortcutGroupDivider
-                                        self.shortcutGroup {
-                                            self.shortcutRow(
-                                                content: .init(
-                                                    icon: "terminal.fill",
-                                                    iconColor: .secondary,
-                                                    title: "Command Mode",
-                                                    description: "Execute voice commands"
-                                                ),
-                                                shortcut: self.commandModeShortcut,
-                                                isRecording: self.isRecording(.command),
-                                                isAnyRecordingActive: self.isRecordingAnyShortcut,
-                                                recordingMessage: self.isRecording(.command) ? self.shortcutRecordingMessage : nil,
-                                                isEnabled: self.$commandModeShortcutEnabled,
-                                                onChangePressed: {
-                                                    DebugLogger.shared.debug("Starting to record new command mode shortcut", source: "SettingsView")
-                                                    self.shortcutRecordingMessage = nil
-                                                    self.activeShortcutRecordingTarget = .command
-                                                },
-                                                onRemovePressed: {
-                                                    if self.activeShortcutRecordingTarget == .command {
-                                                        self.shortcutRecordingMessage = nil
-                                                        self.activeShortcutRecordingTarget = nil
-                                                    }
-                                                    self.commandModeShortcut = nil
-                                                    self.commandModeShortcutEnabled = false
-                                                }
-                                            )
-                                            .settingsSearchTarget(.commandModeShortcut)
-                                            self.shortcutGroupDivider
-
-                                            self.shortcutRow(
-                                                content: .init(
-                                                    icon: "pencil.and.outline",
-                                                    iconColor: .secondary,
-                                                    title: "Edit Mode",
-                                                    description: "Speak to edit selected text or write new text"
-                                                ),
-                                                shortcut: self.rewriteShortcut,
-                                                isRecording: self.isRecording(.edit),
-                                                isAnyRecordingActive: self.isRecordingAnyShortcut,
-                                                recordingMessage: self.isRecording(.edit) ? self.shortcutRecordingMessage : nil,
-                                                isEnabled: self.$rewriteShortcutEnabled,
-                                                onChangePressed: {
-                                                    DebugLogger.shared.debug("Starting to record new write mode shortcut", source: "SettingsView")
-                                                    self.shortcutRecordingMessage = nil
-                                                    self.activeShortcutRecordingTarget = .edit
-                                                }
-                                            )
-                                            .settingsSearchTarget(.editModeShortcut)
-                                        }
-                                        self.shortcutGroupDivider
-                                        self.shortcutGroup {
-                                            self.shortcutRow(
-                                                content: .init(
-                                                    icon: "xmark.circle.fill",
-                                                    iconColor: .secondary,
-                                                    title: "Cancel Recording",
-                                                    description: "Stop without pasting"
-                                                ),
-                                                shortcut: self.cancelRecordingShortcut,
-                                                isRecording: self.isRecording(.cancel),
-                                                isAnyRecordingActive: self.isRecordingAnyShortcut,
-                                                recordingMessage: self.isRecording(.cancel) ? self.shortcutRecordingMessage : nil,
-                                                onChangePressed: {
-                                                    DebugLogger.shared.debug("Starting to record new cancel shortcut", source: "SettingsView")
-                                                    self.shortcutRecordingMessage = nil
-                                                    self.activeShortcutRecordingTarget = .cancel
-                                                },
-                                                onRemovePressed: { self.cancelRecordingShortcut = nil }
-                                            )
-                                            .settingsSearchTarget(.cancelRecordingShortcut)
-                                            self.shortcutGroupDivider
-
-                                            self.shortcutRow(
-                                                content: .init(
-                                                    icon: "arrow.down.doc",
-                                                    iconColor: .secondary,
-                                                    title: "Paste Last Transcription",
-                                                    description: "Insert your last dictation again"
-                                                ),
-                                                shortcut: self.pasteLastTranscriptionShortcut,
-                                                isRecording: self.isRecording(.pasteLast),
-                                                isAnyRecordingActive: self.isRecordingAnyShortcut,
-                                                recordingMessage: self.isRecording(.pasteLast) ? self.shortcutRecordingMessage : nil,
-                                                isEnabled: self.$pasteLastTranscriptionShortcutEnabled,
-                                                onChangePressed: {
-                                                    DebugLogger.shared.debug("Starting to record new paste last transcription shortcut", source: "SettingsView")
-                                                    self.shortcutRecordingMessage = nil
-                                                    self.activeShortcutRecordingTarget = .pasteLast
-                                                },
-                                                onRemovePressed: {
-                                                    if self.activeShortcutRecordingTarget == .pasteLast {
-                                                        self.shortcutRecordingMessage = nil
-                                                        self.activeShortcutRecordingTarget = nil
-                                                    }
-                                                    self.pasteLastTranscriptionShortcut = nil
-                                                    self.pasteLastTranscriptionShortcutEnabled = false
-                                                }
-                                            )
-                                            .settingsSearchTarget(.pasteLastTranscriptionShortcut)
-                                            self.shortcutGroupDivider
-                                            self.shortcutRow(
-                                                content: .init(
-                                                    icon: "person.2.wave.2",
-                                                    iconColor: .secondary,
-                                                    title: "Start / Stop Meeting",
-                                                    description: self.settings.fluidMeetEnabled
-                                                        ? "Pick sources, record, or stop a meeting"
-                                                        : "Turn on FluidMeet to use this shortcut"
-                                                ),
-                                                shortcut: self.settings.meetingRecordingHotkeyShortcut,
-                                                isRecording: self.isRecording(.meeting),
-                                                isAnyRecordingActive: self.isRecordingAnyShortcut,
-                                                recordingMessage: self.isRecording(.meeting) ? self.shortcutRecordingMessage : nil,
-                                                onChangePressed: {
-                                                    self.shortcutRecordingMessage = nil
-                                                    self.activeShortcutRecordingTarget = .meeting
-                                                },
-                                                onRemovePressed: {
-                                                    if self.activeShortcutRecordingTarget == .meeting {
-                                                        self.shortcutRecordingMessage = nil
-                                                        self.activeShortcutRecordingTarget = nil
-                                                    }
-                                                    self.settings.meetingRecordingHotkeyShortcut = nil
-                                                }
-                                            )
-                                            .settingsSearchTarget(.meetingRecordingShortcut)
-                                        }
-                                    }
-                                }
-                                if self.selectedSection == .dictation {
-                                    // MARK: - Options Section
-
-                                    VStack(spacing: 12) {
-                                        HStack(alignment: .center) {
-                                            VStack(alignment: .leading, spacing: 2) {
-                                                Text("Activation Mode")
-                                                    .font(self.theme.typography.bodyStrong)
-                                                    .foregroundStyle(self.settingsTitleText)
-                                                Text(self.hotkeyMode.description)
-                                                    .font(self.theme.typography.bodySmall)
-                                                    .foregroundStyle(self.settingsSecondaryText)
-                                                    .fixedSize(horizontal: false, vertical: true)
-                                            }
-                                            .frame(maxWidth: .infinity, alignment: .leading)
-
-                                            FluidDropdownPicker("Activation mode", selectedTitle: self.hotkeyMode.displayName, selection: self.$hotkeyMode) {
-                                                ForEach(HotkeyActivationMode.allCases) { mode in
-                                                    Text(mode.displayName).tag(mode)
-                                                }
-                                            }
-                                            .fluidDropdownStyle()
-                                            .frame(width: 170, alignment: .trailing)
-                                        }
-                                        .onChange(of: self.hotkeyMode) { _, newValue in
-                                            SettingsStore.shared.hotkeyMode = newValue
-                                            self.hotkeyManager?.setHotkeyMode(newValue)
-                                        }
-                                        .settingsSearchTarget(.activationMode)
-                                        Divider().opacity(0.2)
-
-                                        HStack {
-                                            VStack(alignment: .leading, spacing: 2) {
-                                                Text("Transcription Sounds")
-                                                    .font(self.theme.typography.bodyStrong)
-                                                    .foregroundStyle(self.settingsTitleText)
-                                                Text("Choose a recording sound. Paired sounds preview start and stop.")
-                                                    .fixedSize(horizontal: false, vertical: true)
-                                                    .font(self.theme.typography.bodySmall)
-                                                    .foregroundStyle(self.settingsSecondaryText)
-                                            }
-
-                                            Spacer()
-
-                                            FluidDropdownPicker("Transcription sound", selectedTitle: SettingsStore.shared.transcriptionStartSound.displayName, selection: Binding(
-                                                get: { SettingsStore.shared.transcriptionStartSound },
-                                                set: { newValue in
-                                                    SettingsStore.shared.transcriptionStartSound = newValue
-                                                    TranscriptionSoundPlayer.shared.playPreview(sound: newValue)
-                                                }
-                                            )) {
-                                                ForEach(SettingsStore.TranscriptionStartSound.allCases) { option in
-                                                    Text(option.displayName).tag(option)
-                                                }
-                                            }
-                                            .fluidDropdownStyle()
-                                            .frame(width: 170, alignment: .trailing)
-                                        }
-                                        .settingsSearchTarget(.transcriptionSounds)
-
-                                        if SettingsStore.shared.transcriptionStartSound != .none {
-                                            HStack {
-                                                VStack(alignment: .leading, spacing: 2) {
-                                                    Text("Activation Mode")
-                                                        .font(self.theme.typography.bodyStrong)
-                                                        .foregroundStyle(self.settingsTitleText)
-                                                    Text(self.hotkeyMode.description)
-                                                        .font(self.theme.typography.bodySmall)
-                                                        .foregroundStyle(self.settingsSecondaryText)
-                                                        .fixedSize(horizontal: false, vertical: true)
-                                                }
-                                                .frame(maxWidth: .infinity, alignment: .leading)
-
-                                                FluidDropdownPicker("Activation mode", selectedTitle: self.hotkeyMode.displayName, selection: self.$hotkeyMode) {
-                                                    ForEach(HotkeyActivationMode.allCases) { mode in
-                                                        Text(mode.displayName).tag(mode)
-                                                    }
-                                                }
-                                                .fluidDropdownStyle()
-                                                .frame(width: 170, alignment: .trailing)
-                                            }
-                                            .onChange(of: self.hotkeyMode) { _, newValue in
-                                                SettingsStore.shared.hotkeyMode = newValue
-                                                self.hotkeyManager?.setHotkeyMode(newValue)
-                                            }
-                                            .settingsSearchTarget(.activationMode)
-                                            Divider().opacity(0.2)
-
-                                            HStack {
-                                                VStack(alignment: .leading, spacing: 2) {
-                                                    Text("Transcription Sounds")
-                                                        .font(self.theme.typography.bodyStrong)
-                                                        .foregroundStyle(self.settingsTitleText)
-                                                    Text("Choose a recording sound. Paired sounds preview start and stop.")
-                                                        .fixedSize(horizontal: false, vertical: true)
-                                                        .font(self.theme.typography.bodySmall)
-                                                        .foregroundStyle(self.settingsSecondaryText)
-                                                }
-
-                                                Spacer()
-
-                                                FluidDropdownPicker("Transcription sound", selectedTitle: SettingsStore.shared.transcriptionStartSound.displayName, selection: Binding(
-                                                    get: { SettingsStore.shared.transcriptionStartSound },
-                                                    set: { newValue in
-                                                        SettingsStore.shared.transcriptionStartSound = newValue
-                                                        TranscriptionSoundPlayer.shared.playPreview(sound: newValue)
-                                                    }
-                                                )) {
-                                                    ForEach(SettingsStore.TranscriptionStartSound.allCases) { option in
-                                                        Text(option.displayName).tag(option)
-                                                    }
-                                                }
-                                                .fluidDropdownStyle()
-                                                .frame(width: 170, alignment: .trailing)
-                                            }
-                                            .settingsSearchTarget(.transcriptionSounds)
-
-                                            if SettingsStore.shared.transcriptionStartSound != .none {
-                                                HStack {
-                                                    VStack(alignment: .leading, spacing: 2) {
-                                                        Text("Volume")
-                                                            .font(self.theme.typography.bodyStrong)
-                                                            .foregroundStyle(self.settingsTitleText)
-                                                        Text("Adjust the recording sound cue volume.")
-                                                            .font(self.theme.typography.bodySmall)
-                                                            .foregroundStyle(self.settingsSecondaryText)
-                                                            .fixedSize(horizontal: false, vertical: true)
-                                                    }
-
-                                                    Spacer()
-
-                                                    Slider(
-                                                        value: Binding(
-                                                            get: { Double(SettingsStore.shared.transcriptionSoundVolume) },
-                                                            set: { SettingsStore.shared.transcriptionSoundVolume = Float($0) }
-                                                        ),
-                                                        in: 0...1,
-                                                        step: 0.05
-                                                    ) { editing in
-                                                        if !editing {
-                                                            TranscriptionSoundPlayer.shared.playPreviewAtVolume(
-                                                                SettingsStore.shared.transcriptionSoundVolume
-                                                            )
-                                                        }
-                                                    }
-                                                    .frame(width: 150)
-                                                }
-                                            }
-                                            Divider().opacity(0.2)
-
-                                            self.optionToggleRow(
-                                                title: "Copy to Clipboard",
-                                                description: "Automatically copy transcribed text to clipboard as a backup.",
-                                                isOn: self.$copyToClipboard
-                                            )
-                                            .onChange(of: self.copyToClipboard) { _, newValue in
-                                                SettingsStore.shared.copyTranscriptionToClipboard = newValue
-                                            }
-                                            .settingsSearchTarget(.copyToClipboard)
-                                            Divider().opacity(0.2)
-
-                                            HStack(alignment: .center) {
-                                                VStack(alignment: .leading, spacing: 2) {
-                                                    Text("Text Insertion Mode")
-                                                        .font(self.theme.typography.bodyStrong)
-                                                        .foregroundStyle(self.settingsTitleText)
-                                                    Text(SettingsStore.shared.textInsertionMode.description)
-                                                        .font(self.theme.typography.bodySmall)
-                                                        .foregroundStyle(self.settingsSecondaryText)
-                                                        .fixedSize(horizontal: false, vertical: true)
-                                                }
-                                                .frame(maxWidth: .infinity, alignment: .leading)
-
-                                                FluidDropdownPicker("Text insertion", selectedTitle: SettingsStore.shared.textInsertionMode.displayName, selection: Binding(
-                                                    get: { SettingsStore.shared.textInsertionMode },
-                                                    set: { SettingsStore.shared.textInsertionMode = $0 }
-                                                )) {
-                                                    ForEach(SettingsStore.TextInsertionMode.allCases) { mode in
-                                                        Text(mode.displayName).tag(mode)
-                                                    }
-                                                }
-                                                .fluidDropdownStyle()
-                                                .fixedSize(horizontal: true, vertical: false)
-                                                .frame(minWidth: 170, alignment: .trailing)
-                                            }
-                                            .settingsSearchTarget(.textInsertionMode)
-                                            Divider().opacity(0.2)
-
-                                            self.optionToggleRow(
-                                                title: "Save Transcription History",
-                                                description: "Save transcriptions for stats tracking. Disable for privacy.",
-                                                isOn: Binding(
-                                                    get: { SettingsStore.shared.saveTranscriptionHistory },
-                                                    set: {
-                                                        SettingsStore.shared.saveTranscriptionHistory = $0
-                                                        self.refreshAudioHistoryUsage()
-                                                    }
-                                                )
-                                            )
-                                            .settingsSearchTarget(.transcriptionHistory)
-                                            Divider().opacity(0.2)
-
-                                            self.optionToggleRow(
-                                                title: "Save Audio With History",
-                                                description: "Store actual microphone audio locally with dictation history. Disabled by default.",
-                                                isOn: Binding(
-                                                    get: { SettingsStore.shared.saveAudioWithTranscriptionHistory },
-                                                    set: {
-                                                        SettingsStore.shared.saveAudioWithTranscriptionHistory = $0
-                                                        self.refreshAudioHistoryUsage()
-                                                    }
-                                                )
-                                            )
-                                            .disabled(!SettingsStore.shared.saveTranscriptionHistory)
-                                            .settingsSearchTarget(.audioHistory)
-
-                                            if SettingsStore.shared.saveTranscriptionHistory,
-                                               SettingsStore.shared.saveAudioWithTranscriptionHistory
-                                            {
-                                                self.audioHistoryControls()
-                                                    .padding(.top, 2)
-                                                    .settingsSearchTarget(.audioStorage)
-                                                Divider().opacity(0.2)
-                                            } else {
-                                                Divider().opacity(0.2)
-                                            }
-
-                                            self.optionToggleRow(
-                                                title: "Weekends Don't Break Streak",
-                                                description: "Skip Saturday and Sunday when calculating usage streaks. Perfect for weekday-only users.",
-                                                isOn: Binding(
-                                                    get: { SettingsStore.shared.weekendsDontBreakStreak },
-                                                    set: { SettingsStore.shared.weekendsDontBreakStreak = $0 }
-                                                )
-                                            )
-                                            .settingsSearchTarget(.usageStreak)
-                                            Divider().opacity(0.2)
-
-                                            self.optionToggleRow(
-                                                title: "Skip Silent Recordings",
-                                                description: "Avoid transcription when a recording up to four seconds contains only clear silence. Disabled by default to preserve quiet speech.",
-                                                isOn: Binding(
-                                                    get: { SettingsStore.shared.skipSilentRecordingsEnabled },
-                                                    set: { SettingsStore.shared.skipSilentRecordingsEnabled = $0 }
-                                                )
-                                            )
-                                            .settingsSearchTarget(.skipSilentRecordings)
-                                            Divider().opacity(0.2)
-
-                                            self.optionToggleRow(
-                                                title: "Pause Media During Transcription",
-                                                description: "Automatically pause currently playing audio/video when transcription starts. Resumes only if FluidVoice paused it.",
-                                                isOn: Binding(
-                                                    get: { SettingsStore.shared.pauseMediaDuringTranscription },
-                                                    set: { SettingsStore.shared.pauseMediaDuringTranscription = $0 }
-                                                )
-                                            )
-                                            .settingsSearchTarget(.pauseMedia)
-                                            Divider().opacity(0.2)
-
-                                            DictionarySuggestionsSettingsRow()
-                                                .settingsSearchTarget(.dictionarySuggestions)
-                                            Divider().opacity(0.2)
-
-                                            self.optionToggleRow(
-                                                title: "Share Detailed Anonymous Analytics",
-                                                description: "Share anonymous daily feature, insertion performance, onboarding, and model metrics. " +
-                                                    "When off, FluidVoice still records the anonymous daily activity signal and, in beta builds, daily ASR and Fluid Intelligence timing summaries. " +
-                                                    "Never includes transcription text or prompts.",
-                                                isOn: self.detailedAnalyticsToggleBinding
-                                            )
-                                            .settingsSearchTarget(.analyticsPrivacy)
-
-                                            HStack {
-                                                Button("What we collect") {
-                                                    self.showAnalyticsPrivacy = true
-                                                }
-                                                .buttonStyle(.link)
-
-                                                Spacer()
-                                            }
-                                            .padding(.top, 6)
-                                        }
-                                        .padding(12)
-                                    }
-                                }
-                            } else {
-                                // Hotkey disabled - accessibility not enabled
-                                VStack(alignment: .leading, spacing: 12) {
-                                    HStack(spacing: 10) {
-                                        Circle()
-                                            .fill(self.theme.palette.warning)
-                                            .frame(width: 8, height: 8)
-
-                                        VStack(alignment: .leading, spacing: 2) {
-                                            HStack(spacing: 6) {
-                                                Image(systemName: "exclamationmark.triangle.fill")
-                                                    .foregroundStyle(self.theme.palette.warning)
-                                                Text("Accessibility permissions required")
-                                                    .font(self.theme.typography.bodyStrong)
-                                                    .foregroundStyle(self.theme.palette.warning)
-                                            }
-                                            Text("Required for global hotkey functionality")
-                                                .font(self.theme.typography.bodySmall)
-                                                .foregroundStyle(self.settingsSecondaryText)
-                                                .fixedSize(horizontal: false, vertical: true)
-                                        }
-                                        Spacer()
-
-                                        Button("Open Accessibility Settings") {
-                                            self.openAccessibilitySettings()
-                                        }
-                                        .buttonStyle(.borderedProminent)
-                                        .tint(self.theme.palette.accent)
-                                        .controlSize(.regular)
-                                    }
-
-                                    self.instructionsBox(
-                                        title: "Follow these steps to enable Accessibility:",
-                                        steps: [
-                                            "Click **Open Accessibility Settings** above",
-                                            "In the Accessibility window, click the **+ button**",
-                                            "Select **\(self.appDisplayName)**; use **Reveal in Finder** below if needed",
-                                            "Click **Open**, then toggle **\(self.appDisplayName) ON** in the list",
-                                        ],
-                                        warningStyle: true
-                                    )
-
-                                    HStack(spacing: 10) {
-                                        Button("Reveal in Finder") {
-                                            self.revealAppInFinder()
-                                        }
-                                        .fluidOutlinedButton()
-                                        .controlSize(.small)
-
-                                        Button("Open Applications") {
-                                            self.openApplicationsFolder()
-                                        }
-                                        .fluidOutlinedButton()
-                                        .controlSize(.small)
-                                    }
-                                }
-                                .settingsSearchTarget(.accessibilityPermission)
-                            }
-                        }
-                        .padding(16)
-                    }
-                    .shownInSettingsSection(self.selectedSection == .shortcuts ? .shortcuts : .dictation, selectedSection: self.selectedSection)
-                }
 
                 if self.selectedSection == .dictationFormatting {
                     self.formattingPage
@@ -1534,57 +1027,14 @@ struct SettingsView: View {
     @ViewBuilder
     private var dictationShortcutRows: some View {
         let routing = self.dictationRouting
+        let packages = routing.packages
         let addTarget = ShortcutRecordingTarget.primaryDictation(.add)
-        return self.shortcutGroup {
-            ForEach(Array(routing.packages.enumerated()), id: \.offset) { index, package in
-                if index > 0 { self.shortcutGroupDivider }
-                self.dictationPackageRow(package, routing: routing)
-            }
-            if self.isRecording(addTarget) {
-                self.shortcutControls(
-                    shortcut: nil,
-                    isRecording: true,
-                    title: "New dictation shortcut",
-                    onEdit: {},
-                    onRemove: nil
-                )
-                self.shortcutRecordingWarning
-            } else {
-                Button {
-                    self.shortcutRecordingMessage = nil
-                    self.activeShortcutRecordingTarget = addTarget
-                } label: {
-                    Label("Add dictation shortcut", systemImage: "plus")
-                }
-                .buttonStyle(FluidHoverIconButtonStyle())
-                .disabled(self.isRecordingAnyShortcut)
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func dictationPackageRow(_ package: DictationRouting.Package, routing: DictationRouting) -> some View {
-        if let target = self.recordingTarget(for: package) {
-            let isRecording = self.isRecording(target)
-            VStack(alignment: .leading, spacing: 6) {
-                self.shortcutControls(
-                    shortcut: package.key,
-                    isRecording: isRecording,
-                    title: package.key.displayString,
-                    onEdit: {
-                        self.shortcutRecordingMessage = nil
-                        self.activeShortcutRecordingTarget = target
-                    },
-                    onRemove: { self.removeDictationPackage(package) }
-                )
-                if isRecording {
-                    self.shortcutRecordingWarning
-                } else {
-                    HStack(spacing: 12) {
-                        self.dictationStylePicker(for: package, routing: routing)
-                        self.autoSendToggle(for: package.key)
-                    }
-                }
+        if !packages.isEmpty {
+            HStack(spacing: 14) {
+                Text("Key").frame(width: ShortcutKeyField.width, alignment: .center)
+                Text("Cleanup").frame(width: Self.dictationStyleColumnWidth, alignment: .leading)
+                Text("Auto-send").frame(width: Self.dictationAutoSendColumnWidth, alignment: .center)
+                Spacer(minLength: 0)
             }
             .fluidText(.label)
             .foregroundStyle(self.theme.look.tertiaryText)
@@ -1628,10 +1078,148 @@ struct SettingsView: View {
         }
     }
 
+    private func dictationPackageRow(_ package: DictationRouting.Package, routing: DictationRouting) -> some View {
+        let target = self.recordingTarget(for: package)
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 14) {
+                if let target {
+                    ShortcutKeyField(
+                        shortcut: package.key,
+                        title: "Dictation",
+                        isRecording: self.isRecording(target),
+                        isLocked: self.isRecordingAnyShortcut,
+                        onToggleRecording: { self.toggleRecording(target) }
+                    )
+                }
+                self.dictationStylePicker(for: package, routing: routing)
+                self.autoSendToggle(for: package.key)
+                    .labelsHidden()
+                    .frame(width: Self.dictationAutoSendColumnWidth, alignment: .center)
+                Spacer(minLength: 0)
+                let isLastShortcut = routing.packages.count <= 1
+                Button {
+                    self.removeDictationPackage(package)
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.fluidSystem(size: 12, weight: .semibold))
+                }
+                .fluidGlassAction(circular: true, quiet: true)
+                .disabled(self.isRecordingAnyShortcut || isLastShortcut)
+                .accessibilityLabel("Remove \(package.key.displayString) shortcut")
+                .help(isLastShortcut ? "You need at least one dictation shortcut" : "Remove shortcut")
+            }
+            self.shortcutRecordingWarning(isRecording: target.map(self.isRecording) ?? false)
+        }
+        .padding(.horizontal, Self.shortcutsGroupInset)
+        .padding(.vertical, 9)
+    }
+
     @ViewBuilder
-    private var shortcutRecordingWarning: some View {
-        if let message = self.shortcutRecordingMessage, !message.isEmpty {
-            Text(message).font(self.theme.typography.bodySmall).foregroundStyle(self.theme.palette.warning)
+    private var actionShortcutRows: some View {
+        self.actionShortcutRow(
+            title: "Edit Mode",
+            description: "Speak to edit selected text or write new text",
+            shortcut: self.rewriteShortcutEnabled ? self.rewriteShortcut : nil,
+            target: .edit,
+            onClear: { self.rewriteShortcutEnabled = false }
+        )
+        .settingsSearchTarget(.editModeShortcut)
+        self.shortcutsRowDivider
+        self.actionShortcutRow(
+            title: "Command Mode",
+            description: "Execute voice commands",
+            shortcut: self.commandModeShortcutEnabled ? self.commandModeShortcut : nil,
+            target: .command,
+            onClear: {
+                self.commandModeShortcut = nil
+                self.commandModeShortcutEnabled = false
+            }
+        )
+        .settingsSearchTarget(.commandModeShortcut)
+        self.shortcutsRowDivider
+        self.actionShortcutRow(
+            title: "Cancel Recording",
+            description: "Stop without pasting",
+            shortcut: self.cancelRecordingShortcut,
+            target: .cancel,
+            onClear: { self.cancelRecordingShortcut = nil }
+        )
+        .settingsSearchTarget(.cancelRecordingShortcut)
+        self.shortcutsRowDivider
+        self.actionShortcutRow(
+            title: "Paste Last Transcription",
+            description: "Insert your last dictation again",
+            shortcut: self.pasteLastTranscriptionShortcutEnabled ? self.pasteLastTranscriptionShortcut : nil,
+            target: .pasteLast,
+            onClear: {
+                self.pasteLastTranscriptionShortcut = nil
+                self.pasteLastTranscriptionShortcutEnabled = false
+            }
+        )
+        .settingsSearchTarget(.pasteLastTranscriptionShortcut)
+        self.shortcutsRowDivider
+        self.actionShortcutRow(
+            title: "Start / Stop Meeting",
+            description: self.settings.fluidMeetEnabled
+                ? "Pick sources, record, or stop a meeting"
+                : "Turn on FluidMeet to use this shortcut",
+            shortcut: self.settings.meetingRecordingHotkeyShortcut,
+            target: .meeting,
+            onClear: { self.settings.meetingRecordingHotkeyShortcut = nil }
+        )
+        .settingsSearchTarget(.meetingRecordingShortcut)
+    }
+
+    private func actionShortcutRow(
+        title: String,
+        description: String,
+        shortcut: HotkeyShortcut?,
+        target: ShortcutRecordingTarget,
+        onClear: @escaping () -> Void
+    ) -> some View {
+        let isRecording = self.isRecording(target)
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 14) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(title)
+                        .fluidText(.rowTitle)
+                        .foregroundStyle(self.theme.look.text)
+                    Text(description)
+                        .fluidText(.body)
+                        .foregroundStyle(self.theme.look.secondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                ShortcutKeyField(
+                    shortcut: shortcut,
+                    title: title,
+                    isRecording: isRecording,
+                    isLocked: self.isRecordingAnyShortcut,
+                    onToggleRecording: { self.toggleRecording(target) },
+                    onClear: {
+                        if isRecording { self.toggleRecording(target) }
+                        onClear()
+                    }
+                )
+            }
+            self.shortcutRecordingWarning(isRecording: isRecording)
+        }
+        .padding(.horizontal, Self.shortcutsGroupInset)
+        .padding(.vertical, FluidSettingsLayout.rowVerticalPadding)
+    }
+
+    /// Starts recording a shortcut for `target`, or stops if it is already recording.
+    private func toggleRecording(_ target: ShortcutRecordingTarget) {
+        self.shortcutRecordingMessage = nil
+        self.activeShortcutRecordingTarget = self.isRecording(target) ? nil : target
+    }
+
+    @ViewBuilder
+    private func shortcutRecordingWarning(isRecording: Bool) -> some View {
+        if isRecording, let message = self.shortcutRecordingMessage, !message.isEmpty {
+            Label(message, systemImage: "exclamationmark.triangle")
+                .fluidText(.label)
+                .foregroundStyle(self.theme.look.text)
         }
     }
 
@@ -2182,28 +1770,53 @@ struct FlowLayout: Layout {
 // MARK: - Shortcuts: While You Dictate
 
 private extension SettingsView {
-    var spokenSendSettings: some View {
-        Group {
-            self.optionToggleRow(
-                title: "Spoken Send",
-                description: "Say the phrase and pause to stop dictation and send.",
-                isOn: Binding(
-                    get: { self.settings.spokenSendEnabled },
-                    set: { self.settings.spokenSendEnabled = $0 }
-                )
-            )
+    /// Extra room before Spoken Send's own rows, so they read as part of it.
+    static let shortcutsSubRowIndent: CGFloat = 18
 
-            if self.settings.spokenSendEnabled {
-                VStack(spacing: 10) {
-                    HStack(alignment: .center) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Send Phrase")
-                                .font(self.theme.typography.bodyStrong)
-                                .foregroundStyle(self.settingsTitleText)
-                            Text("Say it at the end. Say “literal \(self.settings.spokenSendPhrase)” to dictate it normally.")
-                                .font(self.theme.typography.bodySmall)
-                                .foregroundStyle(self.settingsSecondaryText)
-                                .fixedSize(horizontal: false, vertical: true)
+    var whileDictatingRows: some View {
+        VStack(spacing: 0) {
+            self.shortcutsSettingRow(
+                title: "Press Style",
+                description: self.hotkeyMode.description
+            ) {
+                FluidDropdownPicker("Press style", selectedTitle: self.hotkeyMode.displayName, selection: self.$hotkeyMode) {
+                    ForEach(HotkeyActivationMode.allCases) { mode in
+                        Text(mode.displayName).tag(mode)
+                    }
+                }
+                .fluidDropdownStyle(fillsWidth: true)
+                .frame(width: ShortcutKeyField.width)
+            }
+            .onChange(of: self.hotkeyMode) { _, newValue in
+                SettingsStore.shared.hotkeyMode = newValue
+                self.hotkeyManager?.setHotkeyMode(newValue)
+            }
+            .settingsSearchTarget(.activationMode)
+
+            self.shortcutsRowDivider
+
+            self.shortcutsSettingRow(
+                title: "Hold Space to Mute",
+                description: "Hold Space to mute, release to resume. A quick tap types a space. Other Space shortcuts take priority."
+            ) {
+                self.shortcutsSwitch(isOn: self.$settings.holdSpaceToMute, label: "Hold Space to Mute")
+            }
+            .settingsSearchTarget(.holdSpaceToMute)
+
+            self.shortcutsRowDivider
+
+            // One stack, so a search for Spoken Send highlights these rows as a single block.
+            VStack(spacing: 0) {
+                self.shortcutsSettingRow(
+                    title: "Send Key",
+                    description: "The key Auto-send and Spoken Send press. Pick what the app expects."
+                ) {
+                    FluidDropdownPicker("Send key", selectedTitle: self.settings.spokenSendKey.displayName, selection: Binding(
+                        get: { self.settings.spokenSendKey },
+                        set: { self.settings.spokenSendKey = $0 }
+                    )) {
+                        ForEach(SettingsStore.SpokenSendKey.allCases) { key in
+                            Text(key.displayName).tag(key)
                         }
                     }
                     .fluidDropdownStyle(fillsWidth: true)
@@ -2249,19 +1862,14 @@ private extension SettingsView {
                         .accessibilityLabel("Spoken Send phrase")
                     }
 
-                    HStack(alignment: .center) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Wait Before Sending")
-                                .font(self.theme.typography.bodyStrong)
-                                .foregroundStyle(self.settingsTitleText)
-                            Text("How long to wait after you say the send phrase.")
-                                .font(self.theme.typography.bodySmall)
-                                .foregroundStyle(self.settingsSecondaryText)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
+                    self.shortcutsRowDivider
+                        .padding(.leading, Self.shortcutsSubRowIndent)
 
-                        Spacer()
-
+                    self.shortcutsSettingRow(
+                        title: "Wait Before Sending",
+                        description: "How long to stay quiet after the phrase. Talk again to cancel.",
+                        indent: Self.shortcutsSubRowIndent
+                    ) {
                         FluidDropdownPicker("Wait before sending", selectedTitle: self.settings.spokenSendWait.displayName, selection: Binding(
                             get: { self.settings.spokenSendWait },
                             set: { self.settings.spokenSendWait = $0 }
@@ -2270,35 +1878,12 @@ private extension SettingsView {
                                 Text(wait.displayName).tag(wait)
                             }
                         }
-                        .fluidDropdownStyle()
-                        .frame(width: 170, alignment: .trailing)
+                        .fluidDropdownStyle(fillsWidth: true)
+                        .frame(width: ShortcutKeyField.width)
                     }
                 }
             }
-
-            HStack(alignment: .center) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Send Key")
-                        .font(self.theme.typography.bodyStrong)
-                        .foregroundStyle(self.settingsTitleText)
-                    Text("The key Auto-send and Spoken Send press.")
-                        .font(self.theme.typography.bodySmall)
-                        .foregroundStyle(self.settingsSecondaryText)
-                }
-
-                Spacer()
-
-                FluidDropdownPicker("Send key", selectedTitle: self.settings.spokenSendKey.displayName, selection: Binding(
-                    get: { self.settings.spokenSendKey },
-                    set: { self.settings.spokenSendKey = $0 }
-                )) {
-                    ForEach(SettingsStore.SpokenSendKey.allCases) { key in
-                        Text(key.displayName).tag(key)
-                    }
-                }
-                .fluidDropdownStyle()
-                .frame(width: 170, alignment: .trailing)
-            }
+            .settingsSearchTarget(.spokenSend)
         }
     }
 

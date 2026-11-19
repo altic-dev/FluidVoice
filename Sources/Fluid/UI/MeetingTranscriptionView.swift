@@ -312,21 +312,19 @@ struct MeetingTranscriptionView: View {
     var body: some View {
         let screen = self.screen
         VStack(spacing: 0) {
-            if case .canvas = screen {
-                MeetingTranscriptionHeader(
-                    actions: MeetingHeaderActions(
-                        screen: screen,
-                        isQuiescent: self.coordinator.isQuiescent,
-                        isSummaryRunning: self.summaryActivity.selectionLock != nil
-                    ),
-                    onBack: self.goHome,
-                    onNewRecording: self.openRecordingView,
-                    onOpenMeetingSettings: self.openMeetingSettings
-                )
-                .padding(.horizontal, FluidPageLayout.inset)
-                .padding(.vertical, 12)
-                Divider()
-            }
+            MeetingTranscriptionHeader(
+                actions: MeetingHeaderActions(
+                    screen: screen,
+                    isQuiescent: self.coordinator.isQuiescent,
+                    isSummaryRunning: self.summaryActivity.selectionLock != nil
+                ),
+                onBack: self.goHome,
+                onNewRecording: self.openRecordingView,
+                onOpenMeetingSettings: self.openMeetingSettings
+            )
+            .padding(.horizontal, FluidPageLayout.inset)
+            .padding(.vertical, 12)
+            FluidHairline()
 
             switch screen {
             case .home:
@@ -1724,7 +1722,7 @@ private struct MeetingTranscriptionHeader: View {
                     Button(action: self.onBack) {
                         Label("Meetings", systemImage: "chevron.left")
                     }
-                    .fluidGlassAction()
+                    .fluidAction()
                     .disabled(!self.actions.canGoBack)
                     .keyboardShortcut("[", modifiers: .command)
                     .help(self.actions.canGoBack ? "Back to your meetings" : "Finish or cancel the summary before returning to your meetings")
@@ -1764,16 +1762,10 @@ private struct MeetingHeaderIconButton: View {
     var body: some View {
         Button(action: self.action) {
             Label(self.label, systemImage: self.systemImage)
-                .foregroundStyle(self.theme.palette.primaryText)
+                .foregroundStyle(self.theme.look.text)
         }
         .labelStyle(.iconOnly)
         .fluidGlassAction(circular: true, quiet: true)
-        // An open panel keeps a quiet fill behind its toggle instead of a colored icon.
-        .background {
-            if self.isSelected {
-                Circle().fill(self.theme.look.highlightFill).allowsHitTesting(false)
-            }
-        }
         .help(self.label)
         .accessibilityLabel(self.label)
     }

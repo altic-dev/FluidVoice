@@ -108,6 +108,23 @@ enum VoiceEngineLanguageCatalog {
         self.allLanguages(availableModels: availableModels).first { $0.id == id }
     }
 
+    /// Display name for a language ID without walking any routes; falls back to the system name.
+    static func displayName(forLanguageID id: String) -> String {
+        self.languageDefinitions.first { $0.id == id }?.displayName
+            ?? Locale(identifier: "en").localizedString(forLanguageCode: id)
+            ?? id
+    }
+
+    /// Every language a model can transcribe, derived from the same routes onboarding uses.
+    static func languages(
+        supportedBy model: SettingsStore.SpeechModel,
+        availableModels: [SettingsStore.SpeechModel] = SettingsStore.SpeechModel.availableModels
+    ) -> [VoiceEngineLanguage] {
+        self.languageDefinitions.filter { language in
+            self.routes(for: language, availableModels: availableModels).contains { $0.model == model }
+        }
+    }
+
     /// The language the selected model's own setting fixes, or nil when the model detects it.
     static func boundLanguageID(settings: SettingsStore) -> String? {
         let model = settings.selectedSpeechModel
@@ -122,6 +139,18 @@ enum VoiceEngineLanguageCatalog {
         default:
             return nil
         }
+    }
+
+    /// The language the model pickers start from: the selected model's own language setting when
+    /// it has one, otherwise the language the user chose.
+    static func preferredLanguageID(
+        settings: SettingsStore,
+        availableModels: [SettingsStore.SpeechModel] = SettingsStore.SpeechModel.availableModels
+    ) -> String {
+        if let bound = self.boundLanguageID(settings: settings), self.language(id: bound, availableModels: availableModels) != nil {
+            return bound
+        }
+        return settings.onboardingSelectedLanguageID
     }
 
     static var whisperLanguages: [VoiceEngineLanguage] {
