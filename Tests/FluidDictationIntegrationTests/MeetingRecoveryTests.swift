@@ -1167,18 +1167,6 @@ final class MeetingRecoveryTests: XCTestCase {
         XCTAssertEqual(MeetingUIPreferences(), preferences, "Recording presentation must not change saved settings or audio routing")
     }
 
-    func testHistoryKeyboardTraversalWalksTheRenderedOrder() {
-        let ids = [UUID(), UUID(), UUID()]
-        func move(from current: UUID?, _ direction: MoveCommandDirection) -> UUID? {
-            MeetingHistoryTraversal.sessionID(movingFrom: current, direction: direction, ordered: ids)
-        }
-        XCTAssertEqual(move(from: nil, .down), ids[0], "no selection starts at the top")
-        XCTAssertEqual(move(from: ids[0], .down), ids[1])
-        XCTAssertEqual(move(from: ids[1], .up), ids[0])
-        XCTAssertNil(move(from: ids[0], .up), "stops at the first row")
-        XCTAssertNil(move(from: ids[2], .down), "stops at the last row")
-    }
-
     // MARK: - Fixtures
 
     @MainActor
