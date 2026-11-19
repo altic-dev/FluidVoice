@@ -451,7 +451,6 @@ struct MeetingTranscriptionView: View {
         MeetingHomeActions(
             openMeeting: self.openMeeting,
             startRecording: self.openRecordingView,
-            refresh: { Task { await self.loadMeetingHistory() } },
             retry: { id in
                 let session = self.historySnapshot.sessions.first { $0.id == id }
                 self.retryProcessingSession(

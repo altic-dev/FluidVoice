@@ -3,7 +3,6 @@ import SwiftUI
 struct MeetingHomeActions {
     let openMeeting: (MeetingSessionID) -> Void
     let startRecording: () -> Void
-    let refresh: () -> Void
     let retry: (MeetingSessionID) -> Void
     let revealAudio: (MeetingSession) -> Void
     let exportAudio: (MeetingSession) -> Void
@@ -126,13 +125,6 @@ struct MeetingHomeList: View {
                 .font(self.theme.typography.badge)
                 .foregroundStyle(self.theme.palette.secondaryText)
             Spacer()
-            Button(action: self.actions.refresh) {
-                Image(systemName: "arrow.clockwise")
-            }
-            .buttonStyle(.borderless)
-            .meetingHoverFeedback()
-            .help("Refresh meetings")
-            .accessibilityLabel("Refresh meetings")
             FluidGlassControlGroup {
                 Button(action: self.actions.startRecording) {
                     Label("Start recording", systemImage: "record.circle")
