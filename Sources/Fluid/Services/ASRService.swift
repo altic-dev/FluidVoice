@@ -7445,6 +7445,7 @@ final class ASRService: ObservableObject {
         toggleStopRequestedAt: TimeInterval? = nil,
         tracksDictionaryCorrections: Bool = false,
         postInsertionKey: SettingsStore.SpokenSendKey? = nil,
+        beforePostInsertionAction: (@MainActor () async -> Void)? = nil,
         requiredFocusTarget: TypingService.CapturedFocusTarget? = nil,
         preserveTranscriptOnClipboard: Bool = false,
         isOutputValid: @escaping @MainActor () -> Bool = { true }
@@ -7465,6 +7466,7 @@ final class ASRService: ObservableObject {
                 toggleStopRequestedAt: toggleStopRequestedAt,
                 tracksDictionaryCorrections: tracksDictionaryCorrections,
                 postInsertionKey: postInsertionKey,
+                beforePostInsertionAction: beforePostInsertionAction,
                 requiredFocusTarget: requiredFocusTarget,
                 preserveTranscriptOnClipboard: preserveTranscriptOnClipboard,
                 isOutputValid: isOutputValid

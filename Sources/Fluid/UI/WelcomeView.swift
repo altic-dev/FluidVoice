@@ -5,16 +5,15 @@ import SwiftUI
 
 /// Presentation only: preserve the user's selected model and the language catalog's order.
 enum OnboardingModelRecommendation {
-    static func defaultRoutes(forLanguageID languageID: String, from availableRoutes: [VoiceEngineLanguageRoute]) -> [VoiceEngineLanguageRoute] {
+    static func defaultRoutes(forLanguageID languageID: String, from availableRoutes: [VoiceEngineLanguageRoute], memoryBytes: UInt64) -> [VoiceEngineLanguageRoute] {
         guard let first = availableRoutes.first else { return [] }
-        guard languageID == "en" else { return [first] }
-        if let english = availableRoutes.first(where: { $0.model == .parakeetTDTv2 }),
-           let mini = availableRoutes.first(where: { $0.model == .fluidParakeetMini })
-        {
-            return [english, mini]
+        if let model = DashboardModelRecommendationPolicy.speechModel(
+            memoryBytes: memoryBytes, language: languageID, available: availableRoutes.map(\.model)
+        ), let route = availableRoutes.first(where: { $0.model == model }) {
+            return [route]
         }
-        // Mini has the same architecture gate and a newer OS gate. Keep the
-        // established cards when either preferred model is unavailable.
+        guard languageID == "en" else { return [first] }
+        // Keep the established fallbacks when the current model is unavailable.
         var routes = [first]
         if let builtIn = availableRoutes.first(where: { $0.model == .appleSpeech || $0.model == .appleSpeechAnalyzer }),
            builtIn.id != first.id
@@ -62,6 +61,7 @@ struct OnboardingFlowView: View {
     @ObservedObject private var settings = SettingsStore.shared
     @ObservedObject private var installations = SpeechModelInstallationSnapshot.shared
     @StateObject private var aiSetup = OnboardingAISetupController.live
+    @State private var recommendationMemoryBytes: UInt64 = 0
 
     @Binding var currentStep: Int
     let accessibilityEnabled: Bool
@@ -222,17 +222,16 @@ struct OnboardingFlowView: View {
             return selectedRoute
         }
 
-        if let selectedRoute = self.selectedLanguageRoutes.first(where: { self.isRouteSelectedInSettings($0) }) {
-            return selectedRoute
-        }
-
-        return self.selectedLanguageRoutes.first
+        // A saved model is adopted once, by syncOnboardingSelectionFromSettings. Otherwise, until the user taps a card,
+        // the choice is the featured recommendation; a model this flow applied for an earlier language is not a choice.
+        return self.defaultDisplayedModelRoutes.first
     }
 
     private var defaultDisplayedModelRoutes: [VoiceEngineLanguageRoute] {
         OnboardingModelRecommendation.defaultRoutes(
             forLanguageID: self.selectedOnboardingLanguage.id,
-            from: self.selectedLanguageRoutes
+            from: self.selectedLanguageRoutes,
+            memoryBytes: self.recommendationMemoryBytes
         )
     }
 
@@ -354,6 +353,11 @@ struct OnboardingFlowView: View {
         }
         .background {
             FluidOnboardingWindowTransparency()
+        }
+        .task {
+            let hardware = await PrivateAIMacHardware.current()
+            guard !Task.isCancelled else { return }
+            self.recommendationMemoryBytes = hardware.memoryBytes
         }
         .onAppear {
             self.installations.refresh()
@@ -983,7 +987,7 @@ struct OnboardingFlowView: View {
         withTransaction(transaction) {
             self.selectedLanguageID = language.id
             self.settings.onboardingSelectedLanguageID = language.id
-            self.selectedModelRouteID = VoiceEngineLanguageCatalog.routes(for: language).first?.id
+            self.selectedModelRouteID = nil
             self.isShowingOtherModelRoutes = false
             self.isLanguageSearchFocused = false
             if language.isPopular {
@@ -1000,28 +1004,28 @@ struct OnboardingFlowView: View {
 
         let storedLanguageID = self.settings.onboardingSelectedLanguageID
         let storedLanguageRoutes = VoiceEngineLanguageCatalog.routes(forLanguageID: storedLanguageID)
-        let route = storedLanguageRoutes.first { route in
-            self.isRouteModelAndLanguageSettingsSelected(route)
-        } ?? storedLanguageRoutes.first ?? allRoutes.first { route in
-            self.isRouteModelAndLanguageSettingsSelected(route)
-        }
-
-        guard let route else {
-            if self.selectedModelRouteID == nil {
-                self.selectedModelRouteID = self.selectedLanguageRoutes.first?.id
-            }
+        let languageID: String
+        let routeID: String?
+        if let route = storedLanguageRoutes.first(where: { self.isRouteModelAndLanguageSettingsSelected($0) }) {
+            (languageID, routeID) = (route.language.id, route.id)
+        } else if !storedLanguageRoutes.isEmpty {
+            // No saved model fits this language, so the featured recommendation stays the choice.
+            (languageID, routeID) = (storedLanguageID, nil)
+        } else if let route = allRoutes.first(where: { self.isRouteModelAndLanguageSettingsSelected($0) }) {
+            (languageID, routeID) = (route.language.id, route.id)
+        } else {
             return
         }
 
-        guard self.selectedLanguageID != route.language.id || self.selectedModelRouteID != route.id else {
+        guard self.selectedLanguageID != languageID || self.selectedModelRouteID != routeID else {
             return
         }
 
         var transaction = Transaction()
         transaction.disablesAnimations = true
         withTransaction(transaction) {
-            self.selectedLanguageID = route.language.id
-            self.selectedModelRouteID = route.id
+            self.selectedLanguageID = languageID
+            self.selectedModelRouteID = routeID
             self.isShowingOtherModelRoutes = false
             self.languageSearchText = ""
             self.isLanguageSearchFocused = false

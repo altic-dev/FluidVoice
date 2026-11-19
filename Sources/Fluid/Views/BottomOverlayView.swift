@@ -361,6 +361,7 @@ final class BottomOverlayWindowController {
         var trace = OverlayCloseTrace("bottom.clearState")
         defer { trace.finish() }
         NotchContentState.shared.setBottomOverlayPresented(false)
+        NotchContentState.shared.isAutoSendArmed = false
         trace.mark("presentedFalse")
         self.endReleaseTransition(flushDeferredUpdate: false)
         trace.mark("releaseTransition")
@@ -465,6 +466,7 @@ final class BottomOverlayWindowController {
 
         window.alphaValue = 0
         NotchContentState.shared.setBottomOverlayPresented(false)
+        NotchContentState.shared.isAutoSendArmed = false
         self.endReleaseTransition(flushDeferredUpdate: false)
         NotchContentState.shared.setBottomOverlayDismissing(false)
         NotchContentState.shared.targetAppIcon = nil
@@ -2632,10 +2634,12 @@ struct BottomOverlayView: View {
         }
     }
 
+    private var sendIndicatorState: SpokenSendIndicatorState {
+        self.contentState.sendIndicatorState(spokenSendEnabled: self.settings.spokenSendEnabled)
+    }
+
     private var showsSpokenSendIndicator: Bool {
-        self.contentState.mode == .dictation &&
-            self.settings.spokenSendEnabled &&
-            self.contentState.spokenSendIndicatorState.isVisible
+        self.sendIndicatorState.isVisible
     }
 
     private var spokenSendIndicatorSize: CGFloat {
@@ -3364,9 +3368,11 @@ struct BottomOverlayView: View {
         HStack(spacing: self.isPillSize ? 4 : 8) {
             if self.showsSpokenSendIndicator {
                 SpokenSendIndicatorView(
-                    state: self.contentState.spokenSendIndicatorState,
+                    state: self.sendIndicatorState,
                     color: self.modeColor,
-                    size: self.isPillSize ? 14 : self.spokenSendIndicatorSize
+                    size: self.isPillSize ? 14 : self.spokenSendIndicatorSize,
+                    countdownDuration: self.contentState.spokenSendCountdownDuration,
+                    countdownStartedAt: self.contentState.spokenSendCountdownStartedAt
                 )
                 .id(self.contentState.spokenSendCountdownID)
                 .transition(.scale(scale: 0.8).combined(with: .opacity))
@@ -3376,7 +3382,7 @@ struct BottomOverlayView: View {
         }
         .animation(
             self.reduceMotion ? nil : .easeOut(duration: 0.14),
-            value: self.contentState.spokenSendIndicatorState
+            value: self.sendIndicatorState
         )
     }
 

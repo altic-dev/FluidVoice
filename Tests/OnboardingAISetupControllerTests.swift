@@ -3,6 +3,8 @@ import Foundation
 @MainActor
 private final class Harness {
     typealias Controller = OnboardingAISetupController
+    var modelID = "fluid-1.1-ripple"
+    var modelName = "Fluid 1.1 Ripple"
     var installed = false
     var failRecommendation = false
     var failDownload = false
@@ -25,7 +27,7 @@ private final class Harness {
             recommend: {
                 self.readCount += 1
                 if self.failRecommendation { throw Failure.simulated }
-                return .init(id: "pico", name: "Pico", byteCount: 100, installed: self.installed)
+                return .init(id: self.modelID, name: self.modelName, byteCount: 100, installed: self.installed)
             },
             prepare: { model, progress in
                 self.downloads += 1
@@ -64,6 +66,23 @@ struct OnboardingAISetupControllerTests {
 
     @MainActor
     static func main() async {
+        for (id, name) in [("fluid-1.1-ripple", "Fluid 1.1 Ripple"), ("fluid-1.1-splash", "Fluid 1.1 Splash")] {
+            let harness = Harness()
+            harness.modelID = id
+            harness.modelName = name
+            let setup = harness.controller()
+            setup.refresh()
+            await self.waitUntil { setup.phase == .offered }
+            precondition(setup.model?.id == id && setup.model?.name == name)
+            precondition(harness.downloads == 0 && harness.loads == 0 && harness.commits == 0)
+            setup.enable { model in
+                precondition(model.id == id)
+                harness.commits += 1
+            }
+            await self.waitUntil { setup.phase == .ready }
+            precondition(harness.lastID == id && harness.downloads == 1 && harness.loads == 1 && harness.commits == 1)
+        }
+
         // A newly created controller recovers a persisted request, never activation.
         let restarted = Harness()
         restarted.pendingDownload = true
@@ -102,7 +121,7 @@ struct OnboardingAISetupControllerTests {
         controller.enable { _ in fresh.commits += 1 }
         controller.enable { _ in preconditionFailure("Duplicate action") }
         await self.waitUntil { controller.phase == .ready }
-        precondition(fresh.downloads == 1 && fresh.loads == 1 && fresh.commits == 1 && fresh.lastID == "pico")
+        precondition(fresh.downloads == 1 && fresh.loads == 1 && fresh.commits == 1 && fresh.lastID == fresh.modelID)
         await fresh.progressCallback?(.init(fraction: 0.1, status: "stale", bytes: nil))
         precondition(controller.phase == .ready && controller.progress == nil)
         controller.introductionFinished = true
