@@ -59,6 +59,14 @@ struct PagePresentationTests {
         environment.fluidPageToolbarVisible = false
         check(!environment.fluidPageToolbarVisible, "Mounted hidden pages must suppress toolbar contribution")
         check(EnvironmentValues().fluidPageToolbarVisible, "Toolbar visibility must not leak into another view environment")
+        check(SidebarItem.cleanupStyles.cachedPage == .aiEnhancements, "Cleanup Styles must reuse the AI Settings page")
+        check(SidebarItem.stats.cachedPage == .stats, "Other pages must keep their own cached view")
+        let store = FluidPageToolbarStore()
+        store.publish(AnyView(EmptyView()), for: .stats)
+        store.publish(AnyView(EmptyView()), for: .changelog)
+        store.publish(nil, for: .stats)
+        check(store.actions[.stats] == nil, "A page must be able to clear its own actions")
+        check(store.actions[.changelog] != nil, "Clearing one page must keep another page's actions")
         print("Page presentation: \(checks) checks passed (navigation non-effects, hidden actions, rapid Settings/Back, adaptive layout)")
     }
 }

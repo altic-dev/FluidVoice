@@ -278,6 +278,7 @@ struct ContentView: View {
     }
 
     @Environment(\.theme) private var theme
+    @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
     @State private var hotkeyManager: GlobalHotkeyManager? = nil
     @State private var hotkeyManagerInitialized: Bool = false
@@ -322,6 +323,8 @@ struct ContentView: View {
 
     @State private var selectedSidebarItem: SidebarItem?
     @State private var previousSidebarItem: SidebarItem? = nil // Track previous for mode transitions
+    @State private var toolbarActions = MainToolbarActions()
+    @State private var pageToolbarStore = FluidPageToolbarStore()
     @State private var settingsNavigation = SettingsNavigationState()
     @State private var settingsSearchQuery = ""
     @State private var settingsSearchScrollRequest = 0
@@ -511,7 +514,6 @@ struct ContentView: View {
         let withToolbar = self.applyMainWindowToolbar(to: observed)
 
         return withToolbar
-            .environment(\.fluidToolbarTrailingInset, self.toolbarTrailingInset)
             .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
                 self.refreshAccessibilityPermissionState()
             }
@@ -1878,29 +1880,10 @@ struct ContentView: View {
         )
     }
 
-    private var themePreferenceButton: some View {
-        Button {
-            self.settings.themePreference = self.nextThemePreference(after: self.settings.themePreference)
-        } label: {
-            Image(systemName: self.settings.themePreference.systemImageName)
-                .fluidToolbarIcon()
-        }
-        .help("Theme: \(self.settings.themePreference.displayName)")
-        .accessibilityLabel("Theme")
-    }
-
-    private func nextThemePreference(after preference: SettingsStore.ThemePreference) -> SettingsStore.ThemePreference {
-        switch preference {
-        case .system: return .light
-        case .light: return .dark
-        case .dark: return .system
-        }
-    }
-
-    private var todayStatsButton: some View {
-        TodayStatsToolbarButton(typingWPM: self.settings.userTypingWPM) {
-            self.navigateToApp(.stats)
-        }
+    private func configureToolbarActions() {
+        self.toolbarActions.toggleSidebar = self.toggleSidebar
+        self.toolbarActions.openStats = { self.navigateToApp(.stats) }
+        self.toolbarActions.reportIssue = self.openIssueReportingPage
     }
 
     private var detailView: some View {
@@ -1909,12 +1892,18 @@ struct ContentView: View {
                 .ignoresSafeArea()
 
             // Preserve the app destination so Back never waits on expensive detail initialization.
-            self.appDetailContent
-                .environment(\.fluidPageToolbarVisible, self.pagePresentation.showsPageActions)
-                .opacity(self.settingsNavigation.isPresented ? 0 : 1)
-                .offset(x: self.settingsNavigation.isPresented ? -6 : 0)
-                .allowsHitTesting(!self.settingsNavigation.isPresented)
-                .accessibilityHidden(self.settingsNavigation.isPresented)
+            AppPageHost(
+                page: self.selectedSidebarItem ?? .welcome,
+                inputs: AppPageInputs(
+                    colorScheme: self.colorScheme,
+                    accentColor: self.settings.accentColorOption,
+                    accessibilityEnabled: self.accessibilityEnabled,
+                    isSettingsPresented: self.settingsNavigation.isPresented
+                ),
+                prewarmPages: SidebarItem.prewarmedPages,
+                canPrewarm: { !self.asr.isRunningOrStarting },
+                content: self.pageContent(for:prewarmState:)
+            )
 
             if self.settingsNavigation.isPresented {
                 self.preferencesView
@@ -1936,8 +1925,23 @@ struct ContentView: View {
         return .offset(x: 8).combined(with: .opacity)
     }
 
-    private var appDetailContent: AnyView {
-        switch self.selectedSidebarItem ?? .welcome {
+    /// Pages get their own hosting view, which inherits none of the window's custom environment.
+    private func pageContent(for page: SidebarItem, prewarmState: FluidPagePrewarmState) -> AnyView {
+        AnyView(
+            self.detailContent(for: page)
+                .appTheme(self.theme)
+                .environmentObject(self.appServices)
+                .environmentObject(self.menuBarManager)
+                .environmentObject(self.mouseTracker)
+                .environment(\.fluidPageToolbarVisible, self.pagePresentation.showsPageActions)
+                .environment(\.fluidPageToolbarStore, self.pageToolbarStore)
+                .environment(\.fluidPageToolbarPage, page)
+                .environment(\.fluidPagePrewarmState, prewarmState)
+        )
+    }
+
+    private func detailContent(for page: SidebarItem) -> AnyView {
+        switch page {
         case .welcome:
             return AnyView(self.welcomeView)
         case .voiceEngine:
@@ -2130,39 +2134,17 @@ struct ContentView: View {
         } else {
             content
                 .toolbar {
-                    // Keep one navigation control alive in both sidebar states. An overlay
-                    // belongs to the sidebar content and shifts below AppKit-hosted title bars.
-                    ToolbarItem(placement: .navigation) {
-                        Button(action: self.toggleSidebar) {
-                            Image(systemName: "sidebar.left")
-                                .fluidToolbarIcon()
-                        }
-                        .buttonStyle(.automatic)
-                        .help(self.columnVisibility == .detailOnly ? "Show sidebar" : "Hide sidebar")
-                        .accessibilityLabel(self.columnVisibility == .detailOnly ? "Show sidebar" : "Hide sidebar")
-                    }
-                    ToolbarItemGroup(placement: .primaryAction) {
-                        UpdateAvailableToolbarButton()
-
-                        self.todayStatsButton
-                            .buttonStyle(.automatic)
-
-                        self.themePreferenceButton
-                            .buttonStyle(.automatic)
-
-                        Button(action: self.openIssueReportingPage) {
-                            Image(systemName: "ladybug.fill")
-                                .fluidToolbarIcon()
-                        }
-                        .buttonStyle(.automatic)
-                        .help("Report an issue")
-                        .accessibilityLabel("Report an issue")
-                    }
-                    if !self.hasPageToolbarActions {
-                        FluidToolbarEdgeSpace(width: self.toolbarTrailingInset)
-                    }
+                    MainWindowToolbar(
+                        isSidebarHidden: self.columnVisibility == .detailOnly,
+                        pageWithActions: self.hasPageToolbarActions ? (self.selectedSidebarItem ?? .welcome).cachedPage : nil,
+                        trailingInset: self.toolbarTrailingInset,
+                        actions: self.toolbarActions,
+                        pageToolbarStore: self.pageToolbarStore
+                    )
                 }
                 .toolbar(removing: .sidebarToggle)
+                .onAppear { self.configureToolbarActions() }
+                .onChange(of: self.accessibilityReduceMotion) { _, _ in self.configureToolbarActions() }
         }
     }
 
@@ -6480,6 +6462,90 @@ private extension ContentView {
     }
 }
 
+/// A stable reference, so page switches leave `MainWindowToolbar`'s inputs unchanged.
+@MainActor
+private final class MainToolbarActions {
+    var toggleSidebar: () -> Void = {}
+    var openStats: () -> Void = {}
+    var reportIssue: () -> Void = {}
+}
+
+private struct MainWindowToolbar: ToolbarContent {
+    let isSidebarHidden: Bool
+    let pageWithActions: SidebarItem?
+    let trailingInset: CGFloat
+    let actions: MainToolbarActions
+    let pageToolbarStore: FluidPageToolbarStore
+
+    var body: some ToolbarContent {
+        // Keep one navigation control alive in both sidebar states. An overlay
+        // belongs to the sidebar content and shifts below AppKit-hosted title bars.
+        ToolbarItem(placement: .navigation) {
+            Button {
+                self.actions.toggleSidebar()
+            } label: {
+                Image(systemName: "sidebar.left")
+                    .fluidToolbarIcon()
+            }
+            .buttonStyle(.automatic)
+            .help(self.isSidebarHidden ? "Show sidebar" : "Hide sidebar")
+            .accessibilityLabel(self.isSidebarHidden ? "Show sidebar" : "Hide sidebar")
+        }
+        ToolbarItemGroup(placement: .primaryAction) {
+            UpdateAvailableToolbarButton()
+
+            TodayStatsToolbarButton { self.actions.openStats() }
+                .buttonStyle(.automatic)
+
+            ThemePreferenceToolbarButton()
+                .buttonStyle(.automatic)
+
+            Button {
+                self.actions.reportIssue()
+            } label: {
+                Image(systemName: "ladybug.fill")
+                    .fluidToolbarIcon()
+            }
+            .buttonStyle(.automatic)
+            .help("Report an issue")
+            .accessibilityLabel("Report an issue")
+        }
+        if let pageWithActions {
+            // Keep page actions separate from the shared trailing controls.
+            if #available(macOS 26, *) {
+                ToolbarSpacer(.fixed, placement: .primaryAction)
+            }
+            ToolbarItemGroup(placement: .primaryAction) {
+                FluidPageToolbarActions(store: self.pageToolbarStore, page: pageWithActions)
+            }
+        }
+        FluidToolbarEdgeSpace(width: self.trailingInset)
+    }
+}
+
+private struct ThemePreferenceToolbarButton: View {
+    @ObservedObject private var settings = SettingsStore.shared
+
+    var body: some View {
+        Button {
+            self.settings.themePreference = self.nextPreference(after: self.settings.themePreference)
+        } label: {
+            Image(systemName: self.settings.themePreference.systemImageName)
+                .fluidToolbarIcon()
+        }
+        .help("Theme: \(self.settings.themePreference.displayName)")
+        .accessibilityLabel("Theme")
+    }
+
+    private func nextPreference(after preference: SettingsStore.ThemePreference) -> SettingsStore.ThemePreference {
+        switch preference {
+        case .system: return .light
+        case .light: return .dark
+        case .dark: return .system
+        }
+    }
+}
+
 private struct UpdateAvailableToolbarButton: View {
     @Environment(\.theme) private var theme
     @ObservedObject private var updater = SimpleUpdater.shared
@@ -6504,13 +6570,13 @@ private struct UpdateAvailableToolbarButton: View {
 
 private struct TodayStatsToolbarButton: View {
     @ObservedObject private var historyStore = TranscriptionHistoryStore.shared
+    @ObservedObject private var settings = SettingsStore.shared
 
-    let typingWPM: Int
     let action: () -> Void
 
     var body: some View {
         let summary = self.historyStore.todaySummary
-        let timeSaved = summary.formattedTimeSaved(typingWPM: self.typingWPM)
+        let timeSaved = summary.formattedTimeSaved(typingWPM: self.settings.userTypingWPM)
         let hasActivity = summary.words > 0
 
         return Button(action: self.action) {

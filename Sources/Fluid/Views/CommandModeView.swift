@@ -22,6 +22,7 @@ struct CommandModeView: View {
     @ObservedObject private var settings = SettingsStore.shared
     @ObservedObject private var chatStore = ChatHistoryStore.shared
     @Environment(\.theme) private var theme
+    @Environment(\.fluidPagePrewarmState) private var prewarmState
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var onClose: (() -> Void)?
 
@@ -50,6 +51,10 @@ struct CommandModeView: View {
             get: { self.drafts.text(for: self.service.currentChatID) },
             set: { self.drafts.set($0, for: self.service.currentChatID) }
         )
+    }
+
+    private var isPrewarming: Bool {
+        self.prewarmState?.isPrewarming == true
     }
 
     var body: some View {
@@ -107,9 +112,13 @@ struct CommandModeView: View {
         .background(self.theme.palette.windowBackground)
         .clipped()
         .onAppear {
+            guard !self.isPrewarming else { return }
             self.updatePresentationActivity(self.isActive)
         }
-        .onDisappear { self.updatePresentationActivity(false) }
+        .onDisappear {
+            guard !self.isPrewarming else { return }
+            self.updatePresentationActivity(false)
+        }
         .onChange(of: self.isActive) { _, active in self.updatePresentationActivity(active) }
         .onChange(of: self.compactHistoryPresented) { _, presented in
             if presented { self.composerFocused = false }

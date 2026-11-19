@@ -2,14 +2,20 @@ import SwiftUI
 
 struct ChangelogView: View {
     @Environment(\.theme) private var theme
+    @Environment(\.fluidPagePrewarmState) private var prewarmState
 
     @State private var releases: [SimpleUpdater.ReleaseNote] = []
     @State private var isRefreshing = false
     @State private var errorMessage: String?
+    @State private var lastRefresh: Date?
 
     private let owner = "altic-dev"
     private let repo = "Fluid-oss"
     private let releaseLimit = 3
+
+    private var isPrewarming: Bool {
+        self.prewarmState?.isPrewarming == true
+    }
 
     var body: some View {
         ScrollView(.vertical, showsIndicators: true) {
@@ -57,7 +63,13 @@ struct ChangelogView: View {
             .accessibilityLabel("Refresh changelog")
         }
         .task {
-            self.loadCachedReleases()
+            if self.releases.isEmpty { self.loadCachedReleases() }
+            guard !self.isPrewarming else { return }
+            if !self.releases.isEmpty {
+                // Saved notes are on screen, so the network result can wait for the page to settle.
+                try? await Task.sleep(for: .seconds(1))
+                guard !Task.isCancelled else { return }
+            }
             await self.refreshReleases()
         }
     }
@@ -114,8 +126,10 @@ struct ChangelogView: View {
         self.releases = Array(cache.releases.prefix(self.releaseLimit))
     }
 
-    private func refreshReleases(force _: Bool = false) async {
+    private func refreshReleases(force: Bool = false) async {
         guard !self.isRefreshing else { return }
+        // Cached pages reappear often, and each refresh can re-render every release note.
+        if !force, let lastRefresh = self.lastRefresh, Date().timeIntervalSince(lastRefresh) < 600 { return }
 
         self.isRefreshing = true
         self.errorMessage = nil
@@ -129,8 +143,9 @@ struct ChangelogView: View {
                 includePrerelease: includePrerelease
             )
             let limitedReleases = Array(fetched.prefix(self.releaseLimit))
-            self.releases = limitedReleases
+            if limitedReleases != self.releases { self.releases = limitedReleases }
             self.saveCachedReleases(limitedReleases)
+            self.lastRefresh = Date()
         } catch {
             if self.releases.isEmpty {
                 self.errorMessage = "Unable to load release notes."

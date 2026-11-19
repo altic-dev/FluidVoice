@@ -182,7 +182,7 @@ struct MeetingHomeList: View {
 
     private var sessionList: some View {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 2) {
+            MeetingSessionStack(isShort: self.filteredSessions.count <= 40) {
                 ForEach(self.groupedSessions, id: \.key) { group in
                     Section {
                         ForEach(group.sessions, content: self.row(for:))
@@ -455,5 +455,19 @@ private struct MeetingHomeRow: View {
             return "\(totalMinutes / 60)h \(totalMinutes % 60)m"
         }
         return "\(max(1, totalMinutes))m"
+    }
+}
+
+/// A lazy stack rebuilds its rows whenever the cached page returns to the window.
+private struct MeetingSessionStack<Content: View>: View {
+    let isShort: Bool
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        if self.isShort {
+            VStack(alignment: .leading, spacing: 2) { self.content }
+        } else {
+            LazyVStack(alignment: .leading, spacing: 2) { self.content }
+        }
     }
 }

@@ -23,6 +23,8 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
             || (!self.asr.isAsrReady && (self.asr.isDownloadingModel || self.asr.isLoadingModel))
     }
 
+    private var lastInstallationRefresh: Date?
+    private var didRefreshCatalog = false
     @Published var modelSortOption: ModelSortOption = .provider
     @Published var providerFilter: SpeechProviderFilter = .all
     @Published var englishOnlyFilter: Bool = false
@@ -65,16 +67,37 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
             .store(in: &self.cancellables)
     }
 
-    func onAppear() {
-        self.previewSpeechModel = self.settings.selectedSpeechModel
-        self.selectedSpeechProvider = self.settings.selectedSpeechModel.provider
+    func onAppear(isPrewarming: Bool) {
+        let selectedModel = self.settings.selectedSpeechModel
+        if self.previewSpeechModel != selectedModel { self.previewSpeechModel = selectedModel }
+        if self.selectedSpeechProvider != selectedModel.provider {
+            self.selectedSpeechProvider = selectedModel.provider
+        }
 
-        self.installations.refresh()
+        self.refreshInstallationsIfStale()
+        guard !isPrewarming, !self.didRefreshCatalog else { return }
+        self.didRefreshCatalog = true
         Task {
             let catalog = CompactSpeechModelReleaseCatalog.shared
             let revision = catalog.revision
             await catalog.refreshIfNeeded()
             if catalog.revision != revision { self.installations.refresh() }
+        }
+    }
+
+    /// A refresh invalidates every model card, so a return visit waits for the page to settle.
+    private func refreshInstallationsIfStale() {
+        let now = Date()
+        guard let lastRefresh = self.lastInstallationRefresh else {
+            self.lastInstallationRefresh = now
+            self.installations.refresh()
+            return
+        }
+        guard now.timeIntervalSince(lastRefresh) >= 60 else { return }
+        self.lastInstallationRefresh = now
+        Task {
+            try? await Task.sleep(for: .milliseconds(600))
+            self.installations.refresh()
         }
     }
 

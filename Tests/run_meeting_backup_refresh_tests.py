@@ -39,7 +39,7 @@ def main() -> None:
             cwd=ROOT, text=True, timeout=10,
         )
         assert "settingsBackupDidRestore" not in baseline
-    assert "self.appDetailContent\n" in (ROOT / "Sources/Fluid/ContentView.swift").read_text()
+    assert "AppPageHost(\n" in (ROOT / "Sources/Fluid/ContentView.swift").read_text()
     assert ".onReceive(NotificationCenter.default.publisher(for: .settingsBackupDidRestore))" in source
     assert ".onChange(of: self.canRefreshSetupAfterBackupRestore)" in source
     mode_observer = declaration(source, ".onChange(of: self.setupDraft.mode)")
