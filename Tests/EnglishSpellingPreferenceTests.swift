@@ -77,10 +77,17 @@ enum EnglishSpellingPreferenceTests {
               "en-GB does not require US spelling forms")
         check(!auInstruction.contains("color,") && !auInstruction.contains("organize") && !auInstruction.contains("center,"),
               "en-AU does not require US spelling forms")
-        check(gbInstruction.lowercased().contains("not") && gbInstruction.lowercased().contains("translat"),
-              "en-GB instruction keeps meaning instead of translating")
-        check(auInstruction.lowercased().contains("not") && auInstruction.lowercased().contains("translat"),
-              "en-AU instruction keeps meaning instead of translating")
+        for instruction in [gbInstruction, auInstruction, usInstruction] {
+            check(!instruction.lowercased().contains("translat"),
+                  "Spelling instruction does not forbid translation requested by a custom prompt")
+            check(instruction.contains("When the output is English"),
+                  "Spelling instruction is scoped to English output")
+        }
+        let translateProfile = "Translate into French."
+        let gbTranslate = EnglishSpellingPreference.enGB.applyingToDictationCleanup(translateProfile, isDictation: true)
+        check(gbTranslate.hasPrefix(translateProfile), "Custom dictation translation prompt is kept")
+        check(!gbTranslate.lowercased().contains("do not translate"),
+              "Custom dictation translation prompt is not contradicted by the spelling suffix")
 
         let gbApplied = EnglishSpellingPreference.enGB.applying(to: samplePrompt)
         let auApplied = EnglishSpellingPreference.enAU.applying(to: samplePrompt)

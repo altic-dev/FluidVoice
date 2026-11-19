@@ -62,13 +62,13 @@ struct EnglishSpellingPreference: RawRepresentable, Equatable, Hashable, Codable
     func spellingInstruction() -> String? {
         switch self.rawValue {
         case "en-US":
-            return "Use American English spelling (for example color, organize, center, enrollment). Keep the original language and meaning; do not translate."
+            return "When the output is English, use American English spelling (for example color, organize, center, enrollment). This only affects spelling of English text; it does not change the output language."
         case "en-GB":
-            return "Use British English spelling (for example colour, organise, centre, enrolment). Keep the original language and meaning; do not translate."
+            return "When the output is English, use British English spelling (for example colour, organise, centre, enrolment). This only affects spelling of English text; it does not change the output language."
         case "en-AU":
-            return "Use Australian English spelling (for example colour, organise, centre, enrolment). Keep the original language and meaning; do not translate."
+            return "When the output is English, use Australian English spelling (for example colour, organise, centre, enrolment). This only affects spelling of English text; it does not change the output language."
         case "en-CA":
-            return "Use Canadian English spelling (for example colour, organize, centre, enrolment). Keep the original language and meaning; do not translate."
+            return "When the output is English, use Canadian English spelling (for example colour, organize, centre, enrolment). This only affects spelling of English text; it does not change the output language."
         default:
             return nil
         }
