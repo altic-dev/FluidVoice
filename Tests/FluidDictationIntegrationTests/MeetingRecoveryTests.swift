@@ -115,6 +115,95 @@ final class MeetingRecoveryTests: XCTestCase {
         XCTAssertTrue(saved?.failures.isEmpty == true)
     }
 
+    /// The meeting app disappearing (for example the host ends a Zoom call, or Zoom quits) is the
+    /// normal end of a meeting. The preserved audio must be transcribed without a manual retry.
+    func testSourceApplicationEndedTranscribesPreservedAudioWithoutManualRetry() async throws {
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MeetingSessionStore(rootDirectory: dir)
+        let capture = StubCaptureController()
+        let microphone = self.makeMicrophoneTrack(chunks: [self.makeFinalizedChunk()])
+        capture.startResult = MeetingCaptureStartResult(tracks: [microphone], firstPresentationTime: nil)
+        let arbiter = StubArbiter()
+        let coordinator = MeetingSessionCoordinator(
+            store: store, capture: capture, processing: StubProcessingController(), audioArbiter: arbiter
+        )
+        let session = try await coordinator.startRecording(configuration: self.makeConfiguration())
+        try await Task.sleep(nanoseconds: 100_000_000) // Let startup retention maintenance finish.
+        capture.stopResult = MeetingCaptureStopResult(tracks: [microphone], stoppedAt: Date())
+        capture.emit(.sourceApplicationEnded(detail: "Zoom is no longer available to record."))
+        for _ in 0..<400 {
+            if coordinator.state == .completed(session.id) { break }
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+        XCTAssertEqual(coordinator.state, .completed(session.id), "Ended source must not wait for Retry")
+        XCTAssertEqual(capture.stopCount, 1)
+        let loaded = try await store.load(id: session.id)
+        let saved = try XCTUnwrap(loaded)
+        XCTAssertEqual(saved.state, .completed)
+        XCTAssertEqual(
+            saved.events.filter { $0.kind == .captureStoppedUnexpectedly }.map(\.detail),
+            ["Zoom is no longer available to record."],
+            "The persisted event history keeps today's schema"
+        )
+        XCTAssertTrue(saved.processingAttempts.allSatisfy { $0.completedAt != nil }, "No attempt may stay pending")
+        XCTAssertEqual(saved.processingAttempts.last?.stage, .completed)
+        XCTAssertEqual(arbiter.acquireCount, arbiter.releaseCount)
+        await coordinator.shutdownForTermination()
+    }
+
+    /// The capture engine's give-up decision: only a meeting app that can no longer be found ends the
+    /// meeting. Every other exhausted recovery stays an unexpected stop that waits for Retry.
+    func testExhaustedRecoveryEndsMeetingOnlyWhenTheMeetingAppIsUnavailable() {
+        let ended = MeetingCaptureEvent.rebuildExhausted(MeetingCaptureError.applicationUnavailable("Zoom"))
+        guard case let .sourceApplicationEnded(detail) = ended else {
+            return XCTFail("An unavailable meeting app must end the meeting, got \(ended)")
+        }
+        XCTAssertEqual(detail, "Zoom is no longer available to record.")
+        let others: [Error] = [
+            MeetingCaptureError.applicationAmbiguous("Zoom"),
+            MeetingCaptureError.noCaptureDisplay,
+            NSError(domain: "Fixture", code: -3808),
+        ]
+        for error in others {
+            let stopped = MeetingCaptureEvent.rebuildExhausted(error)
+            guard case let .interrupted(kind, trackID, detail) = stopped else {
+                return XCTFail("\(error) must stay an unexpected stop, got \(stopped)")
+            }
+            XCTAssertEqual(kind, .captureStoppedUnexpectedly)
+            XCTAssertNil(trackID)
+            XCTAssertEqual(detail, error.localizedDescription)
+        }
+    }
+
+    /// Without finalized audio there is nothing to transcribe, so the session stays an interrupted
+    /// offer exactly as before.
+    func testSourceApplicationEndedWithoutFinalizedAudioStaysInterrupted() async throws {
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MeetingSessionStore(rootDirectory: dir)
+        let capture = StubCaptureController()
+        capture.startResult = MeetingCaptureStartResult(
+            tracks: [self.makeMicrophoneTrack(chunks: [])], firstPresentationTime: nil
+        )
+        let arbiter = StubArbiter()
+        let coordinator = MeetingSessionCoordinator(
+            store: store, capture: capture, processing: StubProcessingController(), audioArbiter: arbiter
+        )
+        let session = try await coordinator.startRecording(configuration: self.makeConfiguration())
+        capture.emit(.sourceApplicationEnded(detail: "Zoom is no longer available to record."))
+        for _ in 0..<200 {
+            if coordinator.isQuiescent, coordinator.state == .interrupted(session.id) { break }
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+        try await Task.sleep(nanoseconds: 50_000_000)
+        XCTAssertEqual(coordinator.state, .interrupted(session.id))
+        let saved = try await store.load(id: session.id)
+        XCTAssertEqual(saved?.state, .interrupted)
+        XCTAssertEqual(arbiter.acquireCount, arbiter.releaseCount)
+        await coordinator.shutdownForTermination()
+    }
+
     func testEchoWarningRendersWithoutInvokingRecordingActions() throws {
         var session = self.makeSession(state: .recording)
         session.mode = .onlineCall
@@ -1076,18 +1165,6 @@ final class MeetingRecoveryTests: XCTestCase {
         }
         XCTAssertEqual(actions.count, 0, "Rendering recording controls must not start or stop real audio capture")
         XCTAssertEqual(MeetingUIPreferences(), preferences, "Recording presentation must not change saved settings or audio routing")
-    }
-
-    func testHistoryKeyboardTraversalWalksTheRenderedOrder() {
-        let ids = [UUID(), UUID(), UUID()]
-        func move(from current: UUID?, _ direction: MoveCommandDirection) -> UUID? {
-            MeetingHistoryTraversal.sessionID(movingFrom: current, direction: direction, ordered: ids)
-        }
-        XCTAssertEqual(move(from: nil, .down), ids[0], "no selection starts at the top")
-        XCTAssertEqual(move(from: ids[0], .down), ids[1])
-        XCTAssertEqual(move(from: ids[1], .up), ids[0])
-        XCTAssertNil(move(from: ids[0], .up), "stops at the first row")
-        XCTAssertNil(move(from: ids[2], .down), "stops at the last row")
     }
 
     // MARK: - Fixtures
@@ -5956,7 +6033,7 @@ final class MeetingRecoveryTests: XCTestCase {
                 let file = directory.appendingPathComponent("manual-summary-\(kind.rawValue).json")
                 try JSONEncoder().encode(saved).write(to: file, options: .atomic)
                 let controller = MeetingSummaryController(store: store)
-                await controller.refresh(session: session, kind: kind, customPrompt: prompt)
+                await controller.refresh(session: session, kind: kind)
                 XCTAssertEqual(controller.output, saved.text, "Legacy \(kind) summary should load before rename")
             }
 
@@ -5973,7 +6050,7 @@ final class MeetingRecoveryTests: XCTestCase {
             let controller = MeetingSummaryController(store: reloadedStore)
             var upgradedFiles: [MeetingSummaryKind: Data] = [:]
             for kind in MeetingSummaryKind.allCases {
-                await controller.refresh(session: renamed, kind: kind, customPrompt: prompt)
+                await controller.refresh(session: renamed, kind: kind)
                 XCTAssertEqual(controller.output, "Saved \(kind.rawValue) summary", "\(provider): \(kind)")
                 XCTAssertEqual(controller.outputProvenance, "Fixture provider · fixture-model")
                 let file = directory.appendingPathComponent("manual-summary-\(kind.rawValue).json")
@@ -5988,25 +6065,26 @@ final class MeetingRecoveryTests: XCTestCase {
             // Already-upgraded summaries survive another rename without rewriting their files.
             let secondRename = try await coordinator.renameSession(sessionID: session.id, to: "New Weekly Sync")
             for kind in MeetingSummaryKind.allCases {
-                await controller.refresh(session: secondRename, kind: kind, customPrompt: prompt)
+                await controller.refresh(session: secondRename, kind: kind)
                 XCTAssertEqual(controller.output, "Saved \(kind.rawValue) summary")
                 let file = directory.appendingPathComponent("manual-summary-\(kind.rawValue).json")
                 XCTAssertEqual(try Data(contentsOf: file), upgradedFiles[kind])
             }
-            await controller.refresh(session: secondRename, kind: .custom, customPrompt: "Edited prompt")
-            XCTAssertTrue(controller.output.isEmpty, "Migrating a custom summary must retain its prompt check")
+            XCTAssertFalse(controller.outputIsOutdated, "A title change does not make a summary outdated")
             var corrected = secondRename
             corrected.transcriptSegments[0].text += " A transcript correction."
             await controller.refresh(session: corrected, kind: .detailed)
-            XCTAssertTrue(controller.output.isEmpty, "Renaming must not disable transcript invalidation")
+            XCTAssertEqual(controller.output, "Saved detailed summary")
+            XCTAssertTrue(controller.outputIsOutdated, "Renaming must not disable transcript change detection")
             corrected = secondRename
             corrected.speakers[0].displayName = "Corrected speaker"
             await controller.refresh(session: corrected, kind: .participants)
-            XCTAssertTrue(controller.output.isEmpty, "Renaming must not disable speaker invalidation")
+            XCTAssertEqual(controller.output, "Saved participants summary")
+            XCTAssertTrue(controller.outputIsOutdated, "Renaming must not disable speaker change detection")
         }
     }
 
-    func testRenameSessionDoesNotReviveInvalidSavedSummaries() async throws {
+    func testRenameSessionDoesNotUpgradeOutdatedOrInvalidSavedSummaries() async throws {
         let dir = self.makeTempDirectory()
         defer { try? FileManager.default.removeItem(at: dir) }
         let store = MeetingSessionStore(rootDirectory: dir)
@@ -6031,9 +6109,15 @@ final class MeetingRecoveryTests: XCTestCase {
         )
         let renamed = try await coordinator.renameSession(sessionID: session.id, to: "Weekly Sync")
         let controller = MeetingSummaryController(store: store)
+        let shownAsOutdated: [MeetingSummaryKind: String] = [.executive: "Stale", .decisions: "Future"]
         for (kind, data) in files {
             await controller.refresh(session: renamed, kind: kind)
-            XCTAssertTrue(controller.output.isEmpty, "\(kind) must stay hidden")
+            if let text = shownAsOutdated[kind] {
+                XCTAssertEqual(controller.output, text, "\(kind) stays visible")
+                XCTAssertTrue(controller.outputIsOutdated, "\(kind) is marked outdated")
+            } else {
+                XCTAssertTrue(controller.output.isEmpty, "\(kind) must stay hidden")
+            }
             let file = directory.appendingPathComponent("manual-summary-\(kind.rawValue).json")
             XCTAssertEqual(try Data(contentsOf: file), data, "An invalid file must not be upgraded")
         }

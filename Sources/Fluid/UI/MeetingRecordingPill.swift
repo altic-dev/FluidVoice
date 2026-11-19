@@ -9,6 +9,7 @@ final class MeetingRecordingPillController: ObservableObject {
     static let shared = MeetingRecordingPillController()
 
     @Published private(set) var presentation: MeetingOverlayPresentation = .pill
+    @Published private(set) var isPillHovered = false
 
     // Shared only by cooperating types in this file.
 
@@ -25,6 +26,7 @@ final class MeetingRecordingPillController: ObservableObject {
     private var transitionGeneration = 0
     private var inFlightTransitionGeneration: Int?
     private var isApplyingProgrammaticFrame = false
+    private var pillDragStart: (anchor: MeetingOverlayVisibleAnchor, pointer: NSPoint)?
 
     private init() {}
 
@@ -66,6 +68,47 @@ final class MeetingRecordingPillController: ObservableObject {
         guard self.reducer.presentation == .pill else { return }
         self.reducer.apply(.toggleRequested)
         self.setPresentation(self.reducer.presentation ?? .captions)
+    }
+
+    /// Hides the pill for this meeting without affecting the recording.
+    func dismissPill() {
+        self.reducer.apply(.pillDismissed)
+        guard self.reducer.isPillDismissed else { return }
+        self.orderOutPill()
+        AccessibilityNotification.Announcement("Recording pill hidden. Recording continues.").post()
+    }
+
+    func setPillHovered(_ hovered: Bool) {
+        guard self.isPillHovered != hovered else { return }
+        self.isPillHovered = hovered
+    }
+
+    func beginPillDrag(at pointer: NSPoint) {
+        guard let panel, panel.isVisible else { return }
+        self.invalidateTransition()
+        self.pillDragStart = (self.anchor(from: Self.visibleSurfaceFrame(from: panel.frame)), pointer)
+    }
+
+    func updatePillDrag(to pointer: NSPoint) {
+        guard let panel, panel.isVisible, let start = self.pillDragStart else { return }
+        let screen = NSScreen.screens.first { $0.frame.contains(pointer) } ?? panel.screen ?? NSScreen.main
+        guard let screenVisible = screen?.visibleFrame else { return }
+        let layout = MeetingOverlayGeometry.layout(
+            anchor: MeetingOverlayGeometry.draggedAnchor(
+                from: start.anchor,
+                pointerStart: start.pointer,
+                pointer: pointer
+            ),
+            visibleSize: MeetingOverlayPresentation.pill.visibleSize,
+            padding: Self.overlayPadding,
+            screenVisible: screenVisible
+        )
+        panel.setFrameOrigin(layout.panelFrame.origin)
+        self.visibleAnchor = self.anchor(from: layout.visibleSurfaceFrame)
+    }
+
+    func endPillDrag() {
+        self.pillDragStart = nil
     }
 
     /// Visible surface of the current overlay, excluding transparent shadow padding.
@@ -112,9 +155,14 @@ final class MeetingRecordingPillController: ObservableObject {
         switch self.presentation {
         case .pill:
             MeetingFloatingCaptionsController.shared.hide()
-            panel.orderFrontRegardless()
+            // Degraded/recovered state updates must not bring back a dismissed pill.
+            if self.reducer.isPillDismissed {
+                self.orderOutPill()
+            } else {
+                panel.orderFrontRegardless()
+            }
         case .captions:
-            panel.orderOut(nil)
+            self.orderOutPill()
             MeetingFloatingCaptionsController.shared.show(from: nil)
         }
     }
@@ -123,8 +171,15 @@ final class MeetingRecordingPillController: ObservableObject {
         self.invalidateTransition()
         self.reducer.apply(.recordingStopped)
         self.presentation = .pill
-        self.panel?.orderOut(nil)
+        self.orderOutPill()
         MeetingFloatingCaptionsController.shared.hide()
+    }
+
+    /// AppKit sends no mouse-exited event to a window ordered out under the pointer.
+    private func orderOutPill() {
+        self.pillDragStart = nil
+        self.setPillHovered(false)
+        self.panel?.orderOut(nil)
     }
 
     private func setPresentation(_ presentation: MeetingOverlayPresentation) {
@@ -137,7 +192,7 @@ final class MeetingRecordingPillController: ObservableObject {
         switch presentation {
         case .captions:
             let source = self.currentOverlayFrame
-            panel.orderOut(nil)
+            self.orderOutPill()
             MeetingFloatingCaptionsController.shared.show(from: source)
         case .pill:
             MeetingFloatingCaptionsController.shared.hide()
@@ -354,34 +409,65 @@ struct MeetingRecordingPillContent: View {
 
     private var compactSurface: some View {
         FluidOverlaySurface(
-            cornerRadius: 16,
+            cornerRadius: 18,
             border: .staticAngular(angle: .degrees(0), lineWidth: 1.2),
             shadow: .init(opacity: 0.32, radius: 10, y: 4)
         )
     }
 
     private var compactPill: some View {
-        HStack(spacing: 7) {
-            MeetingRecordingLevelBars(level: self.microphoneLevel, animated: !self.reduceMotion)
-                .frame(width: 20, height: 11)
+        ZStack(alignment: .leading) {
+            // Clicks and drags land here unless they hit one of the buttons above it.
+            MeetingPillInteractionSurface()
+                .accessibilityHidden(true)
 
-            self.stopButton
+            // The waveform makes room for the close button; the stop button never moves.
+            HStack(spacing: 0) {
+                MeetingRecordingLevelBars(level: self.microphoneLevel, animated: !self.reduceMotion)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .padding(.leading, self.pill.isPillHovered ? 26 : 8)
+                    .allowsHitTesting(false)
+
+                self.stopButton
+            }
+            .padding(.trailing, 7)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            self.dismissButton
+                .padding(.leading, 7)
+                .opacity(self.pill.isPillHovered ? 1 : 0)
+                .allowsHitTesting(self.pill.isPillHovered)
         }
-        .padding(.horizontal, 9)
-        .padding(.vertical, 5)
+        .animation(self.reduceMotion ? nil : .easeOut(duration: 0.14), value: self.pill.isPillHovered)
         .frame(
             width: MeetingOverlayPresentation.pill.visibleSize.width,
             height: MeetingOverlayPresentation.pill.visibleSize.height
         )
-        .contentShape(Capsule())
-        // The whole capsule opens the captions window; only the stop button opts out.
-        .onTapGesture { self.pill.expand() }
         .background(self.compactSurface)
         .accessibilityAddTraits(.isButton)
         .accessibilityLabel("Show live captions")
+        .accessibilityAction { self.pill.expand() }
         .accessibilityAction(named: "Show Captions") {
             self.pill.expand()
         }
+        .accessibilityAction(named: "Hide Recording Pill") {
+            self.pill.dismissPill()
+        }
+    }
+
+    private var dismissButton: some View {
+        Button {
+            self.pill.dismissPill()
+        } label: {
+            Image(systemName: "xmark")
+                .font(.fluidSystem(size: 8, weight: .bold))
+                .foregroundStyle(self.theme.palette.secondaryText)
+                .frame(width: 18, height: 18)
+                .background(self.theme.palette.primaryText.opacity(0.12), in: Circle())
+        }
+        .buttonStyle(.plain)
+        .help("Hide pill. Recording continues.")
+        .accessibilityHidden(true)
     }
 
     private func stopRecording() {
@@ -398,14 +484,100 @@ struct MeetingRecordingPillContent: View {
             self.stopRecording()
         } label: {
             Image(systemName: "stop.fill")
-                .font(.fluidSystem(size: 8, weight: .bold))
+                .font(.fluidSystem(size: 9, weight: .bold))
                 .foregroundStyle(Color.white)
-                .frame(width: 20, height: 20)
+                .frame(width: 22, height: 22)
                 .background(Color(red: 0.93, green: 0.23, blue: 0.23), in: Circle())
         }
         .buttonStyle(.plain)
         .disabled(self.isStopping || !self.isRecordingActive)
         .accessibilityLabel("Stop meeting recording and transcribe")
+    }
+}
+
+private struct MeetingPillInteractionSurface: NSViewRepresentable {
+    func makeNSView(context _: Context) -> MeetingPillInteractionView {
+        MeetingPillInteractionView()
+    }
+
+    func updateNSView(_: MeetingPillInteractionView, context _: Context) {}
+}
+
+/// Separates click from drag, which a SwiftUI tap gesture plus window dragging cannot do reliably
+/// in a panel that never becomes key. A click opens captions; a drag moves the pill.
+private final class MeetingPillInteractionView: NSView {
+    private static let dragThreshold: CGFloat = 3
+
+    private var pointerDownLocation: NSPoint?
+    private var isDragging = false
+
+    private var controller: MeetingRecordingPillController {
+        .shared
+    }
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        // mouseMoved recovers hover when the pill reappears under a stationary pointer.
+        self.addTrackingArea(NSTrackingArea(
+            rect: .zero,
+            options: [.activeAlways, .inVisibleRect, .mouseEnteredAndExited, .mouseMoved],
+            owner: self
+        ))
+    }
+
+    @available(*, unavailable)
+    required init?(coder _: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override var mouseDownCanMoveWindow: Bool {
+        false
+    }
+
+    override func acceptsFirstMouse(for _: NSEvent?) -> Bool {
+        true
+    }
+
+    override func mouseEntered(with _: NSEvent) {
+        self.controller.setPillHovered(true)
+    }
+
+    override func mouseMoved(with _: NSEvent) {
+        self.controller.setPillHovered(true)
+    }
+
+    override func mouseExited(with _: NSEvent) {
+        self.controller.setPillHovered(false)
+    }
+
+    override func mouseDown(with _: NSEvent) {
+        self.pointerDownLocation = NSEvent.mouseLocation
+        self.isDragging = false
+    }
+
+    /// Screen coordinates stay stable while the window moves beneath the pointer.
+    override func mouseDragged(with _: NSEvent) {
+        guard let start = self.pointerDownLocation else { return }
+        let pointer = NSEvent.mouseLocation
+        if !self.isDragging {
+            guard hypot(pointer.x - start.x, pointer.y - start.y) >= Self.dragThreshold else { return }
+            self.isDragging = true
+            self.controller.beginPillDrag(at: start)
+        }
+        self.controller.updatePillDrag(to: pointer)
+    }
+
+    override func mouseUp(with _: NSEvent) {
+        defer {
+            self.pointerDownLocation = nil
+            self.isDragging = false
+        }
+        guard self.pointerDownLocation != nil else { return }
+        if self.isDragging {
+            self.controller.endPillDrag()
+        } else {
+            self.controller.expand()
+        }
     }
 }
 
@@ -416,14 +588,14 @@ private struct MeetingRecordingLevelBars: View {
 
     @Environment(\.theme) private var theme
 
-    private static let weights: [CGFloat] = [0.45, 0.75, 1.0, 0.75, 0.45]
+    private static let weights: [CGFloat] = [0.35, 0.55, 0.8, 0.6, 1.0, 0.7, 0.9, 0.5, 0.35]
 
     var body: some View {
         FluidOverlayLevelBars(
-            heights: Self.weights.map { max(2.5, CGFloat(self.level) * 11 * $0) },
-            width: 2,
+            heights: Self.weights.map { max(3, CGFloat(self.level) * 18 * $0) },
+            width: 2.5,
             spacing: 2.5,
-            cornerRadius: 1,
+            cornerRadius: 1.25,
             color: self.theme.palette.accent,
             glowColor: self.theme.palette.accent,
             glowRadius: 0

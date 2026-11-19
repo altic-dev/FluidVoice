@@ -58,6 +58,15 @@ final class MeetingTranscriptNormalizerTests: XCTestCase {
         XCTAssertEqual(result[0].text, "Name \nnext")
     }
 
+    func testCaseSensitiveDictionaryTimesDoNotChangeOrdinaryAmOrPartialCaptions() async throws {
+        let rules: [SettingsStore.CustomDictionaryEntry] = [.init(triggers: ["AM", "a.m."], replacement: "am", caseSensitive: true)]
+        var partial = self.segment("9 AM")
+        partial.status = .provisional
+        let result = try await MeetingTranscriptNormalizer.normalize([self.segment("I am ready at 9 AM or 10 a.m."), partial], languageCode: "en", dictionaryEntries: rules)
+        XCTAssertEqual(result[0].text, "I am ready at 9 am or 10 am")
+        XCTAssertEqual(result[1], partial)
+    }
+
     func testFormatsQuantitiesAndPreservesEveryOtherSegmentField() async throws {
         let segments = [self.segment("twenty dollars, five billion parameters, one hundred tokens per second")]
         let result = try await MeetingTranscriptNormalizer.normalize(segments, languageCode: "en-US")

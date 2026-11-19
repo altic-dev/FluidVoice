@@ -67,6 +67,23 @@ nonisolated enum MeetingRecordingSourceResolver {
         }
     }
 
+    /// Capture recovery after the captured process may have relaunched. No running copy of the app
+    /// means it is gone (`applicationUnavailable`). Several copies only mean recovery cannot pick one,
+    /// and the call may still be live in one of them (`applicationAmbiguous`).
+    static func resolveRecovery(
+        source: MeetingRecordingSource,
+        applications: [MeetingApplicationIdentity]
+    ) throws -> MeetingApplicationIdentity? {
+        do {
+            return try self.resolve(mode: .onlineCall, source: source, target: nil, applications: applications)
+        } catch let MeetingCaptureError.applicationUnavailable(name) {
+            guard case let .application(bundleIdentifier, _, _) = source,
+                  applications.filter({ $0.bundleIdentifier == bundleIdentifier && ($0.processID ?? 0) > 0 }).count > 1
+            else { throw MeetingCaptureError.applicationUnavailable(name) }
+            throw MeetingCaptureError.applicationAmbiguous(name)
+        }
+    }
+
     /// A small value snapshot for menus. Capture resolves the full process set again at start.
     static func applicationChoices(from applications: [MeetingApplicationIdentity]) -> [MeetingApplicationIdentity] {
         var seen = Set<String>()

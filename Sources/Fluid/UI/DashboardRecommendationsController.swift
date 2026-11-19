@@ -64,9 +64,10 @@ final class DashboardRecommendationsController: ObservableObject {
                 kind: .speech,
                 modelID: model.id,
                 name: model.humanReadableName,
-                detail: model == .fluidParakeetPro ? "Our most accurate speech model, running privately on your Mac." : "Accurate on-device dictation with a lighter memory footprint.",
+                detail: Self.speechDetail(for: model, languageID: selection.language),
                 downloadSize: model.downloadSize,
-                installed: false
+                installed: false,
+                languageID: selection.language
             ))
         }
         if let cleanupID = PrivateAIModelRegistry.recommendedModelID(for: .dictation, on: hardware),
@@ -101,6 +102,19 @@ final class DashboardRecommendationsController: ObservableObject {
         self.recommendations = result
     }
 
+    static func speechDetail(for model: SettingsStore.SpeechModel, languageID: String?) -> String {
+        switch model {
+        case .fluidParakeetPro:
+            return "Our most accurate speech model, running privately on your Mac."
+        case .fluidParakeetMini:
+            return "Accurate on-device dictation with a lighter memory footprint."
+        default:
+            let language = languageID.flatMap { VoiceEngineLanguageCatalog.language(id: $0)?.displayName }
+            let match = language.map { "The best match for \($0) on your Mac." } ?? "A strong match for your language."
+            return model.supportsStreaming ? match : "\(match) Your words appear when you stop talking."
+        }
+    }
+
     func dismiss(_ recommendation: DashboardModelRecommendation) {
         guard !self.operation.isBusy else { return }
         self.dismissals.dismiss(recommendation)
@@ -110,6 +124,7 @@ final class DashboardRecommendationsController: ObservableObject {
     func use(_ recommendation: DashboardModelRecommendation) {
         guard !self.actionsBlocked, self.recommendations.contains(recommendation) else { return }
         let selection = Selection(settings: self.settings)
+        guard recommendation.kind != .speech || selection.language == recommendation.languageID else { return }
         self.operation.start(
             id: recommendation.id,
             prepare: {
@@ -149,7 +164,15 @@ final class DashboardRecommendationsController: ObservableObject {
             activate: {
                 switch recommendation.kind {
                 case .speech:
-                    try await self.activateSpeech(recommendation.modelID, replacing: selection.speech)
+                    guard let model = SettingsStore.SpeechModel(rawValue: recommendation.modelID) else { throw CancellationError() }
+                    self.releaseLease()
+                    try await Self.activateSpeech(
+                        model,
+                        languageID: recommendation.languageID,
+                        settings: self.settings,
+                        reset: { self.asr.resetTranscriptionProvider() },
+                        prepare: { try await self.asr.ensureAsrReady(source: .settings) }
+                    )
                 case .cleanup:
                     DashboardCleanupActivation.commit(modelID: recommendation.modelID, settings: self.settings, defaults: .standard)
                 }
@@ -162,18 +185,25 @@ final class DashboardRecommendationsController: ObservableObject {
         )
     }
 
-    private func activateSpeech(_ modelID: String, replacing previous: SettingsStore.SpeechModel) async throws {
-        guard let model = SettingsStore.SpeechModel(rawValue: modelID) else { throw CancellationError() }
-        // Reset takes its own lease and drains the old provider before ensureAsrReady loads the new one.
-        self.releaseLease()
-        self.settings.selectedSpeechModel = model
-        self.asr.resetTranscriptionProvider()
+    static func activateSpeech(
+        _ model: SettingsStore.SpeechModel, languageID: String?, settings: SettingsStore,
+        reset: () -> Void, prepare: () async throws -> Void
+    ) async throws {
+        let previous = settings.selectedSpeechModel
+        let previousLanguage = settings.selectedWhisperLanguageCode
+        let whisperLanguage = model.isWhisperModel ? languageID.flatMap(VoiceEngineLanguageCatalog.whisperLanguageCode(for:)) : nil
+        if let whisperLanguage { settings.selectedWhisperLanguageCode = whisperLanguage }
+        settings.selectedSpeechModel = model
+        reset()
         do {
-            try await self.asr.ensureAsrReady(source: .settings)
+            try await prepare()
         } catch {
-            if self.settings.selectedSpeechModel == model {
-                self.settings.selectedSpeechModel = previous
-                self.asr.resetTranscriptionProvider()
+            if settings.selectedSpeechModel == model {
+                if let whisperLanguage, settings.selectedWhisperLanguageCode == whisperLanguage {
+                    settings.selectedWhisperLanguageCode = previousLanguage
+                }
+                settings.selectedSpeechModel = previous
+                reset()
             }
             throw error
         }

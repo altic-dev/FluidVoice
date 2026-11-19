@@ -632,6 +632,7 @@ final class TypingService {
         toggleStopRequestedAt: TimeInterval? = nil,
         tracksDictionaryCorrections: Bool = false,
         postInsertionKey: SettingsStore.SpokenSendKey? = nil,
+        beforePostInsertionAction: (@MainActor () async -> Void)? = nil,
         requiredFocusTarget: CapturedFocusTarget? = nil,
         preserveTranscriptOnClipboard: Bool = false,
         isOutputValid: @escaping @MainActor () -> Bool = { true },
@@ -697,6 +698,11 @@ final class TypingService {
                 return
             }
 
+            guard await Self.preparePostInsertionAction(wait: beforePostInsertionAction, isOutputValid: isOutputValid) else {
+                completion?(hasTextToInsert ? .insertedActionSuppressed : .actionSuppressed)
+                return
+            }
+
             let modifiersReleased = await self.waitForPhysicalModifiersToRelease(timeout: 2)
             guard isOutputValid(), Self.canDispatchPostInsertionAction(
                 preferredTargetPID: preferredTargetPID,
@@ -718,6 +724,16 @@ final class TypingService {
             }
             completion?(hasTextToInsert ? .insertedAndActionDispatched : .actionDispatched)
         }
+    }
+
+    /// Called after insertion, before rechecking focus and dispatching the send key.
+    static func preparePostInsertionAction(
+        wait: (@MainActor () async -> Void)?,
+        isOutputValid: @MainActor () -> Bool
+    ) async -> Bool {
+        guard !Task.isCancelled, isOutputValid() else { return false }
+        await wait?()
+        return !Task.isCancelled && isOutputValid()
     }
 
     private func bench(_ message: @autoclosure () -> String) {

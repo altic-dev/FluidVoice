@@ -31,8 +31,7 @@ let result = FluidServeCommand.run(
     arguments: Array(CommandLine.arguments.dropFirst()),
     root: FluidServeMeetings.defaultRoot(),
     accessEnabled: FluidServeMeetings.isAccessEnabled(bundleIdentifier: bundleIdentifier),
-    toolPath: executable.path,
-    customPrompt: FluidServeMeetings.customSummaryPrompt(bundleIdentifier: bundleIdentifier)
+    toolPath: executable.path
 )
 let stream = result.exitCode == 0 ? FileHandle.standardOutput : FileHandle.standardError
 stream.write(Data((result.output + "\n").utf8))

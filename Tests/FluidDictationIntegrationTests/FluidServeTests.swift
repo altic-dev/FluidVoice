@@ -203,7 +203,7 @@ final class FluidServeTests: XCTestCase {
         XCTAssertEqual(self.run("meet", "list", "-\(FluidServeMeetings.accessDefaultsKey)", "YES").exitCode, 1, "Even with access on, a stray dash option is an error")
     }
 
-    func testOnlySummariesTheAppWouldStillShowAreServed() throws {
+    func testSummariesTheAppShowsAreServedWithOutdatedOnesMarked() throws {
         var session = self.session(title: "Weekly sync")
         try self.save(session)
         let entry = try XCTUnwrap(FluidServeMeetings.entries(root: self.root).first)
@@ -212,22 +212,24 @@ final class FluidServeTests: XCTestCase {
         try self.saveSummary("Current.", style: "executive", for: session)
         try self.saveSummary("From a withdrawn model.", style: "topics", for: session, providerID: nil)
         try self.saveSummary("For an older transcript.", style: "actions", for: session, transcriptHash: "stale")
-        XCTAssertEqual(FluidServeMeetings.savedSummaries(for: entry).map(\.style), ["executive"])
+        XCTAssertEqual(FluidServeMeetings.savedSummaries(for: entry).map(\.style), ["actions", "executive"])
+        XCTAssertEqual(FluidServeMeetings.savedSummaries(for: entry).filter(\.isOutdated).map(\.style), ["actions"])
 
-        // A custom summary counts only while the prompt box still holds the prompt it was written with.
+        // The prompt a custom summary was written with does not affect whether it is current.
         try self.saveSummary("Risks only.", style: "custom", for: session, promptHash: MeetingSummaryInput.fingerprint("Focus on risks"))
-        try self.saveSummary("Carries a prompt it should not.", style: "detailed", for: session, promptHash: MeetingSummaryInput.fingerprint("Focus on risks"))
-        XCTAssertEqual(FluidServeMeetings.savedSummaries(for: entry, customPrompt: "  Focus on risks\n").map(\.style), ["custom", "executive"])
-        XCTAssertEqual(FluidServeMeetings.savedSummaries(for: entry, customPrompt: "Focus on dates").map(\.style), ["executive"])
-        XCTAssertEqual(FluidServeMeetings.savedSummaries(for: entry).map(\.style), ["executive"])
+        XCTAssertEqual(FluidServeMeetings.savedSummaries(for: entry).filter(\.isOutdated).map(\.style), ["actions"])
 
-        // Renaming a speaker changes the transcript, so the app hides the summary and so must the command.
+        // Renaming a speaker changes the transcript: the summary is still served, marked outdated.
         session.speakers[0].displayName = "Priya R."
         try self.save(session)
         let renamed = try XCTUnwrap(FluidServeMeetings.entries(root: self.root).first)
-        XCTAssertEqual(FluidServeMeetings.savedSummaries(for: renamed), [])
-        XCTAssertEqual(self.run("meet", "summary", "latest").exitCode, 1)
-        XCTAssertFalse(self.run("meet", "summary", "latest").output.contains("Current."))
+        let executive = try XCTUnwrap(FluidServeMeetings.savedSummaries(for: renamed).first { $0.style == "executive" })
+        XCTAssertTrue(executive.isOutdated)
+        let printed = self.run("meet", "summary", "latest", "--style", "executive")
+        XCTAssertEqual(printed.exitCode, 0)
+        XCTAssertTrue(printed.output.contains("Outdated:"))
+        XCTAssertTrue(printed.output.hasSuffix("Current."))
+        XCTAssertTrue(self.run("meet", "list").output.contains("executive (outdated)"))
     }
 
     func testListKeepsLongAndEmojiTitlesWholeAndMeasuresAnInterruptedMeeting() throws {
@@ -243,7 +245,7 @@ final class FluidServeTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(FluidServeMeetings.entries(root: self.root).first).meeting.durationSeconds, 35)
     }
 
-    func testVersionedSummariesSurviveTitleChangesButNotTranscriptChanges() throws {
+    func testVersionedSummariesStayCurrentAfterTitleChangesButNotTranscriptChanges() throws {
         var session = self.session(title: "Weekly sync")
         try self.save(session)
         let hash = MeetingSummaryInput.contentFingerprint(for: session)
@@ -252,19 +254,25 @@ final class FluidServeTests: XCTestCase {
         try self.saveSummary("Unknown format.", style: "topics", for: session, transcriptHash: hash, transcriptHashVersion: 99)
         try self.saveSummary("Legacy recap.", style: "executive", for: session)
         let original = try XCTUnwrap(FluidServeMeetings.entries(root: self.root).first)
-        XCTAssertEqual(FluidServeMeetings.savedSummaries(for: original, customPrompt: "Focus on risks").map(\.style), ["custom", "detailed", "executive"])
+        let current = { (entry: FluidServeMeetings.Entry) in
+            FluidServeMeetings.savedSummaries(for: entry).filter { !$0.isOutdated }.map(\.style)
+        }
+        XCTAssertEqual(FluidServeMeetings.savedSummaries(for: original).map(\.style), ["custom", "detailed", "executive", "topics"])
+        XCTAssertEqual(current(original), ["custom", "detailed", "executive"])
 
         session.title = "Renamed weekly sync"
         try self.save(session)
         let renamed = try XCTUnwrap(FluidServeMeetings.entries(root: self.root).first)
-        XCTAssertEqual(FluidServeMeetings.savedSummaries(for: renamed, customPrompt: "Focus on risks").map(\.style), ["custom", "detailed"])
-        XCTAssertEqual(FluidServeMeetings.savedSummaries(for: renamed, customPrompt: "New prompt").map(\.style), ["detailed"])
-        XCTAssertTrue(self.run("meet", "summary", "latest", "--style", "detailed").output.hasSuffix("Detailed recap."))
+        XCTAssertEqual(current(renamed), ["custom", "detailed"])
+        let detailed = self.run("meet", "summary", "latest", "--style", "detailed").output
+        XCTAssertTrue(detailed.hasSuffix("Detailed recap."))
+        XCTAssertFalse(detailed.contains("Outdated:"))
 
         session.transcriptSegments[0].text = "Corrected transcript"
         try self.save(session)
         let corrected = try XCTUnwrap(FluidServeMeetings.entries(root: self.root).first)
-        XCTAssertTrue(FluidServeMeetings.savedSummaries(for: corrected, customPrompt: "Focus on risks").isEmpty)
+        XCTAssertEqual(current(corrected), [])
+        XCTAssertEqual(FluidServeMeetings.savedSummaries(for: corrected).count, 4)
     }
 
     func testCommandNeverChangesTheMeetingsFolder() throws {

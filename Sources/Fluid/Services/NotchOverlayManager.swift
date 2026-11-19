@@ -384,6 +384,7 @@ final class NotchOverlayManager {
                 NotchContentState.shared.updateTranscription("")
                 cleanupTrace.mark("clearTranscription")
                 NotchContentState.shared.setSpokenSendIndicatorState(.hidden)
+                NotchContentState.shared.isAutoSendArmed = false
                 cleanupTrace.mark("clearIndicator")
                 Self.overlayBench("hide_immediate_cleanup_complete")
             }
@@ -442,6 +443,7 @@ final class NotchOverlayManager {
         // Safety: reset processing state when hiding
         NotchContentState.shared.setProcessing(false)
         NotchContentState.shared.setSpokenSendIndicatorState(.hidden)
+        NotchContentState.shared.isAutoSendArmed = false
 
         // Handle visible or showing states (can hide while still expanding)
         guard self.state == .visible || self.state == .showing, self.notch != nil else {
