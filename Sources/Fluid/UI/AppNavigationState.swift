@@ -23,14 +23,9 @@ enum SidebarItem: Hashable {
     case rewriteMode
 
     static let prewarmedPages: [SidebarItem] = [
-        .voiceEngine, .aiEnhancements, .fileTranscription, .meetingTranscription,
+        .voiceEngine, .aiEnhancements, .cleanupStyles, .fileTranscription, .meetingTranscription,
         .customDictionary, .stats, .history, .changelog, .commandMode,
     ]
-
-    /// AI Settings and Cleanup Styles are two sections of one screen.
-    var cachedPage: SidebarItem {
-        self == .cleanupStyles ? .aiEnhancements : self
-    }
 
     var title: String {
         switch self {

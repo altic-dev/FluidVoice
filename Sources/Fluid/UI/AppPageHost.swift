@@ -48,7 +48,7 @@ struct AppPageHost: NSViewRepresentable {
             self.container = container
             container.isHidden = host.inputs.isSettingsPresented
 
-            let page = host.page.cachedPage
+            let page = host.page
             let view = self.pages[page] ?? self.makePage(page)
             let prewarmState = self.prewarmState(for: page)
             prewarmState.isPrewarming = false
@@ -112,7 +112,7 @@ struct AppPageHost: NSViewRepresentable {
                         try? await Task.sleep(for: .seconds(1))
                     }
                     guard !Task.isCancelled else { return }
-                    await self?.prewarm(page.cachedPage)
+                    await self?.prewarm(page)
                 }
             }
         }

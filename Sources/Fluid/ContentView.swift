@@ -1953,7 +1953,7 @@ struct ContentView: View {
             return AnyView(AIEnhancementSettingsScreen(
                 menuBarManager: self.menuBarManager,
                 theme: self.theme,
-                selectedConfigurationSection: self.aiEnhancementConfigurationSectionBinding,
+                selectedConfigurationSection: self.aiEnhancementConfigurationSectionBinding(for: page),
                 activeShortcutRecordingTarget: self.$activeShortcutRecordingTarget,
                 shortcutRecordingMessage: self.$shortcutRecordingMessage,
                 revealTarget: self.$appSearchRevealTarget
@@ -1979,13 +1979,14 @@ struct ContentView: View {
         }
     }
 
-    private var aiEnhancementConfigurationSectionBinding: Binding<AIEnhancementConfigurationSection> {
+    /// Each cached page keeps its own section; reading the current selection would go stale.
+    private func aiEnhancementConfigurationSectionBinding(for page: SidebarItem) -> Binding<AIEnhancementConfigurationSection> {
         Binding(
             get: {
-                self.selectedSidebarItem?.aiEnhancementConfigurationSection ?? .providers
+                page.aiEnhancementConfigurationSection ?? .providers
             },
             set: { section in
-                guard self.selectedSidebarItem != section.sidebarItem else { return }
+                guard page != section.sidebarItem else { return }
                 self.navigateToApp(section.sidebarItem)
             }
         )
@@ -2136,7 +2137,7 @@ struct ContentView: View {
                 .toolbar {
                     MainWindowToolbar(
                         isSidebarHidden: self.columnVisibility == .detailOnly,
-                        pageWithActions: self.hasPageToolbarActions ? (self.selectedSidebarItem ?? .welcome).cachedPage : nil,
+                        pageWithActions: self.hasPageToolbarActions ? (self.selectedSidebarItem ?? .welcome) : nil,
                         trailingInset: self.toolbarTrailingInset,
                         actions: self.toolbarActions,
                         pageToolbarStore: self.pageToolbarStore
