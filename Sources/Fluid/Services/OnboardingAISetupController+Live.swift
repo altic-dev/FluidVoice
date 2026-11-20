@@ -4,8 +4,12 @@ extension OnboardingAISetupController {
     static let live: OnboardingAISetupController = .init(dependencies: Dependencies(
         recommend: {
             guard PrivateFeatures.privateAIProvider else { throw PrivateAIUnavailableError() }
-            let recommendation = await PrivateAIHardwareRecommendation.current()
-            guard let model = PrivateAIModelRegistry.model(id: recommendation.model.rawValue), model.isEnabled else {
+            let hardware = await PrivateAIMacHardware.current()
+            guard CPUArchitecture.isAppleSilicon, PrivateAIProviderFeature.shared.isAvailable,
+                  let modelID = PrivateAIModelRegistry.recommendedModelID(for: .dictation, on: hardware),
+                  let model = PrivateAIModelRegistry.model(id: modelID), model.isEnabled,
+                  hardware.memoryBytes >= UInt64(max(0, model.recommendedMemoryGB ?? 8)) * 1024 * 1024 * 1024
+            else {
                 throw PrivateAIUnavailableError()
             }
             let installed = await Task.detached(priority: .utility) {

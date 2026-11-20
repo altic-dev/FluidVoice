@@ -222,7 +222,7 @@ nonisolated enum ParakeetSpeechModelCatalog {
         variant: .mini,
         folderName: "fluid-parakeet-mini-coreml",
         expectedDownloadBytes: 254_136_320,
-        archiveURL: URL(string: "https://models.fluidvoice.app/parakeet/fluid-mini/1.1.1/fluid-parakeet-mini-coreml.tar"),
+        archiveURL: URL(string: "https://models.fluidvoice.com/parakeet/fluid-mini/1.1.1/fluid-parakeet-mini-coreml.tar"),
         archiveSHA256: "7f811554cc670ded812937502f928ae6aad946bbf6e4c2eecd6fcffbe76f4d16",
         requiredModelNames: ParakeetSpeechModelCatalog.splitModelNames,
         vocabularyFile: "parakeet_vocab.json",
@@ -240,7 +240,7 @@ nonisolated enum ParakeetSpeechModelCatalog {
         variant: .pico,
         folderName: "fluid-parakeet-pico-coreml",
         expectedDownloadBytes: 161_208_320,
-        archiveURL: URL(string: "https://models.fluidvoice.app/parakeet/fluid-pico/1.1.1/fluid-parakeet-pico-coreml.tar"),
+        archiveURL: URL(string: "https://models.fluidvoice.com/parakeet/fluid-pico/1.1.1/fluid-parakeet-pico-coreml.tar"),
         archiveSHA256: "542f74f639438bf37ff134a7a75daddb50d301deb87696994e11ff272df21512",
         requiredModelNames: ParakeetSpeechModelCatalog.splitModelNames,
         vocabularyFile: "parakeet_vocab.json",
@@ -256,13 +256,14 @@ nonisolated enum ParakeetSpeechModelCatalog {
 
     /// One int8 encoder next to its own preprocessor, so the Mac pack is not split like Mini and Pico.
     static let proName = "Fluid Speech Pro"
+    static let proVersion1ArchiveSHA256 = "f7af24d8352757b088dd18d150dfbbd2adf37f1d5013ebb036674f507a794333"
     static let pro = Descriptor(
         modelID: "fluid-parakeet-pro",
         variant: .pro,
         folderName: "fluid-parakeet-pro-coreml",
         expectedDownloadBytes: 652_482_560,
-        archiveURL: URL(string: "https://models.fluidvoice.app/parakeet/fluid-pro/1.0.0/fluid-parakeet-pro-coreml.tar"),
-        archiveSHA256: "f7af24d8352757b088dd18d150dfbbd2adf37f1d5013ebb036674f507a794333",
+        archiveURL: URL(string: "https://models.fluidvoice.com/parakeet/fluid-pro/1.0.0/fluid-parakeet-pro-coreml.tar"),
+        archiveSHA256: ParakeetSpeechModelCatalog.proVersion1ArchiveSHA256,
         requiredModelNames: ParakeetSpeechModelCatalog.standardModelNames,
         vocabularyFile: "parakeet_vocab.json",
         displayName: ParakeetSpeechModelCatalog.proName,

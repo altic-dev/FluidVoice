@@ -16,7 +16,7 @@ automatic = source[source.index('    private func checkForUpdatesAutomatically('
 assert 'SimpleUpdater.shared.checkForUpdatesAutomatically()' in automatic
 assert 'checkAndUpdate(' not in automatic
 for relative_path, start, end in [
-    ('Sources/Fluid/UI/SettingsView.swift', 'Button("Check for Updates")', 'Button("Release Notes")'),
+    ('Sources/Fluid/UI/SettingsView.swift', 'private var updateActions: some View', 'Button("Release Notes")'),
     ('Sources/Fluid/Services/MenuBarManager.swift', '@objc private func checkForUpdates(', '@objc private func rollbackToPreviousVersion('),
 ]:
     text = (Path(sys.argv[1]) / relative_path).read_text()

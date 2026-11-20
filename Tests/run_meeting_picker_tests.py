@@ -53,7 +53,7 @@ struct MeetingRecordingDefaults: Equatable, Sendable, Codable {
     var applicationBundleIdentifier: String?
     var applicationDisplayName: String?
 }
-enum MeetingCaptureError: Error { case applicationNotSelected, applicationUnavailable(String) }
+enum MeetingCaptureError: Error { case applicationNotSelected, applicationUnavailable(String), applicationAmbiguous(String) }
 enum MeetingAutoDetector { struct ResolvedTarget { var bundleIdentifier: String; var pid: Int32; var windowID: UInt32? } }
 @MainActor final class SettingsStore {
     static let shared = SettingsStore()

@@ -255,7 +255,7 @@ final class DictationE2ETests: XCTestCase {
         )
 
         XCTAssertEqual(state.replacements.count, 1)
-        XCTAssertEqual(state.replacements.first?.triggers, ["fluid voice", "fluid boys"])
+        XCTAssertEqual(state.replacements.first?.triggers, ["Fluid Voice", "FLUID BOYS"])
         XCTAssertEqual(state.replacements.first?.replacement, "FluidVoice")
         XCTAssertEqual(state.customWords.map(\.text), ["FluidVoice", "Barath"])
         XCTAssertEqual(state.customWords.map(\.weight), [10.0, 10.0])

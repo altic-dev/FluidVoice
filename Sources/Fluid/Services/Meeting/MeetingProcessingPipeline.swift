@@ -644,8 +644,8 @@ private final class MeetingProviderLanguagePin {
 final class MeetingProcessingPipeline: MeetingProcessingControlling {
     /// Bump whenever classification rules change so a resumed run can't mix rules mid-session.
     /// Era-awareness did NOT bump this: the mic pass re-runs every time, and multi-era tracks cannot predate this build.
-    /// Version 15: retain unfiltered microphone speech when echo filtering is unavailable.
-    nonisolated static let pipelineVersion = 15
+    /// Version 18: split sequential replies without fragmenting simultaneous word streams.
+    nonisolated static let pipelineVersion = 19
     /// Per-turn engines starve on short turns, and an all-empty chunk collapses to unlabeled.
     static let perTurnTurnMergeGapSeconds = 5.0
 
@@ -1329,6 +1329,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
     private let serializationGate: MeetingProcessingSerializationGate
     private let backendRegistry: MeetingTranscriptionBackendRegistry
     private let backendIDProvider: @MainActor (String) -> MeetingBackendID
+    private let dictionaryEntriesProvider: @MainActor () -> [SettingsStore.CustomDictionaryEntry]
     private let preferredASRModelProvider: @MainActor () async throws -> SettingsStore.SpeechModel
     /// Canonical path only: observes chunk files for the analysis manifest. `nil` uses the real
     /// filesystem observer; tests inject fixture observations instead of writing audio.
@@ -1360,10 +1361,12 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         meetingRuntimeFactory: MeetingParakeetNemotronRuntimeFactory? = nil,
         prepareDiarizationModel: @escaping @MainActor () async throws -> Void = {},
         canonicalSidecarVerifiedProbe: ((MeetingResultSidecarReference) -> Void)? = nil,
+        dictionaryEntriesProvider: @escaping @MainActor () -> [SettingsStore.CustomDictionaryEntry] = { SettingsStore.shared.customDictionaryEntries },
         preferredASRModelProvider: @escaping @MainActor () async throws -> SettingsStore.SpeechModel = MeetingProcessingPipeline.defaultPreferredASRModel
     ) {
         self.asrServiceProvider = asrServiceProvider
         self.preferredASRModelProvider = preferredASRModelProvider
+        self.dictionaryEntriesProvider = dictionaryEntriesProvider
         self.managesModelResidency = managesModelResidency
         self.serializationGate = serializationGate
         self.chunkObserver = chunkObserver
@@ -1434,6 +1437,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         //
         // The request is frozen first, so the host capability handed to the factory can be bound to
         // this exact value.
+        let dictionaryEntries = self.dictionaryEntriesProvider()
         let preferredModel = try await backendID == .parakeetNemotron ? self.preferredASRModelProvider() : nil
         try Task.checkCancellation()
         let request = MeetingBackendRequest(
@@ -1442,7 +1446,9 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
             sessionDirectory: sessionDirectory,
             configuration: MeetingFinalProcessingConfiguration(
                 preferredASRModel: preferredModel,
-                languageCode: session.languageCode
+                languageCode: session.languageCode,
+                customDictionaryRewritingEnabled: !dictionaryEntries.isEmpty,
+                customDictionaryEntries: dictionaryEntries
             )
         )
         let backend = try self.backendRegistry.makeBackend(
@@ -1518,6 +1524,11 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
                 case .canonicalEvidence:
                     processed = try await self.processCanonicalAttempt(plan: plan, backend: backend, progress: progress)
                 }
+                processed.segments = try await MeetingTranscriptNormalizer.normalize(
+                    processed.segments,
+                    languageCode: request.configuration.languageCode,
+                    dictionaryEntries: request.configuration.customDictionaryEntries
+                )
                 if self.managesModelResidency, summaryProvider != nil {
                     processed.postProcessing = await MeetingPostProcessingRegistry.shared.process(
                         sessionID: session.id,
@@ -1720,9 +1731,9 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         )
     }
 
-    /// Product policy: unresolved text belongs to the preceding visible speaker. Keep the
-    /// original word evidence in the sidecar; only the published transcript inherits a label.
-    /// An opening Unknown stays unresolved until there is a preceding speaker to inherit.
+    /// Unresolved text may inherit only the preceding visible speaker on its own audio track.
+    /// A microphone reply must never borrow a remote speaker from application audio. Keep raw
+    /// word evidence in the sidecar; a track's opening Unknown stays unresolved.
     nonisolated static func inheritPreviousSpeaker(
         _ segments: [MeetingTranscriptSegment]
     ) -> [MeetingTranscriptSegment] {
@@ -1730,7 +1741,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
             ($0.element.start, $0.element.end, $0.element.sourceTrackID.uuidString, $0.offset)
                 < ($1.element.start, $1.element.end, $1.element.sourceTrackID.uuidString, $1.offset)
         }.map(\.element)
-        var previousSpeakerID: SessionSpeakerID?
+        var previousSpeakerByTrack: [MeetingAudioTrackID: SessionSpeakerID] = [:]
         return ordered.map { segment in
             guard !segment.isEcho else { return segment }
             var updated = segment
@@ -1739,57 +1750,81 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
                 || segment.attributionState == .overlappingSpeakers
                 || segment.attributionState == .timingUncertain
             if unresolved {
-                if let previousSpeakerID {
+                if let previousSpeakerID = previousSpeakerByTrack[segment.sourceTrackID] {
                     updated.speakerID = previousSpeakerID
                     updated.attributionState = .assigned
                     updated.overlap = .none
                 }
             } else {
-                previousSpeakerID = segment.speakerID
+                previousSpeakerByTrack[segment.sourceTrackID] = segment.speakerID
             }
             return updated
         }
     }
 
     /// Canonical evidence remains word-granular in the sidecar, but product session JSON and UI
-    /// rows stay turn-granular. Folds each track chronologically and merges only a segment with
-    /// the immediately preceding turn on that same track — never across an intervening
-    /// different-key segment — so A → B → A stays three turns instead of collapsing the two A
-    /// segments around B. A merge additionally requires an identical full attribution/state key
-    /// and the named gap/duration turn bounds.
+    /// rows stay turn-granular. A visible word from another track wholly inside the gap between
+    /// same-track words splits the turn. Interleaved simultaneous words do not: splitting on
+    /// start order alone would reduce overlapping sentences to alternating one-word rows.
+    /// Hidden echoes cannot interrupt visible speech. Original timings remain intact.
     nonisolated static func mergeCanonicalSegments(
         _ segments: [MeetingTranscriptSegment],
         maximumGapSeconds: TimeInterval = MeetingProcessingPipeline.canonicalTurnMergeGapSeconds,
         maximumDurationSeconds: TimeInterval = MeetingProcessingPipeline.canonicalTurnMaximumDurationSeconds
     ) -> [MeetingTranscriptSegment] {
-        let byTrack = Dictionary(grouping: Self.inheritPreviousSpeaker(segments), by: \.sourceTrackID)
+        let ordered = Self.inheritPreviousSpeaker(segments)
+        let completedSpeech = ordered.filter { !$0.isEcho }.sorted { $0.end < $1.end }
+        var completedIndex = 0
+        // Keep the latest completed starts from two distinct tracks. Two suffice to answer
+        // "another track" without scanning every word for every gap.
+        var latestCompleted: [MeetingTranscriptSegment] = []
         var merged: [MeetingTranscriptSegment] = []
-        for (_, members) in byTrack {
-            let ordered = members.enumerated().sorted {
-                ($0.element.start, $0.element.end, $0.offset) < ($1.element.start, $1.element.end, $1.offset)
-            }.map(\.element)
-            guard var current = ordered.first else { continue }
-            var currentKey = Self.canonicalSegmentMergeKey(current)
-            var memberIDs = [current.id]
-            for next in ordered.dropFirst() {
+        for isEcho in [false, true] {
+            let members = ordered.filter { $0.isEcho == isEcho }
+            var lastTurnByTrack: [MeetingAudioTrackID: Int] = [:]
+            var memberIDsByTrack: [MeetingAudioTrackID: [MeetingTranscriptSegmentID]] = [:]
+            for next in members {
+                if !isEcho {
+                    while completedIndex < completedSpeech.count, completedSpeech[completedIndex].end <= next.start {
+                        let completed = completedSpeech[completedIndex]
+                        completedIndex += 1
+                        if let index = latestCompleted.firstIndex(where: { $0.sourceTrackID == completed.sourceTrackID }) {
+                            if completed.start > latestCompleted[index].start { latestCompleted[index] = completed }
+                        } else {
+                            latestCompleted.append(completed)
+                        }
+                        latestCompleted.sort { $0.start > $1.start }
+                        if latestCompleted.count > 2 { latestCompleted.removeLast() }
+                    }
+                }
+                guard let index = lastTurnByTrack[next.sourceTrackID] else {
+                    lastTurnByTrack[next.sourceTrackID] = merged.count
+                    memberIDsByTrack[next.sourceTrackID] = [next.id]
+                    merged.append(next)
+                    continue
+                }
+                var current = merged[index]
+                let currentKey = Self.canonicalSegmentMergeKey(current)
                 let nextKey = Self.canonicalSegmentMergeKey(next)
                 let gap = next.start.seconds - current.end.seconds
                 let combinedDuration = max(current.end.seconds, next.end.seconds) - current.start.seconds
-                if nextKey == currentKey, gap <= maximumGapSeconds, combinedDuration <= maximumDurationSeconds {
+                let interrupted = !isEcho && latestCompleted.contains {
+                    $0.sourceTrackID != next.sourceTrackID && $0.start >= current.end
+                }
+                if nextKey == currentKey, !interrupted, gap <= maximumGapSeconds, combinedDuration <= maximumDurationSeconds {
                     current.end = Self.mediaTime(max(current.end.seconds, next.end.seconds))
                     current.text = Self.joinTranscriptText(current.text, next.text)
-                    memberIDs.append(next.id)
+                    memberIDsByTrack[next.sourceTrackID, default: []].append(next.id)
                     current.id = Self.stableUUID(
-                        "canonical-merged:" + memberIDs.map(\.uuidString).joined(separator: ":")
+                        "canonical-merged:" + (memberIDsByTrack[next.sourceTrackID] ?? []).map(\.uuidString).joined(separator: ":")
                     )
+                    merged[index] = current
                 } else {
-                    merged.append(current)
-                    current = next
-                    currentKey = nextKey
-                    memberIDs = [next.id]
+                    lastTurnByTrack[next.sourceTrackID] = merged.count
+                    memberIDsByTrack[next.sourceTrackID] = [next.id]
+                    merged.append(next)
                 }
             }
-            merged.append(current)
         }
         return merged.enumerated().sorted {
             ($0.element.start, $0.element.end, $0.element.sourceTrackID.uuidString, $0.offset)

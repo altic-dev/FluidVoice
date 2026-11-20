@@ -619,6 +619,89 @@ final class CustomDictionaryManualEntryTests: XCTestCase {
         }
     }
 
+    private func correctionArchiveCandidate() throws -> AutomaticDictionaryCorrectionCandidate {
+        let recording = try XCTUnwrap(DictionaryCorrectionRecording(model: "fixture", rawTranscript: "Nora", samples: [0.1]))
+        var candidate = AutomaticDictionaryCorrectionCandidate(heardText: "Nora", correctedText: "Norah")
+        candidate.trainingExample = DictionaryCorrectionExample.make(
+            id: candidate.id,
+            recording: recording,
+            before: "Nora",
+            after: "Norah",
+            insertedRange: NSRange(location: 0, length: 4),
+            heardWord: "Nora",
+            correctedWord: "Norah"
+        )
+        return candidate
+    }
+
+    func testArchiveFailureKeepsDictionaryCorrectionAndExplainsMissingAudio() async throws {
+        for error in [DictionaryCorrectionArchive.ArchiveError.capacityReached as Error, CocoaError(.fileWriteOutOfSpace)] {
+            let finished = expectation(description: "Archive failure is shown")
+            let session = try AutomaticDictionaryTrainingSession(
+                candidate: self.correctionArchiveCandidate(),
+                asr: AppServices.shared.asr,
+                archiveExample: { _ in throw error }
+            )
+            session.onSuccess = { finished.fulfill() }
+            self.withRestoredDictionary([]) {
+                session.addOnlyCorrection()
+                XCTAssertEqual(SettingsStore.shared.customDictionaryEntries.first?.replacement, "Norah")
+                XCTAssertEqual(session.capturePhase, .processing)
+                XCTAssertEqual(session.screen, .choice)
+            }
+            await fulfillment(of: [finished], timeout: 2)
+            XCTAssertEqual(session.screen, .success)
+            XCTAssertEqual(session.capturePhase, .idle)
+            XCTAssertNotNil(session.archiveWarning)
+            XCTAssertFalse(session.hasError, "The dictionary correction itself succeeded")
+            if case DictionaryCorrectionArchive.ArchiveError.capacityReached = error {
+                XCTAssertTrue(session.archiveWarning?.contains("archive is full") == true)
+            }
+        }
+    }
+
+    func testArchiveSuccessCompletesWithoutAWarning() async throws {
+        let finished = expectation(description: "Archive succeeded")
+        let session = try AutomaticDictionaryTrainingSession(
+            candidate: self.correctionArchiveCandidate(),
+            asr: AppServices.shared.asr,
+            archiveExample: { _ in }
+        )
+        session.onSuccess = { finished.fulfill() }
+        self.withRestoredDictionary([]) {
+            session.addOnlyCorrection()
+            let savedEntries = SettingsStore.shared.customDictionaryEntries
+            session.beginTraining()
+            session.addOnlyCorrection()
+            XCTAssertEqual(session.screen, .choice, "Training cannot interrupt an accepted audio save")
+            XCTAssertEqual(session.capturePhase, .processing)
+            XCTAssertEqual(session.statusMessage, "Saving audio locally…")
+            XCTAssertEqual(SettingsStore.shared.customDictionaryEntries, savedEntries)
+        }
+        await fulfillment(of: [finished], timeout: 2)
+        XCTAssertEqual(session.screen, .success)
+        XCTAssertEqual(session.capturePhase, .idle)
+        XCTAssertNil(session.archiveWarning)
+    }
+
+    func testClosingAcceptedCorrectionDoesNotCancelArchiveOrReopenPrompt() async throws {
+        let archived = expectation(description: "Accepted audio still saved")
+        let noPrompt = expectation(description: "Closed prompt stays closed")
+        noPrompt.isInverted = true
+        let session = try AutomaticDictionaryTrainingSession(
+            candidate: self.correctionArchiveCandidate(),
+            asr: AppServices.shared.asr,
+            archiveExample: { _ in archived.fulfill() }
+        )
+        session.onSuccess = { noPrompt.fulfill() }
+        self.withRestoredDictionary([]) {
+            session.addOnlyCorrection()
+            session.cancel()
+        }
+        await fulfillment(of: [archived, noPrompt], timeout: 2)
+        XCTAssertNotEqual(session.screen, .success)
+    }
+
     func testKeepsWhitespaceOnlyReplacements() {
         XCTAssertEqual(CustomDictionaryManualEntry.sanitizedReplacement("\n"), "\n")
         XCTAssertEqual(CustomDictionaryManualEntry.sanitizedReplacement(" "), " ")
@@ -739,6 +822,214 @@ final class CustomDictionaryManualEntryTests: XCTestCase {
             XCTAssertEqual(SettingsStore.shared.customDictionaryEntries.count, 1)
             XCTAssertEqual(SettingsStore.shared.customDictionaryEntries.first?.triggers, ["new line"])
             XCTAssertEqual(SettingsStore.shared.customDictionaryEntries.first?.replacement, "\n")
+        }
+    }
+
+    func testCaseSensitiveTimesPreserveOrdinaryAmAndWholeWordBoundaries() {
+        let entries: [SettingsStore.CustomDictionaryEntry] = [
+            .init(triggers: ["AM", "a.m."], replacement: "am", caseSensitive: true),
+            .init(triggers: ["PM", "p.m."], replacement: "pm", caseSensitive: true),
+        ]
+        self.withRestoredDictionary(entries) {
+            XCTAssertEqual(
+                ASRService.applyCustomDictionary("I am ready at 9 AM or 10 a.m., then 2 PM or 3 p.m."),
+                "I am ready at 9 am or 10 am, then 2 pm or 3 pm"
+            )
+            XCTAssertEqual(
+                ASRService.applyCustomDictionary("I am AMPLE; Am and Pm stay unchanged."),
+                "I am AMPLE; Am and Pm stay unchanged."
+            )
+            XCTAssertEqual(SettingsStore.shared.customDictionaryEntries, entries)
+        }
+    }
+
+    func testLegacyRulesRemainCaseInsensitiveAndKeepLiteralReplacementCase() throws {
+        let id = UUID()
+        let legacy = Data("{\"id\":\"\(id)\",\"triggers\":[\"FLUID VOICE\"],\"replacement\":\"FluidVoice\"}".utf8)
+        let entry = try JSONDecoder().decode(SettingsStore.CustomDictionaryEntry.self, from: legacy)
+        XCTAssertFalse(entry.caseSensitive)
+        XCTAssertEqual(entry.triggers, ["FLUID VOICE"])
+        self.withRestoredDictionary([entry]) {
+            XCTAssertEqual(ASRService.applyCustomDictionary("fluid voice, Fluid Voice, FLUID VOICE"), "FluidVoice, FluidVoice, FluidVoice")
+        }
+        let decoded = try JSONDecoder().decode(SettingsStore.CustomDictionaryEntry.self, from: JSONEncoder().encode(entry))
+        XCTAssertEqual(decoded, entry)
+    }
+
+    func testCaseSensitiveEntriesRoundTripAndVariantsDoNotCollapse() throws {
+        let entry = SettingsStore.CustomDictionaryEntry(triggers: [" AM ", "am"], replacement: "a.m.", caseSensitive: true)
+        XCTAssertEqual(entry.triggers, ["AM", "am"])
+        XCTAssertEqual(try JSONDecoder().decode(SettingsStore.CustomDictionaryEntry.self, from: JSONEncoder().encode(entry)), entry)
+        XCTAssertEqual(CustomDictionaryManualEntry.normalizedDraftTriggers("AM, am, AM", caseSensitive: true), ["AM", "am"])
+        XCTAssertEqual(CustomDictionaryManualEntry.normalizedDraftTriggers("AM, am, AM"), ["AM"])
+        let exact = DictionaryTriggerIndex(entries: [.init(triggers: ["AM"], replacement: "am", caseSensitive: true)])
+        XCTAssertEqual(exact.duplicates(["am"], caseSensitive: true), [])
+        XCTAssertEqual(exact.duplicates(["AM"], caseSensitive: true), ["AM"])
+        XCTAssertEqual(exact.duplicates(["am"], caseSensitive: false), ["am"])
+        let broad = DictionaryTriggerIndex(entries: [.init(triggers: ["am"], replacement: "a.m.")])
+        XCTAssertEqual(broad.duplicates(["AM"], caseSensitive: true), ["AM"])
+    }
+
+    func testFinalCaseRulesSurviveCleanupWithoutReplayingOrdinaryRules() {
+        let entries: [SettingsStore.CustomDictionaryEntry] = [
+            .init(triggers: ["AM", "a.m."], replacement: "am", caseSensitive: true),
+            .init(triggers: ["PM", "p.m."], replacement: "pm", caseSensitive: true),
+            .init(triggers: ["alias"], replacement: "Name"),
+            .init(triggers: ["title"], replacement: "Title With Extra Words", caseSensitive: true),
+        ]
+        self.withRestoredDictionary(entries) {
+            let cleaned = "I am free at 9 a.m. or 2 PM, alias and title."
+            let final = ASRService.applyCaseSensitiveDictionary(cleaned)
+            XCTAssertEqual(final, "I am free at 9 am or 2 pm, alias and title.")
+            XCTAssertEqual(ASRService.applyCaseSensitiveDictionary(final), final)
+            let frozen = ASRService.caseSensitiveDictionaryRules()
+            var updated = entries
+            updated[0].caseSensitive = false
+            SettingsStore.shared.customDictionaryEntries = updated
+            ASRService.invalidateDictionaryCache()
+            XCTAssertEqual(ASRService.applyCaseSensitiveDictionary("9 AM and 2 PM"), "9 AM and 2 pm")
+            XCTAssertEqual(ASRService.applyCaseSensitiveDictionary("9 AM and 2 PM", rules: frozen), "9 am and 2 pm")
+        }
+    }
+
+    func testCaseVariantsRemainSeparateThroughTransferAndMerge() throws {
+        let document = DictionaryTransferDocument(replacements: [
+            .init(from: ["US"], to: "United States", caseSensitive: true),
+            .init(from: ["us"], to: "ourselves", caseSensitive: true),
+        ], customWords: [])
+        let decoded = try DictionaryTransferService.shared.decode(DictionaryTransferService.shared.encode(document))
+        XCTAssertEqual(decoded, document)
+        let untouched = SettingsStore.CustomDictionaryEntry(triggers: ["other"], replacement: "Other")
+        let state = try DictionaryTransferService.importState(document: decoded, mode: .merge, currentReplacements: [untouched], currentCustomWords: [])
+        XCTAssertEqual(state.replacements.count, 3)
+        XCTAssertEqual(state.replacements.first, untouched)
+        self.withRestoredDictionary(state.replacements) {
+            XCTAssertEqual(ASRService.applyCustomDictionary("US, us, Us"), "United States, ourselves, Us")
+        }
+    }
+
+    func testLocalAPIPreservesCaseAndMatchingModeWithoutReplacingOtherVariants() async throws {
+        try await self.withRestoredDictionaryAsync {
+            SettingsStore.shared.customDictionaryEntries = []
+            let controller = DictionaryAPIController()
+            for (trigger, replacement) in [("AM", "am"), ("am", "AM")] {
+                let payload = try JSONSerialization.data(withJSONObject: ["triggers": [trigger], "replacement": replacement, "caseSensitive": true])
+                let response = await controller.handle(.init(method: "POST", path: "/v1/dictionary/replacements", query: [:], headers: [:], body: payload))
+                XCTAssertEqual(response.status, 200)
+            }
+            let entries = SettingsStore.shared.customDictionaryEntries
+            XCTAssertEqual(entries.count, 2)
+            XCTAssertTrue(entries.allSatisfy(\.caseSensitive))
+            XCTAssertEqual(Set(entries.flatMap(\.triggers)), ["AM", "am"])
+            let response = await controller.handle(.init(method: "GET", path: "/v1/dictionary/replacements", query: [:], headers: [:], body: Data()))
+            let object = try XCTUnwrap(JSONSerialization.jsonObject(with: response.body) as? [String: Any])
+            let items = try XCTUnwrap(object["items"] as? [[String: Any]])
+            XCTAssertTrue(items.allSatisfy { $0["caseSensitive"] as? Bool == true })
+            let imported = try DictionaryTransferService.shared.decode(response.body)
+            XCTAssertTrue(imported.replacements.allSatisfy(\.caseSensitive))
+        }
+    }
+
+    func testMatchedInitialCasePreferenceSurvivesSmartCapsWithoutChangingUnmatchedAm() {
+        let caps = SettingsStore.shared.contextAwareCapitalizationEnabled
+        let spacing = SettingsStore.shared.continuousDictationSpacingEnabled
+        defer {
+            SettingsStore.shared.contextAwareCapitalizationEnabled = caps
+            SettingsStore.shared.continuousDictationSpacingEnabled = spacing
+        }
+        SettingsStore.shared.contextAwareCapitalizationEnabled = true
+        SettingsStore.shared.continuousDictationSpacingEnabled = false
+        self.withRestoredDictionary([.init(triggers: ["AM", "a.m."], replacement: "am", caseSensitive: true)]) {
+            let rules = ASRService.caseSensitiveDictionaryRules()
+            for input in ["AM works", "a.m. works", "9 AM works"] {
+                var initial: DictionaryReplacementRule?
+                let corrected = ASRService.applyCustomDictionary(input, onInitialReplacement: { initial = $0 })
+                XCTAssertNotNil(initial)
+                for preceding in ["", "Already writing"] {
+                    let capitalized = ASRService.applyContinuousDictationFormatting(corrected, precedingText: preceding)
+                    XCTAssertEqual(ASRService.applyCaseSensitiveDictionary(capitalized, rules: rules, initialRule: initial), corrected)
+                }
+                XCTAssertEqual(ASRService.applyCaseSensitiveDictionary("Am works", rules: rules, initialRule: initial), "am works")
+                XCTAssertEqual(ASRService.applyCaseSensitiveDictionary("I am ready", rules: rules, initialRule: initial), "I am ready")
+            }
+            for input in ["Am I ready?", "I am ready", "AMAZING work"] {
+                var initial: DictionaryReplacementRule?
+                let corrected = ASRService.applyCustomDictionary(input, onInitialReplacement: { initial = $0 })
+                XCTAssertNil(initial)
+                let capitalized = ASRService.applyContinuousDictationFormatting(corrected, precedingText: "")
+                XCTAssertEqual(ASRService.applyCaseSensitiveDictionary(capitalized, rules: rules, initialRule: initial), input)
+            }
+        }
+    }
+
+    func testAnExplicitUnchangedInitialSpellingIsProtectedAndSurvivesRuleEdits() {
+        self.withRestoredDictionary([.init(triggers: ["AM"], replacement: "AM", caseSensitive: true)]) {
+            var initial: DictionaryReplacementRule?
+            XCTAssertEqual(ASRService.applyCustomDictionary("AM works", onInitialReplacement: { initial = $0 }), "AM works")
+            XCTAssertNotNil(initial)
+            SettingsStore.shared.customDictionaryEntries = []
+            ASRService.invalidateDictionaryCache()
+            XCTAssertEqual(ASRService.applyCaseSensitiveDictionary("aM works", rules: [], initialRule: initial), "AM works")
+            XCTAssertEqual(ASRService.applyCaseSensitiveDictionary("An entirely different rewrite", rules: [], initialRule: initial), "An entirely different rewrite")
+        }
+    }
+
+    func testNewManualDraftsResetAbandonedMatchingChoices() {
+        let abandoned = DictionaryManualDraft(triggers: "AM", replacement: "am", caseSensitive: true)
+        let fresh = DictionaryManualDraft()
+        let seeded = DictionaryManualDraft(triggers: "alias", replacement: "Name")
+        XCTAssertTrue(abandoned.caseSensitive)
+        XCTAssertFalse(fresh.caseSensitive)
+        XCTAssertTrue(fresh.triggers.isEmpty)
+        XCTAssertTrue(fresh.replacement.isEmpty)
+        XCTAssertFalse(seeded.caseSensitive)
+        XCTAssertEqual(seeded.triggers, "alias")
+    }
+
+    func testManualTrainingDuplicateIndexRejectsOwnedSpellingsWithoutDroppingCaseVariants() {
+        var entries: [SettingsStore.CustomDictionaryEntry] = [
+            .init(triggers: ["alias"], replacement: "Existing Name"),
+            .init(triggers: ["US"], replacement: "United States", caseSensitive: true),
+        ]
+        let snapshot = DictionaryTriggerIndex(entries: entries)
+        XCTAssertEqual(snapshot.duplicates(["alias", "ALIAS", "us"], caseSensitive: false), ["alias", "ALIAS", "us"])
+        XCTAssertEqual(snapshot.duplicates(["us"], caseSensitive: true), [])
+        XCTAssertEqual(DictionaryTriggerIndex(entries: entries, excluding: entries[0].id).duplicates(["alias"], caseSensitive: false), [])
+        entries[0].triggers = ["changed"]
+        XCTAssertEqual(snapshot.duplicates(["alias"], caseSensitive: false), ["alias"], "Published validation snapshots must not change underneath a draft")
+    }
+
+    func testUnicodeDuplicateChecksRespectBroadAndExactMatching() {
+        for (saved, variant) in [("ς", "σ"), ("ß", "ss"), ("É", "e\u{301}")] {
+            let exact = DictionaryTriggerIndex(entries: [.init(triggers: [saved], replacement: "Saved", caseSensitive: true)])
+            XCTAssertEqual(exact.duplicates([variant], caseSensitive: false), [variant])
+            XCTAssertEqual(exact.duplicates([variant], caseSensitive: true), [])
+            let broad = DictionaryTriggerIndex(entries: [.init(triggers: [saved], replacement: "Saved")])
+            XCTAssertEqual(broad.duplicates([variant], caseSensitive: true), [variant])
+            XCTAssertTrue(SettingsStore.CustomDictionaryEntry.triggersOverlap(saved, caseSensitive: true, variant, caseSensitive: false))
+            XCTAssertEqual(CustomDictionaryManualEntry.normalizedTriggers([saved, variant]), [saved])
+            XCTAssertEqual(CustomDictionaryManualEntry.normalizedTriggers([saved, variant], caseSensitive: true), [saved, variant])
+        }
+    }
+
+    func testExactCaseOverrideDoesNotDisableBuiltInCorrectionsForOtherCases() {
+        self.withRestoredDictionary([.init(triggers: ["POST HOC"], replacement: "Custom Choice", caseSensitive: true)]) {
+            XCTAssertEqual(ASRService.applyCustomDictionary("POST HOC, post hoc, Post Hoc"), "Custom Choice, PostHog, PostHog")
+        }
+        self.withRestoredDictionary([.init(triggers: ["CUSTOM"], replacement: "FLUID VOICE", caseSensitive: true)]) {
+            XCTAssertEqual(ASRService.applyCustomDictionary("CUSTOM, fluid voice"), "FLUID VOICE, FluidVoice")
+        }
+    }
+
+    func testAutomaticTrainingCannotBroadenAnExactCaseRule() {
+        let exact = SettingsStore.CustomDictionaryEntry(triggers: ["AM"], replacement: "am", caseSensitive: true)
+        let trained = CustomDictionaryTrainingMerge.mergedEntries(current: [exact], replacement: "a.m.", triggers: ["am"])
+        XCTAssertEqual(trained, [exact])
+        for spelling in ["am", "AM"] {
+            let pronunciation = CustomDictionaryTrainingMerge.mergedEntries(
+                current: [exact], replacement: spelling, triggers: [], savePronunciation: true
+            )
+            XCTAssertEqual(pronunciation, [exact], "A pronunciation anchor must not broaden an exact rule")
         }
     }
 

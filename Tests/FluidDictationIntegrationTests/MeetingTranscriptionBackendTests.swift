@@ -266,7 +266,8 @@ final class MeetingTranscriptionBackendTests: XCTestCase {
     private func makePipeline(
         registry: MeetingTranscriptionBackendRegistry,
         backendID: MeetingBackendID?,
-        gate: MeetingProcessingSerializationGate = MeetingProcessingSerializationGate()
+        gate: MeetingProcessingSerializationGate = MeetingProcessingSerializationGate(),
+        dictionaryEntriesProvider: @escaping @MainActor () -> [SettingsStore.CustomDictionaryEntry] = { [] }
     ) -> MeetingProcessingPipeline {
         MeetingProcessingPipeline(
             asrServiceProvider: {
@@ -276,7 +277,8 @@ final class MeetingTranscriptionBackendTests: XCTestCase {
             managesModelResidency: false,
             serializationGate: gate,
             backendRegistry: registry,
-            backendID: backendID
+            backendID: backendID,
+            dictionaryEntriesProvider: dictionaryEntriesProvider
         )
     }
 
@@ -538,6 +540,26 @@ final class MeetingTranscriptionBackendTests: XCTestCase {
     }
 
     // MARK: - Pipeline dispatch
+
+    func testLegacyDictionaryRunsOnceOnFinalTextWithoutChangingMetadata() async throws {
+        let registry = MeetingTranscriptionBackendRegistry(defaultBackendID: Self.fixtureBackendID)
+        var raw: MeetingProcessingResult?
+        registry.register(Self.fixtureBackendID) { [self] _ in
+            FixtureMeetingBackend(descriptor: self.makeFixtureDescriptor()) { plan in
+                let result = self.makeResult(attemptID: plan.attemptID, text: "space fest costs twenty dollars")
+                raw = result
+                return .legacyCompatibility(result)
+            }
+        }
+        let entries: [SettingsStore.CustomDictionaryEntry] = [.init(triggers: ["space fest"], replacement: "Spacefast")]
+        let pipeline = self.makePipeline(registry: registry, backendID: nil, dictionaryEntriesProvider: { entries })
+        let result = try await pipeline.process(session: self.makeSession(), sessionDirectory: FileManager.default.temporaryDirectory, progress: { _ in })
+        var expected = try XCTUnwrap(raw).segments
+        expected[0].text = "Spacefast costs $20"
+        XCTAssertEqual(result.segments, expected)
+        XCTAssertEqual(result.coverageGaps, raw?.coverageGaps)
+        XCTAssertEqual(result.isComplete, raw?.isComplete)
+    }
 
     func testPipelineDispatchesToTheInjectedBackendBeforeAnyModelWork() async throws {
         let session = self.makeSession()

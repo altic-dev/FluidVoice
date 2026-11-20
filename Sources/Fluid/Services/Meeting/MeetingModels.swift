@@ -995,6 +995,13 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
         (self.endedAt ?? Date()).timeIntervalSince(self.startedAt)
     }
 
+    /// Current coverage wins over historical diagnostic events after a successful retry.
+    var hasIncompleteTranscriptCoverage: Bool {
+        if let complete = self.transcriptIsComplete { return !complete }
+        return self.transcriptCoverageGaps?.isEmpty == false
+            || self.events.contains { $0.kind == .transcriptCoverageIncomplete }
+    }
+
     var microphoneEchoWarning: String? {
         guard self.mode.capturesComputerAudio else { return nil }
         switch self.state {
@@ -1433,6 +1440,10 @@ nonisolated enum MeetingCaptureEvent: Sendable {
     case microphoneEchoProtectionChanged(MeetingMicrophoneEchoProtection)
     case chunkFinalized(trackID: MeetingAudioTrackID, chunk: MeetingAudioChunk, format: MeetingAudioFormat)
     case interrupted(kind: MeetingInterruptionKind, trackID: MeetingAudioTrackID?, detail: String?)
+    /// The captured meeting app is no longer available to capture (for example the host ended the call),
+    /// and stream recovery could not re-attach to it. Persisted as `captureStoppedUnexpectedly`, but the call is over: the coordinator
+    /// transcribes the preserved audio instead of waiting for a manual retry.
+    case sourceApplicationEnded(detail: String?)
     /// `ack` is `nil` for downgrades — the mic is already dead, no race to gate on.
     case captureMethodChanged(trackID: MeetingAudioTrackID, method: MeetingAudioTrackCaptureMethod, ack: MeetingCaptureMethodChangeAck?)
 }

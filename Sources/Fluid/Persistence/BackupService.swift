@@ -81,9 +81,9 @@ struct SettingsBackupPayload: Codable, Equatable {
     let copyTranscriptionToClipboard: Bool
     let textInsertionMode: SettingsStore.TextInsertionMode
     let spokenSendEnabled: Bool?
-    let spokenSendImmediatelyEnabled: Bool?
     let spokenSendPhrase: String?
     let spokenSendKey: SettingsStore.SpokenSendKey?
+    let spokenSendWait: SettingsStore.SpokenSendWait?
     let preferredInputDeviceUID: String?
     // Optional so backups created before microphone priority ordering still decode.
     // swiftlint:disable:next discouraged_optional_collection
@@ -151,6 +151,8 @@ struct SettingsBackupPayload: Codable, Equatable {
     // swiftlint:disable:next discouraged_optional_collection
     var dictationPromptConfigurations: [String: SettingsStore.DictationPromptConfiguration]? = nil
     var automaticDictionaryPromptDelay: SettingsStore.AutomaticDictionaryPromptDelay? = nil
+    // swiftlint:disable:next discouraged_optional_collection
+    var autoSendDictationShortcuts: [HotkeyShortcut]? = nil
 }
 
 struct AppBackupDocument: Codable, Equatable {

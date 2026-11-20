@@ -29,7 +29,8 @@ def main() -> None:
     pipeline = (ROOT / "Sources/Fluid/Services/Meeting/MeetingProcessingPipeline.swift").read_text()
     catalog = (ROOT / "Sources/Fluid/Services/ParakeetSpeechModelCatalog.swift").read_text()
     languages = re.search(r"supportedLanguageCodes: (\[[\s\S]*?\])", catalog.split("static let v3 =", 1)[1]).group(1)
-    swift = '''import Foundation
+    swift = '''import CryptoKit
+import Foundation
 enum SettingsStore {
     enum SpeechModel: String, Sendable {
         case parakeetTDT = "parakeet-tdt", parakeetTDTv2 = "parakeet-tdt-v2"
@@ -62,6 +63,8 @@ enum MeetingProcessingCheckpoint { static let currentDiarizationFingerprint = "f
     }
 }
 '''.replace("LANGUAGES", languages)
+    settings = (ROOT / "Sources/Fluid/Persistence/SettingsStore.swift").read_text()
+    swift = swift.replace("enum SettingsStore {", "enum SettingsStore {\n" + declaration(settings, "nonisolated struct CustomDictionaryEntry:"), 1)
     for marker in ["nonisolated enum MeetingProviderOptionsError", "nonisolated struct MeetingProviderOptions"]:
         swift += declaration(provider, marker) + "\n"
     for marker in ["nonisolated enum MeetingConfigFingerprintEncoding", "nonisolated struct MeetingFinalProcessingConfiguration", "nonisolated struct MeetingLiveCaptionsConfiguration"]:

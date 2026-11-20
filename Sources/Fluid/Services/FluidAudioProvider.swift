@@ -87,7 +87,11 @@ nonisolated enum CompactSpeechModelRuntimeCheck {
         let samples = try self.samples()
         do {
             try await self.withDeadline {
-                let stagedModels = try await AsrModels.loadLocalOnly(from: directory, version: descriptor.asrModelVersion)
+                let stagedModels = try await LocalParakeetModelLoader.load(
+                    from: directory,
+                    version: descriptor.asrModelVersion,
+                    archiveSHA256: descriptor.archiveSHA256
+                )
                 let manager = AsrManager(config: ASRConfig.default)
                 do {
                     try await manager.initialize(models: stagedModels)
@@ -171,9 +175,8 @@ nonisolated struct MeetingProviderOptions: Equatable, Sendable {
         guard !configuration.pronunciationMatchingEnabled else {
             throw MeetingProviderOptionsError.unsupportedFeature("pronunciationMatching")
         }
-        guard !configuration.customDictionaryRewritingEnabled else {
-            throw MeetingProviderOptionsError.unsupportedFeature("customDictionaryRewriting")
-        }
+        // Saved replacements run on final speaker turns in the meeting pipeline, never inside
+        // ASR where they would disagree with raw word timings or read live dictation settings.
         guard !configuration.experimentalUnifiedFinalEnabled else {
             throw MeetingProviderOptionsError.unsupportedFeature("experimentalUnifiedFinal")
         }
@@ -578,7 +581,11 @@ final class FluidAudioProvider: TranscriptionProvider {
                 }
                 try Task.checkCancellation()
                 progressRelay.report(.loading)
-                models = try await AsrModels.loadLocalOnly(from: modelCacheDirectory, version: asrModelVersion)
+                models = try await LocalParakeetModelLoader.load(
+                    from: modelCacheDirectory,
+                    version: asrModelVersion,
+                    archiveSHA256: installedHash ?? descriptor.archiveSHA256
+                )
             } else {
                 models = try await AsrModels.downloadAndLoad(
                     version: asrModelVersion,

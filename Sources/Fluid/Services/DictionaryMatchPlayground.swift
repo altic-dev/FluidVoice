@@ -156,7 +156,7 @@ actor DictionaryMatchPlayground {
         else {
             throw PronunciationDictionaryStoreError.outdatedModelRevision
         }
-        let models = try await AsrModels.loadLocalOnly(from: directory, version: version)
+        let models = try await LocalParakeetModelLoader.load(from: directory, version: version, archiveSHA256: descriptor.archiveSHA256)
         try Task.checkCancellation()
         guard descriptor.installationRevisionMatches(at: directory) else {
             throw PronunciationDictionaryStoreError.outdatedModelRevision

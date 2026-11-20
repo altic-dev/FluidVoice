@@ -90,10 +90,13 @@ run_check clipboard-read-receipts sh Tests/run_paste_read_receipt_tests.sh
 run_check paste-events sh Tests/run_paste_command_event_tests.sh
 run_check keyboard-layouts sh Tests/run_paste_key_cache_tests.sh
 run_check paste-recovery sh Tests/run_paste_recovery_policy_tests.sh
+run_check dictation-shortcut-routing sh Tests/run_dictation_shortcut_routing_tests.sh
 run_check accessibility-preparation sh Tests/run_dictation_accessibility_preparation_tests.sh
 run_check onboarding sh Tests/run_onboarding_tests.sh
+run_check private-ai-settings sh Tests/run_private_ai_settings_tests.sh
 run_check release-highlights sh Tests/run_release_highlights_tests.sh
 run_check history-decode sh Tests/run_history_decode_recovery_tests.sh
+run_check dictionary-correction-archive sh Tests/run_dictionary_correction_archive_tests.sh
 run_check dictionary-correction-timing python3 Tests/run_dictionary_correction_timing_tests.py
 run_check settings-backup python3 Tests/run_settings_backup_concurrency_tests.py
 run_check meeting-backup python3 Tests/run_meeting_backup_refresh_tests.py

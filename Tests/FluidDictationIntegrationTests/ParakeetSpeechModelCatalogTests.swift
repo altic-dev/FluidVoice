@@ -151,7 +151,7 @@ final class ParakeetSpeechModelCatalogTests: XCTestCase {
             let descriptor = try XCTUnwrap(model.parakeetDescriptor)
             XCTAssertEqual(descriptor.expectedDownloadBytes, bytes)
             XCTAssertEqual(descriptor.archiveSHA256, hash)
-            XCTAssertEqual(descriptor.archiveURL?.absoluteString, "https://models.fluidvoice.app/parakeet/\(path)/1.1.1/\(descriptor.folderName).tar")
+            XCTAssertEqual(descriptor.archiveURL?.absoluteString, "https://models.fluidvoice.com/parakeet/\(path)/1.1.1/\(descriptor.folderName).tar")
             XCTAssertEqual(descriptor.archiveURL?.scheme, "https")
             XCTAssertEqual(descriptor.supportedLanguageCodes, ParakeetSpeechModelCatalog.v3.supportedLanguageCodes)
             XCTAssertFalse(descriptor.isEnglishOnly)
@@ -183,7 +183,7 @@ final class ParakeetSpeechModelCatalogTests: XCTestCase {
         let model = SettingsStore.SpeechModel.fluidParakeetPro
         XCTAssertEqual(model.parakeetDescriptor, descriptor)
         XCTAssertEqual(descriptor.asrModelVersion, .fluidParakeetPro)
-        XCTAssertEqual(descriptor.archiveURL?.absoluteString, "https://models.fluidvoice.app/parakeet/fluid-pro/1.0.0/fluid-parakeet-pro-coreml.tar")
+        XCTAssertEqual(descriptor.archiveURL?.absoluteString, "https://models.fluidvoice.com/parakeet/fluid-pro/1.0.0/fluid-parakeet-pro-coreml.tar")
         XCTAssertEqual(descriptor.archiveSHA256?.count, 64)
         XCTAssertEqual(descriptor.manifestSHA256?.count, 64)
         XCTAssertEqual(descriptor.expectedDownloadBytes, 652_482_560)
@@ -264,46 +264,71 @@ final class ParakeetSpeechModelCatalogTests: XCTestCase {
         XCTAssertTrue(VoiceEngineLanguageCatalog.routes(forLanguageID: "missing", availableModels: models).isEmpty)
     }
 
-    func testEnglishOnboardingShowsV2AndMiniWithoutChangingSelectionOrAvailableRoutes() {
-        let language = VoiceEngineLanguage(id: "en", displayName: "English", aliases: [], isPopular: true)
-        let models: [SettingsStore.SpeechModel] = [.parakeetTDTv2, .parakeetRealtime, .parakeetTDT, .fluidParakeetMini, .fluidParakeetPico, .appleSpeechAnalyzer, .appleSpeech, .whisperBase]
-        let available = models.map { VoiceEngineLanguageRoute(language: language, model: $0, binding: .automatic) }
+    func testOnboardingFeaturesCurrentSpeechModelWithoutChangingSelectionOrRoutes() {
+        let gib: UInt64 = 1024 * 1024 * 1024
         let selection = SettingsStore.shared.selectedSpeechModel
-        let displayed = OnboardingModelRecommendation.defaultRoutes(forLanguageID: "en", from: available)
-        XCTAssertEqual(displayed.map(\.model), [.parakeetTDTv2, .fluidParakeetMini])
-        XCTAssertEqual(displayed.first, available.first, "The established first recommendation must stay unchanged")
-        let displayedIDs = Set(displayed.map(\.id))
-        let other = available.filter { !displayedIDs.contains($0.id) }
-        XCTAssertEqual(other.map(\.model), [.parakeetRealtime, .parakeetTDT, .fluidParakeetPico, .appleSpeechAnalyzer, .appleSpeech, .whisperBase])
-        XCTAssertEqual(available.map(\.model), models)
-        XCTAssertEqual(Set((displayed + other).map(\.id)), Set(available.map(\.id)))
-        XCTAssertEqual(SettingsStore.shared.selectedSpeechModel, selection)
-        XCTAssertEqual(ParakeetSpeechModelCatalog.mini.cardDescription, "Clear dictation in noisy places, at half the size of Blazing Fast. Runs on your Mac.")
-        XCTAssertEqual(ParakeetSpeechModelCatalog.pico.cardDescription, "Our smallest model. Light enough for older Macs, and still clear in noisy places.")
+        let models: [SettingsStore.SpeechModel] = [.parakeetTDTv2, .parakeetTDT, .fluidParakeetMini, .fluidParakeetPro, .appleSpeech]
+        for languageID in ["en", "fr"] {
+            let available = VoiceEngineLanguageCatalog.routes(forLanguageID: languageID, availableModels: models)
+            for (memory, expected) in [(8 * gib, SettingsStore.SpeechModel.fluidParakeetMini), (16 * gib, .fluidParakeetPro), (64 * gib, .fluidParakeetPro)] {
+                let displayed = OnboardingModelRecommendation.defaultRoutes(forLanguageID: languageID, from: available, memoryBytes: memory)
+                XCTAssertEqual(displayed.map(\.model), [expected])
+                let displayedIDs = Set(displayed.map(\.id))
+                let other = available.filter { !displayedIDs.contains($0.id) }
+                XCTAssertEqual(Set((displayed + other).map(\.id)), Set(available.map(\.id)))
+                XCTAssertEqual(available, VoiceEngineLanguageCatalog.routes(forLanguageID: languageID, availableModels: models))
+                XCTAssertEqual(SettingsStore.shared.selectedSpeechModel, selection)
+            }
+        }
     }
 
-    func testOnboardingRecommendationsPreserveUnavailableMiniIntelAndNonEnglishFallbacks() {
+    func testQwenRoutesCoverItsLanguagesAfterExistingFallbacks() {
+        XCTAssertEqual(
+            Set(VoiceEngineLanguageCatalog.allLanguages(availableModels: [.qwen3Asr17B]).map(\.id)),
+            VoiceEngineLanguageCatalog.qwenLanguageIDs
+        )
+        XCTAssertTrue(VoiceEngineLanguageCatalog.routes(forLanguageID: "ta", availableModels: [.qwen3Asr17B]).isEmpty)
+        let models: [SettingsStore.SpeechModel] = [.cohereTranscribeSixBit, .whisperSmall, .whisperLargeTurbo, .qwen3Asr17B]
+        let japanese = VoiceEngineLanguageCatalog.routes(forLanguageID: "ja", availableModels: models)
+        XCTAssertEqual(japanese.map(\.model), models) // Low-memory Macs keep the old first choice.
+        XCTAssertEqual(japanese.last?.binding, .automatic)
+    }
+
+    func testLanguageSearchFindsTagalogByEitherName() {
+        for query in ["Tagalog", "filipino", " Filipino "] {
+            XCTAssertTrue(VoiceEngineLanguageCatalog.searchableLanguages(query: query).contains { $0.id == "tl" }, query)
+        }
+    }
+
+    func testOnboardingFeaturesQwenForJapaneseOnlyFromEightGigabytes() {
+        let gib: UInt64 = 1024 * 1024 * 1024
+        let routes = VoiceEngineLanguageCatalog.routes(forLanguageID: "ja", availableModels: [.cohereTranscribeSixBit, .whisperLargeTurbo, .qwen3Asr17B])
+        XCTAssertEqual(OnboardingModelRecommendation.defaultRoutes(forLanguageID: "ja", from: routes, memoryBytes: 8 * gib).map(\.model), [.qwen3Asr17B])
+        XCTAssertEqual(OnboardingModelRecommendation.defaultRoutes(forLanguageID: "ja", from: routes, memoryBytes: 4 * gib).map(\.model), [.cohereTranscribeSixBit])
+        let filipino = VoiceEngineLanguageCatalog.routes(forLanguageID: "tl", availableModels: [.whisperSmall, .whisperLargeTurbo, .qwen3Asr17B])
+        XCTAssertEqual(OnboardingModelRecommendation.defaultRoutes(forLanguageID: "tl", from: filipino, memoryBytes: 16 * gib).map(\.model), [.whisperLargeTurbo])
+    }
+
+    func testOnboardingPreservesUnsupportedHardwareAndLanguageFallbacks() {
+        let gib: UInt64 = 1024 * 1024 * 1024
         let english = VoiceEngineLanguage(id: "en", displayName: "English", aliases: [], isPopular: true)
         func routes(_ models: [SettingsStore.SpeechModel]) -> [VoiceEngineLanguageRoute] {
             models.map { VoiceEngineLanguageRoute(language: english, model: $0, binding: .automatic) }
         }
-        let oldOS = routes([.parakeetTDTv2, .parakeetTDT, .appleSpeech])
-        XCTAssertEqual(OnboardingModelRecommendation.defaultRoutes(forLanguageID: "en", from: oldOS).map(\.model), [.parakeetTDTv2, .appleSpeech])
-        let intel = routes([.whisperBase, .appleSpeechAnalyzer, .appleSpeech])
-        XCTAssertEqual(OnboardingModelRecommendation.defaultRoutes(forLanguageID: "en", from: intel).map(\.model), [.whisperBase, .appleSpeechAnalyzer])
-        let appleFirst = routes([.appleSpeech, .whisperBase])
-        XCTAssertEqual(OnboardingModelRecommendation.defaultRoutes(forLanguageID: "en", from: appleFirst), [appleFirst[0]], "Do not duplicate the built-in card")
-        let withoutV2 = routes([.parakeetTDT, .fluidParakeetMini, .appleSpeech])
-        XCTAssertEqual(OnboardingModelRecommendation.defaultRoutes(forLanguageID: "en", from: withoutV2).map(\.model), [.parakeetTDT, .appleSpeech])
-        let french = VoiceEngineLanguage(id: "fr", displayName: "French", aliases: [], isPopular: true)
-        let frenchRoutes = [.parakeetTDT, SettingsStore.SpeechModel.appleSpeech].map {
-            VoiceEngineLanguageRoute(language: french, model: $0, binding: .automatic)
+        for memory in [UInt64(0), 4 * gib, 16 * gib] {
+            let oldOS = routes([.parakeetTDTv2, .parakeetTDT, .appleSpeech])
+            XCTAssertEqual(OnboardingModelRecommendation.defaultRoutes(forLanguageID: "en", from: oldOS, memoryBytes: memory).map(\.model), [.parakeetTDTv2, .appleSpeech])
+            let intel = routes([.whisperBase, .appleSpeechAnalyzer, .appleSpeech])
+            XCTAssertEqual(OnboardingModelRecommendation.defaultRoutes(forLanguageID: "en", from: intel, memoryBytes: memory).map(\.model), [.whisperBase, .appleSpeechAnalyzer])
         }
-        XCTAssertEqual(OnboardingModelRecommendation.defaultRoutes(forLanguageID: "fr", from: frenchRoutes), [frenchRoutes[0]])
-        XCTAssertTrue(OnboardingModelRecommendation.defaultRoutes(forLanguageID: "en", from: []).isEmpty)
-        XCTAssertTrue(OnboardingModelRecommendation.defaultRoutes(forLanguageID: "fr", from: []).isEmpty)
-        let onlyMini = routes([.fluidParakeetMini])
-        XCTAssertEqual(OnboardingModelRecommendation.defaultRoutes(forLanguageID: "en", from: onlyMini), onlyMini)
+        let appleFirst = routes([.appleSpeech, .whisperBase])
+        XCTAssertEqual(OnboardingModelRecommendation.defaultRoutes(forLanguageID: "en", from: appleFirst, memoryBytes: 16 * gib), [appleFirst[0]])
+        let lowMemory = routes([.parakeetTDTv2, .fluidParakeetPro, .fluidParakeetMini, .appleSpeech])
+        XCTAssertEqual(OnboardingModelRecommendation.defaultRoutes(forLanguageID: "en", from: lowMemory, memoryBytes: 4 * gib).map(\.model), [.parakeetTDTv2, .appleSpeech])
+        let unsupported = VoiceEngineLanguageCatalog.routes(forLanguageID: "ja", availableModels: [.whisperBase, .appleSpeech])
+        XCTAssertFalse(unsupported.isEmpty)
+        XCTAssertEqual(OnboardingModelRecommendation.defaultRoutes(forLanguageID: "ja", from: unsupported, memoryBytes: 64 * gib), [unsupported[0]])
+        XCTAssertTrue(OnboardingModelRecommendation.defaultRoutes(forLanguageID: "en", from: [], memoryBytes: 16 * gib).isEmpty)
     }
 
     func testCatalogReadsPreserveExistingAndNewPersistedSelections() throws {

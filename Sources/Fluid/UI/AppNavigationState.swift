@@ -22,6 +22,11 @@ enum SidebarItem: Hashable {
     case commandMode
     case rewriteMode
 
+    static let prewarmedPages: [SidebarItem] = [
+        .voiceEngine, .aiEnhancements, .cleanupStyles, .fileTranscription, .meetingTranscription,
+        .customDictionary, .stats, .history, .changelog, .commandMode,
+    ]
+
     var title: String {
         switch self {
         case .welcome: "Dashboard"

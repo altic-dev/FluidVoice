@@ -5,6 +5,7 @@ struct AutomaticDictionaryCorrectionCandidate: Equatable, Identifiable {
     let heardText: String
     let correctedText: String
     var sourceUTF16Range: NSRange?
+    var trainingExample: DictionaryCorrectionExample?
     var audioEvidence: DictionaryLearningAudioEvidence?
     var negativeCorrection: DictionaryNegativeCorrection?
 

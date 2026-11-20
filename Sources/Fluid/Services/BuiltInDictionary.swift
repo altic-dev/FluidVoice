@@ -13,7 +13,8 @@ nonisolated enum BuiltInDictionary {
 
     /// Built-in entries without any spelling the user already maps, so the user's choice wins.
     static func entries(excludingSpellingsIn userEntries: [SettingsStore.CustomDictionaryEntry]) -> [SettingsStore.CustomDictionaryEntry] {
-        let taken = Set(userEntries.flatMap(\.triggers).map { $0.lowercased() })
+        // Exact-case overrides are protected per occurrence by ASRService, not removed globally.
+        let taken = Set(userEntries.filter { !$0.caseSensitive }.flatMap(\.triggers).map { $0.lowercased() })
         return self.entries.compactMap { entry in
             let triggers = entry.triggers.filter { !taken.contains($0) }
             return triggers.isEmpty ? nil : SettingsStore.CustomDictionaryEntry(id: entry.id, triggers: triggers, replacement: entry.replacement)

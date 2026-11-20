@@ -1,5 +1,9 @@
 @testable import FluidVoice_Debug
 import Foundation
+import HTTPTypes
+import Hummingbird
+import Logging
+import NIOEmbedded
 import XCTest
 
 @MainActor
@@ -13,7 +17,7 @@ final class MeetingAPIControllerTests: XCTestCase {
             let router = LocalAPIRouter(meetingStore: store)
 
             for limit in ["1", "0", "-1"] {
-                let response = await router.route(self.request(path: "/v1/meetings", query: ["limit": limit]))
+                let response = try await router.route(self.request(path: "/v1/meetings", query: ["limit": limit]))
                 XCTAssertEqual(response.status, 200)
                 let body = try self.json(response)
                 XCTAssertEqual(body["count"] as? Int, 1)
@@ -26,7 +30,7 @@ final class MeetingAPIControllerTests: XCTestCase {
                 XCTAssertNil(items.first?["audioTracks"])
             }
 
-            let response = await router.route(self.request(path: "/v1/meetings"))
+            let response = try await router.route(self.request(path: "/v1/meetings"))
             let items = try XCTUnwrap(self.json(response)["items"] as? [[String: Any]])
             XCTAssertEqual(items.compactMap { $0["id"] as? String }, [newer.id.uuidString, older.id.uuidString])
         }
@@ -46,7 +50,7 @@ final class MeetingAPIControllerTests: XCTestCase {
             try await store.create(session)
 
             let router = LocalAPIRouter(meetingStore: store)
-            let response = await router.route(self.request(query: ["id": session.id.uuidString.lowercased()]))
+            let response = try await router.route(self.request(query: ["id": session.id.uuidString.lowercased()]))
             XCTAssertEqual(response.status, 200)
             XCTAssertEqual(response.headers["Content-Type"], "application/json; charset=utf-8")
             let body = try self.json(response)
@@ -72,7 +76,7 @@ final class MeetingAPIControllerTests: XCTestCase {
             var session = self.makeSession()
             try await store.create(session)
             let router = LocalAPIRouter(meetingStore: store)
-            _ = await router.route(self.request(query: ["id": session.id.uuidString, "format": "text"]))
+            _ = try await router.route(self.request(query: ["id": session.id.uuidString, "format": "text"]))
 
             session.speakers[0].displayName = "Renée"
             session.transcriptSegments[0].text = "Corrected words 👋"
@@ -83,10 +87,54 @@ final class MeetingAPIControllerTests: XCTestCase {
             session.transcriptSegments.append(echo)
             try await store.save(session)
 
-            let response = await router.route(self.request(query: ["id": session.id.uuidString, "format": "text"]))
+            let response = try await router.route(self.request(query: ["id": session.id.uuidString, "format": "text"]))
             XCTAssertEqual(response.status, 200)
             XCTAssertEqual(response.headers["Content-Type"], "text/plain; charset=utf-8")
             XCTAssertEqual(String(data: response.body, encoding: .utf8), "[00:01] Renée: Corrected words 👋")
+        }
+    }
+
+    func testMarkdownTranscriptMatchesExporterOmitsEchoesAndEscapesContent() async throws {
+        try await self.withStore { store in
+            var session = self.makeSession()
+            session.speakers[0].displayName = "Renée [lead]"
+            session.transcriptSegments[0].text = "Corrected **words** 👋"
+            var echo = session.transcriptSegments[0]
+            echo.id = UUID()
+            echo.text = "Hidden echo"
+            echo.isLikelyEcho = true
+            session.transcriptSegments.append(echo)
+            try await store.create(session)
+            let router = LocalAPIRouter(meetingStore: store)
+
+            let response = try await router.route(self.request(query: ["id": session.id.uuidString, "format": "markdown"]))
+            XCTAssertEqual(response.status, 200)
+            XCTAssertEqual(response.headers["Content-Type"], "text/markdown; charset=utf-8")
+            let body = try XCTUnwrap(String(data: response.body, encoding: .utf8))
+            XCTAssertEqual(body, MeetingTranscriptExporter.markdown(for: session))
+            XCTAssertFalse(body.contains("Hidden echo"))
+            XCTAssertTrue(body.contains(#"Renée \[lead\]"#))
+            XCTAssertTrue(body.contains(#"Corrected \*\*words\*\* 👋"#))
+        }
+    }
+
+    func testMarkdownTranscriptForEmptySessionReturnsHeadings() async throws {
+        try await self.withStore { store in
+            var session = self.makeSession()
+            session.state = .recording
+            session.endedAt = nil
+            session.transcriptSegments = []
+            session.transcriptIsComplete = nil
+            try await store.create(session)
+            let router = LocalAPIRouter(meetingStore: store)
+
+            let response = try await router.route(self.request(query: ["id": session.id.uuidString, "format": "markdown"]))
+            XCTAssertEqual(response.status, 200)
+            XCTAssertEqual(response.headers["Content-Type"], "text/markdown; charset=utf-8")
+            let body = try XCTUnwrap(String(data: response.body, encoding: .utf8))
+            XCTAssertEqual(body, MeetingTranscriptExporter.markdown(for: session))
+            XCTAssertEqual(body, "# API meeting\n\n## Transcript\n")
+            XCTAssertFalse(body.isEmpty)
         }
     }
 
@@ -100,10 +148,10 @@ final class MeetingAPIControllerTests: XCTestCase {
             try await store.create(session)
             let router = LocalAPIRouter(meetingStore: store)
 
-            let response = await router.route(self.request(query: ["id": session.id.uuidString]))
+            let response = try await router.route(self.request(query: ["id": session.id.uuidString]))
             XCTAssertEqual(response.status, 200)
             XCTAssertEqual(try (self.json(response)["segments"] as? [Any])?.count, 0)
-            let text = await router.route(self.request(query: ["id": session.id.uuidString, "format": "text"]))
+            let text = try await router.route(self.request(query: ["id": session.id.uuidString, "format": "text"]))
             XCTAssertEqual(text.status, 200)
             XCTAssertTrue(text.body.isEmpty)
         }
@@ -117,9 +165,18 @@ final class MeetingAPIControllerTests: XCTestCase {
                 ["id": UUID().uuidString, "format": "xml"],
             ]
             for query in queries {
-                let response = await router.route(self.request(query: query))
+                let response = try await router.route(self.request(query: query))
                 XCTAssertEqual(response.status, 400)
                 XCTAssertNotNil(try self.json(response)["error"] as? String)
+            }
+
+            for format in ["xml", "html", "md", "Markdown"] {
+                let response = try await router.route(self.request(query: ["id": UUID().uuidString, "format": format]))
+                XCTAssertEqual(response.status, 400, format)
+                let message = try XCTUnwrap(self.json(response)["error"] as? String)
+                XCTAssertTrue(message.contains("markdown"), message)
+                XCTAssertTrue(message.contains("json"), message)
+                XCTAssertTrue(message.contains("text"), message)
             }
         }
     }
@@ -129,12 +186,12 @@ final class MeetingAPIControllerTests: XCTestCase {
             let session = self.makeSession()
             let router = LocalAPIRouter(meetingStore: store)
             let request = self.request(query: ["id": session.id.uuidString])
-            let missing = await router.route(request)
+            let missing = try await router.route(request)
             XCTAssertEqual(missing.status, 404)
 
             try await store.create(session)
             try await store.delete(id: session.id)
-            let deleted = await router.route(request)
+            let deleted = try await router.route(request)
             XCTAssertEqual(deleted.status, 404)
         }
     }
@@ -144,13 +201,13 @@ final class MeetingAPIControllerTests: XCTestCase {
             let router = LocalAPIRouter(meetingStore: store)
             for path in ["/v1/meetings", "/v1/meetings/transcript"] {
                 for method in ["POST", "DELETE", "PUT"] {
-                    let response = await router.route(self.request(method: method, path: path))
+                    let response = try await router.route(self.request(method: method, path: path))
                     XCTAssertEqual(response.status, 405)
                 }
             }
-            let unknown = await router.route(self.request(path: "/v1/meetings/unknown"))
+            let unknown = try await router.route(self.request(path: "/v1/meetings/unknown"))
             XCTAssertEqual(unknown.status, 404)
-            let health = await router.route(self.request(path: "/v1/health"))
+            let health = try await router.route(self.request(path: "/v1/health"))
             XCTAssertEqual(health.status, 200)
         }
     }
@@ -161,7 +218,7 @@ final class MeetingAPIControllerTests: XCTestCase {
             try await store.create(session)
             let directory = try await store.sessionDirectory(for: session.id)
             try Data("invalid private manifest".utf8).write(to: directory.appendingPathComponent("session.json"))
-            let response = await LocalAPIRouter(meetingStore: store).route(self.request(query: ["id": session.id.uuidString]))
+            let response = try await LocalAPIRouter(meetingStore: store).route(self.request(query: ["id": session.id.uuidString]))
             XCTAssertEqual(response.status, 503)
             let body = try XCTUnwrap(String(data: response.body, encoding: .utf8))
             XCTAssertFalse(body.contains(directory.path))
@@ -170,7 +227,7 @@ final class MeetingAPIControllerTests: XCTestCase {
 
     func testEmptyListAndUnavailableStore() async throws {
         try await self.withStore { store in
-            let response = await LocalAPIRouter(meetingStore: store).route(self.request(path: "/v1/meetings"))
+            let response = try await LocalAPIRouter(meetingStore: store).route(self.request(path: "/v1/meetings"))
             XCTAssertEqual(response.status, 200)
             XCTAssertEqual(try self.json(response)["count"] as? Int, 0)
         }
@@ -179,7 +236,7 @@ final class MeetingAPIControllerTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
         try Data().write(to: root)
         let store = MeetingSessionStore(rootDirectory: root)
-        let response = await LocalAPIRouter(meetingStore: store).route(self.request(path: "/v1/meetings"))
+        let response = try await LocalAPIRouter(meetingStore: store).route(self.request(path: "/v1/meetings"))
         XCTAssertEqual(response.status, 503)
     }
 
@@ -267,7 +324,7 @@ final class MeetingLiveAPIControllerTests: XCTestCase {
         snapshot.revision = 12
         let router = self.router(MeetingLiveTranscriptReading(sessionID: self.sessionID, snapshot: snapshot))
 
-        let response = await router.route(self.request())
+        let response = try await router.route(self.request())
 
         XCTAssertEqual(response.status, 200)
         XCTAssertEqual(response.headers["Content-Type"], "application/json; charset=utf-8")
@@ -294,7 +351,7 @@ final class MeetingLiveAPIControllerTests: XCTestCase {
     func test_live_sinceAndSessionMatch_returns304() async throws {
         let router = self.router(self.reading(revision: 5))
 
-        let response = await router.route(self.request(query: ["since": "5", "session": self.sessionID.uuidString.lowercased()]))
+        let response = try await router.route(self.request(query: ["since": "5", "session": self.sessionID.uuidString.lowercased()]))
 
         XCTAssertEqual(response.status, 304)
         XCTAssertTrue(response.body.isEmpty)
@@ -303,7 +360,7 @@ final class MeetingLiveAPIControllerTests: XCTestCase {
     func test_live_sinceMatchesButSessionMissing_returns200() async throws {
         let router = self.router(self.reading(revision: 5))
 
-        let response = await router.route(self.request(query: ["since": "5"]))
+        let response = try await router.route(self.request(query: ["since": "5"]))
 
         XCTAssertEqual(response.status, 200)
         XCTAssertEqual(try self.json(response)["revision"] as? Int, 5)
@@ -312,7 +369,7 @@ final class MeetingLiveAPIControllerTests: XCTestCase {
     func test_live_sessionMatchesButSinceMissing_returns200() async throws {
         let router = self.router(self.reading(revision: 5))
 
-        let response = await router.route(self.request(query: ["session": self.sessionID.uuidString]))
+        let response = try await router.route(self.request(query: ["session": self.sessionID.uuidString]))
 
         XCTAssertEqual(response.status, 200)
     }
@@ -320,7 +377,7 @@ final class MeetingLiveAPIControllerTests: XCTestCase {
     func test_live_sinceBehindCurrentRevision_returns200() async throws {
         let router = self.router(self.reading(revision: 6))
 
-        let response = await router.route(self.request(query: ["since": "5", "session": self.sessionID.uuidString]))
+        let response = try await router.route(self.request(query: ["since": "5", "session": self.sessionID.uuidString]))
 
         XCTAssertEqual(response.status, 200)
         XCTAssertEqual(try self.json(response)["revision"] as? Int, 6)
@@ -332,7 +389,7 @@ final class MeetingLiveAPIControllerTests: XCTestCase {
         let oldSessionID = UUID()
         let router = self.router(self.reading(revision: 3))
 
-        let response = await router.route(self.request(query: ["since": "3", "session": oldSessionID.uuidString]))
+        let response = try await router.route(self.request(query: ["since": "3", "session": oldSessionID.uuidString]))
 
         XCTAssertEqual(response.status, 200)
         let body = try self.json(response)
@@ -344,7 +401,7 @@ final class MeetingLiveAPIControllerTests: XCTestCase {
         let router = self.router(.idle)
 
         for query in [[:], ["since": "0"], ["since": "0", "session": self.sessionID.uuidString]] {
-            let response = await router.route(self.request(query: query))
+            let response = try await router.route(self.request(query: query))
             XCTAssertEqual(response.status, 200, "\(query)")
             let body = try self.json(response)
             XCTAssertTrue(body["sessionID"] is NSNull)
@@ -359,7 +416,7 @@ final class MeetingLiveAPIControllerTests: XCTestCase {
         let router = self.router(self.reading(revision: 1))
 
         for since in ["abc", "-1", "", "1.5", "18446744073709551616"] {
-            let response = await router.route(self.request(query: ["since": since, "session": self.sessionID.uuidString]))
+            let response = try await router.route(self.request(query: ["since": since, "session": self.sessionID.uuidString]))
             XCTAssertEqual(response.status, 400, "since=\(since)")
             let message = try XCTUnwrap(self.json(response)["error"] as? String)
             XCTAssertTrue(message.contains("since"), message)
@@ -370,7 +427,7 @@ final class MeetingLiveAPIControllerTests: XCTestCase {
         let router = self.router(self.reading(revision: 1))
 
         for session in ["not-a-uuid", "", "../session.json"] {
-            let response = await router.route(self.request(query: ["since": "1", "session": session]))
+            let response = try await router.route(self.request(query: ["since": "1", "session": session]))
             XCTAssertEqual(response.status, 400, "session=\(session)")
             let message = try XCTUnwrap(self.json(response)["error"] as? String)
             XCTAssertTrue(message.contains("session"), message)
@@ -381,7 +438,7 @@ final class MeetingLiveAPIControllerTests: XCTestCase {
         let router = self.router(self.reading(revision: 1))
 
         for method in ["POST", "DELETE", "PUT"] {
-            let response = await router.route(self.request(method: method))
+            let response = try await router.route(self.request(method: method))
             XCTAssertEqual(response.status, 405, method)
         }
     }
@@ -389,45 +446,35 @@ final class MeetingLiveAPIControllerTests: XCTestCase {
     func test_live_responsesAreNotCached() async throws {
         let router = self.router(self.reading(revision: 5))
 
-        let full = await router.route(self.request())
+        let full = try await router.route(self.request())
         XCTAssertEqual(full.status, 200)
         XCTAssertEqual(full.headers["Cache-Control"], "no-store")
-        let notModified = await router.route(self.request(query: ["since": "5", "session": self.sessionID.uuidString]))
+        let notModified = try await router.route(self.request(query: ["since": "5", "session": self.sessionID.uuidString]))
         XCTAssertEqual(notModified.status, 304)
         XCTAssertEqual(notModified.headers["Cache-Control"], "no-store")
-        let badQuery = await router.route(self.request(query: ["since": "-1"]))
+        XCTAssertNil(notModified.headers["Content-Length"])
+        XCTAssertTrue(notModified.body.isEmpty)
+        let badQuery = try await router.route(self.request(query: ["since": "-1"]))
         XCTAssertEqual(badQuery.status, 400)
         XCTAssertEqual(badQuery.headers["Cache-Control"], "no-store")
-        let wrongMethod = await router.route(self.request(method: "POST"))
+        let wrongMethod = try await router.route(self.request(method: "POST"))
         XCTAssertEqual(wrongMethod.status, 405)
         XCTAssertEqual(wrongMethod.headers["Cache-Control"], "no-store")
-    }
-
-    func test_wireHeaders_omitContentLengthWithoutBody() {
-        for status in [204, 304] {
-            let headers = LocalAPI.wireHeaders(for: LocalAPI.Response(status: status))
-            XCTAssertNil(headers["Content-Length"], "\(status)")
-            XCTAssertEqual(headers["Connection"], "close")
-        }
-        let ok = LocalAPI.wireHeaders(for: LocalAPI.Response(status: 200, headers: ["X": "1"], body: Data("{}".utf8)))
-        XCTAssertEqual(ok["Content-Length"], "2")
-        XCTAssertEqual(ok["Connection"], "close")
-        XCTAssertEqual(ok["X"], "1")
     }
 
     func test_untrustedRequestRejection_allowsLoopbackHostsWithoutOrigin() {
         for host in ["127.0.0.1:47733", "localhost:47733", "LOCALHOST:47733", "[::1]:47733"] {
             let request = self.request(headers: ["host": host])
-            XCTAssertNil(LocalAPI.untrustedRequestRejection(for: request, port: 47733), host)
+            XCTAssertNil(LocalAPI.untrustedRequestRejection(host: request.headers["host"], hasOrigin: request.headers["origin"] != nil, port: 47733), host)
         }
     }
 
     func test_untrustedRequestRejection_onPort80AllowsHostsWithoutPort() throws {
         for host in ["127.0.0.1", "localhost", "[::1]", "127.0.0.1:80"] {
             let request = self.request(headers: ["host": host])
-            XCTAssertNil(LocalAPI.untrustedRequestRejection(for: request, port: 80), host)
+            XCTAssertNil(LocalAPI.untrustedRequestRejection(host: request.headers["host"], hasOrigin: false, port: 80), host)
         }
-        let foreign = try XCTUnwrap(LocalAPI.untrustedRequestRejection(for: self.request(headers: ["host": "evil.example"]), port: 80))
+        let foreign = try XCTUnwrap(LocalAPI.untrustedRequestRejection(host: "evil.example", hasOrigin: false, port: 80))
         XCTAssertEqual(foreign.status, 403)
     }
 
@@ -443,13 +490,9 @@ final class MeetingLiveAPIControllerTests: XCTestCase {
         ]
         for headers in cases {
             let request = self.request(headers: headers)
-            let response = try XCTUnwrap(LocalAPI.untrustedRequestRejection(for: request, port: 47733), "\(headers)")
+            let response = try XCTUnwrap(LocalAPI.untrustedRequestRejection(host: request.headers["host"], hasOrigin: request.headers["origin"] != nil, port: 47733), "\(headers)")
             XCTAssertEqual(response.status, 403, "\(headers)")
         }
-    }
-
-    func test_notModified_hasReasonPhrase() {
-        XCTAssertEqual(LocalAPI.reasonPhrase(for: 304), "Not Modified")
     }
 
     private func router(_ reading: MeetingLiveTranscriptReading) -> LocalAPIRouter {
@@ -484,5 +527,224 @@ private struct FixedLiveTranscriptProvider: MeetingLiveTranscriptProviding {
 
     func currentLiveTranscript() async -> MeetingLiveTranscriptReading {
         self.reading
+    }
+}
+
+private extension LocalAPIRouter {
+    func route(_ request: LocalAPI.Request) async throws -> LocalAPI.Response {
+        var target = URLComponents()
+        target.path = request.path
+        if !request.query.isEmpty {
+            target.queryItems = request.query.map { URLQueryItem(name: $0.key, value: $0.value) }
+        }
+        let head = HTTPRequest(
+            method: try XCTUnwrap(HTTPRequest.Method(request.method)),
+            scheme: "http",
+            authority: "127.0.0.1:\(LocalAPI.defaultPort)",
+            path: target.string
+        )
+        let input = Request(head: head, body: .init(buffer: ByteBuffer(bytes: request.body)))
+        let channel = NIOAsyncTestingChannel()
+        let context = BasicRequestContext(source: .init(channel: channel, logger: Logger(label: "LocalAPIRouterTests")))
+        let response = try await self.respond(to: input, context: context)
+        var body = Data()
+        try await response.body.write(TestResponseWriter { body.append(contentsOf: $0.readableBytesView) })
+        return LocalAPI.Response(
+            status: response.status.code,
+            headers: Dictionary(uniqueKeysWithValues: response.headers.map { ($0.name.rawName, $0.value) }),
+            body: body
+        )
+    }
+}
+
+private struct TestResponseWriter: ResponseBodyWriter {
+    let append: (ByteBuffer) -> Void
+
+    func write(_ buffer: ByteBuffer) async throws {
+        self.append(buffer)
+    }
+
+    func finish(_ trailingHeaders: HTTPFields?) async throws {}
+}
+
+@MainActor
+final class LocalAPIServerTests: XCTestCase {
+    func testServesBothLoopbackAddressesAndReleasesPortOnStop() async throws {
+        let port = try Self.availablePort()
+        let server = LocalAPIServer()
+        server.start(configuration: .init(enabled: true, port: port))
+        defer { server.stop() }
+
+        let session = URLSession(configuration: .ephemeral)
+        defer { session.invalidateAndCancel() }
+        for host in ["127.0.0.1", "[::1]"] {
+            let url = try XCTUnwrap(URL(string: "http://\(host):\(port)/v1/health"))
+            var request = URLRequest(url: url, timeoutInterval: 2)
+            let (body, response) = try await self.waitUntilReady(session: session, request: request)
+            XCTAssertEqual(response.statusCode, 200)
+            XCTAssertEqual(response.value(forHTTPHeaderField: "Connection"), "close")
+            let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: String])
+            XCTAssertEqual(json["status"], "ok")
+            XCTAssertFalse(try XCTUnwrap(json["version"]).isEmpty)
+
+            request.setValue("https://example.com", forHTTPHeaderField: "Origin")
+            let (_, rejected) = try await session.data(for: request)
+            XCTAssertEqual((rejected as? HTTPURLResponse)?.statusCode, 403)
+        }
+
+        let url = try XCTUnwrap(URL(string: "http://127.0.0.1:\(port)/v1/postprocess"))
+        var request = URLRequest(url: url, timeoutInterval: 2)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = Data(#"{"text":42}"#.utf8)
+        let (body, response) = try await session.data(for: request)
+        XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 400)
+        let error = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: String])
+        XCTAssertEqual(error["error"], "Invalid JSON text payload.")
+
+        let rejected = try await self.sendRawRequest(
+            "GET /v1/health HTTP/1.1\r\nHost: example.com:\(port)\r\n\r\n",
+            port: port
+        )
+        XCTAssertTrue(rejected.hasPrefix("HTTP/1.1 403 "), rejected)
+        XCTAssertTrue(rejected.contains("Host not allowed."), rejected)
+
+        // An oversized Content-Length must get a response without sending the body.
+        let oversized = try await self.sendRawRequest(
+            "POST /v1/transcribe HTTP/1.1\r\nHost: 127.0.0.1:\(port)\r\nContent-Length: \(LocalAPI.maxRequestBytes + 1)\r\n\r\n",
+            port: port
+        )
+        XCTAssertTrue(oversized.hasPrefix("HTTP/1.1 413 "), oversized)
+        XCTAssertTrue(oversized.contains("Request too large."), oversized)
+
+        server.stop()
+        for _ in 0..<40 {
+            do {
+                _ = try await session.data(for: request)
+            } catch let error as URLError where error.code == .cannotConnectToHost {
+                return
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        XCTFail("Local API still accepts connections after stop()")
+    }
+
+    func testRecoversWhenAnOccupiedPortIsReleased() async throws {
+        let blocker = try Self.bindLoopbackSocket()
+        defer { blocker.release() }
+        XCTAssertEqual(listen(blocker.descriptor, 1), 0)
+
+        let server = LocalAPIServer()
+        defer { server.stop() }
+        server.start(configuration: .init(enabled: true, port: blocker.port))
+        try await Task.sleep(for: .milliseconds(650))
+        blocker.release()
+
+        let session = URLSession(configuration: .ephemeral)
+        defer { session.invalidateAndCancel() }
+        for host in ["127.0.0.1", "[::1]"] {
+            let url = try XCTUnwrap(URL(string: "http://\(host):\(blocker.port)/v1/health"))
+            let (body, response) = try await self.waitUntilReady(session: session, request: URLRequest(url: url, timeoutInterval: 2))
+            XCTAssertEqual(response.statusCode, 200)
+            let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: String])
+            XCTAssertEqual(json["status"], "ok")
+        }
+    }
+
+    func testStopCancelsPendingBindRetry() async throws {
+        let blocker = try Self.bindLoopbackSocket()
+        defer { blocker.release() }
+        XCTAssertEqual(listen(blocker.descriptor, 1), 0)
+
+        let server = LocalAPIServer()
+        server.start(configuration: .init(enabled: true, port: blocker.port))
+        try await Task.sleep(for: .milliseconds(650))
+        server.stop()
+        try await Task.sleep(for: .milliseconds(250))
+        blocker.release()
+
+        let session = URLSession(configuration: .ephemeral)
+        defer { session.invalidateAndCancel() }
+        let url = try XCTUnwrap(URL(string: "http://127.0.0.1:\(blocker.port)/v1/health"))
+        do {
+            _ = try await self.waitUntilReady(session: session, request: URLRequest(url: url, timeoutInterval: 2))
+            XCTFail("The server restarted after stop()")
+        } catch let error as URLError where error.code == .cannotConnectToHost {
+            // The port stayed closed through the next scheduled attempts.
+        }
+    }
+
+    private func sendRawRequest(_ request: String, port: UInt16) async throws -> String {
+        let process = Process()
+        let input = Pipe()
+        let output = Pipe()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/nc")
+        process.arguments = ["-w", "2", "127.0.0.1", String(port)]
+        process.standardInput = input
+        process.standardOutput = output
+        try process.run()
+        defer { try? input.fileHandleForWriting.close() }
+        try input.fileHandleForWriting.write(contentsOf: Data(request.utf8))
+        let data = await Task.detached { output.fileHandleForReading.readDataToEndOfFile() }.value
+        return try XCTUnwrap(String(data: data, encoding: .utf8))
+    }
+
+    private func waitUntilReady(session: URLSession, request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        for _ in 0..<40 {
+            do {
+                let (body, response) = try await session.data(for: request)
+                return (body, try XCTUnwrap(response as? HTTPURLResponse))
+            } catch let error as URLError where error.code == .cannotConnectToHost {
+                try await Task.sleep(for: .milliseconds(50))
+            }
+        }
+        throw URLError(.cannotConnectToHost)
+    }
+
+    private static func availablePort() throws -> UInt16 {
+        let socket = try Self.bindLoopbackSocket()
+        socket.release()
+        return socket.port
+    }
+
+    private static func bindLoopbackSocket() throws -> BoundSocket {
+        let descriptor = socket(AF_INET, SOCK_STREAM, 0)
+        guard descriptor >= 0 else { throw POSIXError(.EIO) }
+
+        var address = sockaddr_in()
+        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_addr = in_addr(s_addr: inet_addr("127.0.0.1"))
+        var length = socklen_t(MemoryLayout<sockaddr_in>.size)
+        let status = withUnsafeMutablePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                guard Darwin.bind(descriptor, $0, length) == 0 else { return Int32(-1) }
+                return getsockname(descriptor, $0, &length)
+            }
+        }
+        guard status == 0 else {
+            close(descriptor)
+            throw POSIXError(.EADDRNOTAVAIL)
+        }
+        return BoundSocket(descriptor: descriptor, port: UInt16(bigEndian: address.sin_port))
+    }
+
+    private final class BoundSocket {
+        let descriptor: Int32
+        let port: UInt16
+        private var isOpen = true
+
+        init(descriptor: Int32, port: UInt16) {
+            self.descriptor = descriptor
+            self.port = port
+        }
+
+        deinit { self.release() }
+
+        func release() {
+            guard self.isOpen else { return }
+            self.isOpen = false
+            close(self.descriptor)
+        }
     }
 }

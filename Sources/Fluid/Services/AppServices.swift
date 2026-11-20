@@ -105,6 +105,8 @@ final class AppServices: ObservableObject {
         return arbiter
     }
 
+    private(set) lazy var meetingSummaryGeneration = MeetingSummaryGeneration()
+
     private var _meetingSessionCoordinator: MeetingSessionCoordinator?
     var meetingSessionCoordinator: MeetingSessionCoordinator {
         if let existing = self._meetingSessionCoordinator {

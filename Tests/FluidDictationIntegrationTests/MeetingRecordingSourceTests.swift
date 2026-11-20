@@ -476,6 +476,22 @@ final class MeetingRecordingSourceTests: XCTestCase {
         controller.cancel()
     }
 
+    /// Recovery after the captured process vanished: no running copy means the meeting app is gone, but
+    /// several copies only mean recovery cannot pick one, and the call may still be live in one of them.
+    func testRecoveryTellsAGoneAppFromSeveralRunningCopies() throws {
+        let source = MeetingRecordingSource.application(bundleIdentifier: "zoom", processID: nil, displayName: "Zoom")
+        XCTAssertThrowsError(try MeetingRecordingSourceResolver.resolveRecovery(source: source, applications: [self.browser])) {
+            guard case MeetingCaptureError.applicationUnavailable("Zoom") = $0 else { return XCTFail("Expected unavailable, got \($0)") }
+        }
+        var second = self.zoom
+        second.processID = 99
+        XCTAssertThrowsError(try MeetingRecordingSourceResolver.resolveRecovery(source: source, applications: [self.zoom, second])) {
+            guard case MeetingCaptureError.applicationAmbiguous("Zoom") = $0 else { return XCTFail("Expected ambiguous, got \($0)") }
+        }
+        let single = try MeetingRecordingSourceResolver.resolveRecovery(source: source, applications: [self.browser, second])
+        XCTAssertEqual(single?.processID, 99)
+    }
+
     func testRecentChoiceCoversRelaunchedAndDuplicateInstances() throws {
         var snapshot = self.snapshot()
         snapshot.recentApplication = self.browser

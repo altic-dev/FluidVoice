@@ -6,6 +6,16 @@ import SwiftUI
 import XCTest
 
 final class MeetingProviderOptionsTests: XCTestCase {
+    func testMeetingDictionaryRewritingStaysOutsideASR() throws {
+        let options = try MeetingProviderOptions.resolve(MeetingFinalProcessingConfiguration(
+            customDictionaryRewritingEnabled: true,
+            customDictionaryEntries: [.init(triggers: ["space fest"], replacement: "Spacefast")]
+        ))
+        XCTAssertFalse(options.customDictionaryRewritingEnabled, "final-turn rewriting must not alter ASR word timings")
+        XCTAssertFalse(options.vocabularyBoostingEnabled)
+        XCTAssertFalse(options.pronunciationMatchingEnabled)
+    }
+
     func testDefaultMeetingConfigurationResolvesToPinnedProEnglishPolicy() throws {
         let options = try MeetingProviderOptions.resolve(MeetingFinalProcessingConfiguration())
         XCTAssertEqual(options.model, .fluidParakeetPro)
@@ -23,6 +33,8 @@ final class MeetingProviderOptionsTests: XCTestCase {
         XCTAssertNil(MeetingRetranscriptionLanguage.canonicalCode(" "))
         XCTAssertEqual(MeetingRetranscriptionLanguage.displayName(for: "de"), "German")
         XCTAssertFalse(MeetingRetranscriptionLanguage.canRetranscribe(selection: "en", currentLanguageCode: "en"))
+        XCTAssertTrue(MeetingRetranscriptionLanguage.canRetranscribe(selection: "en", currentLanguageCode: "en", allowsSameLanguage: true))
+        XCTAssertFalse(MeetingRetranscriptionLanguage.canRetranscribe(selection: "invalid", currentLanguageCode: "en", allowsSameLanguage: true))
         XCTAssertTrue(MeetingRetranscriptionLanguage.canRetranscribe(selection: "nl", currentLanguageCode: "en"))
         XCTAssertEqual(
             MeetingFinalProcessingConfiguration(languageCode: "de").asrModel,
@@ -176,7 +188,6 @@ final class MeetingProviderOptionsTests: XCTestCase {
         let cases: [(MeetingFinalProcessingConfiguration, String)] = [
             (MeetingFinalProcessingConfiguration(vocabularyBoostingEnabled: true), "vocabularyBoosting"),
             (MeetingFinalProcessingConfiguration(pronunciationMatchingEnabled: true), "pronunciationMatching"),
-            (MeetingFinalProcessingConfiguration(customDictionaryRewritingEnabled: true), "customDictionaryRewriting"),
             (MeetingFinalProcessingConfiguration(experimentalUnifiedFinalEnabled: true), "experimentalUnifiedFinal"),
         ]
         for (configuration, feature) in cases {

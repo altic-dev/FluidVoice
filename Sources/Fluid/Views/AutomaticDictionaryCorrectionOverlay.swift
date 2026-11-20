@@ -155,8 +155,9 @@ final class DictionaryCorrectionOverlayController {
     private func scheduleSuccessDismissal() {
         self.keepVisible()
         let successGeneration = self.generation
+        let duration = self.session?.archiveWarning == nil ? Self.successDurationNanoseconds : Self.displayDurationNanoseconds
         self.dismissTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: Self.successDurationNanoseconds)
+            try? await Task.sleep(nanoseconds: duration)
             guard !Task.isCancelled,
                   let self,
                   self.generation == successGeneration
@@ -701,6 +702,9 @@ private struct AutomaticDictionaryCorrectionOverlayView: View {
     }
 
     private var correctionChoiceDescription: String {
+        if self.session.candidate.trainingExample != nil, self.session.candidate.negativeCorrection == nil {
+            return "Saves this correction and its dictation audio on this Mac."
+        }
         if self.session.candidate.negativeCorrection != nil {
             return "Confirm only if you said a different word, not a spelling change."
         }
@@ -746,6 +750,12 @@ private struct AutomaticDictionaryCorrectionOverlayView: View {
 
                     self.moreOptionsMenu
                 }
+            }
+            .disabled(self.session.capturePhase != .idle)
+            if self.session.capturePhase == .processing {
+                Text(self.session.statusMessage)
+                    .font(.fluidSystem(size: 11))
+                    .foregroundStyle(.white.opacity(0.58))
             }
             if self.session.hasError {
                 Text(self.session.statusMessage).font(.fluidSystem(size: 11)).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
@@ -915,6 +925,12 @@ private struct AutomaticDictionaryCorrectionOverlayView: View {
                     .font(.fluidSystem(size: 11))
                     .foregroundStyle(.white.opacity(0.6))
                     .lineLimit(1)
+                if let warning = self.session.archiveWarning {
+                    Text(warning)
+                        .font(.fluidSystem(size: 11))
+                        .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
 
             Spacer(minLength: 8)

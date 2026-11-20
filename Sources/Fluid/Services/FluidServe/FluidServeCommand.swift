@@ -28,9 +28,8 @@ nonisolated enum FluidServeCommand {
     static func run(
         arguments: [String],
         root: URL,
-        accessEnabled: Bool,
+        accessEnabled: Bool?,
         toolPath: String = FluidServeMeetings.toolName,
-        customPrompt: String = "",
         now: Date = Date(),
         timeZone: TimeZone = .current,
         fileManager: FileManager = .default
@@ -45,6 +44,14 @@ nonisolated enum FluidServeCommand {
             // Instructions only, no meeting data, so it answers whatever the switch says.
             return Result(output: FluidServeSkill.document(toolPath: toolPath).trimmingCharacters(in: .newlines), exitCode: 0)
         case "status":
+            guard let accessEnabled else {
+                let message = FluidServeMeetings.ReadError.accessUnavailable.localizedDescription
+                if arguments == ["--json"] {
+                    let object: [String: Any] = ["access": NSNull(), "meetings": 0]
+                    return Result(output: (try? self.json(object)) ?? "{}", exitCode: 0)
+                }
+                return Result(output: "Meeting access: unknown\n\(message)", exitCode: 0)
+            }
             let count = accessEnabled ? FluidServeMeetings.entries(root: root, fileManager: fileManager).count : 0
             if arguments == ["--json"] {
                 let object: [String: Any] = ["access": accessEnabled, "meetings": count]
@@ -57,11 +64,12 @@ nonisolated enum FluidServeCommand {
                 exitCode: 0
             )
         case "meet":
-            guard accessEnabled else {
-                return .failure(FluidServeMeetings.ReadError.accessOff.localizedDescription, code: 2)
+            guard accessEnabled == true else {
+                let error: FluidServeMeetings.ReadError = accessEnabled == false ? .accessOff : .accessUnavailable
+                return .failure(error.localizedDescription, code: 2)
             }
             do {
-                return try self.meet(arguments, root: root, customPrompt: customPrompt, now: now, timeZone: timeZone, fileManager: fileManager)
+                return try self.meet(arguments, root: root, now: now, timeZone: timeZone, fileManager: fileManager)
             } catch let error as UsageError {
                 return .failure("\(error.message)\n\n\(self.usage)")
             } catch {
@@ -112,7 +120,6 @@ nonisolated enum FluidServeCommand {
     private static func meet(
         _ arguments: [String],
         root: URL,
-        customPrompt: String,
         now: Date,
         timeZone: TimeZone,
         fileManager: FileManager
@@ -148,9 +155,9 @@ nonisolated enum FluidServeCommand {
             let entries = try Array(FluidServeMeetings.entries(root: root, since: since(options), fileManager: fileManager)
                 .prefix(limit(options, default: 20)))
             if options.flags.contains("--json") {
-                return try Result(output: self.json(entries.map { self.summaryObject($0, customPrompt: customPrompt, fileManager: fileManager) }), exitCode: 0)
+                return try Result(output: self.json(entries.map { self.summaryObject($0, fileManager: fileManager) }), exitCode: 0)
             }
-            return Result(output: FluidServeMeetings.listing(entries, customPrompt: customPrompt, timeZone: timeZone, fileManager: fileManager), exitCode: 0)
+            return Result(output: FluidServeMeetings.listing(entries, timeZone: timeZone, fileManager: fileManager), exitCode: 0)
 
         case "show":
             let options = try self.parse(rest, valued: ["--from", "--to"], flags: ["--json"])
@@ -162,7 +169,7 @@ nonisolated enum FluidServeCommand {
             let to = try clock(options, "--to")
             if let from, let to, from > to { throw UsageError(message: "--from must be earlier than --to.") }
             if options.flags.contains("--json") {
-                var object = self.summaryObject(entry, customPrompt: customPrompt, fileManager: fileManager)
+                var object = self.summaryObject(entry, fileManager: fileManager)
                 object["turns"] = entry.meeting.turns
                     .filter { $0.start.seconds >= (from ?? 0) && $0.start.seconds <= (to ?? .infinity) }
                     .map { [
@@ -186,13 +193,13 @@ nonisolated enum FluidServeCommand {
                 options.positional.first ?? "latest",
                 in: FluidServeMeetings.entries(root: root, fileManager: fileManager)
             )
-            var summaries = FluidServeMeetings.savedSummaries(for: entry, customPrompt: customPrompt, fileManager: fileManager)
+            var summaries = FluidServeMeetings.savedSummaries(for: entry, fileManager: fileManager)
             if let style = options.values["--style"] {
                 summaries = summaries.filter { $0.style == style.lowercased() }
             }
             guard !summaries.isEmpty else {
                 return .failure(
-                    "No current saved summary for this meeting. Summaries are written in FluidVoice; "
+                    "No saved summary for this meeting. Summaries are written in FluidVoice; "
                         + "`\(FluidServeMeetings.toolName) meet show \(entry.meeting.id.uuidString.prefix(8))` prints the transcript."
                 )
             }
@@ -201,6 +208,9 @@ nonisolated enum FluidServeCommand {
                 if let modelName = summary.modelName { facts.append("Written by: \(modelName)") }
                 if let generatedAt = summary.generatedAt {
                     facts.append("Saved: \(FluidServeMeetings.dateText(generatedAt, timeZone: timeZone))")
+                }
+                if summary.isOutdated {
+                    facts.append("Outdated: the meeting changed after this summary was written. Regenerate it in FluidVoice if needed.")
                 }
                 return facts.joined(separator: "\n") + "\n\n" + summary.text
             }.joined(separator: "\n\n==========\n\n")
@@ -237,9 +247,10 @@ nonisolated enum FluidServeCommand {
         }
     }
 
-    private static func summaryObject(_ entry: FluidServeMeetings.Entry, customPrompt: String, fileManager: FileManager) -> [String: Any] {
+    private static func summaryObject(_ entry: FluidServeMeetings.Entry, fileManager: FileManager) -> [String: Any] {
         let meeting = entry.meeting
         let formatter = ISO8601DateFormatter()
+        let summaries = FluidServeMeetings.savedSummaries(for: entry, fileManager: fileManager)
         return [
             "id": meeting.id.uuidString,
             "title": meeting.title,
@@ -247,7 +258,8 @@ nonisolated enum FluidServeCommand {
             "durationSeconds": meeting.durationSeconds.rounded(),
             "languageCode": meeting.languageCode,
             "speakers": meeting.activeSpeakers.map(\.displayName),
-            "summaries": FluidServeMeetings.savedSummaries(for: entry, customPrompt: customPrompt, fileManager: fileManager).map(\.style),
+            "summaries": summaries.map(\.style),
+            "outdatedSummaries": summaries.filter(\.isOutdated).map(\.style),
         ]
     }
 
