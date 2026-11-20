@@ -14,6 +14,7 @@ trap 'rm -rf "$task_test_dir"' EXIT
 sed '/^extension FileTranscriptionEntry/,$d' \
     Sources/Fluid/Persistence/Search/SearchIndexRecord.swift > "$task_test_dir/HistorySearchRecord.swift"
 xcrun swiftc -O -parse-as-library \
+    Sources/Fluid/Persistence/Search/HistorySearchRevision.swift \
     "$task_test_dir/HistorySearchRecord.swift" \
     Sources/Fluid/Persistence/TranscriptionHistoryDatabase.swift \
     Sources/Fluid/Persistence/TranscriptionHistoryStore.swift \

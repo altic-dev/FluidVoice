@@ -1599,6 +1599,32 @@ struct SettingsView: View {
         Task { await self.performBackupImport() }
     }
 
+    static func backupImportConfirmation(exportedAt: Date, fileTranscriptCount: Int?) -> NSAlert {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+
+        var changes = "This replaces your current settings, prompt profiles, and stats history."
+        if let fileTranscriptCount {
+            changes += fileTranscriptCount == 0
+                ? " This backup has no file transcripts. Importing it will clear your saved file transcripts."
+                : " The file transcripts in this backup will replace your saved file transcripts."
+        }
+
+        let confirm = NSAlert()
+        confirm.messageText = "Import this backup?"
+        confirm.informativeText = """
+        \(changes)
+
+        Exported: \(formatter.string(from: exportedAt))
+        API keys are not included and will not be changed.
+        """
+        confirm.alertStyle = .warning
+        confirm.addButton(withTitle: "Import")
+        confirm.addButton(withTitle: "Cancel")
+        return confirm
+    }
+
     private func performBackupImport() async {
         do {
             let panel = NSOpenPanel()
@@ -1612,22 +1638,9 @@ struct SettingsView: View {
             let data = try Data(contentsOf: url)
             let document = try BackupService.shared.decode(data)
 
-            let formatter = DateFormatter()
-            formatter.dateStyle = .medium
-            formatter.timeStyle = .short
-
-            let confirm = NSAlert()
-            confirm.messageText = "Import this backup?"
-            confirm.informativeText = """
-            This replaces your current settings, prompt profiles, and stats history.
-
-            Exported: \(formatter.string(from: document.exportedAt))
-            API keys are not included and will not be changed.
-            """
-            confirm.alertStyle = .warning
-            confirm.addButton(withTitle: "Import")
-            confirm.addButton(withTitle: "Cancel")
-
+            let confirm = Self.backupImportConfirmation(
+                exportedAt: document.exportedAt, fileTranscriptCount: document.fileTranscriptionHistory?.count
+            )
             guard confirm.runModal() == .alertFirstButtonReturn else { return }
 
             try await BackupService.shared.restore(document)
