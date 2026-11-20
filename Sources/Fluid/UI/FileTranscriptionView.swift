@@ -297,9 +297,7 @@ struct FileTranscriptionView: View {
                                 Text("Label speakers")
                                     .font(self.theme.typography.bodySmall)
 
-                                Text(self.selectedFileIsVideo
-                                    ? "Available for audio files only"
-                                    : "Identify who said what (downloads speaker models on first use)")
+                                Text("Identify who said what (downloads speaker models on first use)")
                                     .font(self.theme.typography.caption)
                                     .foregroundColor(.secondary)
                             }
@@ -307,9 +305,9 @@ struct FileTranscriptionView: View {
                         }
                         .toggleStyle(.switch)
                         .accessibilityLabel("Label speakers")
-                        .disabled(self.selectedFileIsVideo || self.transcriptionService.isTranscribing)
+                        .disabled(self.transcriptionService.isTranscribing)
 
-                        if self.settings.fileTranscriptionSpeakerLabelsEnabled, !self.selectedFileIsVideo {
+                        if self.settings.fileTranscriptionSpeakerLabelsEnabled {
                             HStack {
                                 Text("Number of speakers")
                                     .font(self.theme.typography.bodySmall)
