@@ -421,8 +421,6 @@ struct ContentView: View {
     @State private var savedProviders: [SettingsStore.SavedProvider] = []
     @State private var selectedProviderID: String = SettingsStore.shared.selectedProviderID
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
-    @State private var toolbarTrailingInset: CGFloat = 80
-
     #if DEBUG
     private var dictationModeSwitchASRForTesting: ASRService?
     private var dictationModeSwitchOnReadyForTesting: ((ContentView) -> Void)?
@@ -492,11 +490,6 @@ struct ContentView: View {
                             .toolbar(removing: .sidebarToggle)
                     } detail: {
                         self.detailView
-                            .onGeometryChange(for: CGFloat.self) { geometry in
-                                (geometry.size.width * 0.1).rounded()
-                            } action: { inset in
-                                self.toolbarTrailingInset = inset
-                            }
                     }
                     .navigationSplitViewStyle(.balanced)
                 }
@@ -2145,7 +2138,6 @@ struct ContentView: View {
                     MainWindowToolbar(
                         isSidebarHidden: self.columnVisibility == .detailOnly,
                         pageWithActions: self.hasPageToolbarActions ? (self.selectedSidebarItem ?? .welcome) : nil,
-                        trailingInset: self.toolbarTrailingInset,
                         actions: self.toolbarActions,
                         pageToolbarStore: self.pageToolbarStore
                     )
@@ -6481,7 +6473,6 @@ private final class MainToolbarActions {
 private struct MainWindowToolbar: ToolbarContent {
     let isSidebarHidden: Bool
     let pageWithActions: SidebarItem?
-    let trailingInset: CGFloat
     let actions: MainToolbarActions
     let pageToolbarStore: FluidPageToolbarStore
 
@@ -6527,7 +6518,6 @@ private struct MainWindowToolbar: ToolbarContent {
                 FluidPageToolbarActions(store: self.pageToolbarStore, page: pageWithActions)
             }
         }
-        FluidToolbarEdgeSpace(width: self.trailingInset)
     }
 }
 

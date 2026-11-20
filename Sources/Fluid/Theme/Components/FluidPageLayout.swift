@@ -176,24 +176,3 @@ extension View {
         self.modifier(FluidPageActions(enabled: enabled, actions: actions()))
     }
 }
-
-/// A separate invisible item leaves the native glass and button hit areas intact.
-struct FluidToolbarEdgeSpace: ToolbarContent {
-    let width: CGFloat
-
-    var body: some ToolbarContent {
-        if #available(macOS 26, *) {
-            ToolbarItem(placement: .primaryAction) { self.space }
-                .sharedBackgroundVisibility(.hidden)
-        } else {
-            ToolbarItem(placement: .primaryAction) { self.space }
-        }
-    }
-
-    private var space: some View {
-        Color.clear
-            .frame(width: max(0, self.width - 8), height: 1)
-            .allowsHitTesting(false)
-            .accessibilityHidden(true)
-    }
-}
