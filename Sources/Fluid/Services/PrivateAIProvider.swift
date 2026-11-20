@@ -149,6 +149,7 @@ struct PrivateAIRegisteredModel: Sendable, Codable, Hashable, Identifiable {
     var parameterCount: String
     var recommendedMemoryGB: Int?
     var artifact: PrivateAIModelArtifact
+    var presentation: PrivateAIModelPresentation?
 
     var canDownload: Bool {
         self.artifact.downloadURL != nil && self.artifact.sha256?.isEmpty == false
@@ -202,9 +203,13 @@ protocol PrivateAIProviderFeatureProviding: Sendable {
     func isKnownModelID(_ value: String) -> Bool
     func matches(model: String) -> Bool
     func localModelURL(for model: PrivateAIRegisteredModel, directoryURL: URL) -> URL
+    func recommendedModelID(for task: PrivateAIModelTask, on hardware: PrivateAIMacHardware) -> String?
 }
 
+// Optional catalog advice keeps older providers compatible.
 extension PrivateAIProviderFeatureProviding {
+    func recommendedModelID(for _: PrivateAIModelTask, on _: PrivateAIMacHardware) -> String? { nil }
+
     func selectedModelDefaultsKey(for _: PrivateAIModelTask) -> String {
         self.selectedModelDefaultsKey
     }
@@ -467,6 +472,10 @@ enum PrivateAIModelRegistry {
         PrivateAIProviderFeature.shared.modelIDs(for: task)
     }
 
+    nonisolated static func recommendedModelID(for task: PrivateAIModelTask, on hardware: PrivateAIMacHardware) -> String? {
+        PrivateAIProviderFeature.shared.recommendedModelID(for: task, on: hardware)
+    }
+
     nonisolated static func localModelURL(for model: PrivateAIRegisteredModel, directoryURL: URL) -> URL {
         PrivateAIProviderFeature.shared.localModelURL(for: model, directoryURL: directoryURL)
     }
@@ -590,4 +599,21 @@ nonisolated struct PrivateAIConfirmedResidency: Sendable {
         guard generation == self.generation else { return }
         self.isResident = isResident
     }
+}
+
+/// Optional metadata returned by current private providers; older hosts need not display it.
+struct PrivateAIReleaseHighlight: Sendable, Equatable {
+    var id: String
+    var eyebrow: String
+    var title: String
+    var detail: String
+    var action: String
+    var releaseTitle: String
+    var subtitle: String
+}
+
+struct PrivateAIBoostOption: Sendable, Equatable {
+    var title: String
+    var detail: String
+    var help: String
 }

@@ -1,281 +1,117 @@
-import Foundation
-import Network
+import Darwin
+import Hummingbird
+import Logging
+import NIOCore
+import NIOHTTPTypes
+import ServiceLifecycle
 
 @MainActor
 final class LocalAPIServer {
     static let shared = LocalAPIServer()
 
-    private let router = LocalAPIRouter()
-    private let queue = DispatchQueue(label: "fluidvoice.local-api", qos: .utility)
-    private var listener: NWListener?
-    private var activeConnections: [ObjectIdentifier: LocalAPIConnectionHandler] = [:]
-    private(set) var port: UInt16 = LocalAPI.defaultPort
+    private var serverTask: Task<Void, Never>?
+    private var serviceGroup: ServiceGroup?
+    private var isStopping = false
 
-    private init() {}
-
-    func start() {
-        let config = LocalAPI.Configuration.current
+    func start(configuration config: LocalAPI.Configuration = .current) {
+        guard self.serverTask == nil else { return }
         guard config.enabled else {
             DebugLogger.shared.info("Local API disabled", source: "LocalAPIServer")
             return
         }
 
-        if self.listener != nil {
-            return
-        }
-
-        do {
-            guard let port = NWEndpoint.Port(rawValue: config.port) else {
-                DebugLogger.shared.error("Local API invalid port", source: "LocalAPIServer")
-                return
-            }
-
-            let parameters = NWParameters.tcp
-
-            let listener = try NWListener(using: parameters, on: port)
-            listener.newConnectionHandler = { [weak self] connection in
-                guard Self.isLoopback(connection.endpoint) else {
-                    connection.cancel()
-                    return
-                }
-
-                Task { @MainActor [weak self] in
-                    guard let self else {
-                        connection.cancel()
-                        return
-                    }
-
-                    let handler = LocalAPIConnectionHandler(
-                        connection: connection,
-                        router: self.router,
-                        port: config.port
-                    )
-                    let id = ObjectIdentifier(handler)
-                    handler.onClose = { [weak self] in
-                        Task { @MainActor in
-                            self?.activeConnections[id] = nil
-                        }
-                    }
-                    self.activeConnections[id] = handler
-                    handler.start(on: self.queue)
-                }
-            }
-            listener.stateUpdateHandler = { state in
-                Task { @MainActor in
-                    self.handleState(state)
-                }
-            }
-
-            self.port = config.port
-            self.listener = listener
-            listener.start(queue: self.queue)
-        } catch {
-            DebugLogger.shared.error("Local API failed to start: \(error.localizedDescription)", source: "LocalAPIServer")
+        self.isStopping = false
+        self.serverTask = Task {
+            defer { self.serverTask = nil }
+            await self.run(port: config.port)
         }
     }
 
     func stop() {
-        for handler in self.activeConnections.values {
-            handler.cancel()
-        }
-        self.activeConnections.removeAll()
-        self.listener?.cancel()
-        self.listener = nil
-    }
-
-    private func handleState(_ state: NWListener.State) {
-        switch state {
-        case .ready:
-            DebugLogger.shared.info("Local API listening on http://127.0.0.1:\(self.port)", source: "LocalAPIServer")
-        case let .failed(error):
-            DebugLogger.shared.error("Local API listener failed: \(error.localizedDescription)", source: "LocalAPIServer")
-            self.listener?.cancel()
-            self.listener = nil
-        case .cancelled:
-            self.listener = nil
-        default:
-            break
+        self.isStopping = true
+        if let group = self.serviceGroup {
+            Task { await group.triggerGracefulShutdown() }
+        } else {
+            self.serverTask?.cancel()
         }
     }
 
-    private nonisolated static func isLoopback(_ endpoint: NWEndpoint) -> Bool {
-        guard case let .hostPort(host, _) = endpoint else { return false }
+    private func run(port: UInt16) async {
+        let router = LocalAPIRouter(port: port)
+        let clock = ContinuousClock()
+        var deadline: ContinuousClock.Instant?
+        var delay = Duration.milliseconds(250)
 
-        switch host {
-        case let .name(name, _):
-            return name.caseInsensitiveCompare("localhost") == .orderedSame
-        case let .ipv4(address):
-            return "\(address)" == "127.0.0.1"
-        case let .ipv6(address):
-            return "\(address)" == "::1"
-        @unknown default:
-            return false
+        while !self.isStopping {
+            do {
+                try await self.runOnce(router: router, port: port)
+                return
+            } catch {
+                guard !self.isStopping else { return }
+                guard let ioError = error as? IOError, ioError.errnoCode == EADDRINUSE else {
+                    DebugLogger.shared.error("Local API listener failed: \(error)", source: "LocalAPIServer")
+                    return
+                }
+
+                let now = clock.now
+                if deadline == nil {
+                    // Give the outgoing process time to finish its update shutdown.
+                    deadline = now + .seconds(30)
+                    DebugLogger.shared.warning("Local API port \(port) is in use; retrying for up to 30 seconds", source: "LocalAPIServer")
+                }
+                guard let deadline, now < deadline else {
+                    DebugLogger.shared.error("Local API port \(port) is still in use after retrying: \(error)", source: "LocalAPIServer")
+                    return
+                }
+
+                do {
+                    try await clock.sleep(until: min(now + delay, deadline))
+                } catch {
+                    return
+                }
+                delay = min(delay * 2, .seconds(2))
+            }
         }
+    }
+
+    private func runOnce(router: LocalAPIRouter, port: UInt16) async throws {
+        let services = ["127.0.0.1", "::1"].map { host in
+            let application = Application(
+                responder: router,
+                server: .http1(configuration: .init(additionalChannelHandlers: [CloseAfterResponse()])),
+                configuration: .init(address: .hostname(host, port: Int(port))),
+                onServerRunning: { _ in
+                    let address = host == "::1" ? "[::1]" : host
+                    DebugLogger.shared.info("Local API listening on http://\(address):\(port)", source: "LocalAPIServer")
+                }
+            )
+            return ServiceGroupConfiguration.ServiceConfiguration(
+                service: application,
+                failureTerminationBehavior: .gracefullyShutdownGroup
+            )
+        }
+
+        // AppDelegate manages shutdown. Leave process signal handling to the app.
+        var configuration = ServiceGroupConfiguration(services: services, logger: Logger(label: "LocalAPIServer"))
+        configuration.maximumGracefulShutdownDuration = .seconds(1)
+        let group = ServiceGroup(configuration: configuration)
+        self.serviceGroup = group
+        defer { self.serviceGroup = nil }
+        try await group.run()
     }
 }
 
-@MainActor
-private final class LocalAPIConnectionHandler {
-    private let connection: NWConnection
-    private let router: LocalAPIRouter
-    private let port: UInt16
-    private var buffer = Data()
-    private var isClosed = false
-    var onClose: (() -> Void)?
+// Preserve one request per connection, including rejections that leave the request body unread.
+private final nonisolated class CloseAfterResponse: ChannelOutboundHandler, RemovableChannelHandler {
+    typealias OutboundIn = HTTPResponsePart
+    typealias OutboundOut = HTTPResponsePart
 
-    init(connection: NWConnection, router: LocalAPIRouter, port: UInt16) {
-        self.connection = connection
-        self.router = router
-        self.port = port
-    }
-
-    func start(on queue: DispatchQueue) {
-        self.connection.start(queue: queue)
-        self.receive()
-    }
-
-    func cancel() {
-        self.close()
-    }
-
-    private func receive() {
-        self.connection.receive(minimumIncompleteLength: 1, maximumLength: 16_384) { [weak self] data, _, isComplete, error in
-            Task { @MainActor in
-                guard let self else { return }
-                if error != nil || isComplete {
-                    self.close()
-                    return
-                }
-
-                if let data {
-                    self.buffer.append(data)
-                }
-
-                guard self.buffer.count <= LocalAPI.maxRequestBytes else {
-                    self.send(LocalAPI.error("Request too large.", status: 413))
-                    return
-                }
-
-                switch self.parseRequestIfComplete() {
-                case let .request(request):
-                    if let rejection = LocalAPI.untrustedRequestRejection(for: request, port: self.port) {
-                        self.send(rejection)
-                        return
-                    }
-                    let response = await self.router.route(request)
-                    self.send(response)
-                case let .failure(response):
-                    self.send(response)
-                case .incomplete:
-                    self.receive()
-                }
-            }
-        }
-    }
-
-    private func send(_ response: LocalAPI.Response) {
-        let body = response.body
-        let headers = LocalAPI.wireHeaders(for: response)
-
-        let statusLine = "HTTP/1.1 \(response.status) \(LocalAPI.reasonPhrase(for: response.status))\r\n"
-        let headerLines = headers
-            .map { "\($0.key): \($0.value)\r\n" }
-            .sorted()
-            .joined()
-        var data = Data((statusLine + headerLines + "\r\n").utf8)
-        data.append(body)
-
-        self.connection.send(content: data, completion: .contentProcessed { [connection] _ in
-            connection.cancel()
-            Task { @MainActor [weak self] in
-                self?.close()
-            }
-        })
-    }
-
-    private func close() {
-        guard !self.isClosed else { return }
-        self.isClosed = true
-        self.connection.cancel()
-        self.onClose?()
-    }
-
-    private enum ParsedRequest {
-        case incomplete
-        case request(LocalAPI.Request)
-        case failure(LocalAPI.Response)
-    }
-
-    private func parseRequestIfComplete() -> ParsedRequest {
-        guard let headerEnd = self.buffer.range(of: Data("\r\n\r\n".utf8)) else {
-            return .incomplete
-        }
-
-        let headerData = self.buffer[..<headerEnd.lowerBound]
-        guard let headerText = String(data: headerData, encoding: .utf8) else {
-            return .failure(LocalAPI.error("Malformed request.", status: 400))
-        }
-
-        let lines = headerText.components(separatedBy: "\r\n")
-        guard let requestLine = lines.first else { return .incomplete }
-        let parts = requestLine.split(separator: " ", maxSplits: 2).map(String.init)
-        guard parts.count >= 2 else {
-            return .failure(LocalAPI.error("Malformed request.", status: 400))
-        }
-
-        var headers: [String: String] = [:]
-        for line in lines.dropFirst() {
-            guard let separator = line.firstIndex(of: ":") else { continue }
-            let key = line[..<separator].trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-            let value = line[line.index(after: separator)...].trimmingCharacters(in: .whitespacesAndNewlines)
-            headers[key] = value
-        }
-
-        let contentLength: Int
-        if let rawContentLength = headers["content-length"] {
-            guard let parsedContentLength = Int(rawContentLength), parsedContentLength >= 0 else {
-                return .failure(LocalAPI.error("Invalid Content-Length.", status: 400))
-            }
-            guard parsedContentLength <= LocalAPI.maxRequestBytes else {
-                return .failure(LocalAPI.error("Request too large.", status: 413))
-            }
-            contentLength = parsedContentLength
+    func write(context: ChannelHandlerContext, data: NIOAny, promise: EventLoopPromise<Void>?) {
+        if case .end = self.unwrapOutboundIn(data) {
+            context.writeAndFlush(data, promise: promise)
+            context.close(promise: nil)
         } else {
-            contentLength = 0
+            context.write(data, promise: promise)
         }
-
-        let bodyStart = headerEnd.upperBound
-        let requestEnd = bodyStart + contentLength
-        guard requestEnd <= LocalAPI.maxRequestBytes else {
-            return .failure(LocalAPI.error("Request too large.", status: 413))
-        }
-        guard self.buffer.count >= requestEnd else {
-            return .incomplete
-        }
-
-        let body = Data(self.buffer[bodyStart..<requestEnd])
-        let parsedTarget = Self.parseTarget(parts[1])
-        return .request(LocalAPI.Request(
-            method: parts[0].uppercased(),
-            path: parsedTarget.path,
-            query: parsedTarget.query,
-            headers: headers,
-            body: body
-        ))
-    }
-
-    private static func parseTarget(_ target: String) -> (path: String, query: [String: String]) {
-        let base = target.hasPrefix("http") ? target : "http://127.0.0.1\(target)"
-        guard let components = URLComponents(string: base) else {
-            return (target, [:])
-        }
-
-        var query: [String: String] = [:]
-        for item in components.queryItems ?? [] {
-            guard !item.name.isEmpty else { continue }
-            query[item.name] = item.value ?? ""
-        }
-
-        return (components.path.isEmpty ? "/" : components.path, query)
     }
 }

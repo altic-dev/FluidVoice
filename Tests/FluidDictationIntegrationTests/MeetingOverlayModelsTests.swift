@@ -38,6 +38,24 @@ final class MeetingOverlayGeometryTests: XCTestCase {
         XCTAssertEqual(next.bottomY, self.screen.minY + 30)
     }
 
+    func testDraggedAnchorFollowsPointerAndLayoutKeepsPillOnScreen() {
+        let start = MeetingOverlayVisibleAnchor(centerX: 300, bottomY: 450)
+        let moved = MeetingOverlayGeometry.draggedAnchor(
+            from: start,
+            pointerStart: CGPoint(x: 310, y: 460),
+            pointer: CGPoint(x: 350, y: 430)
+        )
+        XCTAssertEqual(moved, MeetingOverlayVisibleAnchor(centerX: 340, bottomY: 420))
+
+        let offscreen = MeetingOverlayGeometry.draggedAnchor(
+            from: start,
+            pointerStart: .zero,
+            pointer: CGPoint(x: -5000, y: -5000)
+        )
+        let layout = MeetingOverlayGeometry.layout(anchor: offscreen, visibleSize: self.pill, padding: 24, screenVisible: self.screen)
+        XCTAssertEqual(layout.visibleSurfaceFrame.origin, self.screen.origin)
+    }
+
     func testCanonicalPresentationVisibleSizes() {
         XCTAssertGreaterThan(self.captions.width, self.pill.width)
         XCTAssertGreaterThan(self.captions.height, self.pill.height)
@@ -360,6 +378,40 @@ final class MeetingOverlayPresentationReducerTests: XCTestCase {
         XCTAssertEqual(reducer.presentation, .captions)
         reducer.apply(.toggleRequested)
         XCTAssertEqual(reducer.presentation, .pill)
+    }
+
+    func testDismissedPillStaysHiddenThroughDegradeAndResetsForNextMeeting() {
+        var reducer = MeetingOverlayPresentationReducer(preference: .pill)
+        let session = UUID()
+        reducer.apply(.pillDismissed)
+        XCTAssertFalse(reducer.isPillDismissed)
+
+        reducer.apply(.recordingStarted(sessionID: session))
+        reducer.apply(.pillDismissed)
+        XCTAssertTrue(reducer.isPillDismissed)
+
+        reducer.apply(.recordingDegraded)
+        reducer.apply(.recordingStarted(sessionID: session))
+        XCTAssertTrue(reducer.isPillDismissed)
+
+        reducer.apply(.recordingStarted(sessionID: UUID()))
+        XCTAssertFalse(reducer.isPillDismissed)
+
+        reducer.apply(.pillDismissed)
+        reducer.apply(.recordingStopped)
+        XCTAssertFalse(reducer.isPillDismissed)
+    }
+
+    func testOpeningCaptionsClearsPillDismissal() {
+        var reducer = MeetingOverlayPresentationReducer(preference: .pill)
+        reducer.apply(.recordingStarted(sessionID: UUID()))
+        reducer.apply(.pillDismissed)
+        reducer.apply(.toggleRequested)
+        XCTAssertEqual(reducer.presentation, .captions)
+        XCTAssertFalse(reducer.isPillDismissed)
+
+        reducer.apply(.pillDismissed)
+        XCTAssertFalse(reducer.isPillDismissed)
     }
 
     func testPreferenceRoundTripAndCaseIterable() throws {
@@ -788,7 +840,7 @@ extension MeetingMenuBarStartTests {
 }
 
 @MainActor
-final class MeetingPageActionAvailabilityTests: XCTestCase {
+final class MeetingHeaderActionsTests: XCTestCase {
     private func session() -> MeetingSession {
         MeetingSession(
             configuration: MeetingCaptureConfiguration(mode: .inRoom, title: "Meeting", microphone: MeetingMicrophoneIdentity(captureDeviceID: "mic", displayName: "Mic")),
@@ -796,32 +848,78 @@ final class MeetingPageActionAvailabilityTests: XCTestCase {
         )
     }
 
-    func testCompletedAndFailedMeetingsKeepNewMeetingVisibleWhileSummaryBlocksItsAction() {
+    private func actions(_ screen: MeetingScreen, isQuiescent: Bool = true, isSummaryRunning: Bool = false) -> MeetingHeaderActions {
+        MeetingHeaderActions(screen: screen, isQuiescent: isQuiescent, isSummaryRunning: isSummaryRunning)
+    }
+
+    func testHomeOffersRecordingWithoutBackOrPlus() {
+        let actions = self.actions(.home)
+        XCTAssertFalse(actions.showsBack)
+        XCTAssertFalse(actions.showsNewRecording)
+        XCTAssertTrue(actions.canStartRecording)
+        XCTAssertTrue(actions.canEditSetup)
+        XCTAssertFalse(self.actions(.home, isQuiescent: false).canStartRecording)
+        XCTAssertFalse(self.actions(.home, isSummaryRunning: true).canStartRecording)
+    }
+
+    func testFinishedMeetingsShowBackAndPlusWhileSummaryBlocksThem() {
         for state in [MeetingTranscriptionCanvasState.result(self.session()), .failed(session: nil, message: "Failed")] {
             for summaryRunning in [false, true] {
-                let actions = MeetingPageActionAvailability(state: state, isSummaryRunning: summaryRunning)
-                XCTAssertTrue(actions.showsNewMeeting)
-                XCTAssertEqual(actions.canStartNewMeeting, !summaryRunning)
+                let actions = self.actions(.canvas(state), isSummaryRunning: summaryRunning)
+                XCTAssertTrue(actions.showsBack)
+                XCTAssertTrue(actions.showsNewRecording)
+                XCTAssertEqual(actions.canGoBack, !summaryRunning)
+                XCTAssertEqual(actions.canStartRecording, !summaryRunning)
                 XCTAssertTrue(actions.canEditSetup)
             }
         }
     }
 
-    func testSetupAndActiveCaptureNeverOfferAnotherMeeting() {
+    func testRecordingViewShowsBackUntilCaptureStarts() {
+        let idle = self.actions(.canvas(.setup(isStarting: false, recentSession: nil)))
+        XCTAssertTrue(idle.showsBack)
+        XCTAssertFalse(idle.showsNewRecording)
+        XCTAssertTrue(idle.canEditSetup)
+
+        let starting = self.actions(.canvas(.setup(isStarting: true, recentSession: nil)))
+        XCTAssertFalse(starting.showsBack)
+        XCTAssertFalse(starting.canEditSetup)
+    }
+
+    func testActiveCaptureHidesNavigation() {
         let session = self.session()
         let states: [MeetingTranscriptionCanvasState] = [
-            .setup(isStarting: false, recentSession: nil),
-            .setup(isStarting: true, recentSession: session),
             .recording(session: session, trackHealth: [:], liveTranscript: .empty),
             .stopping(session: session, trackHealth: [:], liveTranscript: .empty),
             .processing(session: session, stage: .transcribing),
         ]
-        for (index, state) in states.enumerated() {
-            let actions = MeetingPageActionAvailability(state: state, isSummaryRunning: false)
-            XCTAssertFalse(actions.showsNewMeeting)
-            XCTAssertFalse(actions.canStartNewMeeting)
-            XCTAssertEqual(actions.canEditSetup, index == 0)
+        for state in states {
+            let actions = self.actions(.canvas(state))
+            XCTAssertFalse(actions.showsBack)
+            XCTAssertFalse(actions.showsNewRecording)
+            XCTAssertFalse(actions.canStartRecording)
+            XCTAssertFalse(actions.canEditSetup)
         }
+    }
+
+    func testIdleSetupIsHomeUnlessRecordingViewWasRequested() {
+        let idle = MeetingTranscriptionCanvasState.setup(isStarting: false, recentSession: nil)
+        guard case .home = MeetingScreen(route: .home, canvasState: idle) else { return XCTFail("Idle route should show home") }
+        guard case .canvas(.setup) = MeetingScreen(route: .newRecording, canvasState: idle) else {
+            return XCTFail("New recording route should show setup")
+        }
+    }
+
+    func testCaptureAndFinishedSessionsOverrideHomeRoute() {
+        let session = self.session()
+        guard case .canvas(.setup) = MeetingScreen(route: .home, canvasState: .setup(isStarting: true, recentSession: nil)) else {
+            return XCTFail("A starting capture must stay visible")
+        }
+        guard case .canvas(.result) = MeetingScreen(route: .home, canvasState: .result(session)) else {
+            return XCTFail("A finished meeting must stay visible")
+        }
+        XCTAssertEqual(MeetingRoute.meeting(session.id).meetingID, session.id)
+        XCTAssertNil(MeetingRoute.newRecording.meetingID)
     }
 }
 

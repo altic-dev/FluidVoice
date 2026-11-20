@@ -133,6 +133,8 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
     @Published var pendingDeletePromptName: String = ""
 
     private var newPromptShortcutCancellable: AnyCancellable?
+    private var settingsReloadCancellables = Set<AnyCancellable>()
+    private var needsSettingsReload = true
 
     init(settings: SettingsStore, menuBarManager: MenuBarManager, promptTest: DictationPromptTestCoordinator) {
         self.settings = settings
@@ -140,6 +142,13 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         self.promptTest = promptTest
         self.openAIBaseURL = ""
         self.selectedProviderID = settings.selectedProviderID
+
+        settings.objectWillChange
+            .sink { [weak self] _ in self?.needsSettingsReload = true }
+            .store(in: &self.settingsReloadCancellables)
+        NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)
+            .sink { [weak self] _ in self?.needsSettingsReload = true }
+            .store(in: &self.settingsReloadCancellables)
 
         self.newPromptShortcutCancellable = NotificationCenter.default
             .publisher(for: .newPromptShortcutRecorded)
@@ -153,9 +162,15 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
             }
     }
 
-    func onAppear() {
+    /// Returns whether settings were reloaded. Reloading republishes every field and redraws the page.
+    @discardableResult
+    func onAppear() -> Bool {
         self.appear = true
+        guard self.needsSettingsReload else { return false }
         self.loadSettings()
+        // Loading can normalize stored values, which reports a change of its own.
+        self.needsSettingsReload = false
+        return true
     }
 
     // MARK: - Load Settings

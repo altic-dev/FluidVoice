@@ -74,6 +74,8 @@ nonisolated enum FluidServeMeetings {
         var text: String
         var modelName: String?
         var generatedAt: Date?
+        /// The transcript or speaker names changed after it was written.
+        var isOutdated = false
     }
 
     struct Entry: Equatable {
@@ -88,6 +90,7 @@ nonisolated enum FluidServeMeetings {
 
     enum ReadError: LocalizedError, Equatable {
         case accessOff
+        case accessUnavailable
         case noMeetings
         case notFound(String)
         case ambiguous(String, Int)
@@ -96,6 +99,9 @@ nonisolated enum FluidServeMeetings {
             switch self {
             case .accessOff:
                 return "FluidVoice is not sharing meetings with any agent yet. In FluidVoice, open FluidMeet settings > Integrations and add your agent."
+            case .accessUnavailable:
+                return "Could not verify FluidVoice meeting-sharing permission. The setting may be unset or blocked by a sandbox. "
+                    + "Check FluidMeet settings > Integrations; if sharing is on, check the agent's sandbox permissions. No meeting data was read."
             case .noMeetings:
                 return "No finished meetings with a transcript were found."
             case let .notFound(reference):
@@ -118,19 +124,14 @@ nonisolated enum FluidServeMeetings {
     /// but through CFPreferences rather than `UserDefaults`, which would also honour a
     /// `-FluidServeMeetingAccessEnabled YES` argument and let a caller switch it on.
     /// This is a consent switch, not a lock: anything running as the user could read the files anyway.
-    static func isAccessEnabled(bundleIdentifier: String) -> Bool {
-        (CFPreferencesCopyAppValue(self.accessDefaultsKey as CFString, bundleIdentifier as CFString) as? Bool) ?? false
-    }
-
-    static let customSummaryPromptDefaultsKey = "MeetingSummaryCustomPrompt"
-
-    /// The prompt in the app's custom-summary box, needed to tell whether a saved custom summary is still the current one.
-    static func customSummaryPrompt(bundleIdentifier: String) -> String {
-        (CFPreferencesCopyAppValue(self.customSummaryPromptDefaultsKey as CFString, bundleIdentifier as CFString) as? String) ?? ""
+    /// A missing value cannot distinguish an unset preference from a sandbox-denied read.
+    /// Only an explicit true grants access; nil is unknown, not proof that sharing is off.
+    static func isAccessEnabled(bundleIdentifier: String) -> Bool? {
+        CFPreferencesCopyAppValue(self.accessDefaultsKey as CFString, bundleIdentifier as CFString) as? Bool
     }
 
     /// This Mac's time zone as the app sees it. A `TZ` variable in an agent's shell must not change
-    /// which summaries count as current, so the zone is read from the system setting, not the environment.
+    /// which summaries are marked outdated, so the zone is read from the system setting, not the environment.
     static func systemTimeZone(fileManager: FileManager = .default) -> TimeZone {
         if let target = try? fileManager.destinationOfSymbolicLink(atPath: "/etc/localtime"),
            let range = target.range(of: "/zoneinfo/"),
@@ -179,15 +180,13 @@ nonisolated enum FluidServeMeetings {
         }
     }
 
-    /// Saved summaries the app itself would still show for this meeting: written by a known provider,
-    /// for the transcript as it is now, and (for a custom summary) with the prompt as it is now.
-    /// A summary from before an edit, a speaker rename or a prompt change is left out.
-    static func savedSummaries(for entry: Entry, customPrompt: String = "", fileManager: FileManager = .default) -> [SavedSummary] {
+    /// Saved summaries the app itself shows for this meeting: any written by a known provider.
+    /// One from before a transcript edit or a speaker rename is marked outdated.
+    static func savedSummaries(for entry: Entry, fileManager: FileManager = .default) -> [SavedSummary] {
         struct Stored: Decodable {
             var transcriptHash: String
             var transcriptHashVersion: Int?
             var text: String
-            var promptHash: String?
             var providerID: String?
             var providerName: String?
             var modelName: String?
@@ -202,27 +201,25 @@ nonisolated enum FluidServeMeetings {
         var contentSource = entry.meeting
         contentSource.title = ""
         let contentHash = self.fingerprint(self.summaryInput(for: contentSource))
-        let customPromptHash = self.fingerprint(customPrompt.trimmingCharacters(in: .whitespacesAndNewlines))
         return names.compactMap { name in
             let style = String(name.dropFirst(prefix.count).dropLast(".json".count))
             guard let data = try? Data(contentsOf: entry.directory.appendingPathComponent(name, isDirectory: false)),
                   let stored = try? JSONDecoder().decode(Stored.self, from: data),
                   stored.providerID != nil,
-                  stored.promptHash == (style == "custom" ? customPromptHash : nil),
                   !stored.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             else { return nil }
-            let currentHash: String
+            let currentHash: String?
             switch stored.transcriptHashVersion {
             case nil: currentHash = legacyHash
             case 2: currentHash = contentHash
-            default: return nil
+            default: currentHash = nil
             }
-            guard stored.transcriptHash == currentHash else { return nil }
             return SavedSummary(
                 style: style,
                 text: stored.text,
                 modelName: stored.modelName ?? stored.providerName,
-                generatedAt: stored.generatedAt
+                generatedAt: stored.generatedAt,
+                isOutdated: stored.transcriptHash != currentHash
             )
         }
     }
@@ -309,7 +306,6 @@ nonisolated enum FluidServeMeetings {
 
     static func listing(
         _ entries: [Entry],
-        customPrompt: String = "",
         timeZone: TimeZone = .current,
         fileManager: FileManager = .default
     ) -> String {
@@ -317,7 +313,8 @@ nonisolated enum FluidServeMeetings {
         var rows = [["ID", "DATE", "LENGTH", "SPEAKERS", "TITLE", "SUMMARIES"]]
         for entry in entries {
             let meeting = entry.meeting
-            let summaries = self.savedSummaries(for: entry, customPrompt: customPrompt, fileManager: fileManager).map(\.style)
+            let summaries = self.savedSummaries(for: entry, fileManager: fileManager)
+                .map { $0.isOutdated ? "\($0.style) (outdated)" : $0.style }
             rows.append([
                 String(meeting.id.uuidString.prefix(8)),
                 self.dateText(meeting.startedAt, timeZone: timeZone),

@@ -1,4 +1,5 @@
 import AVFoundation
+import CoreML
 import CryptoKit
 @testable import FluidVoice_Debug
 import Foundation
@@ -9,6 +10,47 @@ import FluidAudio
 
 @MainActor
 final class ParakeetCompactModelSmokeTests: XCTestCase {
+    #if arch(arm64)
+    func testBundledPreprocessorAppliesOnlyToTheOriginalProArchive() throws {
+        let archive = ParakeetSpeechModelCatalog.proVersion1ArchiveSHA256
+        XCTAssertNotNil(try LocalParakeetModelLoader.preprocessorURL(for: .fluidParakeetPro, archiveSHA256: archive))
+        XCTAssertNil(try LocalParakeetModelLoader.preprocessorURL(for: .fluidParakeetPro, archiveSHA256: nil))
+        XCTAssertNil(try LocalParakeetModelLoader.preprocessorURL(for: .fluidParakeetPro, archiveSHA256: String(repeating: "a", count: 64)))
+        for version in [AsrModelVersion.v2, .v3, .fluidParakeetMini, .fluidParakeetPico] {
+            XCTAssertNil(try LocalParakeetModelLoader.preprocessorURL(for: version, archiveSHA256: archive))
+        }
+    }
+
+    func testBundledProPreprocessorKeepsAudioBeyondTheCutoff() async throws {
+        let url = try XCTUnwrap(LocalParakeetModelLoader.preprocessorURL(
+            for: .fluidParakeetPro,
+            archiveSHA256: ParakeetSpeechModelCatalog.proVersion1ArchiveSHA256
+        ))
+        let configuration = MLModelConfiguration()
+        configuration.computeUnits = .cpuOnly
+        let model = try await MLModel.load(contentsOf: url, configuration: configuration)
+        let waveform = try MLMultiArray(shape: [1, 240_000], dataType: .float32)
+        let pcm = waveform.dataPointer.assumingMemoryBound(to: Float.self)
+        for sample in 0..<waveform.count {
+            pcm[sample] = sample < 48_000 ? 0.1 * sin(Float(sample) * 0.02) : 0
+        }
+        let length = try MLMultiArray(shape: [1], dataType: .int32)
+        length[0] = 238_080
+        let input = try MLDictionaryFeatureProvider(dictionary: ["audio_signal": waveform, "audio_length": length])
+        let before = try await model.prediction(from: input)
+        let beforeMel = try XCTUnwrap(before.featureValue(for: "mel")?.multiArrayValue)
+        let feature: [NSNumber] = [0, 20, 1_100]
+        let beforeValue = beforeMel[feature].floatValue
+        for sample in 160_000..<192_000 {
+            pcm[sample] = 0.25 * sin(Float(sample) * 0.17)
+        }
+        let after = try await model.prediction(from: input)
+        let afterMel = try XCTUnwrap(after.featureValue(for: "mel")?.multiArrayValue)
+        XCTAssertEqual(after.featureValue(for: "mel_length")?.multiArrayValue?[0].intValue, 1_488)
+        XCTAssertGreaterThan(abs(afterMel[feature].floatValue - beforeValue), 0.1)
+    }
+    #endif
+
     func testShippedRuntimeCheckRecordingIsBundledAndUnchanged() throws {
         let url = try XCTUnwrap(CompactSpeechModelRuntimeCheck.recordingURL)
         let data = try Data(contentsOf: url)
@@ -118,7 +160,7 @@ final class ParakeetCompactModelSmokeTests: XCTestCase {
         ]
         for (model, bytes, oldHash) in fixtures {
             let latest = try XCTUnwrap(model.parakeetDescriptor)
-            let oldURL = try XCTUnwrap(URL(string: "https://models.fluidvoice.app/parakeet/fluid-\(latest.variant.rawValue)/1.0.0/\(latest.folderName).tar"))
+            let oldURL = try XCTUnwrap(URL(string: "https://models.fluidvoice.com/parakeet/fluid-\(latest.variant.rawValue)/1.0.0/\(latest.folderName).tar"))
             let old = latest.replacingArchive(url: oldURL, sha256: oldHash, byteCount: bytes)
             let directory = try await ParakeetArchiveDownloader.ensurePresent(descriptor: old, in: root)
             let probe = SpeechModelInstallationSnapshot.Probe(modelID: model.id, kind: .parakeet(latest))

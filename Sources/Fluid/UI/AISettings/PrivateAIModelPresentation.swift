@@ -22,7 +22,7 @@ enum PrivateAIUpcomingModel: String, CaseIterable, Identifiable {
 }
 
 /// Customer-facing copy only. Registry IDs, downloads, and runtime settings remain authoritative.
-struct PrivateAIModelPresentation {
+struct PrivateAIModelPresentation: Sendable, Codable, Hashable {
     let summary: String
     let useCase: String
     var language: String = "On-device"
@@ -31,6 +31,8 @@ struct PrivateAIModelPresentation {
     var speed: Int?
     /// A small label above the name, such as "Research preview".
     var badge: String?
+    var shortName: String?
+    var analyticsLabel: String?
 
     static func forModel(id: String) -> Self {
         switch id {

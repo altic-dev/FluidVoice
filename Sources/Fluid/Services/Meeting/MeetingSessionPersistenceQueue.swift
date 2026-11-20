@@ -8,6 +8,7 @@ final class MeetingSessionPersistenceQueue {
     private let store: any MeetingSessionStoring
     private var pending: [MeetingSessionID: MeetingSession] = [:]
     private var order: [MeetingSessionID] = []
+    private var completions: [MeetingSessionID: [(Result<Void, Error>) -> Void]] = [:]
     private var task: Task<Void, Never>?
 
     init(store: any MeetingSessionStoring) {
@@ -15,6 +16,18 @@ final class MeetingSessionPersistenceQueue {
     }
 
     func enqueue(_ session: MeetingSession) {
+        self.enqueue(session, completion: nil)
+    }
+
+    /// Title edits await the same serialized writer as capture updates, without holding capture.
+    func save(_ session: MeetingSession) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            self.enqueue(session) { continuation.resume(with: $0) }
+        }
+    }
+
+    private func enqueue(_ session: MeetingSession, completion: ((Result<Void, Error>) -> Void)?) {
+        if let completion { self.completions[session.id, default: []].append(completion) }
         if self.pending[session.id] == nil {
             self.order.append(session.id)
         }
@@ -24,9 +37,18 @@ final class MeetingSessionPersistenceQueue {
             while !self.order.isEmpty {
                 let id = self.order.removeFirst()
                 guard let snapshot = self.pending.removeValue(forKey: id) else { continue }
-                // Match the coordinator's best-effort background-save policy. A failed save
-                // must not strand the worker or prevent newer snapshots from being written.
-                try? await self.store.save(snapshot)
+                let completions = self.completions.removeValue(forKey: id) ?? []
+                let result: Result<Void, Error>
+                do {
+                    try await self.store.save(snapshot)
+                    result = .success(())
+                } catch {
+                    result = .failure(error)
+                }
+                // A failed save must still release waiters and let newer snapshots be written.
+                for completion in completions {
+                    completion(result)
+                }
             }
             self.task = nil
         }

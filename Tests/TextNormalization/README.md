@@ -17,7 +17,7 @@ let final = normalizer.normalize(safe, phase: .afterCleanup, languageCode: "en")
 
 The macOS adapter is `Sources/Fluid/Services/DictationTextNormalizationService.swift`. It loads the catalog once, on its actor rather than the main thread, and returns an immutable formatter snapshot. Each dictation uses that same snapshot before and after cleanup. Emoji rules are selected from that request’s input even when the catalog is already cached; previous dictations cannot change the rules it receives. The final call runs after smart capitalization, so continued text cannot leave `5b` or `7m` in place of `5B` or `7M`.
 
-Normal dictation, prompt testing, and reprocessing use the component. Recording, first audio capture, partial captions, meeting transcripts, rewrite/command instructions, history copying, and dictionary storage do not call it. No settings or persisted user state are added.
+Normal dictation, prompt testing, and reprocessing use the component. Completed meeting transcripts use its quantity rules, without an emoji catalog, on a background task before summary generation and saving. Each speaker turn is formatted independently using the attempt's frozen language; raw word evidence, speaker labels, timing and coverage metadata stay unchanged. New processing, retries and language redo share this path; existing saved meetings are not rewritten on load. Recording, first audio capture, partial captions, rewrite/command instructions, history copying, and dictionary storage do not call it. No settings are added.
 
 ## Contract
 

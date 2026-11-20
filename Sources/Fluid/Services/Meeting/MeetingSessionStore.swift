@@ -49,8 +49,25 @@ actor MeetingSessionStore: MeetingSessionStoring {
     private let decoder: JSONDecoder
     private var tombstonedIDs: Set<MeetingSessionID> = []
 
+    #if DEBUG
+    /// XCTest launches the real app host as well as the fixture coordinators. Its startup
+    /// maintenance must never see recordings belonging to the person running the tests.
+    private static let testHostRoot: URL? = {
+        let environment = ProcessInfo.processInfo.environment
+        guard environment.keys.contains(where: { $0.hasPrefix("XCTest") })
+            || NSClassFromString("XCTestCase") != nil
+        else { return nil }
+        return FileManager.default.temporaryDirectory
+            .appendingPathComponent("FluidVoice-XCTest-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("Meetings", isDirectory: true)
+    }()
+    #endif
+
     init(rootDirectory: URL? = nil, fileManager: FileManager = .default) {
         self.fileSystem = MeetingSessionFileSystem(manager: fileManager)
+        #if DEBUG
+        let rootDirectory = rootDirectory ?? Self.testHostRoot
+        #endif
         if let rootDirectory {
             self.rootDirectory = rootDirectory
         } else {

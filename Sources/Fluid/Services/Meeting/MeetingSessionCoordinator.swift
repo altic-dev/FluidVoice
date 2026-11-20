@@ -483,7 +483,7 @@ final class MeetingSessionCoordinator: ObservableObject {
                 eventHandler: { [weak self] event in
                     // Preserve failure/recovery emission order across the capture-to-main hop.
                     DispatchQueue.main.async { [weak self] in
-                        self?.handleCaptureEvent(event, generation: generation)
+                        self?.routeCaptureEvent(event, generation: generation)
                     }
                 },
                 liveAudioHandler: { [weak liveTranscriptionCoordinator] kind, sampleBuffer in
@@ -776,6 +776,8 @@ final class MeetingSessionCoordinator: ObservableObject {
         session.transcriptSegments = inputSession.transcriptSegments
         session.postProcessing = inputSession.postProcessing
         session.transcriptCoverageGaps = inputSession.transcriptCoverageGaps
+        session.events.removeAll { $0.kind == .transcriptCoverageIncomplete }
+        session.events.append(contentsOf: inputSession.events.filter { $0.kind == .transcriptCoverageIncomplete })
         session.resultSidecarReference = inputSession.resultSidecarReference
         session.transcriptIsComplete = inputSession.transcriptIsComplete
         session.transcriptTimeDomain = inputSession.transcriptTimeDomain
@@ -1141,6 +1143,9 @@ final class MeetingSessionCoordinator: ObservableObject {
     /// Not a transcript correction: does not push onto `correctionUndoStacks`.
     @discardableResult
     func renameSession(sessionID: MeetingSessionID, to title: String) async throws -> MeetingSession {
+        if self.activeSession?.id == sessionID, self.isRecording {
+            return try await self.renameRecordingSession(sessionID: sessionID, to: title)
+        }
         guard !self.isMutatingSession else { throw MeetingCoordinatorError.activityInProgress }
         self.isMutatingSession = true
         defer { self.releaseMutationGate() }
@@ -1800,6 +1805,8 @@ final class MeetingSessionCoordinator: ObservableObject {
                     }
                 }
             }
+            // This is the current transcript's status, not a permanent capture interruption.
+            session.events.removeAll { $0.kind == .transcriptCoverageIncomplete }
             if !result.coverageGaps.isEmpty {
                 let excludedSeconds = result.coverageGaps.reduce(0.0) { total, gap in
                     total + max(0, gap.end - gap.start)
@@ -1917,6 +1924,7 @@ final class MeetingSessionCoordinator: ObservableObject {
         guard self.captureGeneration == generation, var session = self.activeSession else { return }
         self.liveTranscriptionCoordinator?.recordComparisonCaptureEvent(event)
         switch event {
+        case .sourceApplicationEnded: return // routeCaptureEvent converts it before it gets here.
         case let .audioComparisonProbeStarted(probe):
             self.liveTranscriptionCoordinator?.attachComparisonProbe(probe)
             return // Diagnostic-only: no recording, persistence, navigation or transcript writes.
@@ -2391,6 +2399,67 @@ enum MeetingCoordinatorError: LocalizedError {
             return "FluidVoice is tidying up meeting storage. Try again in a moment."
         case .unsupportedRetranscriptionLanguage:
             return "Choose a language the meeting transcription model supports."
+        }
+    }
+}
+
+extension MeetingSessionCoordinator {
+    /// Change only title metadata before suspending, so every subsequent capture/stop snapshot keeps it.
+    /// The serialized persistence queue prevents a slow rename save from overwriting newer audio or state.
+    private func renameRecordingSession(sessionID: MeetingSessionID, to title: String) async throws -> MeetingSession {
+        guard !self.isMutatingSession, !self.hasBlockingActivityTask, !self.isDeleting,
+              var session = self.activeSession, session.id == sessionID, self.isRecording
+        else { throw MeetingCoordinatorError.activityInProgress }
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { throw MeetingDomainError.emptyMeetingTitle }
+        self.isMutatingSession = true
+        defer { self.releaseMutationGate() }
+        session.title = trimmed
+        session.defaultTitleBase = nil
+        session.updatedAt = Date()
+        self.activeSession = session
+        do {
+            try await self.persistence.save(session)
+        } catch {
+            // Keep the edited title in the live snapshot so capture updates and stopping can retry it.
+            throw NSError(domain: "MeetingTitle", code: 1, userInfo: [
+                NSLocalizedDescriptionKey: "The title could not be saved yet. Recording can continue; try renaming again to retry.",
+                NSUnderlyingErrorKey: error,
+            ])
+        }
+        // Capture or Stop may have advanced the session while its title was being saved.
+        if let current = self.activeSession, current.id == sessionID { return current }
+        if let completed = self.latestCompletedSession, completed.id == sessionID { return completed }
+        return session
+    }
+}
+
+private extension MeetingSessionCoordinator {
+    /// A meeting app that can no longer be captured cannot resume the call. Stop like any other
+    /// unexpected stop, then transcribe the preserved audio through the same path as the Retry button.
+    /// If that cannot start, the session keeps its usual retry offer.
+    func routeCaptureEvent(_ event: MeetingCaptureEvent, generation: UUID) {
+        guard case let .sourceApplicationEnded(detail) = event else {
+            self.handleCaptureEvent(event, generation: generation)
+            return
+        }
+        guard self.captureGeneration == generation, let sessionID = self.activeSession?.id else { return }
+        self.handleCaptureEvent(
+            .interrupted(kind: .captureStoppedUnexpectedly, trackID: nil, detail: detail),
+            generation: generation
+        )
+        guard let interruption = self.interruptionTask else { return }
+        Task { @MainActor [weak self] in
+            await interruption.value
+            guard let self, self.terminationTask == nil,
+                  let session = self.activeSession, session.id == sessionID,
+                  session.state == .interrupted, session.hasRetryableAudio
+            else { return }
+            do {
+                _ = try await self.retryProcessing(sessionID: sessionID)
+            } catch {
+                DebugLogger.shared.log("Meeting \(sessionID): transcription after the meeting app ended did not start: \(error)")
+            }
         }
     }
 }

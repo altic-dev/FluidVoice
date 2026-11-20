@@ -6,6 +6,9 @@ struct ChangelogView: View {
     @State private var releases: [SimpleUpdater.ReleaseNote] = []
     @State private var isRefreshing = false
     @State private var errorMessage: String?
+    @State private var lastRefresh: Date?
+    @State private var releasesChannel: String?
+    @State private var refreshTask: Task<Void, Never>?
 
     private let owner = "altic-dev"
     private let repo = "Fluid-oss"
@@ -56,10 +59,20 @@ struct ChangelogView: View {
             .help("Refresh changelog")
             .accessibilityLabel("Refresh changelog")
         }
-        .task {
-            self.loadCachedReleases()
-            await self.refreshReleases()
+        .onAppear { self.loadCachedReleasesIfChannelChanged() }
+        .onFluidPagePresented {
+            self.loadCachedReleasesIfChannelChanged()
+            self.refreshTask?.cancel()
+            self.refreshTask = Task {
+                if !self.releases.isEmpty {
+                    // Saved notes are on screen, so the network result can wait for the page to settle.
+                    try? await Task.sleep(for: .seconds(1))
+                    guard !Task.isCancelled else { return }
+                }
+                await self.refreshReleases()
+            }
         }
+        .onDisappear { self.refreshTask?.cancel() }
     }
 
     private var loadingCard: some View {
@@ -104,33 +117,41 @@ struct ChangelogView: View {
         }
     }
 
-    private func loadCachedReleases() {
-        let cacheKey = self.cacheKey
-        guard
-            let data = UserDefaults.standard.data(forKey: cacheKey),
-            let cache = try? JSONDecoder().decode(ChangelogCache.self, from: data)
-        else { return }
-
-        self.releases = Array(cache.releases.prefix(self.releaseLimit))
+    /// The page stays built across visits, so a beta setting change must replace the notes on screen.
+    private func loadCachedReleasesIfChannelChanged() {
+        let channel = Self.currentChannel
+        guard self.releasesChannel != channel else { return }
+        self.releasesChannel = channel
+        self.lastRefresh = nil
+        self.errorMessage = nil
+        let cache = UserDefaults.standard.data(forKey: Self.cacheKey(for: channel))
+            .flatMap { try? JSONDecoder().decode(ChangelogCache.self, from: $0) }
+        self.releases = Array((cache?.releases ?? []).prefix(self.releaseLimit))
     }
 
-    private func refreshReleases(force _: Bool = false) async {
+    private func refreshReleases(force: Bool = false) async {
         guard !self.isRefreshing else { return }
+        // Cached pages reappear often, and each refresh can re-render every release note.
+        if !force, let lastRefresh = self.lastRefresh, Date().timeIntervalSince(lastRefresh) < 600 { return }
 
+        self.loadCachedReleasesIfChannelChanged()
+        let channel = Self.currentChannel
         self.isRefreshing = true
         self.errorMessage = nil
 
         do {
-            let includePrerelease = SettingsStore.shared.betaReleasesEnabled
             let fetched = try await SimpleUpdater.shared.fetchRecentReleaseNotes(
                 owner: self.owner,
                 repo: self.repo,
                 limit: self.releaseLimit,
-                includePrerelease: includePrerelease
+                includePrerelease: channel == "beta"
             )
             let limitedReleases = Array(fetched.prefix(self.releaseLimit))
-            self.releases = limitedReleases
-            self.saveCachedReleases(limitedReleases)
+            self.saveCachedReleases(limitedReleases, channel: channel)
+            if self.releasesChannel == channel {
+                if limitedReleases != self.releases { self.releases = limitedReleases }
+                self.lastRefresh = Date()
+            }
         } catch {
             if self.releases.isEmpty {
                 self.errorMessage = "Unable to load release notes."
@@ -142,15 +163,18 @@ struct ChangelogView: View {
         self.isRefreshing = false
     }
 
-    private func saveCachedReleases(_ releases: [SimpleUpdater.ReleaseNote]) {
+    private func saveCachedReleases(_ releases: [SimpleUpdater.ReleaseNote], channel: String) {
         let cache = ChangelogCache(releases: releases, savedAt: Date())
         guard let data = try? JSONEncoder().encode(cache) else { return }
-        UserDefaults.standard.set(data, forKey: self.cacheKey)
+        UserDefaults.standard.set(data, forKey: Self.cacheKey(for: channel))
     }
 
-    private var cacheKey: String {
-        let channel = SettingsStore.shared.betaReleasesEnabled ? "beta" : "stable"
-        return "FluidVoiceChangelogCache.\(channel)"
+    private static var currentChannel: String {
+        SettingsStore.shared.betaReleasesEnabled ? "beta" : "stable"
+    }
+
+    private static func cacheKey(for channel: String) -> String {
+        "FluidVoiceChangelogCache.\(channel)"
     }
 }
 

@@ -33,6 +33,16 @@ final nonisolated class MeetingAECPipeline: @unchecked Sendable {
         }
     }
 
+    /// The first format-validation callback is recorded unchanged, outside the joiner, but is
+    /// still transcribable raw audio. Claim no echo cancellation and report no filter failure.
+    func commitValidationCapture(_ sampleBuffer: CMSampleBuffer) {
+        guard !self.stopped else {
+            self.committer.commitRaw(sampleBuffer, failure: .stopped)
+            return
+        }
+        self.committer.commitWarmup(sampleBuffer)
+    }
+
     func consumeCapture(_ sampleBuffer: CMSampleBuffer, stream: MeetingAECStreamToken) {
         guard !self.stopped else {
             self.committer.commitRaw(sampleBuffer, failure: .stopped)
@@ -71,6 +81,21 @@ final nonisolated class MeetingAECPipeline: @unchecked Sendable {
         guard !self.stopped else { return }
         self.handle(self.joiner.flush(reason: reason), allowFallback: false)
         self.committer.invalidateForExternalBoundary(boundary)
+    }
+
+    /// Losing the captured window does not invalidate audio already buffered from the same
+    /// physical route. Drain it like Stop, including the raw tail without claiming AEC protection.
+    /// Route changes and all other stream failures retain conservative admission invalidation.
+    func retireStoppedStream(
+        sourceDisappeared: Bool,
+        routeUnchanged: Bool,
+        boundary: MeetingMicrophoneTranscriptGate.InvalidationBoundary?
+    ) {
+        if sourceDisappeared, routeUnchanged {
+            self.stop(boundary: boundary)
+        } else {
+            self.invalidate(reason: .streamChanged, boundary: boundary)
+        }
     }
 
     func stop(boundary: MeetingMicrophoneTranscriptGate.InvalidationBoundary?) {

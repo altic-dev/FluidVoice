@@ -1,6 +1,7 @@
 #if DICTIONARY_CORRECTION_STANDALONE
 import Foundation
 
+struct DictionaryCorrectionExample {}
 struct DictionaryLearningAudioEvidence {}
 struct DictionaryNegativeCorrection {}
 

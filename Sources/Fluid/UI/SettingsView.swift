@@ -145,76 +145,63 @@ struct SettingsView: View {
         )
     }
 
-    private func dictationPromptSelectionBinding(for slot: SettingsStore.DictationShortcutSlot) -> Binding<String> {
-        Binding(
-            get: {
-                switch self.settings.dictationPromptSelection(for: slot) {
-                case .off:
-                    return "__OFF__"
-                case .default:
-                    return "__DEFAULT__"
-                case .privateAI:
-                    return PrivateAIProviderPromptFormat.promptSelectionID
-                case let .profile(id):
-                    return id
-                }
-            },
-            set: { newValue in
-                switch newValue {
-                case "__OFF__":
-                    self.settings.setDictationPromptSelection(.off, for: slot)
-                case "__DEFAULT__":
-                    self.settings.setDictationPromptSelection(.default, for: slot)
-                case PrivateAIProviderPromptFormat.promptSelectionID:
-                    guard PrivateAIProviderPromptFormat.isAvailable(settings: self.settings) else { return }
-                    self.settings.setDictationPromptSelection(.privateAI, for: slot)
-                default:
-                    self.settings.setDictationPromptSelection(.profile(newValue), for: slot)
-                }
-            }
-        )
-    }
+    private typealias DictationRouting = DictationShortcutRouting<HotkeyShortcut, SettingsStore.DictationPromptSelection>
 
-    @ViewBuilder
-    private func dictationPromptPicker(for slot: SettingsStore.DictationShortcutSlot) -> some View {
-        let profiles = self.settings.promptProfiles(for: .dictate)
-        let privateAIAvailable = PrivateAIProviderPromptFormat.isAvailable(settings: self.settings)
-        let selection = self.dictationPromptSelectionBinding(for: slot)
-        let title: String = switch self.settings.dictationPromptSelection(for: slot) {
+    private func dictationStyleTitle(_ style: SettingsStore.DictationPromptSelection) -> String {
+        switch style {
         case .off: "Basic — No cleanup"
         case .default: SettingsStore.DictationModeLabels.externalDefault
         case .privateAI: SettingsStore.DictationModeLabels.smartWithModel
-        case let .profile(id): profiles.first(where: { $0.id == id }).map { $0.name.isEmpty ? "Untitled" : $0.name } ?? "Default"
+        case let .profile(id):
+            self.settings.promptProfiles(for: .dictate).first(where: { $0.id == id }).map { $0.name.isEmpty ? "Untitled" : $0.name } ?? "Default"
         }
-        HStack(spacing: 10) {
-            Text("Cleanup style")
-                .font(self.theme.typography.bodySmall)
-                .foregroundStyle(self.settingsSecondaryText)
-                .padding(.leading, 30)
-            FluidDropdown(title: title) {
-                Picker("Cleanup style", selection: selection) {
-                    Section("ON-DEVICE") {
-                        Text("Basic — No cleanup").tag("__OFF__")
-                        if PrivateFeatures.privateAIProvider {
-                            Text(SettingsStore.DictationModeLabels.smartWithModel)
-                                .tag(PrivateAIProviderPromptFormat.promptSelectionID)
-                                .disabled(!privateAIAvailable)
-                        }
-                    }
-                    Section("CUSTOM STYLES") {
-                        Text(SettingsStore.DictationModeLabels.externalDefault).tag("__DEFAULT__")
-                        ForEach(profiles) { profile in
-                            Text(profile.name.isEmpty ? "Untitled" : profile.name)
-                                .tag(profile.id)
-                        }
-                    }
+    }
+
+    private func dictationStylePicker(for package: DictationRouting.Package, routing: DictationRouting) -> some View {
+        let profiles = self.settings.promptProfiles(for: .dictate)
+        let privateAIAvailable = PrivateAIProviderPromptFormat.isAvailable(settings: self.settings)
+        let title = self.dictationStyleTitle(package.style)
+        return Menu {
+            Section("ON-DEVICE") {
+                self.dictationStyleOption(.off, for: package, routing: routing)
+                if PrivateFeatures.privateAIProvider {
+                    self.dictationStyleOption(.privateAI, for: package, routing: routing, isAvailable: privateAIAvailable)
                 }
-                .pickerStyle(.inline)
             }
-            .accessibilityLabel("Cleanup style")
-            .accessibilityValue(title)
+            Section("CUSTOM STYLES") {
+                self.dictationStyleOption(.default, for: package, routing: routing)
+                ForEach(profiles) { profile in
+                    self.dictationStyleOption(.profile(profile.id), for: package, routing: routing)
+                }
+            }
+        } label: {
+            Text(title).lineLimit(1)
         }
-        .padding(.bottom, 4)
+        .fluidDropdownStyle()
+        .disabled(self.isRecordingAnyShortcut)
+        .accessibilityLabel("Cleanup style for \(package.key.displayString)")
+        .accessibilityValue(title)
+    }
+
+    private func dictationStyleOption(
+        _ style: SettingsStore.DictationPromptSelection,
+        for package: DictationRouting.Package,
+        routing: DictationRouting,
+        isAvailable: Bool = true
+    ) -> some View {
+        let blocker = routing.blocker(moving: package, to: style)
+        let name = self.dictationStyleTitle(style)
+        let label = switch blocker {
+        case let .taken(by: owner)?: "\(name) · used by \(owner.displayString)"
+        case .mainKeysOnly?: "\(name) · keyboard keys only"
+        case nil: name
+        }
+        let isSelected = Binding(
+            get: { style == package.style },
+            set: { isOn in if isOn { self.setDictationStyle(style, for: package) } }
+        )
+        return Toggle(label, isOn: isSelected)
+            .disabled(!isAvailable || blocker != nil)
     }
 
     var body: some View {
@@ -498,12 +485,8 @@ struct SettingsView: View {
                                     // MARK: - Shortcuts Section
 
                                     VStack(alignment: .leading, spacing: 16) {
-                                        self.shortcutGroup {
-                                            self.primaryDictationShortcutsList()
-                                                .settingsSearchTarget(.primaryDictationShortcuts)
-                                            self.shortcutGroupDivider
-                                            self.smartDictationShortcutRow
-                                        }
+                                        self.dictationShortcutPackages
+                                            .settingsSearchTarget(.primaryDictationShortcuts)
                                         self.shortcutGroupDivider
                                         self.shortcutGroup {
                                             self.shortcutRow(
@@ -1616,6 +1599,32 @@ struct SettingsView: View {
         Task { await self.performBackupImport() }
     }
 
+    static func backupImportConfirmation(exportedAt: Date, fileTranscriptCount: Int?) -> NSAlert {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+
+        var changes = "This replaces your current settings, prompt profiles, and stats history."
+        if let fileTranscriptCount {
+            changes += fileTranscriptCount == 0
+                ? " This backup has no file transcripts. Importing it will clear your saved file transcripts."
+                : " The file transcripts in this backup will replace your saved file transcripts."
+        }
+
+        let confirm = NSAlert()
+        confirm.messageText = "Import this backup?"
+        confirm.informativeText = """
+        \(changes)
+
+        Exported: \(formatter.string(from: exportedAt))
+        API keys are not included and will not be changed.
+        """
+        confirm.alertStyle = .warning
+        confirm.addButton(withTitle: "Import")
+        confirm.addButton(withTitle: "Cancel")
+        return confirm
+    }
+
     private func performBackupImport() async {
         do {
             let panel = NSOpenPanel()
@@ -1629,22 +1638,9 @@ struct SettingsView: View {
             let data = try Data(contentsOf: url)
             let document = try BackupService.shared.decode(data)
 
-            let formatter = DateFormatter()
-            formatter.dateStyle = .medium
-            formatter.timeStyle = .short
-
-            let confirm = NSAlert()
-            confirm.messageText = "Import this backup?"
-            confirm.informativeText = """
-            This replaces your current settings, prompt profiles, and stats history.
-
-            Exported: \(formatter.string(from: document.exportedAt))
-            API keys are not included and will not be changed.
-            """
-            confirm.alertStyle = .warning
-            confirm.addButton(withTitle: "Import")
-            confirm.addButton(withTitle: "Cancel")
-
+            let confirm = Self.backupImportConfirmation(
+                exportedAt: document.exportedAt, fileTranscriptCount: document.fileTranscriptionHistory?.count
+            )
             guard confirm.runModal() == .alertFirstButtonReturn else { return }
 
             try await BackupService.shared.restore(document)
@@ -2000,69 +1996,156 @@ struct SettingsView: View {
         )
     }
 
-    private func primaryDictationShortcutsList() -> some View {
-        let addTarget = ShortcutRecordingTarget.primaryDictation(.add)
-        let isAdding = self.isRecording(addTarget)
-        return HStack(alignment: .top, spacing: 20) {
-            VStack(alignment: .leading, spacing: 12) {
-                self.shortcutLabel(
-                    icon: "mic.fill",
-                    color: self.settingsSecondaryText,
-                    title: "Primary dictation",
-                    description: "Keyboard shortcut or mouse button"
-                )
-                self.dictationPromptPicker(for: .primary)
+    private var dictationRouting: DictationRouting {
+        let profiles = self.settings.promptProfiles(for: .dictate)
+        func rank(_ style: SettingsStore.DictationPromptSelection) -> Int {
+            switch style {
+            case .off: 0
+            case .privateAI: 1
+            case .default: 2
+            case let .profile(id): 3 + (profiles.firstIndex(where: { $0.id == id }) ?? profiles.count)
             }
-            Spacer(minLength: 12)
-            VStack(alignment: .trailing, spacing: 10) {
-                ForEach(Array(self.primaryDictationShortcuts.enumerated()), id: \.offset) { index, shortcut in
-                    self.primaryDictationShortcutRow(shortcut: shortcut, index: index)
+        }
+        let styleKeys = self.settings.dictationPromptShortcutAssignments()
+            .filter { $0.selection != .privateAI || PrivateFeatures.privateAIProvider }
+            .sorted { rank($0.selection) < rank($1.selection) }
+            .map { (style: $0.selection, key: $0.shortcut) }
+        return DictationRouting(
+            mainKeys: self.primaryDictationShortcuts,
+            mainStyle: self.settings.dictationPromptSelection(for: .primary),
+            styleKeys: styleKeys,
+            keyCanMoveToStyle: { !$0.isMouseShortcut && !$0.requiresModifierForRecording }
+        )
+    }
+
+    private var dictationShortcutPackages: some View {
+        let routing = self.dictationRouting
+        let addTarget = ShortcutRecordingTarget.primaryDictation(.add)
+        return self.shortcutGroup {
+            ForEach(Array(routing.packages.enumerated()), id: \.offset) { index, package in
+                if index > 0 { self.shortcutGroupDivider }
+                self.dictationPackageRow(package, routing: routing)
+            }
+            if self.isRecording(addTarget) {
+                self.shortcutControls(
+                    shortcut: nil,
+                    isRecording: true,
+                    title: "New dictation shortcut",
+                    onEdit: {},
+                    onRemove: nil
+                )
+                self.shortcutRecordingWarning
+            } else {
+                Button {
+                    self.shortcutRecordingMessage = nil
+                    self.activeShortcutRecordingTarget = addTarget
+                } label: {
+                    Label("Add dictation shortcut", systemImage: "plus")
                 }
-                if isAdding {
-                    self.shortcutControls(
-                        shortcut: nil,
-                        isRecording: true,
-                        title: "New dictation shortcut",
-                        onEdit: {},
-                        onRemove: nil
-                    )
-                } else {
-                    Button {
+                .buttonStyle(FluidHoverIconButtonStyle())
+                .disabled(self.isRecordingAnyShortcut)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func dictationPackageRow(_ package: DictationRouting.Package, routing: DictationRouting) -> some View {
+        if let target = self.recordingTarget(for: package) {
+            let isRecording = self.isRecording(target)
+            VStack(alignment: .leading, spacing: 6) {
+                self.shortcutControls(
+                    shortcut: package.key,
+                    isRecording: isRecording,
+                    title: package.key.displayString,
+                    onEdit: {
                         self.shortcutRecordingMessage = nil
-                        self.activeShortcutRecordingTarget = addTarget
-                    } label: {
-                        Label("Add shortcut", systemImage: "plus")
+                        self.activeShortcutRecordingTarget = target
+                    },
+                    onRemove: { self.removeDictationPackage(package) }
+                )
+                if isRecording {
+                    self.shortcutRecordingWarning
+                } else {
+                    HStack(spacing: 12) {
+                        self.dictationStylePicker(for: package, routing: routing)
+                        self.autoSendToggle(for: package.key)
                     }
-                    .buttonStyle(FluidHoverIconButtonStyle())
-                    .disabled(self.isRecordingAnyShortcut)
-                }
-                if isAdding, let message = self.shortcutRecordingMessage {
-                    Text(message).font(self.theme.typography.bodySmall).foregroundStyle(self.theme.palette.warning)
                 }
             }
         }
     }
 
-    private func primaryDictationShortcutRow(shortcut: HotkeyShortcut, index: Int) -> some View {
-        let target = ShortcutRecordingTarget.primaryDictation(.replace(index))
-        return VStack(alignment: .trailing, spacing: 4) {
-            self.shortcutControls(
-                shortcut: shortcut,
-                isRecording: self.isRecording(target),
-                title: "Dictation shortcut",
-                onEdit: {
-                    self.shortcutRecordingMessage = nil
-                    self.activeShortcutRecordingTarget = target
-                },
-                onRemove: {
-                    guard self.primaryDictationShortcuts.indices.contains(index) else { return }
-                    self.primaryDictationShortcuts.remove(at: index)
-                }
-            )
-            if self.isRecording(target), let message = self.shortcutRecordingMessage {
-                Text(message).font(self.theme.typography.bodySmall).foregroundStyle(self.theme.palette.warning)
-            }
+    @ViewBuilder
+    private var shortcutRecordingWarning: some View {
+        if let message = self.shortcutRecordingMessage, !message.isEmpty {
+            Text(message).font(self.theme.typography.bodySmall).foregroundStyle(self.theme.palette.warning)
         }
+    }
+
+    private func recordingTarget(for package: DictationRouting.Package) -> ShortcutRecordingTarget? {
+        switch package.source {
+        case let .main(index): .primaryDictation(.replace(index))
+        case .style: self.settings.dictationPromptConfigurationKey(for: package.style).map { .dictationPrompt($0) }
+        }
+    }
+
+    private func setDictationStyleShortcut(_ key: HotkeyShortcut?, for style: SettingsStore.DictationPromptSelection) {
+        var configuration = self.settings.dictationPromptConfiguration(for: style)
+        configuration.shortcut = key
+        self.settings.setDictationPromptConfiguration(configuration, for: style)
+    }
+
+    private func setDictationStyle(_ style: SettingsStore.DictationPromptSelection, for package: DictationRouting.Package) {
+        if style == .privateAI, !PrivateAIProviderPromptFormat.isAvailable(settings: self.settings) { return }
+        let before = self.dictationRouting
+        var after = before
+        guard after.move(package, to: style) else { return }
+        let keepsAutoSend = self.settings.autoSendEnabled(for: package.key)
+        func owns(_ routing: DictationRouting, _ entry: (style: SettingsStore.DictationPromptSelection, key: HotkeyShortcut)) -> Bool {
+            routing.styleKeys.contains { $0.style == entry.style && $0.key == entry.key }
+        }
+        // Save the key in its new place before clearing the old one, so auto-send is never pruned.
+        for entry in after.styleKeys where !owns(before, entry) {
+            self.setDictationStyleShortcut(entry.key, for: entry.style)
+        }
+        if after.mainKeys != before.mainKeys {
+            self.settings.primaryDictationShortcuts = after.mainKeys
+            self.primaryDictationShortcuts = after.mainKeys
+        }
+        for entry in before.styleKeys where !owns(after, entry) {
+            self.setDictationStyleShortcut(nil, for: entry.style)
+        }
+        if after.mainStyle != before.mainStyle {
+            self.settings.setDictationPromptSelection(after.mainStyle, for: .primary)
+        }
+        if keepsAutoSend { self.settings.setAutoSendEnabled(true, for: package.key) }
+        NotificationCenter.default.post(name: .dictationPromptShortcutsChanged, object: nil)
+    }
+
+    private func removeDictationPackage(_ package: DictationRouting.Package) {
+        switch package.source {
+        case let .main(index):
+            guard self.primaryDictationShortcuts.indices.contains(index), self.primaryDictationShortcuts[index] == package.key else { return }
+            self.primaryDictationShortcuts.remove(at: index)
+        case .style:
+            self.setDictationStyleShortcut(nil, for: package.style)
+            NotificationCenter.default.post(name: .dictationPromptShortcutsChanged, object: nil)
+        }
+    }
+
+    private func autoSendToggle(for shortcut: HotkeyShortcut) -> some View {
+        Toggle("Auto-send", isOn: Binding(
+            get: { self.settings.autoSendEnabled(for: shortcut) },
+            set: { self.settings.setAutoSendEnabled($0, for: shortcut) }
+        ))
+        .toggleStyle(.switch)
+        .tint(self.theme.palette.accent)
+        .controlSize(.small)
+        .font(self.theme.typography.bodySmall)
+        .fixedSize()
+        .disabled(self.isRecordingAnyShortcut)
+        .accessibilityLabel("Auto-send for \(shortcut.displayString)")
+        .help("Insert dictation, then press your send key after 1 second. Press Escape to cancel sending.")
     }
 }
 
@@ -2220,42 +2303,6 @@ private extension SettingsView {
             .fill(self.theme.palette.cardBorder)
             .frame(height: 1)
             .padding(.vertical, 2)
-    }
-
-    @ViewBuilder
-    private var smartDictationShortcutRow: some View {
-        if PrivateFeatures.privateAIProvider,
-           let key = self.settings.dictationPromptConfigurationKey(for: .privateAI)
-        {
-            let configuration = self.settings.dictationPromptConfiguration(for: .privateAI)
-            let target = ShortcutRecordingTarget.dictationPrompt(key)
-            let usesPrimary = self.settings.dictationPromptSelection(for: .primary) == .privateAI
-            self.shortcutRow(
-                content: .init(
-                    icon: "sparkles",
-                    iconColor: self.theme.palette.accent,
-                    title: "Smart dictation",
-                    description: usesPrimary && configuration.shortcut == nil
-                        ? "Uses your primary shortcut. An extra shortcut is optional."
-                        : "Optional shortcut to dictate with Fluid Intelligence."
-                ),
-                shortcut: configuration.shortcut,
-                isRecording: self.activeShortcutRecordingTarget == target,
-                isAnyRecordingActive: self.isRecordingAnyShortcut,
-                recordingMessage: self.activeShortcutRecordingTarget == target ? self.shortcutRecordingMessage : nil,
-                onChangePressed: {
-                    self.shortcutRecordingMessage = nil
-                    self.activeShortcutRecordingTarget = target
-                },
-                onRemovePressed: {
-                    var updated = self.settings.dictationPromptConfiguration(for: .privateAI)
-                    updated.shortcut = nil
-                    self.settings.setDictationPromptConfiguration(updated, for: .privateAI)
-                    NotificationCenter.default.post(name: .dictationPromptShortcutsChanged, object: nil)
-                }
-            )
-            .padding(.vertical, 2)
-        }
     }
 
     var isRecordingAnyShortcut: Bool {
@@ -2833,7 +2880,7 @@ private extension SettingsView {
         Group {
             self.optionToggleRow(
                 title: "Spoken Send",
-                description: "Say a phrase at the end of dictation to send with your chosen Enter command.",
+                description: "Say the phrase and pause to stop dictation and send.",
                 isOn: Binding(
                     get: { self.settings.spokenSendEnabled },
                     set: { self.settings.spokenSendEnabled = $0 }
@@ -2842,15 +2889,6 @@ private extension SettingsView {
 
             if self.settings.spokenSendEnabled {
                 VStack(spacing: 10) {
-                    self.optionToggleRow(
-                        title: "Send Immediately",
-                        description: "Stop listening and send as soon as the phrase is recognized. May not work with all voice models; Parakeet is recommended.",
-                        isOn: Binding(
-                            get: { self.settings.spokenSendImmediatelyEnabled },
-                            set: { self.settings.spokenSendImmediatelyEnabled = $0 }
-                        )
-                    )
-
                     HStack(alignment: .center) {
                         VStack(alignment: .leading, spacing: 2) {
                             Text("Send Phrase")
@@ -2877,30 +2915,53 @@ private extension SettingsView {
 
                     HStack(alignment: .center) {
                         VStack(alignment: .leading, spacing: 2) {
-                            Text("Send Command")
+                            Text("Wait Before Sending")
                                 .font(self.theme.typography.bodyStrong)
                                 .foregroundStyle(self.settingsTitleText)
-                            Text("Choose the Enter behavior expected by the destination app.")
+                            Text("How long to wait after you say the send phrase.")
                                 .font(self.theme.typography.bodySmall)
                                 .foregroundStyle(self.settingsSecondaryText)
                         }
 
                         Spacer()
 
-                        FluidDropdownPicker("Send key", selectedTitle: self.settings.spokenSendKey.displayName, selection: Binding(
-                            get: { self.settings.spokenSendKey },
-                            set: { self.settings.spokenSendKey = $0 }
+                        FluidDropdownPicker("Wait before sending", selectedTitle: self.settings.spokenSendWait.displayName, selection: Binding(
+                            get: { self.settings.spokenSendWait },
+                            set: { self.settings.spokenSendWait = $0 }
                         )) {
-                            ForEach(SettingsStore.SpokenSendKey.allCases) { key in
-                                Text(key.displayName).tag(key)
+                            ForEach(SettingsStore.SpokenSendWait.allCases) { wait in
+                                Text(wait.displayName).tag(wait)
                             }
                         }
                         .fluidDropdownStyle()
                         .frame(width: 170, alignment: .trailing)
-                        .accessibilityLabel("Spoken Send command")
                     }
                 }
                 .padding(.leading, 12)
+            }
+
+            HStack(alignment: .center) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Send Key")
+                        .font(self.theme.typography.bodyStrong)
+                        .foregroundStyle(self.settingsTitleText)
+                    Text("The key Auto-send and Spoken Send press.")
+                        .font(self.theme.typography.bodySmall)
+                        .foregroundStyle(self.settingsSecondaryText)
+                }
+
+                Spacer()
+
+                FluidDropdownPicker("Send key", selectedTitle: self.settings.spokenSendKey.displayName, selection: Binding(
+                    get: { self.settings.spokenSendKey },
+                    set: { self.settings.spokenSendKey = $0 }
+                )) {
+                    ForEach(SettingsStore.SpokenSendKey.allCases) { key in
+                        Text(key.displayName).tag(key)
+                    }
+                }
+                .fluidDropdownStyle()
+                .frame(width: 170, alignment: .trailing)
             }
         }
     }

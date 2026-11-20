@@ -1,3 +1,5 @@
+import AppKit
+import Combine
 import SwiftUI
 
 /// Shared page geometry. Pane interiors and readable document columns retain their own layouts.
@@ -24,14 +26,61 @@ private struct FluidPageToolbarVisibleKey: EnvironmentKey {
     static let defaultValue = true
 }
 
-private struct FluidToolbarTrailingInsetKey: EnvironmentKey {
-    static let defaultValue: CGFloat = 80
+/// A reference, so ending a prewarm doesn't invalidate the page that was just built.
+@MainActor
+final class FluidPagePrewarmState {
+    private(set) var isPrewarming = false
+    private var presentationActions: [() -> Void] = []
+
+    func begin() {
+        self.isPrewarming = true
+    }
+
+    /// A page shown mid-prewarm is already attached, so its appearance handlers won't run again.
+    func end(presented: Bool) {
+        guard self.isPrewarming else { return }
+        self.isPrewarming = false
+        let actions = self.presentationActions
+        self.presentationActions = []
+        if presented { actions.forEach { $0() } }
+    }
+
+    func whenPresented(_ action: @escaping () -> Void) {
+        if self.isPrewarming {
+            self.presentationActions.append(action)
+        } else {
+            action()
+        }
+    }
+}
+
+private struct FluidPagePrewarmStateKey: EnvironmentKey {
+    static let defaultValue: FluidPagePrewarmState? = nil
+}
+
+private struct FluidPageToolbarPageKey: EnvironmentKey {
+    static let defaultValue: SidebarItem? = nil
+}
+
+private struct FluidPageToolbarStoreKey: EnvironmentKey {
+    static let defaultValue: FluidPageToolbarStore? = nil
 }
 
 extension EnvironmentValues {
-    var fluidToolbarTrailingInset: CGFloat {
-        get { self[FluidToolbarTrailingInsetKey.self] }
-        set { self[FluidToolbarTrailingInsetKey.self] = newValue }
+    /// Set while a page is built ahead of its first visit; it must not start user-visible work.
+    var fluidPagePrewarmState: FluidPagePrewarmState? {
+        get { self[FluidPagePrewarmStateKey.self] }
+        set { self[FluidPagePrewarmStateKey.self] = newValue }
+    }
+
+    var fluidPageToolbarPage: SidebarItem? {
+        get { self[FluidPageToolbarPageKey.self] }
+        set { self[FluidPageToolbarPageKey.self] = newValue }
+    }
+
+    var fluidPageToolbarStore: FluidPageToolbarStore? {
+        get { self[FluidPageToolbarStoreKey.self] }
+        set { self[FluidPageToolbarStoreKey.self] = newValue }
     }
 
     /// Hidden app content remains mounted behind Settings, but must not contribute actions.
@@ -41,25 +90,100 @@ extension EnvironmentValues {
     }
 }
 
+/// Cached pages sit in their own hosting views, whose `.toolbar` content can't reach the window.
+/// Actions stay stored per page so the toolbar has them in the same update as a page switch.
+@MainActor
+final class FluidPageToolbarStore: ObservableObject {
+    @Published private(set) var actions: [SidebarItem: AnyView] = [:]
+
+    func publish(_ actions: AnyView?, for page: SidebarItem) {
+        self.actions[page] = actions
+    }
+}
+
+struct FluidPageToolbarActions: View {
+    @ObservedObject var store: FluidPageToolbarStore
+    let page: SidebarItem
+
+    var body: some View {
+        self.store.actions[self.page]
+    }
+}
+
+private final class FluidPageToolbarAnchorView: NSView {
+    weak var store: FluidPageToolbarStore?
+    var page: SidebarItem?
+    var actions: AnyView?
+    private var isSyncScheduled = false
+
+    override func hitTest(_: NSPoint) -> NSView? {
+        nil
+    }
+
+    /// Publishing during a SwiftUI update would mutate state that the toolbar is reading.
+    func scheduleSync() {
+        guard !self.isSyncScheduled else { return }
+        self.isSyncScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.isSyncScheduled = false
+            guard let page = self.page else { return }
+            self.store?.publish(self.actions, for: page)
+        }
+    }
+}
+
+private struct FluidPageToolbarAnchor: NSViewRepresentable {
+    let store: FluidPageToolbarStore?
+    let page: SidebarItem?
+    let actions: AnyView?
+
+    func makeNSView(context _: Context) -> FluidPageToolbarAnchorView {
+        FluidPageToolbarAnchorView()
+    }
+
+    func updateNSView(_ view: FluidPageToolbarAnchorView, context _: Context) {
+        view.store = self.store
+        view.page = self.page
+        view.actions = self.actions
+        view.scheduleSync()
+    }
+
+    static func dismantleNSView(_ view: FluidPageToolbarAnchorView, coordinator _: ()) {
+        guard let page = view.page else { return }
+        view.store?.publish(nil, for: page)
+    }
+}
+
 private struct FluidPageActions<Actions: View>: ViewModifier {
-    @Environment(\.fluidPageToolbarVisible) private var isVisible
-    @Environment(\.fluidToolbarTrailingInset) private var trailingInset
+    @Environment(\.fluidPageToolbarStore) private var store
+    @Environment(\.fluidPageToolbarPage) private var page
     let enabled: Bool
     let actions: Actions
 
     func body(content: Content) -> some View {
-        content.toolbar {
-            if self.isVisible, self.enabled {
-                // Keep page actions separate from the shared trailing controls.
-                if #available(macOS 26, *) {
-                    ToolbarSpacer(.fixed, placement: .primaryAction)
-                }
-                ToolbarItemGroup(placement: .primaryAction) {
-                    self.actions
-                        .buttonStyle(.automatic)
-                        .labelStyle(FluidToolbarLabelStyle())
-                }
-                FluidToolbarEdgeSpace(width: self.trailingInset)
+        content.background(FluidPageToolbarAnchor(
+            store: self.store,
+            page: self.page,
+            actions: self.enabled ? AnyView(
+                self.actions
+                    .buttonStyle(.automatic)
+                    .labelStyle(FluidToolbarLabelStyle())
+            ) : nil
+        ))
+    }
+}
+
+private struct FluidPagePresented: ViewModifier {
+    @Environment(\.fluidPagePrewarmState) private var prewarmState
+    let action: () -> Void
+
+    func body(content: Content) -> some View {
+        content.onAppear {
+            if let prewarmState {
+                prewarmState.whenPresented(self.action)
+            } else {
+                self.action()
             }
         }
     }
@@ -88,25 +212,9 @@ extension View {
     func fluidPageActions<Actions: View>(enabled: Bool = true, @ViewBuilder actions: () -> Actions) -> some View {
         self.modifier(FluidPageActions(enabled: enabled, actions: actions()))
     }
-}
 
-/// A separate invisible item leaves the native glass and button hit areas intact.
-struct FluidToolbarEdgeSpace: ToolbarContent {
-    let width: CGFloat
-
-    var body: some ToolbarContent {
-        if #available(macOS 26, *) {
-            ToolbarItem(placement: .primaryAction) { self.space }
-                .sharedBackgroundVisibility(.hidden)
-        } else {
-            ToolbarItem(placement: .primaryAction) { self.space }
-        }
-    }
-
-    private var space: some View {
-        Color.clear
-            .frame(width: max(0, self.width - 8), height: 1)
-            .allowsHitTesting(false)
-            .accessibilityHidden(true)
+    /// Like `onAppear`, but skipped during a prewarm unless the page is shown before it ends.
+    func onFluidPagePresented(perform action: @escaping () -> Void) -> some View {
+        self.modifier(FluidPagePresented(action: action))
     }
 }

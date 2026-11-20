@@ -57,7 +57,7 @@ nonisolated enum FluidServeSkill {
 
         - `meet list [--since 7d] [--limit N]` - recent meetings, newest first: id, date, length, speakers, title, saved summaries.
         - `meet show <id|latest> [--from MM:SS] [--to MM:SS]` - the transcript, with speaker names and timestamps.
-        - `meet summary <id|latest> [--style NAME]` - summaries already written in FluidVoice that still match the transcript.
+        - `meet summary <id|latest> [--style NAME]` - summaries already written in FluidVoice. One marked outdated predates a transcript or speaker name change; say so when you use it.
         - `meet search [--since 7d] [--limit N] text` - lines that mention the text, grouped by meeting.
         - `--json` on `list` or `show` gives structured output.
 
@@ -74,6 +74,9 @@ nonisolated enum FluidServeSkill {
         ## If it does not work
 
         - It says meetings are not shared yet: ask the user to open FluidVoice, go to FluidMeet settings > Integrations, and add this agent there. Do not look for another way to read the meetings.
+        - It cannot verify sharing permission: the preference may be unset or a sandbox may prevent reading it. Ask the user to check Integrations. \
+        If sharing is already on, use the agent's normal permission-approval flow before retrying this same command with the required access. \
+        Do not disable the sandbox, change sharing settings, or read meeting files directly to bypass the check.
         - The command is not found: FluidVoice was moved or removed. Ask the user to open FluidMeet settings > Integrations in FluidVoice and press Update skill.
         """ + "\n"
     }

@@ -81,9 +81,9 @@ struct SettingsBackupPayload: Codable, Equatable {
     let copyTranscriptionToClipboard: Bool
     let textInsertionMode: SettingsStore.TextInsertionMode
     let spokenSendEnabled: Bool?
-    let spokenSendImmediatelyEnabled: Bool?
     let spokenSendPhrase: String?
     let spokenSendKey: SettingsStore.SpokenSendKey?
+    let spokenSendWait: SettingsStore.SpokenSendWait?
     let preferredInputDeviceUID: String?
     // Optional so backups created before microphone priority ordering still decode.
     // swiftlint:disable:next discouraged_optional_collection
@@ -151,6 +151,8 @@ struct SettingsBackupPayload: Codable, Equatable {
     // swiftlint:disable:next discouraged_optional_collection
     var dictationPromptConfigurations: [String: SettingsStore.DictationPromptConfiguration]? = nil
     var automaticDictionaryPromptDelay: SettingsStore.AutomaticDictionaryPromptDelay? = nil
+    // swiftlint:disable:next discouraged_optional_collection
+    var autoSendDictationShortcuts: [HotkeyShortcut]? = nil
 }
 
 struct AppBackupDocument: Codable, Equatable {
@@ -164,6 +166,9 @@ struct AppBackupDocument: Codable, Equatable {
     // Optional so backups created before pronunciation matching still decode.
     // swiftlint:disable:next discouraged_optional_collection
     let pronunciationProfiles: [PronunciationDictionaryProfile]?
+    // Absent in older backups; restoring one of those keeps the current file transcripts.
+    // swiftlint:disable:next discouraged_optional_collection
+    var fileTranscriptionHistory: [FileTranscriptionEntry]? = nil
 }
 
 enum BackupServiceError: LocalizedError {
@@ -212,7 +217,8 @@ final class BackupService {
             promptProfiles: SettingsStore.shared.dictationPromptProfiles,
             appPromptBindings: SettingsStore.shared.appPromptBindings,
             transcriptionHistory: TranscriptionHistoryStore.shared.makeBackupPayload(),
-            pronunciationProfiles: pronunciationProfiles
+            pronunciationProfiles: pronunciationProfiles,
+            fileTranscriptionHistory: FileTranscriptionHistoryStore.shared.makeBackupPayload()
         )
     }
 
@@ -265,6 +271,9 @@ final class BackupService {
         // Commit settings, History and synchronous observers together before
         // yielding to another actor, keeping the settings/History snapshot consistent.
         TranscriptionHistoryStore.shared.restore(from: document.transcriptionHistory)
+        if let fileTranscriptionHistory = document.fileTranscriptionHistory {
+            FileTranscriptionHistoryStore.shared.restore(from: fileTranscriptionHistory)
+        }
         // Arm model retirement before admission reopens, including imports whose
         // unchanged idle preference has no further actor hop. UI notification
         // delivery must never decide whether the next capture uses stale state.

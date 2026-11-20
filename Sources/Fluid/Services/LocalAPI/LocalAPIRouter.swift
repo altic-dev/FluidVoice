@@ -1,65 +1,137 @@
 import Foundation
+import HTTPTypes
+import Hummingbird
+import NIOCore
+import NIOFoundationEssentialsCompat
 
-final class LocalAPIRouter {
-    private struct RouteKey: Hashable {
-        let method: String
-        let path: String
-    }
+nonisolated struct LocalAPIRouter: HTTPResponder {
+    typealias Context = BasicRequestContext
 
-    private var routes: [RouteKey: LocalAPIRouteHandler] = [:]
+    private let responder: RouterResponder<Context>
+    private let paths: Set<String>
+    private let port: UInt16
 
+    @MainActor
     init(
+        port: UInt16 = LocalAPI.defaultPort,
         meetingStore: any MeetingSessionStoring = MeetingSessionStore.shared,
         liveTranscript: any MeetingLiveTranscriptProviding = MeetingCoordinatorLiveTranscriptProvider()
     ) {
-        self.register(method: "GET", path: "/v1/health", handler: HealthController())
-
+        let health = HealthController()
         let history = HistoryAPIController()
-        self.register(method: "GET", path: "/v1/history", handler: history)
-
         let meetings = MeetingAPIController(store: meetingStore, liveTranscript: liveTranscript)
-        self.register(method: "GET", path: "/v1/meetings", handler: meetings)
-        self.register(method: "GET", path: "/v1/meetings/transcript", handler: meetings)
-        self.register(method: "GET", path: "/v1/meetings/live", handler: meetings)
-
         let dictionary = DictionaryAPIController()
-        self.register(method: "GET", path: "/v1/dictionary/replacements", handler: dictionary)
-        self.register(method: "POST", path: "/v1/dictionary/replacements", handler: dictionary)
-        self.register(method: "GET", path: "/v1/dictionary/custom-words", handler: dictionary)
-        self.register(method: "POST", path: "/v1/dictionary/custom-words", handler: dictionary)
-
         let inference = InferenceAPIController()
-        self.register(method: "POST", path: "/v1/transcribe", handler: inference)
-        self.register(method: "POST", path: "/v1/postprocess", handler: inference)
-    }
+        let routes: [(HTTPRequest.Method, String, any LocalAPIRouteHandler)] = [
+            (.get, "/v1/health", health),
+            (.get, "/v1/history", history),
+            (.get, "/v1/meetings", meetings),
+            (.get, "/v1/meetings/transcript", meetings),
+            (.get, "/v1/meetings/live", meetings),
+            (.get, "/v1/dictionary/replacements", dictionary),
+            (.post, "/v1/dictionary/replacements", dictionary),
+            (.get, "/v1/dictionary/custom-words", dictionary),
+            (.post, "/v1/dictionary/custom-words", dictionary),
+            (.post, "/v1/transcribe", inference),
+            (.post, "/v1/postprocess", inference),
+        ]
 
-    func register(method: String, path: String, handler: LocalAPIRouteHandler) {
-        let key = RouteKey(method: method.uppercased(), path: path)
-        self.routes[key] = handler
-    }
-
-    /// Paths whose every response (errors included) must stay out of a client's HTTP cache.
-    private static let noStorePaths: Set<String> = ["/v1/meetings/live"]
-
-    func route(_ request: LocalAPI.Request) async -> LocalAPI.Response {
-        let response = await self.dispatch(request)
-        guard Self.noStorePaths.contains(request.path) else { return response }
-        return LocalAPI.Response(
-            status: response.status,
-            headers: response.headers.merging(["Cache-Control": "no-store"]) { _, new in new },
-            body: response.body
-        )
-    }
-
-    private func dispatch(_ request: LocalAPI.Request) async -> LocalAPI.Response {
-        let key = RouteKey(method: request.method.uppercased(), path: request.path)
-        guard let handler = self.routes[key] else {
-            if self.routes.keys.contains(where: { $0.path == request.path }) {
-                return LocalAPI.error("Method not allowed.", status: 405)
+        let router = Router(context: Context.self)
+        for (method, path, handler) in routes {
+            router.on(RouterPath(path), method: method) { request, _ in
+                try await Self.handle(request, with: handler)
             }
-            return LocalAPI.error("Route not found.", status: 404)
         }
-        return await handler.handle(request)
+        self.responder = router.buildResponder()
+        self.paths = Set(routes.map { $0.1 })
+        self.port = port
+    }
+
+    func respond(to request: Request, context: Context) async throws -> Response {
+        // The HTTP/1 codec moves the Host header into :authority.
+        let host = request.head.authority
+        if request.headers.contains(where: { $0.name.canonicalName == "host" }) {
+            return Self.makeResponse(LocalAPI.error("Host not allowed.", status: 403))
+        }
+        if let rejection = LocalAPI.untrustedRequestRejection(
+            host: host,
+            hasOrigin: request.headers.contains(.origin),
+            port: self.port
+        ) {
+            return Self.makeResponse(rejection)
+        }
+
+        // Preserve the original URL decoding and exact path matching.
+        let target = "http://127.0.0.1" + (request.head.path ?? "/")
+        guard let components = URLComponents(string: target), self.paths.contains(components.path) else {
+            return Self.makeResponse(LocalAPI.error("Route not found.", status: 404))
+        }
+        var head = request.head
+        head.path = components.path + (components.percentEncodedQuery.map { "?" + $0 } ?? "")
+        var response = try await self.responder.respond(to: Request(head: head, body: request.body), context: context)
+        if context.endpointPath == "NotFound" {
+            response = Self.makeResponse(LocalAPI.error("Method not allowed.", status: 405))
+        }
+        if components.path == "/v1/meetings/live" {
+            response.headers[.cacheControl] = "no-store"
+        }
+        return response
+    }
+
+    private static func handle(_ request: Request, with handler: any LocalAPIRouteHandler) async throws -> Response {
+        if let length = request.headers[.contentLength], let count = UInt64(length),
+           count > LocalAPI.maxRequestBytes
+        {
+            return self.makeResponse(LocalAPI.error("Request too large.", status: 413))
+        }
+
+        let body: ByteBuffer
+        do {
+            body = try await request.body.collect(upTo: LocalAPI.maxRequestBytes)
+        } catch is NIOTooManyBytesError {
+            return Self.makeResponse(LocalAPI.error("Request too large.", status: 413))
+        }
+
+        var headers: [String: String] = [:]
+        for field in request.headers {
+            headers[field.name.canonicalName] = field.value
+        }
+        headers["host"] = request.head.authority
+
+        var query: [String: String] = [:]
+        if let target = request.head.path, let items = URLComponents(string: target)?.queryItems {
+            for item in items where !item.name.isEmpty {
+                query[item.name] = item.value
+            }
+        }
+        let response = await handler.handle(LocalAPI.Request(
+            method: request.method.rawValue,
+            path: request.uri.path,
+            query: query,
+            headers: headers,
+            body: Data(buffer: body)
+        ))
+        return Self.makeResponse(response)
+    }
+
+    private static func makeResponse(_ local: LocalAPI.Response) -> Response {
+        var headers = HTTPFields()
+        for (name, value) in local.headers {
+            if let field = HTTPField.Name(name) {
+                headers[field] = value
+            }
+        }
+        var response = Response(
+            status: .init(code: local.status),
+            headers: headers,
+            body: .init(byteBuffer: ByteBuffer(bytes: local.body))
+        )
+        response.headers[.connection] = "close"
+        // Hummingbird inserts Content-Length for known-size bodies, including zero.
+        if local.status == 204 || local.status == 304 {
+            response.headers[.contentLength] = nil
+        }
+        return response
     }
 }
 
@@ -70,10 +142,6 @@ private struct HealthController: LocalAPIRouteHandler {
     }
 
     func handle(_ request: LocalAPI.Request) async -> LocalAPI.Response {
-        guard request.method == "GET" else {
-            return LocalAPI.error("Method not allowed.", status: 405)
-        }
-
         let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "unknown"
         return LocalAPI.json(Body(status: "ok", version: version))
     }
