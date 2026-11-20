@@ -111,10 +111,7 @@ struct CommandModeView: View {
         }
         .background(self.theme.palette.windowBackground)
         .clipped()
-        .onAppear {
-            guard !self.isPrewarming else { return }
-            self.updatePresentationActivity(self.isActive)
-        }
+        .onFluidPagePresented { self.updatePresentationActivity(self.isActive) }
         .onDisappear {
             guard !self.isPrewarming else { return }
             self.updatePresentationActivity(false)

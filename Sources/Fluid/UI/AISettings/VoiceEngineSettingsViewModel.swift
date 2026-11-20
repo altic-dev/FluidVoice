@@ -24,7 +24,6 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
     }
 
     private var lastInstallationRefresh: Date?
-    private var didRefreshCatalog = false
     @Published var modelSortOption: ModelSortOption = .provider
     @Published var providerFilter: SpeechProviderFilter = .all
     @Published var englishOnlyFilter: Bool = false
@@ -67,7 +66,7 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
             .store(in: &self.cancellables)
     }
 
-    func onAppear(isPrewarming: Bool) {
+    func onAppear() {
         let selectedModel = self.settings.selectedSpeechModel
         if self.previewSpeechModel != selectedModel { self.previewSpeechModel = selectedModel }
         if self.selectedSpeechProvider != selectedModel.provider {
@@ -75,8 +74,10 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
         }
 
         self.refreshInstallationsIfStale()
-        guard !isPrewarming, !self.didRefreshCatalog else { return }
-        self.didRefreshCatalog = true
+    }
+
+    /// The catalog applies its own refresh and retry intervals.
+    func refreshCatalog() {
         Task {
             let catalog = CompactSpeechModelReleaseCatalog.shared
             let revision = catalog.revision

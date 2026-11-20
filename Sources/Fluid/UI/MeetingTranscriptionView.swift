@@ -255,7 +255,6 @@ struct MeetingTranscriptionView: View {
     let resumingSummarySessionID: MeetingSessionID?
 
     @Environment(\.theme) private var theme
-    @Environment(\.fluidPagePrewarmState) private var prewarmState
 
     @State private var setupDraft: MeetingTranscriptionSetupDraft
     @State private var setupDraftBeforeEditing: MeetingTranscriptionSetupDraft
@@ -310,10 +309,6 @@ struct MeetingTranscriptionView: View {
         self._isShowingMeetingSettings = State(initialValue: false)
     }
 
-    private var isPrewarming: Bool {
-        self.prewarmState?.isPrewarming == true
-    }
-
     var body: some View {
         let screen = self.screen
         VStack(spacing: 0) {
@@ -342,12 +337,8 @@ struct MeetingTranscriptionView: View {
         }
         .background(self.theme.palette.contentBackground)
         .clipped()
-        .task {
-            if !self.isPrewarming {
-                MeetingDiarizationModelStore.shared.prepareInBackground()
-            }
-            await self.refreshPageData()
-        }
+        .onFluidPagePresented { MeetingDiarizationModelStore.shared.prepareInBackground() }
+        .task { await self.refreshPageData() }
         .onChange(of: self.setupDraft.mode) { _, _ in
             Task { await self.refreshSources(requestPermissions: false) }
             self.regenerateDefaultTitleIfNeeded()

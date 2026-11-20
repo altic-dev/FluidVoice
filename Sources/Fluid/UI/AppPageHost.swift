@@ -51,7 +51,7 @@ struct AppPageHost: NSViewRepresentable {
             let page = host.page
             let view = self.pages[page] ?? self.makePage(page)
             let prewarmState = self.prewarmState(for: page)
-            prewarmState.isPrewarming = false
+            prewarmState.end(presented: true)
             if self.appliedInputs[page] != host.inputs {
                 view.rootView = host.content(page, prewarmState)
                 self.appliedInputs[page] = host.inputs
@@ -121,7 +121,7 @@ struct AppPageHost: NSViewRepresentable {
         private func prewarm(_ page: SidebarItem) async {
             guard self.pages[page] == nil, let container else { return }
             let prewarmState = self.prewarmState(for: page)
-            prewarmState.isPrewarming = true
+            prewarmState.begin()
             let view = self.makePage(page)
             view.alphaValue = 0
             view.frame = container.bounds
@@ -132,7 +132,7 @@ struct AppPageHost: NSViewRepresentable {
             view.removeFromSuperview()
             // `onDisappear` runs after removal and must still see the prewarm.
             try? await Task.sleep(for: .milliseconds(50))
-            if self.visiblePage != page { prewarmState.isPrewarming = false }
+            if self.visiblePage != page { prewarmState.end(presented: false) }
         }
     }
 }

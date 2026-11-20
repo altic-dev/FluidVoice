@@ -29,7 +29,29 @@ private struct FluidPageToolbarVisibleKey: EnvironmentKey {
 /// A reference, so ending a prewarm doesn't invalidate the page that was just built.
 @MainActor
 final class FluidPagePrewarmState {
-    var isPrewarming = false
+    private(set) var isPrewarming = false
+    private var presentationActions: [() -> Void] = []
+
+    func begin() {
+        self.isPrewarming = true
+    }
+
+    /// A page shown mid-prewarm is already attached, so its appearance handlers won't run again.
+    func end(presented: Bool) {
+        guard self.isPrewarming else { return }
+        self.isPrewarming = false
+        let actions = self.presentationActions
+        self.presentationActions = []
+        if presented { actions.forEach { $0() } }
+    }
+
+    func whenPresented(_ action: @escaping () -> Void) {
+        if self.isPrewarming {
+            self.presentationActions.append(action)
+        } else {
+            action()
+        }
+    }
 }
 
 private struct FluidPagePrewarmStateKey: EnvironmentKey {
@@ -152,6 +174,21 @@ private struct FluidPageActions<Actions: View>: ViewModifier {
     }
 }
 
+private struct FluidPagePresented: ViewModifier {
+    @Environment(\.fluidPagePrewarmState) private var prewarmState
+    let action: () -> Void
+
+    func body(content: Content) -> some View {
+        content.onAppear {
+            if let prewarmState {
+                prewarmState.whenPresented(self.action)
+            } else {
+                self.action()
+            }
+        }
+    }
+}
+
 /// Match symbol geometry without replacing native macOS toolbar chrome or interaction.
 private struct FluidToolbarLabelStyle: LabelStyle {
     func makeBody(configuration: Configuration) -> some View {
@@ -174,5 +211,10 @@ extension View {
 
     func fluidPageActions<Actions: View>(enabled: Bool = true, @ViewBuilder actions: () -> Actions) -> some View {
         self.modifier(FluidPageActions(enabled: enabled, actions: actions()))
+    }
+
+    /// Like `onAppear`, but skipped during a prewarm unless the page is shown before it ends.
+    func onFluidPagePresented(perform action: @escaping () -> Void) -> some View {
+        self.modifier(FluidPagePresented(action: action))
     }
 }

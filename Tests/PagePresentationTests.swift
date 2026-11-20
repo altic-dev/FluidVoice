@@ -66,6 +66,21 @@ struct PagePresentationTests {
         store.publish(nil, for: .stats)
         check(store.actions[.stats] == nil, "A page must be able to clear its own actions")
         check(store.actions[.changelog] != nil, "Clearing one page must keep another page's actions")
-        print("Page presentation: \(checks) checks passed (navigation non-effects, hidden actions, rapid Settings/Back, adaptive layout)")
+        var presentations = 0
+        let prewarm = FluidPagePrewarmState()
+        prewarm.whenPresented { presentations += 1 }
+        check(presentations == 1, "A page outside a prewarm runs its presentation work at once")
+        prewarm.begin()
+        prewarm.whenPresented { presentations += 1 }
+        check(presentations == 1, "A prewarm must not start presentation work")
+        prewarm.end(presented: true)
+        check(presentations == 2 && !prewarm.isPrewarming, "A page shown mid-prewarm must still be presented")
+        prewarm.end(presented: true)
+        check(presentations == 2, "Presentation work must run once")
+        prewarm.begin()
+        prewarm.whenPresented { presentations += 1 }
+        prewarm.end(presented: false)
+        check(presentations == 2 && !prewarm.isPrewarming, "A finished prewarm must drop its presentation work")
+        print("Page presentation: \(checks) checks passed (navigation non-effects, hidden actions, rapid Settings/Back, adaptive layout, prewarm hand-off)")
     }
 }
