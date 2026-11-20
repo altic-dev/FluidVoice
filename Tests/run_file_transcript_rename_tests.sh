@@ -9,5 +9,13 @@ fi
 export DEVELOPER_DIR="$task_developer_dir"
 task_test_dir=$(mktemp -d /tmp/fluidvoice-file-rename.XXXXXX)
 trap 'rm -rf "$task_test_dir"' EXIT HUP INT TERM
-xcrun swiftc -parse-as-library Sources/Fluid/Persistence/FileTranscriptionHistoryStore.swift Sources/Fluid/Persistence/PersistedHistory.swift Tests/FileTranscriptRenameTests.swift -o "$task_test_dir/tests"
+# Compile the production search record without the unrelated store mappings.
+sed '/^extension TranscriptionHistoryEntry/,$d' \
+    Sources/Fluid/Persistence/Search/SearchIndexRecord.swift > "$task_test_dir/SearchIndexRecord.swift"
+xcrun swiftc -parse-as-library \
+    "$task_test_dir/SearchIndexRecord.swift" \
+    Sources/Fluid/Persistence/FileTranscriptionHistoryStore.swift \
+    Sources/Fluid/Persistence/PersistedHistory.swift \
+    Tests/FileTranscriptRenameTests.swift \
+    -o "$task_test_dir/tests"
 "$task_test_dir/tests"
