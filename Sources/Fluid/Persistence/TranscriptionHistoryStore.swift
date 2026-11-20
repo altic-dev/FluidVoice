@@ -229,7 +229,7 @@ struct TranscriptionHistoryEntry: Codable, Identifiable, Equatable, Sendable {
     }
 
     mutating func markRestored(over indexed: UInt64?, at date: Date = Date()) {
-        self.searchRevision = SearchIndexRecord.revisionAfterRestore(
+        self.searchRevision = HistorySearchRevision.afterRestore(
             restored: self.searchRevision,
             indexed: indexed,
             at: date

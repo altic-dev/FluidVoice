@@ -228,7 +228,7 @@ final class FileTranscriptionHistoryStore: ObservableObject {
             payload
                 .map { entry in
                     var entry = entry
-                    entry.searchRevision = SearchIndexRecord.revisionAfterRestore(
+                    entry.searchRevision = HistorySearchRevision.afterRestore(
                         restored: entry.searchRevision,
                         indexed: indexed[entry.id]
                     )

@@ -40,6 +40,16 @@ final class SettingsBackupRoundTripTests: XCTestCase {
         }
     }
 
+    func testImportWarningMatchesTheFileTranscriptPayload() {
+        let date = Date(timeIntervalSince1970: 1_800_000_100)
+        func warning(_ count: Int?) -> String {
+            SettingsView.backupImportConfirmation(exportedAt: date, fileTranscriptCount: count).informativeText
+        }
+        XCTAssertFalse(warning(nil).contains("file transcripts"))
+        XCTAssertTrue(warning(0).contains("will clear your saved file transcripts"))
+        XCTAssertTrue(warning(1).contains("will replace your saved file transcripts"))
+    }
+
     func testFileTranscriptionsRoundTripThroughBackupAndRestoreIntoStore() throws {
         let entry = FileTranscriptionEntry(
             timestamp: Date(timeIntervalSince1970: 1_800_000_000),
