@@ -1746,21 +1746,26 @@ struct ContentView: View {
             List {
                 ForEach(self.filteredSettingsSections) { section in
                     let isSelected = self.settingsNavigation.selectedSection == section
-                    HStack(spacing: self.theme.metrics.spacing.sm) {
-                        Image(systemName: section.systemImage)
-                            .symbolRenderingMode(.hierarchical)
-                            .foregroundStyle(isSelected ? self.theme.look.text : self.theme.look.secondaryText)
-                            .frame(width: 18)
+                    Button {
+                        self.selectSettingsSection(section)
+                    } label: {
+                        HStack(spacing: self.theme.metrics.spacing.sm) {
+                            Image(systemName: section.systemImage)
+                                .symbolRenderingMode(.hierarchical)
+                                .foregroundStyle(isSelected ? self.theme.look.text : self.theme.look.secondaryText)
+                                .frame(width: 18)
 
-                        Text(section.title)
-                            .foregroundStyle(self.theme.look.text)
+                            Text(section.title)
+                                .foregroundStyle(self.theme.look.text)
+                        }
+                        .fluidText(.rowTitle)
+                        .sidebarOptionHover(
+                            isSelected: isSelected,
+                            reduceMotion: self.accessibilityReduceMotion
+                        )
                     }
-                    .fluidText(.rowTitle)
-                    .tag(section)
-                    .sidebarOptionHover(
-                        isSelected: isSelected,
-                        reduceMotion: self.accessibilityReduceMotion
-                    )
+                    .buttonStyle(.plain)
+                    .accessibilityAddTraits(isSelected ? .isSelected : [])
                 }
             }
             .listStyle(.sidebar)
@@ -1940,7 +1945,19 @@ struct ContentView: View {
             self.theme.palette.contentBackground
                 .ignoresSafeArea()
 
-            self.appDetailContent
+            // Preserve the app destination so Back never waits on expensive detail initialization.
+            AppPageHost(
+                page: self.selectedSidebarItem ?? .welcome,
+                inputs: AppPageInputs(
+                    colorScheme: self.colorScheme,
+                    accentColor: self.settings.accentColorOption,
+                    customAccentColorHex: self.settings.customAccentColorHex,
+                    accessibilityEnabled: self.accessibilityEnabled
+                ),
+                prewarmPages: SidebarItem.prewarmedPages,
+                canPrewarm: { !self.asr.isRunningOrStarting },
+                content: self.pageContent(for:prewarmState:)
+            )
         }
         .navigationTitle((self.selectedSidebarItem ?? .welcome).title)
     }
@@ -2001,8 +2018,7 @@ struct ContentView: View {
                 .appTheme(self.theme)
                 .environmentObject(self.appServices)
                 .environmentObject(self.menuBarManager)
-                .environmentObject(self.mouseTracker)
-                .environment(\.fluidPageToolbarVisible, self.pagePresentation.showsPageActions)
+                .environment(\.fluidPopupPresence, self.popupPresence)
                 .environment(\.fluidPageToolbarStore, self.pageToolbarStore)
                 .environment(\.fluidPageToolbarPage, page)
                 .environment(\.fluidPagePrewarmState, prewarmState)

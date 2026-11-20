@@ -5,8 +5,9 @@ import SwiftUI
 struct AppPageInputs: Equatable {
     let colorScheme: ColorScheme
     let accentColor: SettingsStore.AccentColorOption
+    /// A custom color replaces the preset tint, so it changes the theme pages draw with.
+    let customAccentColorHex: String?
     let accessibilityEnabled: Bool
-    let isSettingsPresented: Bool
 }
 
 /// Keeps visited pages outside the window, so a page switch reattaches a built SwiftUI graph.
@@ -46,7 +47,6 @@ struct AppPageHost: NSViewRepresentable {
         func update(_ host: AppPageHost, container: NSView) {
             self.host = host
             self.container = container
-            container.isHidden = host.inputs.isSettingsPresented
 
             let page = host.page
             let view = self.pages[page] ?? self.makePage(page)

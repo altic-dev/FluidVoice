@@ -69,6 +69,7 @@ struct StatsHeatmapView: View {
                         .zIndex(columns[column].contains { $0?.date == self.hoveredDate } ? 1 : 0)
                     }
                 }
+                // One hover region replaces a tracking region on every day.
                 .contentShape(Rectangle())
                 .onContinuousHover { phase in
                     switch phase {
@@ -81,20 +82,6 @@ struct StatsHeatmapView: View {
             }
             .frame(height: 160)
         }
-    }
-
-    private func updateHover(at location: CGPoint, columns: [[StatsActivityPeriod.Day?]], cellWidth: CGFloat) {
-        let columnStep = cellWidth + 4
-        let rowStep: CGFloat = 20
-        let y = location.y - rowStep
-        let column = Int((location.x / columnStep).rounded(.down))
-        let row = Int((y / rowStep).rounded(.down))
-        let isInsideCell = location.x.truncatingRemainder(dividingBy: columnStep) < cellWidth
-            && y.truncatingRemainder(dividingBy: rowStep) < 16
-        let date = isInsideCell && y >= 0 && columns.indices.contains(column) && columns[column].indices.contains(row)
-            ? columns[column][row]?.date
-            : nil
-        if self.hoveredDate != date { self.hoveredDate = date }
     }
 
     @ViewBuilder

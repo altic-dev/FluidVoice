@@ -312,19 +312,21 @@ struct MeetingTranscriptionView: View {
     var body: some View {
         let screen = self.screen
         VStack(spacing: 0) {
-            MeetingTranscriptionHeader(
-                actions: MeetingHeaderActions(
-                    screen: screen,
-                    isQuiescent: self.coordinator.isQuiescent,
-                    isSummaryRunning: self.summaryActivity.selectionLock != nil
-                ),
-                onBack: self.goHome,
-                onNewRecording: self.openRecordingView,
-                onOpenMeetingSettings: self.openMeetingSettings
-            )
-            .padding(.horizontal, FluidPageLayout.inset)
-            .padding(.vertical, 12)
-            FluidHairline()
+            if case .canvas = screen {
+                MeetingTranscriptionHeader(
+                    actions: MeetingHeaderActions(
+                        screen: screen,
+                        isQuiescent: self.coordinator.isQuiescent,
+                        isSummaryRunning: self.summaryActivity.selectionLock != nil
+                    ),
+                    onBack: self.goHome,
+                    onNewRecording: self.openRecordingView,
+                    onOpenMeetingSettings: self.openMeetingSettings
+                )
+                .padding(.horizontal, FluidPageLayout.inset)
+                .padding(.vertical, 12)
+                FluidHairline()
+            }
 
             switch screen {
             case .home:
