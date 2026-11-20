@@ -267,6 +267,7 @@ struct MeetingTranscriptionView: View {
     @State private var applications: [MeetingApplicationOption] = []
     @State private var microphones: [MeetingMicrophoneOption] = []
     @State private var isRefreshingSources = false
+    @State private var lastSourceRefresh: Date?
     @State private var isStarting = false
     @State private var isStopping = false
     @State private var isRetrying = false
@@ -277,6 +278,7 @@ struct MeetingTranscriptionView: View {
     @State private var modelReadinessRevision = 0
     @State private var cachedStorageStatus = "Checking…"
     @State private var cachedStorageReady = false
+    @State private var storageReadinessRevision = 0
     @ObservedObject var historySnapshot: MeetingHistorySnapshot
     @State private var route: MeetingRoute
     @State private var pendingDeleteSessionID: MeetingSessionID?
@@ -310,19 +312,21 @@ struct MeetingTranscriptionView: View {
     var body: some View {
         let screen = self.screen
         VStack(spacing: 0) {
-            MeetingTranscriptionHeader(
-                actions: MeetingHeaderActions(
-                    screen: screen,
-                    isQuiescent: self.coordinator.isQuiescent,
-                    isSummaryRunning: self.summaryActivity.selectionLock != nil
-                ),
-                onBack: self.goHome,
-                onNewRecording: self.openRecordingView,
-                onOpenMeetingSettings: self.openMeetingSettings
-            )
-            .padding(.horizontal, FluidPageLayout.inset)
-            .padding(.vertical, 12)
-            Divider()
+            if case .canvas = screen {
+                MeetingTranscriptionHeader(
+                    actions: MeetingHeaderActions(
+                        screen: screen,
+                        isQuiescent: self.coordinator.isQuiescent,
+                        isSummaryRunning: self.summaryActivity.selectionLock != nil
+                    ),
+                    onBack: self.goHome,
+                    onNewRecording: self.openRecordingView,
+                    onOpenMeetingSettings: self.openMeetingSettings
+                )
+                .padding(.horizontal, FluidPageLayout.inset)
+                .padding(.vertical, 12)
+                Divider()
+            }
 
             switch screen {
             case .home:
@@ -333,14 +337,8 @@ struct MeetingTranscriptionView: View {
         }
         .background(self.theme.palette.contentBackground)
         .clipped()
-        .task {
-            self.pendingSourceChoiceRefresh = true
-            self.applyPendingSourceChoiceRefresh()
-            MeetingDiarizationModelStore.shared.prepareInBackground()
-            async let sources: Void = self.refreshSources(requestPermissions: false)
-            await self.loadMeetingHistory()
-            await sources
-        }
+        .onFluidPagePresented { MeetingDiarizationModelStore.shared.prepareInBackground() }
+        .task { await self.refreshPageData() }
         .onChange(of: self.setupDraft.mode) { _, _ in
             Task { await self.refreshSources(requestPermissions: false) }
             self.regenerateDefaultTitleIfNeeded()
@@ -465,7 +463,8 @@ struct MeetingTranscriptionView: View {
             requestDeletion: { self.pendingDeleteSessionID = $0 },
             rename: { self.renameMeetingSession(sessionID: $0, to: $1) },
             recordAgain: self.recordAgain,
-            openIntegrations: self.openMeetingIntegrations
+            openIntegrations: self.openMeetingIntegrations,
+            openSettings: self.openMeetingSettings
         )
     }
 
@@ -659,6 +658,23 @@ struct MeetingTranscriptionView: View {
         // An older check must not overwrite an import completion's newer result.
         guard self.modelReadinessRevision == revision else { return }
         self.cachedModelReady = ready
+    }
+
+    @MainActor
+    private func refreshPageData() async {
+        if let lastRefresh = self.lastSourceRefresh {
+            guard Date().timeIntervalSince(lastRefresh) >= 30 else { return }
+            // The cached setup is on screen, so the check can wait for the page to settle.
+            try? await Task.sleep(for: .milliseconds(600))
+            guard !Task.isCancelled else { return }
+        } else {
+            self.pendingSourceChoiceRefresh = true
+            self.applyPendingSourceChoiceRefresh()
+        }
+        self.lastSourceRefresh = Date()
+        async let sources: Void = self.refreshSources(requestPermissions: false)
+        await self.loadMeetingHistory()
+        await sources
     }
 
     @MainActor
@@ -1423,12 +1439,21 @@ struct MeetingTranscriptionView: View {
     private func refreshCachedReadiness() {
         self.cachedMicrophoneStatus = AVCaptureDevice.authorizationStatus(for: .audio)
         self.cachedScreenCaptureAccess = CGPreflightScreenCaptureAccess()
-        let storage = Self.storageReadiness(trackCount: MeetingPCMStoragePolicy.trackCount(for: self.effectiveCaptureMode))
-        self.cachedStorageStatus = storage.status
-        self.cachedStorageReady = storage.ready
+        self.storageReadinessRevision += 1
+        let revision = self.storageReadinessRevision
+        let trackCount = MeetingPCMStoragePolicy.trackCount(for: self.effectiveCaptureMode)
+        Task {
+            // Volume capacity queries can block, so keep them off the main thread.
+            let storage = await Task.detached(priority: .userInitiated) {
+                Self.storageReadiness(trackCount: trackCount)
+            }.value
+            guard self.storageReadinessRevision == revision else { return }
+            self.cachedStorageStatus = storage.status
+            self.cachedStorageReady = storage.ready
+        }
     }
 
-    private static func storageReadiness(trackCount: Int) -> (status: String, ready: Bool) {
+    private nonisolated static func storageReadiness(trackCount: Int) -> (status: String, ready: Bool) {
         guard let applicationSupport = FileManager.default.urls(
             for: .applicationSupportDirectory,
             in: .userDomainMask

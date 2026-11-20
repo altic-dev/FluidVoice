@@ -12,6 +12,7 @@ struct MeetingHomeActions {
     let rename: (MeetingSessionID, String) -> Void
     let recordAgain: (MeetingSession) -> Void
     let openIntegrations: () -> Void
+    let openSettings: () -> Void
 }
 
 struct MeetingHomeList: View {
@@ -126,12 +127,23 @@ struct MeetingHomeList: View {
                 .foregroundStyle(self.theme.palette.secondaryText)
             Spacer()
             FluidGlassControlGroup {
-                Button(action: self.actions.startRecording) {
-                    Label("Start recording", systemImage: "record.circle")
+                HStack(spacing: self.theme.metrics.spacing.sm) {
+                    Button(action: self.actions.startRecording) {
+                        Label("Start recording", systemImage: "record.circle")
+                    }
+                    .meetingGlassAction(prominent: true, spacious: true)
+                    .disabled(!self.canStartRecording)
+                    .keyboardShortcut("n", modifiers: .command)
+
+                    Button(action: self.actions.openSettings) {
+                        Label("FluidMeet settings", systemImage: "gearshape")
+                            .foregroundStyle(self.theme.palette.primaryText)
+                    }
+                    .labelStyle(.iconOnly)
+                    .meetingGlassAction(circular: true)
+                    .help("FluidMeet settings")
+                    .accessibilityHint("Change the saved recording application, microphone, and meeting defaults")
                 }
-                .meetingGlassAction(prominent: true, spacious: true)
-                .disabled(!self.canStartRecording)
-                .keyboardShortcut("n", modifiers: .command)
             }
             .fixedSize()
         }
@@ -182,7 +194,7 @@ struct MeetingHomeList: View {
 
     private var sessionList: some View {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 2) {
+            MeetingSessionStack(isShort: self.filteredSessions.count <= 40) {
                 ForEach(self.groupedSessions, id: \.key) { group in
                     Section {
                         ForEach(group.sessions, content: self.row(for:))
@@ -455,5 +467,19 @@ private struct MeetingHomeRow: View {
             return "\(totalMinutes / 60)h \(totalMinutes % 60)m"
         }
         return "\(max(1, totalMinutes))m"
+    }
+}
+
+/// A lazy stack rebuilds its rows whenever the cached page returns to the window.
+private struct MeetingSessionStack<Content: View>: View {
+    let isShort: Bool
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        if self.isShort {
+            VStack(alignment: .leading, spacing: 2) { self.content }
+        } else {
+            LazyVStack(alignment: .leading, spacing: 2) { self.content }
+        }
     }
 }

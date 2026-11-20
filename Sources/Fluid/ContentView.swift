@@ -278,6 +278,7 @@ struct ContentView: View {
     }
 
     @Environment(\.theme) private var theme
+    @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
     @State private var hotkeyManager: GlobalHotkeyManager? = nil
     @State private var hotkeyManagerInitialized: Bool = false
@@ -322,6 +323,8 @@ struct ContentView: View {
 
     @State private var selectedSidebarItem: SidebarItem?
     @State private var previousSidebarItem: SidebarItem? = nil // Track previous for mode transitions
+    @State private var toolbarActions = MainToolbarActions()
+    @State private var pageToolbarStore = FluidPageToolbarStore()
     @State private var settingsNavigation = SettingsNavigationState()
     @State private var settingsSearchQuery = ""
     @State private var settingsSearchScrollRequest = 0
@@ -418,8 +421,6 @@ struct ContentView: View {
     @State private var savedProviders: [SettingsStore.SavedProvider] = []
     @State private var selectedProviderID: String = SettingsStore.shared.selectedProviderID
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
-    @State private var toolbarTrailingInset: CGFloat = 80
-
     #if DEBUG
     private var dictationModeSwitchASRForTesting: ASRService?
     private var dictationModeSwitchOnReadyForTesting: ((ContentView) -> Void)?
@@ -489,11 +490,6 @@ struct ContentView: View {
                             .toolbar(removing: .sidebarToggle)
                     } detail: {
                         self.detailView
-                            .onGeometryChange(for: CGFloat.self) { geometry in
-                                (geometry.size.width * 0.1).rounded()
-                            } action: { inset in
-                                self.toolbarTrailingInset = inset
-                            }
                     }
                     .navigationSplitViewStyle(.balanced)
                 }
@@ -511,7 +507,6 @@ struct ContentView: View {
         let withToolbar = self.applyMainWindowToolbar(to: observed)
 
         return withToolbar
-            .environment(\.fluidToolbarTrailingInset, self.toolbarTrailingInset)
             .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
                 self.refreshAccessibilityPermissionState()
             }
@@ -1271,6 +1266,14 @@ struct ContentView: View {
         self.selectedSidebarItem = destination == .meetingTranscription && !self.settings.fluidMeetEnabled ? .welcome : destination
     }
 
+    private func selectSettingsSection(_ section: SettingsSection) {
+        if self.settingsNavigation.isLeaving(.shortcuts, for: section) {
+            self.clearShortcutRecordingMode()
+        }
+        self.settingsNavigation.selectedSection = section
+        self.settingsSearchScrollRequest += 1
+    }
+
     private func resetSettingsSearch() {
         self.settingsSearchQuery = ""
         self.settingsRevealTarget = nil
@@ -1542,7 +1545,8 @@ struct ContentView: View {
     }
 
     private var appSidebarSections: some View {
-        List(selection: self.$selectedSidebarItem) {
+        // Rows set the page themselves: List selection can deliver a rapid click only when the next one arrives.
+        List {
             Section {
                 self.sidebarNavigationLink(.welcome, title: "Dashboard", systemImage: "house.fill")
                 self.sidebarNavigationLink(.history, title: "History", systemImage: "clock.arrow.circlepath")
@@ -1674,20 +1678,12 @@ struct ContentView: View {
             .padding(.top, self.theme.metrics.spacing.xs)
             .padding(.bottom, self.theme.metrics.spacing.sm)
 
-            List(selection: Binding(
-                get: { self.settingsNavigation.selectedSection },
-                set: { newValue in
-                    guard let newValue else { return }
-                    if self.settingsNavigation.isLeaving(.shortcuts, for: newValue) {
-                        self.clearShortcutRecordingMode()
-                    }
-                    self.settingsNavigation.selectedSection = newValue
-                    self.settingsSearchScrollRequest += 1
-                }
-            )) {
+            List {
                 ForEach(self.filteredSettingsSections) { section in
                     let isSelected = self.settingsNavigation.selectedSection == section
-                    NavigationLink(value: section) {
+                    Button {
+                        self.selectSettingsSection(section)
+                    } label: {
                         HStack(spacing: self.theme.metrics.spacing.sm) {
                             Image(systemName: section.systemImage)
                                 .symbolRenderingMode(.hierarchical)
@@ -1698,11 +1694,13 @@ struct ContentView: View {
                                 .foregroundStyle(isSelected ? Color.white : Color.primary)
                         }
                         .font(self.theme.typography.sidebarItem)
+                        .sidebarOptionHover(
+                            isSelected: isSelected,
+                            reduceMotion: self.accessibilityReduceMotion
+                        )
                     }
-                    .sidebarOptionHover(
-                        isSelected: isSelected,
-                        reduceMotion: self.accessibilityReduceMotion
-                    )
+                    .buttonStyle(.plain)
+                    .accessibilityAddTraits(isSelected ? .isSelected : [])
                 }
             }
             .listStyle(.sidebar)
@@ -1856,7 +1854,9 @@ struct ContentView: View {
 
     private func sidebarNavigationLink(_ item: SidebarItem, title: String, systemImage: String) -> some View {
         let isSelected = self.selectedSidebarItem == item
-        return NavigationLink(value: item) {
+        return Button {
+            self.selectedSidebarItem = item
+        } label: {
             HStack(spacing: self.theme.metrics.spacing.sm) {
                 Image(nsImage: SidebarSymbolCache.image(named: systemImage))
                     .renderingMode(.template)
@@ -1871,36 +1871,19 @@ struct ContentView: View {
             }
             .font(self.theme.typography.sidebarItem)
             .padding(.vertical, self.theme.metrics.spacing.xs / 2)
+            .sidebarOptionHover(
+                isSelected: isSelected,
+                reduceMotion: self.accessibilityReduceMotion
+            )
         }
-        .sidebarOptionHover(
-            isSelected: isSelected,
-            reduceMotion: self.accessibilityReduceMotion
-        )
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
-    private var themePreferenceButton: some View {
-        Button {
-            self.settings.themePreference = self.nextThemePreference(after: self.settings.themePreference)
-        } label: {
-            Image(systemName: self.settings.themePreference.systemImageName)
-                .fluidToolbarIcon()
-        }
-        .help("Theme: \(self.settings.themePreference.displayName)")
-        .accessibilityLabel("Theme")
-    }
-
-    private func nextThemePreference(after preference: SettingsStore.ThemePreference) -> SettingsStore.ThemePreference {
-        switch preference {
-        case .system: return .light
-        case .light: return .dark
-        case .dark: return .system
-        }
-    }
-
-    private var todayStatsButton: some View {
-        TodayStatsToolbarButton(typingWPM: self.settings.userTypingWPM) {
-            self.navigateToApp(.stats)
-        }
+    private func configureToolbarActions() {
+        self.toolbarActions.toggleSidebar = self.toggleSidebar
+        self.toolbarActions.openStats = { self.navigateToApp(.stats) }
+        self.toolbarActions.reportIssue = self.openIssueReportingPage
     }
 
     private var detailView: some View {
@@ -1909,12 +1892,18 @@ struct ContentView: View {
                 .ignoresSafeArea()
 
             // Preserve the app destination so Back never waits on expensive detail initialization.
-            self.appDetailContent
-                .environment(\.fluidPageToolbarVisible, self.pagePresentation.showsPageActions)
-                .opacity(self.settingsNavigation.isPresented ? 0 : 1)
-                .offset(x: self.settingsNavigation.isPresented ? -6 : 0)
-                .allowsHitTesting(!self.settingsNavigation.isPresented)
-                .accessibilityHidden(self.settingsNavigation.isPresented)
+            AppPageHost(
+                page: self.selectedSidebarItem ?? .welcome,
+                inputs: AppPageInputs(
+                    colorScheme: self.colorScheme,
+                    accentColor: self.settings.accentColorOption,
+                    accessibilityEnabled: self.accessibilityEnabled,
+                    isSettingsPresented: self.settingsNavigation.isPresented
+                ),
+                prewarmPages: SidebarItem.prewarmedPages,
+                canPrewarm: { !self.asr.isRunningOrStarting },
+                content: self.pageContent(for:prewarmState:)
+            )
 
             if self.settingsNavigation.isPresented {
                 self.preferencesView
@@ -1936,8 +1925,23 @@ struct ContentView: View {
         return .offset(x: 8).combined(with: .opacity)
     }
 
-    private var appDetailContent: AnyView {
-        switch self.selectedSidebarItem ?? .welcome {
+    /// Pages get their own hosting view, which inherits none of the window's custom environment.
+    private func pageContent(for page: SidebarItem, prewarmState: FluidPagePrewarmState) -> AnyView {
+        AnyView(
+            self.detailContent(for: page)
+                .appTheme(self.theme)
+                .environmentObject(self.appServices)
+                .environmentObject(self.menuBarManager)
+                .environmentObject(self.mouseTracker)
+                .environment(\.fluidPageToolbarVisible, self.pagePresentation.showsPageActions)
+                .environment(\.fluidPageToolbarStore, self.pageToolbarStore)
+                .environment(\.fluidPageToolbarPage, page)
+                .environment(\.fluidPagePrewarmState, prewarmState)
+        )
+    }
+
+    private func detailContent(for page: SidebarItem) -> AnyView {
+        switch page {
         case .welcome:
             return AnyView(self.welcomeView)
         case .voiceEngine:
@@ -1949,7 +1953,7 @@ struct ContentView: View {
             return AnyView(AIEnhancementSettingsScreen(
                 menuBarManager: self.menuBarManager,
                 theme: self.theme,
-                selectedConfigurationSection: self.aiEnhancementConfigurationSectionBinding,
+                selectedConfigurationSection: self.aiEnhancementConfigurationSectionBinding(for: page),
                 activeShortcutRecordingTarget: self.$activeShortcutRecordingTarget,
                 shortcutRecordingMessage: self.$shortcutRecordingMessage,
                 revealTarget: self.$appSearchRevealTarget
@@ -1975,13 +1979,14 @@ struct ContentView: View {
         }
     }
 
-    private var aiEnhancementConfigurationSectionBinding: Binding<AIEnhancementConfigurationSection> {
+    /// Each cached page keeps its own section; reading the current selection would go stale.
+    private func aiEnhancementConfigurationSectionBinding(for page: SidebarItem) -> Binding<AIEnhancementConfigurationSection> {
         Binding(
             get: {
-                self.selectedSidebarItem?.aiEnhancementConfigurationSection ?? .providers
+                page.aiEnhancementConfigurationSection ?? .providers
             },
             set: { section in
-                guard self.selectedSidebarItem != section.sidebarItem else { return }
+                guard page != section.sidebarItem else { return }
                 self.navigateToApp(section.sidebarItem)
             }
         )
@@ -2130,39 +2135,16 @@ struct ContentView: View {
         } else {
             content
                 .toolbar {
-                    // Keep one navigation control alive in both sidebar states. An overlay
-                    // belongs to the sidebar content and shifts below AppKit-hosted title bars.
-                    ToolbarItem(placement: .navigation) {
-                        Button(action: self.toggleSidebar) {
-                            Image(systemName: "sidebar.left")
-                                .fluidToolbarIcon()
-                        }
-                        .buttonStyle(.automatic)
-                        .help(self.columnVisibility == .detailOnly ? "Show sidebar" : "Hide sidebar")
-                        .accessibilityLabel(self.columnVisibility == .detailOnly ? "Show sidebar" : "Hide sidebar")
-                    }
-                    ToolbarItemGroup(placement: .primaryAction) {
-                        UpdateAvailableToolbarButton()
-
-                        self.todayStatsButton
-                            .buttonStyle(.automatic)
-
-                        self.themePreferenceButton
-                            .buttonStyle(.automatic)
-
-                        Button(action: self.openIssueReportingPage) {
-                            Image(systemName: "ladybug.fill")
-                                .fluidToolbarIcon()
-                        }
-                        .buttonStyle(.automatic)
-                        .help("Report an issue")
-                        .accessibilityLabel("Report an issue")
-                    }
-                    if !self.hasPageToolbarActions {
-                        FluidToolbarEdgeSpace(width: self.toolbarTrailingInset)
-                    }
+                    MainWindowToolbar(
+                        isSidebarHidden: self.columnVisibility == .detailOnly,
+                        pageWithActions: self.hasPageToolbarActions ? (self.selectedSidebarItem ?? .welcome) : nil,
+                        actions: self.toolbarActions,
+                        pageToolbarStore: self.pageToolbarStore
+                    )
                 }
                 .toolbar(removing: .sidebarToggle)
+                .onAppear { self.configureToolbarActions() }
+                .onChange(of: self.accessibilityReduceMotion) { _, _ in self.configureToolbarActions() }
         }
     }
 
@@ -6480,6 +6462,84 @@ private extension ContentView {
     }
 }
 
+/// A stable reference, so page switches leave `MainWindowToolbar`'s inputs unchanged.
+@MainActor
+private final class MainToolbarActions {
+    var toggleSidebar: () -> Void = {}
+    var openStats: () -> Void = {}
+    var reportIssue: () -> Void = {}
+}
+
+private struct MainWindowToolbar: ToolbarContent {
+    let isSidebarHidden: Bool
+    let pageWithActions: SidebarItem?
+    let actions: MainToolbarActions
+    let pageToolbarStore: FluidPageToolbarStore
+
+    var body: some ToolbarContent {
+        // Keep one navigation control alive in both sidebar states. An overlay
+        // belongs to the sidebar content and shifts below AppKit-hosted title bars.
+        ToolbarItem(placement: .navigation) {
+            Button {
+                self.actions.toggleSidebar()
+            } label: {
+                Image(systemName: "sidebar.left")
+                    .fluidToolbarIcon()
+            }
+            .buttonStyle(.automatic)
+            .help(self.isSidebarHidden ? "Show sidebar" : "Hide sidebar")
+            .accessibilityLabel(self.isSidebarHidden ? "Show sidebar" : "Hide sidebar")
+        }
+        ToolbarItemGroup(placement: .primaryAction) {
+            UpdateAvailableToolbarButton()
+
+            TodayStatsToolbarButton { self.actions.openStats() }
+                .buttonStyle(.automatic)
+
+            ThemePreferenceToolbarButton()
+                .buttonStyle(.automatic)
+
+            Button {
+                self.actions.reportIssue()
+            } label: {
+                Image(systemName: "ladybug.fill")
+                    .fluidToolbarIcon()
+            }
+            .buttonStyle(.automatic)
+            .help("Report an issue")
+            .accessibilityLabel("Report an issue")
+        }
+        if let pageWithActions {
+            ToolbarItemGroup(placement: .primaryAction) {
+                FluidPageToolbarActions(store: self.pageToolbarStore, page: pageWithActions)
+            }
+        }
+    }
+}
+
+private struct ThemePreferenceToolbarButton: View {
+    @ObservedObject private var settings = SettingsStore.shared
+
+    var body: some View {
+        Button {
+            self.settings.themePreference = self.nextPreference(after: self.settings.themePreference)
+        } label: {
+            Image(systemName: self.settings.themePreference.systemImageName)
+                .fluidToolbarIcon()
+        }
+        .help("Theme: \(self.settings.themePreference.displayName)")
+        .accessibilityLabel("Theme")
+    }
+
+    private func nextPreference(after preference: SettingsStore.ThemePreference) -> SettingsStore.ThemePreference {
+        switch preference {
+        case .system: return .light
+        case .light: return .dark
+        case .dark: return .system
+        }
+    }
+}
+
 private struct UpdateAvailableToolbarButton: View {
     @Environment(\.theme) private var theme
     @ObservedObject private var updater = SimpleUpdater.shared
@@ -6504,13 +6564,13 @@ private struct UpdateAvailableToolbarButton: View {
 
 private struct TodayStatsToolbarButton: View {
     @ObservedObject private var historyStore = TranscriptionHistoryStore.shared
+    @ObservedObject private var settings = SettingsStore.shared
 
-    let typingWPM: Int
     let action: () -> Void
 
     var body: some View {
         let summary = self.historyStore.todaySummary
-        let timeSaved = summary.formattedTimeSaved(typingWPM: self.typingWPM)
+        let timeSaved = summary.formattedTimeSaved(typingWPM: self.settings.userTypingWPM)
         let hasActivity = summary.words > 0
 
         return Button(action: self.action) {

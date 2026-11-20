@@ -67,9 +67,33 @@ struct StatsHeatmapView: View {
                         .zIndex(columns[column].contains { $0?.date == self.hoveredDate } ? 1 : 0)
                     }
                 }
+                // One hover region replaces a tracking region on every day.
+                .contentShape(Rectangle())
+                .onContinuousHover { phase in
+                    switch phase {
+                    case let .active(location):
+                        self.updateHover(at: location, columns: columns, cellWidth: width)
+                    case .ended:
+                        self.hoveredDate = nil
+                    }
+                }
             }
             .frame(height: 160)
         }
+    }
+
+    private func updateHover(at location: CGPoint, columns: [[StatsActivityPeriod.Day?]], cellWidth: CGFloat) {
+        let columnStep = cellWidth + 4
+        let rowStep: CGFloat = 20
+        let y = location.y - rowStep
+        let column = Int((location.x / columnStep).rounded(.down))
+        let row = Int((y / rowStep).rounded(.down))
+        let isInsideCell = location.x.truncatingRemainder(dividingBy: columnStep) < cellWidth
+            && y.truncatingRemainder(dividingBy: rowStep) < 16
+        let date = isInsideCell && y >= 0 && columns.indices.contains(column) && columns[column].indices.contains(row)
+            ? columns[column][row]?.date
+            : nil
+        if self.hoveredDate != date { self.hoveredDate = date }
     }
 
     @ViewBuilder
@@ -83,7 +107,6 @@ struct StatsHeatmapView: View {
                     RoundedRectangle(cornerRadius: 3)
                         .strokeBorder(highlighted ? self.theme.palette.primaryText : .clear, lineWidth: 2)
                 }
-                .contentShape(Rectangle())
                 .overlay(alignment: tooltipAlignment) {
                     if self.hoveredDate == day.date {
                         VStack(alignment: .leading, spacing: 4) {
@@ -103,13 +126,6 @@ struct StatsHeatmapView: View {
                     }
                 }
                 .zIndex(self.hoveredDate == day.date ? 1 : 0)
-                .onHover { hovering in
-                    if hovering {
-                        self.hoveredDate = day.date
-                    } else if self.hoveredDate == day.date {
-                        self.hoveredDate = nil
-                    }
-                }
                 .accessibilityLabel(self.labels[day.date]?.accessible ?? "")
                 .accessibilityElement(children: .ignore)
 

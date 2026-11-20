@@ -13,6 +13,11 @@ import Combine
 import SwiftUI
 import UniformTypeIdentifiers
 
+@MainActor
+private final class DictionaryReloadTracker {
+    var needsReload = true
+}
+
 // This legacy screen still owns several dictionary editors; split them into standalone views incrementally.
 // swiftlint:disable:next type_body_length
 struct CustomDictionaryView: View {
@@ -34,6 +39,8 @@ struct CustomDictionaryView: View {
     /// cleared so the same row can be picked again later.
     @Binding var revealTarget: AppSearchHit.Target?
 
+    /// A reference, so marking the page stale doesn't redraw it while it's hidden.
+    @State private var reloadTracker = DictionaryReloadTracker()
     @State private var entries: [SettingsStore.CustomDictionaryEntry] = SettingsStore.shared.customDictionaryEntries
     @State private var boostTerms: [ParakeetVocabularyStore.VocabularyConfig.Term] = []
     @State private var editingEntry: SettingsStore.CustomDictionaryEntry?
@@ -378,7 +385,13 @@ struct CustomDictionaryView: View {
                 }
             }
         }
+        .onReceive(SettingsStore.shared.objectWillChange) { _ in self.reloadTracker.needsReload = true }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            self.reloadTracker.needsReload = true
+        }
         .onAppear {
+            guard self.reloadTracker.needsReload else { return }
+            self.reloadTracker.needsReload = false
             if !self.formattingOnly {
                 self.entries = SettingsStore.shared.customDictionaryEntries
                 self.loadBoostTerms()
@@ -388,6 +401,7 @@ struct CustomDictionaryView: View {
             self.formattingActionRules = SettingsStore.shared.spokenFormattingActionRules
         }
         .onReceive(NotificationCenter.default.publisher(for: .parakeetVocabularyDidChange)) { _ in
+            self.reloadTracker.needsReload = true
             guard !self.formattingOnly else { return }
             self.entries = SettingsStore.shared.customDictionaryEntries
             self.pronunciationRevisionNoticeRefresh &+= 1

@@ -105,7 +105,7 @@ extension VoiceEngineSettingsView {
                                 Text(hasActiveModel ? "Other Models" : "Available Models")
                                     .font(self.theme.typography.sectionTitle)
                                     .foregroundStyle(self.voiceEngineTitleText)
-                                VStack(spacing: 8) {
+                                LazyVStack(spacing: 8) {
                                     ForEach(otherModels) { model in
                                         self.speechModelCard(for: model)
                                     }
