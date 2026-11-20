@@ -6510,10 +6510,6 @@ private struct MainWindowToolbar: ToolbarContent {
             .accessibilityLabel("Report an issue")
         }
         if let pageWithActions {
-            // Keep page actions separate from the shared trailing controls.
-            if #available(macOS 26, *) {
-                ToolbarSpacer(.fixed, placement: .primaryAction)
-            }
             ToolbarItemGroup(placement: .primaryAction) {
                 FluidPageToolbarActions(store: self.pageToolbarStore, page: pageWithActions)
             }

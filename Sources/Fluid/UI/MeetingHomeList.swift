@@ -12,6 +12,7 @@ struct MeetingHomeActions {
     let rename: (MeetingSessionID, String) -> Void
     let recordAgain: (MeetingSession) -> Void
     let openIntegrations: () -> Void
+    let openSettings: () -> Void
 }
 
 struct MeetingHomeList: View {
@@ -126,12 +127,23 @@ struct MeetingHomeList: View {
                 .foregroundStyle(self.theme.palette.secondaryText)
             Spacer()
             FluidGlassControlGroup {
-                Button(action: self.actions.startRecording) {
-                    Label("Start recording", systemImage: "record.circle")
+                HStack(spacing: self.theme.metrics.spacing.sm) {
+                    Button(action: self.actions.startRecording) {
+                        Label("Start recording", systemImage: "record.circle")
+                    }
+                    .meetingGlassAction(prominent: true, spacious: true)
+                    .disabled(!self.canStartRecording)
+                    .keyboardShortcut("n", modifiers: .command)
+
+                    Button(action: self.actions.openSettings) {
+                        Label("FluidMeet settings", systemImage: "gearshape")
+                            .foregroundStyle(self.theme.palette.primaryText)
+                    }
+                    .labelStyle(.iconOnly)
+                    .meetingGlassAction(circular: true)
+                    .help("FluidMeet settings")
+                    .accessibilityHint("Change the saved recording application, microphone, and meeting defaults")
                 }
-                .meetingGlassAction(prominent: true, spacious: true)
-                .disabled(!self.canStartRecording)
-                .keyboardShortcut("n", modifiers: .command)
             }
             .fixedSize()
         }
