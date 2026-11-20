@@ -32,7 +32,7 @@ private final class DisplayNameCache: @unchecked Sendable {
 
     init() {
         self.observer = NotificationCenter.default.addObserver(
-            forName: UserDefaults.didChangeNotification,
+            forName: Foundation.UserDefaults.didChangeNotification,
             object: nil,
             queue: nil
         ) { [weak self] _ in
