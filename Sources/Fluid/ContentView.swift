@@ -1273,6 +1273,14 @@ struct ContentView: View {
         self.selectedSidebarItem = destination == .meetingTranscription && !self.settings.fluidMeetEnabled ? .welcome : destination
     }
 
+    private func selectSettingsSection(_ section: SettingsSection) {
+        if self.settingsNavigation.isLeaving(.shortcuts, for: section) {
+            self.clearShortcutRecordingMode()
+        }
+        self.settingsNavigation.selectedSection = section
+        self.settingsSearchScrollRequest += 1
+    }
+
     private func resetSettingsSearch() {
         self.settingsSearchQuery = ""
         self.settingsRevealTarget = nil
@@ -1544,7 +1552,8 @@ struct ContentView: View {
     }
 
     private var appSidebarSections: some View {
-        List(selection: self.$selectedSidebarItem) {
+        // Rows set the page themselves: List selection can deliver a rapid click only when the next one arrives.
+        List {
             Section {
                 self.sidebarNavigationLink(.welcome, title: "Dashboard", systemImage: "house.fill")
                 self.sidebarNavigationLink(.history, title: "History", systemImage: "clock.arrow.circlepath")
@@ -1676,20 +1685,12 @@ struct ContentView: View {
             .padding(.top, self.theme.metrics.spacing.xs)
             .padding(.bottom, self.theme.metrics.spacing.sm)
 
-            List(selection: Binding(
-                get: { self.settingsNavigation.selectedSection },
-                set: { newValue in
-                    guard let newValue else { return }
-                    if self.settingsNavigation.isLeaving(.shortcuts, for: newValue) {
-                        self.clearShortcutRecordingMode()
-                    }
-                    self.settingsNavigation.selectedSection = newValue
-                    self.settingsSearchScrollRequest += 1
-                }
-            )) {
+            List {
                 ForEach(self.filteredSettingsSections) { section in
                     let isSelected = self.settingsNavigation.selectedSection == section
-                    NavigationLink(value: section) {
+                    Button {
+                        self.selectSettingsSection(section)
+                    } label: {
                         HStack(spacing: self.theme.metrics.spacing.sm) {
                             Image(systemName: section.systemImage)
                                 .symbolRenderingMode(.hierarchical)
@@ -1700,11 +1701,13 @@ struct ContentView: View {
                                 .foregroundStyle(isSelected ? Color.white : Color.primary)
                         }
                         .font(self.theme.typography.sidebarItem)
+                        .sidebarOptionHover(
+                            isSelected: isSelected,
+                            reduceMotion: self.accessibilityReduceMotion
+                        )
                     }
-                    .sidebarOptionHover(
-                        isSelected: isSelected,
-                        reduceMotion: self.accessibilityReduceMotion
-                    )
+                    .buttonStyle(.plain)
+                    .accessibilityAddTraits(isSelected ? .isSelected : [])
                 }
             }
             .listStyle(.sidebar)
@@ -1858,7 +1861,9 @@ struct ContentView: View {
 
     private func sidebarNavigationLink(_ item: SidebarItem, title: String, systemImage: String) -> some View {
         let isSelected = self.selectedSidebarItem == item
-        return NavigationLink(value: item) {
+        return Button {
+            self.selectedSidebarItem = item
+        } label: {
             HStack(spacing: self.theme.metrics.spacing.sm) {
                 Image(nsImage: SidebarSymbolCache.image(named: systemImage))
                     .renderingMode(.template)
@@ -1873,11 +1878,13 @@ struct ContentView: View {
             }
             .font(self.theme.typography.sidebarItem)
             .padding(.vertical, self.theme.metrics.spacing.xs / 2)
+            .sidebarOptionHover(
+                isSelected: isSelected,
+                reduceMotion: self.accessibilityReduceMotion
+            )
         }
-        .sidebarOptionHover(
-            isSelected: isSelected,
-            reduceMotion: self.accessibilityReduceMotion
-        )
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
     private func configureToolbarActions() {
