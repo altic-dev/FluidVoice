@@ -20,6 +20,19 @@ final class LLMClientStreamingToolCallTests: XCTestCase {
         XCTAssertEqual(response.toolCalls.map { $0.getString("command") }, ["echo work", "echo groceries"])
     }
 
+    /// Some providers omit `index`; the id then identifies which call a chunk belongs to.
+    func testParallelToolCallsWithoutIndexAreMatchedByID() async throws {
+        let response = try await self.call(streaming: [
+            #"{"choices":[{"index":0,"delta":{"tool_calls":[{"id":"call_a","type":"function","function":{"name":"execute_terminal_command","arguments":"{\"command\":\"echo work\","}}]}}]}"#,
+            #"{"choices":[{"index":0,"delta":{"tool_calls":[{"id":"call_b","type":"function","function":{"name":"execute_terminal_command","arguments":"{\"command\":\"echo groceries\","}}]}}]}"#,
+            #"{"choices":[{"index":0,"delta":{"tool_calls":[{"id":"call_a","function":{"arguments":"\"purpose\":\"executing\"}"}}]}}]}"#,
+            #"{"choices":[{"index":0,"delta":{"tool_calls":[{"id":"call_b","function":{"arguments":"\"purpose\":\"executing\"}"}}]}}]}"#,
+        ])
+
+        XCTAssertEqual(response.toolCalls.map(\.id), ["call_a", "call_b"])
+        XCTAssertEqual(response.toolCalls.map { $0.getString("command") }, ["echo work", "echo groceries"])
+    }
+
     func testSingleToolCallAfterTextIsParsed() async throws {
         let response = try await self.call(streaming: [
             #"{"choices":[{"index":0,"delta":{"content":"Checking."}}]}"#,

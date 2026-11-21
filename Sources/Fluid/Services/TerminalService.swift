@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 /// Simple terminal command execution service
 /// All responses are JSON-parsable for easy AI processing
@@ -122,11 +123,12 @@ final nonisolated class TerminalService: Sendable {
         }
 
         // Backgrounded children inherit the pipes and can keep them open after the shell exits.
-        let outputData = await stdout.collect(grace: 1)
-        let errorData = await stderr.collect(grace: 1)
+        async let outputData = stdout.collect(grace: 1)
+        async let errorData = stderr.collect(grace: 1)
+        let (outputBytes, errorBytes) = await (outputData, errorData)
 
-        let output = (String(bytes: outputData, encoding: .utf8) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        var errorOutput = (String(bytes: errorData, encoding: .utf8) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let output = (String(bytes: outputBytes, encoding: .utf8) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        var errorOutput = (String(bytes: errorBytes, encoding: .utf8) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         if timedOut {
             let note = "Command timed out after \(Int(timeout))s and was terminated."
             errorOutput = errorOutput.isEmpty ? note : "\(errorOutput)\n\(note)"
@@ -146,7 +148,7 @@ final nonisolated class TerminalService: Sendable {
 
     /// Runs `process` to completion without blocking a thread. Returns whether the timeout fired.
     private static func run(_ process: Process, timeout: TimeInterval) async throws -> Bool {
-        let timedOut = TimeoutFlag()
+        let timedOut = OSAllocatedUnfairLock(initialState: false)
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             process.terminationHandler = { _ in continuation.resume() }
             do {
@@ -156,18 +158,19 @@ final nonisolated class TerminalService: Sendable {
                 continuation.resume(throwing: error)
                 return
             }
-            DispatchQueue.global().asyncAfter(deadline: .now() + timeout) {
-                guard process.isRunning else { return }
-                timedOut.set()
+            // Weak so a pending timer doesn't keep a finished process and its pipes alive.
+            DispatchQueue.global().asyncAfter(deadline: .now() + timeout) { [weak process] in
+                guard let process, process.isRunning else { return }
+                timedOut.withLock { $0 = true }
                 process.terminate()
-                DispatchQueue.global().asyncAfter(deadline: .now() + 2) {
-                    if process.isRunning {
+                DispatchQueue.global().asyncAfter(deadline: .now() + 2) { [weak process] in
+                    if let process, process.isRunning {
                         kill(process.processIdentifier, SIGKILL)
                     }
                 }
             }
         }
-        return timedOut.value
+        return timedOut.withLock { $0 }
     }
 
     /// Convert result to JSON string for AI processing
@@ -199,19 +202,6 @@ final nonisolated class TerminalService: Sendable {
     }
 }
 
-private final nonisolated class TimeoutFlag: @unchecked Sendable {
-    private let lock = NSLock()
-    private var fired = false
-
-    var value: Bool {
-        self.lock.withLock { self.fired }
-    }
-
-    func set() {
-        self.lock.withLock { self.fired = true }
-    }
-}
-
 /// Accumulates a pipe's output as it arrives.
 private final nonisolated class PipeCollector: @unchecked Sendable {
     private let handle: FileHandle
@@ -222,12 +212,13 @@ private final nonisolated class PipeCollector: @unchecked Sendable {
 
     init(_ pipe: Pipe) {
         self.handle = pipe.fileHandleForReading
-        self.handle.readabilityHandler = { [weak self] handle in
+        // `finish()` clears the handler, which breaks this retain cycle.
+        self.handle.readabilityHandler = { handle in
             let chunk = handle.availableData
             if chunk.isEmpty {
-                self?.finish()
+                self.finish()
             } else {
-                self?.lock.withLock { self?.data.append(chunk) }
+                self.lock.withLock { self.data.append(chunk) }
             }
         }
     }
@@ -244,7 +235,7 @@ private final nonisolated class PipeCollector: @unchecked Sendable {
                 continuation.resume()
                 return
             }
-            DispatchQueue.global().asyncAfter(deadline: .now() + grace) { self.finish() }
+            DispatchQueue.global().asyncAfter(deadline: .now() + grace) { [weak self] in self?.finish() }
         }
         return self.lock.withLock { self.data }
     }

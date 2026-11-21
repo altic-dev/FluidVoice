@@ -759,7 +759,7 @@ final class CommandModeService: ObservableObject {
         let resultJSON = await EnhancedCommandResult(
             result: result,
             purpose: purpose
-        ).encodedJSON()
+        ).toJSON()
 
         // Determine result step type
         let resultStepType: Message.StepType = result.success ? .success : .failure
@@ -803,11 +803,7 @@ final class CommandModeService: ObservableObject {
 
         /// Command output can be large; encode it off the main actor.
         @concurrent
-        func encodedJSON() async -> String {
-            self.toJSON()
-        }
-
-        func toJSON() -> String {
+        func toJSON() async -> String {
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
             if let data = try? encoder.encode(self),

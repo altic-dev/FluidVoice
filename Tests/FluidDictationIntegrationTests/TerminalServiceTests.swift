@@ -1,7 +1,7 @@
 @testable import FluidVoice_Debug
 import XCTest
 
-/// Runs on the app's main thread, where a blocking `execute` froze command mode.
+/// Runs on the main actor, like Command Mode, to check `execute` never blocks it.
 @MainActor
 final class TerminalServiceTests: XCTestCase {
     func testOutputLargerThanPipeBufferIsReturnedInFull() async {
