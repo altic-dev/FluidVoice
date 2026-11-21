@@ -12,15 +12,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 
-
-def declaration(source: str, marker: str) -> str:
-    start = source.index(marker)
-    brace = source.index("{", start)
-    depth, end = 1, brace + 1
-    while depth:
-        depth += (source[end] == "{") - (source[end] == "}")
-        end += 1
-    return source[start:end]
+from swift_source import declaration
 
 
 def main() -> None:
