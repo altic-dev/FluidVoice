@@ -6,8 +6,8 @@ import Foundation
 /// The format identity shared by capture writers and PCM sinks. Channel topology is validated
 /// but intentionally excluded from identity: the sink canonicalizes planar input into interleaved
 /// CAF, so an interleaved/planar transition with the same semantic layout is one capture epoch.
-nonisolated struct MeetingPCMFormatContract: Equatable, Sendable {
-    nonisolated enum SemanticLayout: Equatable, Sendable {
+nonisolated struct MeetingPCMFormatContract: Equatable {
+    nonisolated enum SemanticLayout: Equatable {
         case mono
         case stereo
         case explicit(Data)
@@ -141,7 +141,7 @@ nonisolated enum MeetingPCMFormatResolver {
     }
 }
 
-nonisolated enum MeetingPCMFormatContractError: LocalizedError, Equatable, Sendable {
+nonisolated enum MeetingPCMFormatContractError: LocalizedError, Equatable {
     case unsupported(String)
 
     var errorDescription: String? {

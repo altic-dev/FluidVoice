@@ -11,11 +11,21 @@ private final class ReleaseHighlightsCoordinator {
         self.policy.request(owner: owner, version: version, build: build, eligible: eligible, manual: manual)
     }
 
-    func requestManual(owner: UUID) { self.policy.requestManual(owner: owner) }
+    func requestManual(owner: UUID) {
+        self.policy.requestManual(owner: owner)
+    }
 
-    func beginDismiss(id: UUID) -> Bool { self.policy.beginDismiss(id: id, acknowledge: true) }
-    func interrupt(id: UUID) { self.policy.interrupt(id: id) }
-    func abandon(owner: UUID) { self.policy.abandon(owner: owner) }
+    func beginDismiss(id: UUID) -> Bool {
+        self.policy.beginDismiss(id: id, acknowledge: true)
+    }
+
+    func interrupt(id: UUID) {
+        self.policy.interrupt(id: id)
+    }
+
+    func abandon(owner: UUID) {
+        self.policy.abandon(owner: owner)
+    }
 
     func finishDismiss(id: UUID, eligible: Bool) -> Bool? {
         let result = self.policy.finishDismiss(id: id, eligible: eligible)
@@ -47,11 +57,13 @@ struct ReleaseHighlightsPresenter: ViewModifier {
     private final class WindowReference {
         weak var window: NSWindow?
 
-        // Explicitly nonisolated: on macOS 15.4+ the synthesized main-actor deinit can abort until the OS runtime has the fix (swiftlang/swift#88036).
+        /// Explicitly nonisolated: on macOS 15.4+ the synthesized main-actor deinit can abort until the OS runtime has the fix (swiftlang/swift#88036).
         nonisolated deinit {}
     }
 
-    private var canExplore: Bool { self.isEligible && !self.processing && !self.refining }
+    private var canExplore: Bool {
+        self.isEligible && !self.processing && !self.refining
+    }
 
     func body(content: Content) -> some View {
         content
@@ -152,7 +164,9 @@ private struct ReleaseHighlightsWindowReader: NSViewRepresentable {
         return view
     }
 
-    func updateNSView(_ view: WindowView, context _: Context) { view.onWindow = self.onWindow }
+    func updateNSView(_ view: WindowView, context _: Context) {
+        view.onWindow = self.onWindow
+    }
 
     final class WindowView: NSView {
         var onWindow: ((NSWindow?) -> Void)?

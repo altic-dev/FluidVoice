@@ -902,12 +902,14 @@ struct CustomDictionaryView: View {
     }
 
     private var voiceMatchingSettingsRow: some View {
-        Text(self.pronunciationEnabled
-            ? "Pronunciation matching is on for dictation. Meetings use saved replacements."
-            : "Voice training is off. Enable “Learn from your pronunciation” in Settings → Experimental.")
-            .font(self.theme.typography.caption)
-            .foregroundStyle(self.theme.palette.secondaryText)
-            .fixedSize(horizontal: false, vertical: true)
+        Text(
+            self.pronunciationEnabled
+                ? "Pronunciation matching is on for dictation. Meetings use saved replacements."
+                : "Voice training is off. Enable “Learn from your pronunciation” in Settings → Experimental."
+        )
+        .font(self.theme.typography.caption)
+        .foregroundStyle(self.theme.palette.secondaryText)
+        .fixedSize(horizontal: false, vertical: true)
     }
 
     private var pronunciationRevisionNoticeRequest: String {
@@ -2924,7 +2926,9 @@ struct CustomDictionaryView: View {
 }
 
 private extension CustomDictionaryView {
-    var asr: ASRService { self.appServices.asr }
+    var asr: ASRService {
+        self.appServices.asr
+    }
 
     var trainedReplacementButtonTitle: String {
         self.activePronunciationMatching ? "Save Word"
@@ -3039,9 +3043,11 @@ private struct VoiceMatchingSettingsRow: View {
                     .fill(
                         isSelected
                             ? self.theme.palette.accent
-                            : (isHovered
-                                ? self.theme.palette.accent.opacity(0.1)
-                                : self.theme.palette.cardBackground.opacity(0.5))
+                            : (
+                                isHovered
+                                    ? self.theme.palette.accent.opacity(0.1)
+                                    : self.theme.palette.cardBackground.opacity(0.5)
+                            )
                     )
                     .overlay(
                         RoundedRectangle(cornerRadius: 7, style: .continuous)
@@ -3214,7 +3220,9 @@ private enum DictionaryComposerMode: CaseIterable, Identifiable {
     case train
     case manual
 
-    var id: Self { self }
+    var id: Self {
+        self
+    }
 
     var title: String {
         switch self {
@@ -3293,9 +3301,11 @@ private struct DictionaryComposerModeTab: View {
             .fill(
                 self.isSelected
                     ? self.theme.palette.accent
-                    : (self.isHovered
-                        ? self.theme.palette.accent.opacity(0.1)
-                        : self.theme.palette.cardBackground.opacity(0.5))
+                    : (
+                        self.isHovered
+                            ? self.theme.palette.accent.opacity(0.1)
+                            : self.theme.palette.cardBackground.opacity(0.5)
+                    )
             )
             .overlay(
                 RoundedRectangle(cornerRadius: self.theme.metrics.corners.sm, style: .continuous)
@@ -3310,14 +3320,14 @@ private struct DictionaryComposerModeTab: View {
 }
 
 /// Starting or seeding a new draft resets every matching choice together with its text.
-nonisolated struct DictionaryManualDraft: Equatable, Sendable {
+nonisolated struct DictionaryManualDraft: Equatable {
     var triggers = ""
     var replacement = ""
     var caseSensitive = false
 }
 
 /// An immutable matching snapshot: callers must choose a matching mode rather than compare encoded keys.
-nonisolated struct DictionaryTriggerIndex: Sendable {
+nonisolated struct DictionaryTriggerIndex {
     private var insensitive: Set<String> = []
     private var sensitive: [String: Set<String>] = [:]
 
@@ -3434,7 +3444,10 @@ struct DictionaryTrainingProgress {
     let pronunciationCount: Int
     let pronunciationEnabled: Bool
 
-    var spellingReady: Bool { self.spellingCount >= CustomDictionaryTrainingMerge.readyCoveredCount }
+    var spellingReady: Bool {
+        self.spellingCount >= CustomDictionaryTrainingMerge.readyCoveredCount
+    }
+
     var pronunciationReady: Bool {
         self.pronunciationEnabled && self.pronunciationCount >= CustomDictionaryTrainingMerge.readyCoveredCount
     }
@@ -3781,7 +3794,9 @@ private enum BoostStrengthPreset: String, CaseIterable, Identifiable {
     case balanced = "Balanced"
     case strong = "Strong"
 
-    var id: String { self.rawValue }
+    var id: String {
+        self.rawValue
+    }
 
     var weight: Float {
         switch self {

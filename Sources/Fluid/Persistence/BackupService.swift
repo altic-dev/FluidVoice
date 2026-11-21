@@ -69,11 +69,11 @@ struct SettingsBackupPayload: Codable, Equatable {
     let hotkeyMode: HotkeyActivationMode?
     var holdSpaceToMute: Bool? = nil
     let enableStreamingPreview: Bool
-    // Optional so backups created before incremental Parakeet finalization still decode.
+    /// Optional so backups created before incremental Parakeet finalization still decode.
     let experimentalParakeetUnifiedFinalEnabled: Bool?
-    // Optional to preserve compatibility with older backups.
+    /// Optional to preserve compatibility with older backups.
     let returnDictationToStartingField: Bool?
-    // Optional so backups created before History performance details still decode.
+    /// Optional so backups created before History performance details still decode.
     let showHistoryPerformanceMetrics: Bool?
     // Optional so backups created before the silence filter still decode.
     let skipSilentRecordingsEnabled: Bool?

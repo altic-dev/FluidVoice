@@ -9,7 +9,10 @@ nonisolated enum DictionaryMatcherExperiment {
     }
 
     static let didChangeNotification = Notification.Name("DictionaryPronunciationDidChange")
-    static var generation: String { UserDefaults.standard.string(forKey: "DictionaryPronunciationGeneration") ?? "initial" }
+    static var generation: String {
+        UserDefaults.standard.string(forKey: "DictionaryPronunciationGeneration") ?? "initial"
+    }
+
     static func setEnabled(_ enabled: Bool) {
         guard self.sharedFeaturesEnabled != enabled else { return }
         UserDefaults.standard.set(UUID().uuidString, forKey: "DictionaryPronunciationGeneration")
@@ -17,17 +20,32 @@ nonisolated enum DictionaryMatcherExperiment {
         NotificationCenter.default.post(name: self.didChangeNotification, object: nil)
     }
 
-    static var positiveEnabled: Bool { sharedFeaturesEnabled }
-    static var collectNegatives: Bool { sharedFeaturesEnabled && UserDefaults.standard.bool(forKey: "DictionaryNegativeLearningEnabled") }
-    static var compareNegatives: Bool { sharedFeaturesEnabled && UserDefaults.standard.bool(forKey: "DictionaryNegativeComparisonEnabled") }
-    static var needsFrames: Bool { sharedFeaturesEnabled }
+    static var positiveEnabled: Bool {
+        sharedFeaturesEnabled
+    }
+
+    static var collectNegatives: Bool {
+        sharedFeaturesEnabled && UserDefaults.standard.bool(forKey: "DictionaryNegativeLearningEnabled")
+    }
+
+    static var compareNegatives: Bool {
+        sharedFeaturesEnabled && UserDefaults.standard.bool(forKey: "DictionaryNegativeComparisonEnabled")
+    }
+
+    static var needsFrames: Bool {
+        sharedFeaturesEnabled
+    }
+
     static let version = "parakeet-exact-rms005-frames-v1"
 }
 
-nonisolated struct DictionaryMatchFrames: Codable, Equatable, Sendable {
+nonisolated struct DictionaryMatchFrames: Codable, Equatable {
     let hiddenSize: Int
     let values: [Float]
-    var count: Int { self.hiddenSize > 0 ? self.values.count / self.hiddenSize : 0 }
+    var count: Int {
+        self.hiddenSize > 0 ? self.values.count / self.hiddenSize : 0
+    }
+
     var isValid: Bool {
         (1...1024).contains(self.hiddenSize) && (1...192).contains(self.count)
             && self.values.count == self.count * self.hiddenSize && self.values.allSatisfy(\.isFinite)
@@ -49,8 +67,8 @@ nonisolated struct DictionaryMatchFrames: Codable, Equatable, Sendable {
 
 /// No labels, settings, disk, audio capture, or model loading inside the decision layer.
 nonisolated enum DictionaryExperimentalMatcher {
-    struct Metrics: Equatable, Sendable { let mean: Float; let lower: Float }
-    struct Decision: Sendable { let accepted: Bool; let meanRelative: Float; let lowerRelative: Float }
+    struct Metrics: Equatable { let mean: Float; let lower: Float }
+    struct Decision { let accepted: Bool; let meanRelative: Float; let lowerRelative: Float }
 
     @concurrent static func comparePositive(query: DictionaryMatchFrames, references: [DictionaryMatchFrames]) async -> Decision? {
         self.positive(query: query, references: references)

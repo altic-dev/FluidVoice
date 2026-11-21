@@ -2,7 +2,7 @@ import Foundation
 
 /// Additive audio-asset vocabulary. Unknown values are retained verbatim so a future asset can be
 /// quarantined without making the containing session undecodable.
-nonisolated enum MeetingAudioAssetRole: Equatable, Sendable {
+nonisolated enum MeetingAudioAssetRole: Equatable {
     case captureAnalysis
     case playbackArchive
     case unknown(String)
@@ -15,15 +15,22 @@ nonisolated enum MeetingAudioAssetRole: Equatable, Sendable {
         }
     }
 
-    init(rawValue: String) { self = rawValue == "captureAnalysis" ? .captureAnalysis : rawValue == "playbackArchive" ? .playbackArchive : .unknown(rawValue) }
+    init(rawValue: String) {
+        self = rawValue == "captureAnalysis" ? .captureAnalysis : rawValue == "playbackArchive" ? .playbackArchive : .unknown(rawValue)
+    }
 }
 
 nonisolated extension MeetingAudioAssetRole: Codable {
-    init(from decoder: Decoder) throws { try self.init(rawValue: decoder.singleValueContainer().decode(String.self)) }
-    func encode(to encoder: Encoder) throws { var c = encoder.singleValueContainer(); try c.encode(self.rawValue) }
+    init(from decoder: Decoder) throws {
+        try self.init(rawValue: decoder.singleValueContainer().decode(String.self))
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.singleValueContainer(); try c.encode(self.rawValue)
+    }
 }
 
-nonisolated enum MeetingAudioEncoding: Equatable, Hashable, Sendable {
+nonisolated enum MeetingAudioEncoding: Equatable, Hashable {
     case linearPCMFloat32CAFV1
     case aacLCM4AV1
     case legacyAACUnknownPrimingV1
@@ -52,11 +59,16 @@ nonisolated enum MeetingAudioEncoding: Equatable, Hashable, Sendable {
 }
 
 nonisolated extension MeetingAudioEncoding: Codable {
-    init(from decoder: Decoder) throws { try self.init(rawValue: decoder.singleValueContainer().decode(String.self)) }
-    func encode(to encoder: Encoder) throws { var c = encoder.singleValueContainer(); try c.encode(self.rawValue) }
+    init(from decoder: Decoder) throws {
+        try self.init(rawValue: decoder.singleValueContainer().decode(String.self))
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.singleValueContainer(); try c.encode(self.rawValue)
+    }
 }
 
-nonisolated enum MeetingAudioAssetPresence: Equatable, Sendable {
+nonisolated enum MeetingAudioAssetPresence: Equatable {
     case partial
     case ready
     case evicted
@@ -85,11 +97,16 @@ nonisolated enum MeetingAudioAssetPresence: Equatable, Sendable {
 }
 
 nonisolated extension MeetingAudioAssetPresence: Codable {
-    init(from decoder: Decoder) throws { try self.init(rawValue: decoder.singleValueContainer().decode(String.self)) }
-    func encode(to encoder: Encoder) throws { var c = encoder.singleValueContainer(); try c.encode(self.rawValue) }
+    init(from decoder: Decoder) throws {
+        try self.init(rawValue: decoder.singleValueContainer().decode(String.self))
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.singleValueContainer(); try c.encode(self.rawValue)
+    }
 }
 
-nonisolated struct MeetingAudioAsset: Codable, Equatable, Sendable {
+nonisolated struct MeetingAudioAsset: Codable, Equatable {
     var role: MeetingAudioAssetRole
     var encoding: MeetingAudioEncoding
     var presence: MeetingAudioAssetPresence
@@ -147,7 +164,7 @@ nonisolated struct MeetingAudioAsset: Codable, Equatable, Sendable {
     }
 }
 
-nonisolated enum MeetingAudioAssetValidationIssue: Equatable, Sendable {
+nonisolated enum MeetingAudioAssetValidationIssue: Equatable {
     case unknownRole(String)
     case unknownEncoding(String)
     case unknownPresence(String)

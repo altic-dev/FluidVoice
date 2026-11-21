@@ -34,7 +34,9 @@ struct OnboardingCleanupExampleCarousel: View {
             cleaned: "I think I'm gonna meet you tomorrow at 3 p.m. Let me know if the time works. If not, we can figure out some other time.\n\nAlso, I think you need to fix the bug. Please let me know if you need some help there."
         ),
     ]
-    private var ids: [String] { Self.examples.map(\.id) }
+    private var ids: [String] {
+        Self.examples.map(\.id)
+    }
 
     var body: some View {
         VStack(spacing: 10) {

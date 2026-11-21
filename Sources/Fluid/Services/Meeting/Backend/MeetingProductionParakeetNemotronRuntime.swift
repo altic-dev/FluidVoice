@@ -65,7 +65,7 @@ private final nonisolated class NemotronDiarizerFactory: MeetingNemotronDiarizer
 }
 
 private nonisolated struct NemotronDiarizerSession: MeetingNemotronDiarizerSession, @unchecked Sendable {
-    // The diarizer is used strictly serially: one epoch, one caller, one call.
+    /// The diarizer is used strictly serially: one epoch, one caller, one call.
     let diarizer: SortformerDiarizer
 
     func diarize(samples: [Float]) async throws -> [MeetingNemotronSpeakerSegment] {

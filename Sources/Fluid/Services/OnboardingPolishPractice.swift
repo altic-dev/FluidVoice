@@ -39,9 +39,17 @@ struct OnboardingPolishPractice {
     private(set) var index = 0
     private(set) var results: [Int: String] = [:]
     private var awaitingOutput = false
-    var example: Example { Self.examples[self.index] }
-    var result: String? { self.results[self.index] }
-    var isLast: Bool { self.index == Self.examples.count - 1 }
+    var example: Example {
+        Self.examples[self.index]
+    }
+
+    var result: String? {
+        self.results[self.index]
+    }
+
+    var isLast: Bool {
+        self.index == Self.examples.count - 1
+    }
 
     mutating func beginAttempt() {
         self.awaitingOutput = true

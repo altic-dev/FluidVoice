@@ -6,7 +6,9 @@ extension SettingsStore {
         case allApps
         case selectedAppsOnly
 
-        var id: String { self.rawValue }
+        var id: String {
+            self.rawValue
+        }
     }
 
     var dictationPromptRoutingScope: PromptRoutingScope {

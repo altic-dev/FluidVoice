@@ -378,9 +378,14 @@ public struct MeetingSignalDomainGateThresholds: Codable, Equatable, Sendable {
 
     private struct DynamicKey: CodingKey {
         var stringValue: String
-        init?(stringValue: String) { self.stringValue = stringValue }
+        init?(stringValue: String) {
+            self.stringValue = stringValue
+        }
+
         var intValue: Int?
-        init?(intValue: Int) { return nil }
+        init?(intValue: Int) {
+            return nil
+        }
     }
 
     public init(from decoder: Decoder) throws {
@@ -804,14 +809,18 @@ public enum MeetingSignalDomainGate {
         }
         if session.renderBlocks.isEmpty || session.captureBlocks.isEmpty { reasons.append(.metadataOnly) }
         if thresholds.requireDeliveryJitter
-            && (session.renderBlocks.contains(where: { $0.arrivalSeconds == nil })
-                || session.captureBlocks.contains(where: { $0.arrivalSeconds == nil }))
+            && (
+                session.renderBlocks.contains(where: { $0.arrivalSeconds == nil })
+                    || session.captureBlocks.contains(where: { $0.arrivalSeconds == nil })
+            )
         {
             reasons.append(.missingArrivalMetadata)
         }
         if thresholds.requireDeliveryJitter
-            && (session.renderBlocks.count < thresholds.minimumTimingBlockCount
-                || session.captureBlocks.count < thresholds.minimumTimingBlockCount)
+            && (
+                session.renderBlocks.count < thresholds.minimumTimingBlockCount
+                    || session.captureBlocks.count < thresholds.minimumTimingBlockCount
+            )
         {
             reasons.append(.insufficientTimingObservations)
         }
@@ -1180,20 +1189,28 @@ public enum MeetingSignalDomainGate {
         return min(1, max(0, errorEnergy / targetEnergy))
     }
 
-    private static func pathStability(_ values: [Double]) -> Double? { guard !values.isEmpty else { return nil }; let median = self.percentile(values, 0.5); let tolerance = max(
-        1e-4,
-        abs(median) * 0.10
-    ); return Double(values.filter { abs($0 - median) <= tolerance }.count) / Double(values.count) }
-    private static func percentile(_ values: [Double], _ p: Double) -> Double { let sorted = values.sorted(); guard let first = sorted.first
+    private static func pathStability(_ values: [Double]) -> Double? {
+        guard !values.isEmpty else { return nil }; let median = self.percentile(values, 0.5); let tolerance = max(
+            1e-4,
+            abs(median) * 0.10
+        ); return Double(values.filter { abs($0 - median) <= tolerance }.count) / Double(values.count)
+    }
+
+    private static func percentile(_ values: [Double], _ p: Double) -> Double {
+        let sorted = values.sorted(); guard let first = sorted.first
         else { return .nan }; if sorted.count == 1 { return first }; let index = min(
             Double(sorted.count - 1),
             max(0, p * Double(sorted.count - 1))
         ); let low = Int(index.rounded(.down)); let high = Int(index.rounded(.up)); return sorted[low] + (sorted[high] - sorted[low]) * (index - Double(low))
     }
 
-    private static func percentileOptional(_ values: [Double], _ p: Double) -> Double? { values.isEmpty ? nil : self.percentile(values, p) }
-    private static func unique(_ reasons: [MeetingSignalDomainGateReason]) -> [MeetingSignalDomainGateReason] { var seen = Set<MeetingSignalDomainGateReason>(); return reasons
-        .filter { seen.insert($0).inserted }
+    private static func percentileOptional(_ values: [Double], _ p: Double) -> Double? {
+        values.isEmpty ? nil : self.percentile(values, p)
+    }
+
+    private static func unique(_ reasons: [MeetingSignalDomainGateReason]) -> [MeetingSignalDomainGateReason] {
+        var seen = Set<MeetingSignalDomainGateReason>(); return reasons
+            .filter { seen.insert($0).inserted }
     }
 }
 

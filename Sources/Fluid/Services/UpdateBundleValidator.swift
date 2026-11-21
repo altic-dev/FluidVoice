@@ -4,7 +4,7 @@ import Security
 /// Synchronous disk/security work. Call from the updater's background staging pipeline.
 /// The caller must keep the validated bundle unchanged until the filesystem exchange.
 nonisolated enum UpdateBundleValidator {
-    struct Expectation: Sendable {
+    struct Expectation {
         let bundleIdentifier: String
         /// Exact approved release version. Nil is only for inspecting an installed/rollback bundle.
         let version: String?
@@ -18,7 +18,7 @@ nonisolated enum UpdateBundleValidator {
         }
     }
 
-    enum SigningPolicy: Sendable {
+    enum SigningPolicy {
         /// Downloaded releases must use this policy, including in Debug builds.
         case developerID(allowedTeamIDs: Set<String>)
         /// Only for local development builds and their rollback backups/tests.
@@ -45,7 +45,7 @@ nonisolated enum UpdateBundleValidator {
         }
     }
 
-    struct ValidatedBundle: Equatable, Sendable {
+    struct ValidatedBundle: Equatable {
         let bundleIdentifier: String
         let version: String
         let build: String

@@ -12,7 +12,9 @@ import Speech
 /// This provides advanced speech-to-text with streaming capabilities.
 @available(macOS 26.0, *)
 final class AppleSpeechAnalyzerProvider: TranscriptionProvider {
-    var name: String { "Apple Speech (macOS 26+)" }
+    var name: String {
+        "Apple Speech (macOS 26+)"
+    }
 
     var isAvailable: Bool {
         // SpeechAnalyzer is always available on macOS 26+
@@ -20,7 +22,9 @@ final class AppleSpeechAnalyzerProvider: TranscriptionProvider {
     }
 
     private(set) var isReady: Bool = false
-    var shouldClearCacheAfterCancellation: Bool { false }
+    var shouldClearCacheAfterCancellation: Bool {
+        false
+    }
 
     /// Buffer converter for audio format conversion
     private var converter: BufferConverter?

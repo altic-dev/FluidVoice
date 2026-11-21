@@ -276,7 +276,9 @@ nonisolated enum CompactSpeechModelArchiveTransport {
             self.descriptor = descriptor
         }
 
-        func close() { flock(self.descriptor, LOCK_UN); Darwin.close(self.descriptor) }
+        func close() {
+            flock(self.descriptor, LOCK_UN); Darwin.close(self.descriptor)
+        }
     }
 
     /// Completion joins URLSession's didComplete callback; cancellation never races deletion.

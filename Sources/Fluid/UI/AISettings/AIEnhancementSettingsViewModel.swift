@@ -7,7 +7,7 @@ import UniformTypeIdentifiers
 
 @MainActor
 final class AIEnhancementSettingsViewModel: ObservableObject {
-    // Explicitly nonisolated: on macOS 15.4+ the synthesized main-actor deinit can abort until the OS runtime has the fix (swiftlang/swift#88036).
+    /// Explicitly nonisolated: on macOS 15.4+ the synthesized main-actor deinit can abort until the OS runtime has the fix (swiftlang/swift#88036).
     nonisolated deinit {}
 
     private let modelVerifications = ProviderModelVerificationStore()
@@ -391,8 +391,8 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         let configuredModelID = PrivateAIIntegrationService.configuredModelID
         let fingerprint = self.privateAIFingerprint(for: currentModel.id)
 
-        // Navigation may expose another settings owner while verification is awaiting the runtime.
-        // Do not publish an old verification into a newly selected model/backend configuration.
+        /// Navigation may expose another settings owner while verification is awaiting the runtime.
+        /// Do not publish an old verification into a newly selected model/backend configuration.
         func configurationIsCurrent() -> Bool {
             PrivateAIIntegrationService.configuredModelID == configuredModelID
                 && self.privateAIFingerprint(for: currentModel.id) == fingerprint

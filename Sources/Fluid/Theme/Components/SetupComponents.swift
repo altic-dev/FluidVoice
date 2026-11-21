@@ -94,9 +94,11 @@ struct SetupStepView: View {
             .padding(10)
             .background(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(self.status == .completed
-                        ? Color.fluidGreen.opacity(0.06)
-                        : self.theme.palette.cardBackground.opacity(0.5))
+                    .fill(
+                        self.status == .completed
+                            ? Color.fluidGreen.opacity(0.06)
+                            : self.theme.palette.cardBackground.opacity(0.5)
+                    )
                     .overlay(
                         RoundedRectangle(cornerRadius: 8, style: .continuous)
                             .stroke(

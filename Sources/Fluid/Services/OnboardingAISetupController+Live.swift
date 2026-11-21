@@ -53,6 +53,8 @@ extension OnboardingAISetupController {
 
     private struct SetupError: LocalizedError {
         let message: String
-        var errorDescription: String? { self.message }
+        var errorDescription: String? {
+            self.message
+        }
     }
 }

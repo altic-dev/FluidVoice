@@ -7,7 +7,9 @@ import Speech
 /// A TranscriptionProvider that uses Apple's native SFSpeechRecognizer.
 /// This uses Apple's system speech path and lets macOS choose local or online recognition.
 final class AppleSpeechProvider: TranscriptionProvider {
-    var name: String { "Apple Speech (Legacy)" }
+    var name: String {
+        "Apple Speech (Legacy)"
+    }
 
     /// Always available on macOS 10.15+ (Catalina and later)
     var isAvailable: Bool {

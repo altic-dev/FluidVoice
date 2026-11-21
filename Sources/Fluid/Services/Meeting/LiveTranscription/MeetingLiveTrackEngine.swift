@@ -19,12 +19,14 @@ nonisolated protocol MeetingLiveRecognizer: Sendable {
 }
 
 extension StreamingEouAsrManager: MeetingLiveRecognizer {
-    func prepareModels() async throws { try await self.loadModelsFromHuggingFace() }
+    func prepareModels() async throws {
+        try await self.loadModelsFromHuggingFace()
+    }
 }
 
 /// Numeric wrapper observations, not speech truth, token counts, or a recovery verdict.
 /// No audio, transcript, embedding, route identifiers or user identifiers are retained here.
-nonisolated struct MeetingLiveDiagnosticSnapshot: Sendable {
+nonisolated struct MeetingLiveDiagnosticSnapshot {
     var convertedBuffers = 0
     var conversionFailures = 0
     var appendStarts = 0
@@ -77,7 +79,7 @@ actor MeetingLiveTrackEngine {
     /// token started at least one chunk before the audio we were feeding when that token arrived.
     private static let decoderLookback = CMTime(value: CMTimeValue(chunkSize.durationMs), timescale: 1000)
     private let manager: any MeetingLiveRecognizer
-    private enum RecognizerCallback: Sendable {
+    private enum RecognizerCallback {
         case partial(String)
         case end(String)
     }
@@ -131,7 +133,9 @@ actor MeetingLiveTrackEngine {
         case processingError, audioQueueOverflow, callbackQueueOverflow
     }
 
-    private var diagLabel: String { self.kind == .microphone ? "MIC" : "APP" }
+    private var diagLabel: String {
+        self.kind == .microphone ? "MIC" : "APP"
+    }
 
     private func diag(_ message: @autoclosure () -> String) {
         guard self.diagnosticsEnabled else { return }
@@ -586,10 +590,21 @@ actor MeetingLiveTrackEngine {
     #if DEBUG
     /// Deterministic P0 seam: bypasses capture/model loading, but exercises production conversion,
     /// append/process and existing rotation policy. It deliberately does not add recovery policy.
-    func diagnosticConsume(_ sample: MeetingLiveSampleCopy.Sample) async { await self.consume(sample) }
-    func diagnosticInstallCallbacks() async { await self.installCallbacks() }
-    func diagnosticPartial(_ text: String) { self.handlePartial(text) }
-    func diagnosticSnapshotValue() -> MeetingLiveDiagnosticSnapshot { self.diagnosticSnapshot }
+    func diagnosticConsume(_ sample: MeetingLiveSampleCopy.Sample) async {
+        await self.consume(sample)
+    }
+
+    func diagnosticInstallCallbacks() async {
+        await self.installCallbacks()
+    }
+
+    func diagnosticPartial(_ text: String) {
+        self.handlePartial(text)
+    }
+
+    func diagnosticSnapshotValue() -> MeetingLiveDiagnosticSnapshot {
+        self.diagnosticSnapshot
+    }
     #endif
 
     /// Persistent converter reused across calls; FluidAudio's own `appendAudio` takes a fast path

@@ -2,7 +2,7 @@ import AppKit
 import Combine
 import Foundation
 
-nonisolated struct DictationOverlayPresentation: Equatable, Sendable {
+nonisolated struct DictationOverlayPresentation: Equatable {
     var label: String
     var builtInLabel: String?
     var hasAppOverride: Bool
@@ -15,8 +15,8 @@ nonisolated struct DictationOverlayPresentation: Equatable, Sendable {
     }
 }
 
-nonisolated struct DictationOverlayPresentationInput: Equatable, Sendable {
-    struct Candidate: Equatable, Sendable {
+nonisolated struct DictationOverlayPresentationInput: Equatable {
+    struct Candidate: Equatable {
         var name: String
         var builtInLabel: String?
         var hasAppOverride: Bool
@@ -35,7 +35,7 @@ nonisolated struct DictationOverlayPresentationInput: Equatable, Sendable {
         }
     }
 
-    struct Choices: Equatable, Sendable {
+    struct Choices: Equatable {
         let available: Candidate
         let unavailable: Candidate
 
@@ -106,7 +106,7 @@ nonisolated struct DictationOverlayPresentationInput: Equatable, Sendable {
     }
 }
 
-nonisolated struct DictationOverlayPresentations: Equatable, Sendable {
+nonisolated struct DictationOverlayPresentations: Equatable {
     var primary: DictationOverlayPresentation
     var secondary: DictationOverlayPresentation
 

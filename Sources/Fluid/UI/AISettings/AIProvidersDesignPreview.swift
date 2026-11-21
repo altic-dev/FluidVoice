@@ -10,7 +10,9 @@ struct AIProvidersDesignPreview: View {
     @State private var showsExamples = true
     @State private var activePanel: AIProvidersPreviewPanel?
 
-    private var theme: AppTheme { AppTheme.adaptive(accent: .blue, colorScheme: self.isLight ? .light : .dark) }
+    private var theme: AppTheme {
+        AppTheme.adaptive(accent: .blue, colorScheme: self.isLight ? .light : .dark)
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -55,7 +57,10 @@ private struct AIProvidersPresentation: View {
 
     private enum Model: String, CaseIterable, Identifiable {
         case pico = "Pico", mini = "Fluid-1 Mini", full = "Fluid-1"
-        var id: String { self.rawValue }
+        var id: String {
+            self.rawValue
+        }
+
         var detail: String {
             switch self {
             case .pico: "Fast and lightweight.\nGreat for everyday use."
@@ -73,9 +78,17 @@ private struct AIProvidersPresentation: View {
         }
     }
 
-    private var spacing: AppTheme.Metrics.Spacing { self.theme.metrics.spacing }
-    private var isDark: Bool { self.colorScheme == .dark }
-    private var supportingText: Color { self.isDark ? self.theme.palette.secondaryText : self.theme.palette.primaryText.opacity(0.75) }
+    private var spacing: AppTheme.Metrics.Spacing {
+        self.theme.metrics.spacing
+    }
+
+    private var isDark: Bool {
+        self.colorScheme == .dark
+    }
+
+    private var supportingText: Color {
+        self.isDark ? self.theme.palette.secondaryText : self.theme.palette.primaryText.opacity(0.75)
+    }
 
     var body: some View {
         ZStack(alignment: .trailing) {

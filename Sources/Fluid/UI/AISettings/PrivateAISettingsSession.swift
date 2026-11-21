@@ -24,7 +24,9 @@ struct PrivateAISettingsSession {
     private(set) var revision = UUID()
     private(set) var operationID: UUID?
 
-    var isBusy: Bool { self.operationID != nil }
+    var isBusy: Bool {
+        self.operationID != nil
+    }
 
     init(selectedModelID: String) {
         self.selectedModelID = selectedModelID

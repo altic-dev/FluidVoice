@@ -2,7 +2,7 @@ import ApplicationServices
 import Foundation
 
 /// URL presence alone cannot distinguish a connected call from its post-call page.
-nonisolated enum MeetingBrowserCallState: Sendable, Equatable {
+nonisolated enum MeetingBrowserCallState: Equatable {
     case unknown
     case inCall
     case ended

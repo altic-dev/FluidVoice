@@ -1002,7 +1002,7 @@ final class GlobalHotkeyManager: NSObject {
         DebugLogger.shared.info("Mouse observer tap enabled (listen-only)", source: "GlobalHotkeyManager")
     }
 
-    // Filter tap, created only for the button families that have a shortcut.
+    /// Filter tap, created only for the button families that have a shortcut.
     private func setupMouseShortcutTap(mouseButtons: Set<Int>, preservePrimaryPress: Bool = false) {
         let preservesHeldPress = preservePrimaryPress && self.activePrimaryShortcutPress?.mouseButton != nil
         if !preservesHeldPress { self.finishInterruptedMouseShortcutPress(reason: "mouse shortcut tap rebuilt") }

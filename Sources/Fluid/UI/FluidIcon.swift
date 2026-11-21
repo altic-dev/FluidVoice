@@ -93,7 +93,7 @@ struct FluidIcon: View {
     }
 }
 
-// Variants for different use cases
+/// Variants for different use cases
 struct FluidIconFilled: View {
     let size: CGFloat
     let color: Color
@@ -118,7 +118,7 @@ struct FluidIconFilled: View {
     }
 }
 
-// Advanced variant with sophisticated negative space
+/// Advanced variant with sophisticated negative space
 struct FluidIconAdvanced: View {
     let size: CGFloat
     let color: Color

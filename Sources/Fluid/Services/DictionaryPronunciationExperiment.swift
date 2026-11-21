@@ -2,8 +2,13 @@ import Foundation
 
 /// Pronunciation follows the master switch; diagnostic audio capture remains opt-in.
 nonisolated enum DictionaryPronunciationExperiment {
-    static var enabled: Bool { DictionaryMatcherExperiment.sharedFeaturesEnabled }
-    static var captureEnabled: Bool { enabled && UserDefaults.standard.bool(forKey: "DictionaryPronunciationDebugCapture") }
+    static var enabled: Bool {
+        DictionaryMatcherExperiment.sharedFeaturesEnabled
+    }
+
+    static var captureEnabled: Bool {
+        enabled && UserDefaults.standard.bool(forKey: "DictionaryPronunciationDebugCapture")
+    }
 
     /// Only the outer quiet edges are removed. Internal pauses and low-energy consonants remain.
     static func trimmedRange(_ samples: [Float], within range: Range<Int>? = nil) -> Range<Int>? {
@@ -115,8 +120,11 @@ actor DictionaryPronunciationDebugArchive {
     static let shared = DictionaryPronunciationDebugArchive()
     private let directory: URL?
 
-    init(directory: URL? = nil) { self.directory = directory }
-    struct Score: Codable, Sendable {
+    init(directory: URL? = nil) {
+        self.directory = directory
+    }
+
+    struct Score: Codable {
         let word: String
         let start: Double
         let end: Double

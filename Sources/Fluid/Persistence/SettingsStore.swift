@@ -1694,7 +1694,9 @@ final class SettingsStore: ObservableObject {
         case thirtyMinutes = 30
         case oneHour = 60
 
-        var id: Int { self.rawValue }
+        var id: Int {
+            self.rawValue
+        }
 
         var title: String {
             switch self {
@@ -5231,7 +5233,7 @@ final class SettingsStore: ObservableObject {
 
     /// A custom dictionary entry that maps multiple misheard/alternate spellings to a correct replacement.
     /// For example: ["fluid voice", "fluid boys"] -> "FluidVoice"
-    nonisolated struct CustomDictionaryEntry: Codable, Identifiable, Hashable, Sendable {
+    nonisolated struct CustomDictionaryEntry: Codable, Identifiable, Hashable {
         let id: UUID
         /// Words/phrases to look for, preserving the capitalization the user entered.
         var triggers: [String]
@@ -5307,7 +5309,9 @@ final class SettingsStore: ObservableObject {
         case second = 2
         case third = 3
 
-        var id: Int { self.rawValue }
+        var id: Int {
+            self.rawValue
+        }
 
         var displayName: String {
             switch self {
@@ -5324,7 +5328,10 @@ final class SettingsStore: ObservableObject {
         case two = 2000
         case three = 3000
 
-        var id: Int { self.rawValue }
+        var id: Int {
+            self.rawValue
+        }
+
         var displayName: String {
             switch self {
             case .threeQuarters: "0.75 seconds"
@@ -5334,9 +5341,14 @@ final class SettingsStore: ObservableObject {
             }
         }
 
-        var inactivityNanoseconds: UInt64 { UInt64(self.rawValue) * 1_000_000 }
-        // Leaving the corrected word should never wait longer than inactivity.
-        var completionNanoseconds: UInt64 { min(self.inactivityNanoseconds, 1_000_000_000) }
+        var inactivityNanoseconds: UInt64 {
+            UInt64(self.rawValue) * 1_000_000
+        }
+
+        /// Leaving the corrected word should never wait longer than inactivity.
+        var completionNanoseconds: UInt64 {
+            min(self.inactivityNanoseconds, 1_000_000_000)
+        }
     }
 
     var automaticDictionaryPromptDelay: AutomaticDictionaryPromptDelay {

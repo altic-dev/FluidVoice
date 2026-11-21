@@ -152,8 +152,10 @@ nonisolated enum FluidServeCommand {
         switch action {
         case "list":
             let options = try self.parse(rest, valued: ["--since", "--limit"], flags: ["--json"])
-            let entries = try Array(FluidServeMeetings.entries(root: root, since: since(options), fileManager: fileManager)
-                .prefix(limit(options, default: 20)))
+            let entries = try Array(
+                FluidServeMeetings.entries(root: root, since: since(options), fileManager: fileManager)
+                    .prefix(limit(options, default: 20))
+            )
             if options.flags.contains("--json") {
                 return try Result(output: self.json(entries.map { self.summaryObject($0, fileManager: fileManager) }), exitCode: 0)
             }

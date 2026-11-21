@@ -14,7 +14,7 @@ final class HuggingFaceModelDownloader {
         let size: Int64?
     }
 
-    nonisolated struct ModelItem: Sendable {
+    nonisolated struct ModelItem {
         let path: String
         let isDirectory: Bool
     }

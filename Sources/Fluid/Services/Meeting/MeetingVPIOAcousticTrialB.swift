@@ -53,7 +53,7 @@ nonisolated enum MeetingVPIOAcousticHostClock {
 
 /// Evidence that the stimulus actually reached the engine's output path, independent of the
 /// microphone: without it a silent capture cannot be told apart from a silent render.
-nonisolated struct MeetingVPIOAcousticRenderConfirmation: Codable, Equatable, Sendable {
+nonisolated struct MeetingVPIOAcousticRenderConfirmation: Codable, Equatable {
     var scheduledFrameCount: Int
     var sampleRate: Double
     var volume: Double
@@ -83,7 +83,7 @@ nonisolated struct MeetingVPIOAcousticRenderConfirmation: Codable, Equatable, Se
 
 /// Read-only safety preflight for a local render. It records only route/volume numbers and
 /// typed refusal reasons; it never changes the system volume or audio-device controls.
-nonisolated struct MeetingVPIOAcousticOutputPreflight: Codable, Equatable, Sendable {
+nonisolated struct MeetingVPIOAcousticOutputPreflight: Codable, Equatable {
     var outputConnectionCount: Int
     var outputDeviceID: UInt32?
     var defaultOutputDeviceID: UInt32?
@@ -93,10 +93,12 @@ nonisolated struct MeetingVPIOAcousticOutputPreflight: Codable, Equatable, Senda
     var combinedPeak: Double?
     var reasons: [MeetingVPIOAcousticReason]
 
-    var isSafe: Bool { self.reasons.isEmpty }
+    var isSafe: Bool {
+        self.reasons.isEmpty
+    }
 }
 
-nonisolated struct MeetingVPIOAcousticControlState: Codable, Equatable, Sendable {
+nonisolated struct MeetingVPIOAcousticControlState: Codable, Equatable {
     var requestedBypass: Bool
     var appliedBypass: Bool?
     var requestedAGCEnabled: Bool
@@ -110,7 +112,7 @@ nonisolated struct MeetingVPIOAcousticControlState: Codable, Equatable, Sendable
     var applied: Bool
 }
 
-nonisolated struct MeetingVPIOAcousticCaptureWindow: Codable, Equatable, Sendable {
+nonisolated struct MeetingVPIOAcousticCaptureWindow: Codable, Equatable {
     var startHostSeconds: Double
     var frameCount: Int
     var writtenFrameCount: Int
@@ -121,7 +123,7 @@ nonisolated struct MeetingVPIOAcousticCaptureWindow: Codable, Equatable, Sendabl
     var resyncedSegmentCount: Int
 }
 
-nonisolated struct MeetingVPIOAcousticRun: Codable, Equatable, Sendable {
+nonisolated struct MeetingVPIOAcousticRun: Codable, Equatable {
     var variant: String
     var control: MeetingVPIOAcousticControlState
     var render: MeetingVPIOAcousticRenderConfirmation?
@@ -131,7 +133,7 @@ nonisolated struct MeetingVPIOAcousticRun: Codable, Equatable, Sendable {
     var reasons: [MeetingVPIOAcousticReason]
 }
 
-nonisolated struct MeetingVPIOAcousticTrialBReport: Codable, Equatable, Sendable {
+nonisolated struct MeetingVPIOAcousticTrialBReport: Codable, Equatable {
     static let currentSchemaVersion = 1
 
     /// Carried in the sidecar so a reader cannot lift a number out of it as an AEC result.
@@ -159,14 +161,14 @@ nonisolated struct MeetingVPIOAcousticTrialBReport: Codable, Equatable, Sendable
 /// the metrics can be aligned to render time. Nothing here is written to disk, and only numbers
 /// leave it.
 final nonisolated class MeetingVPIOAcousticCaptureCollector: @unchecked Sendable {
-    private nonisolated struct Segment: Sendable {
+    private nonisolated struct Segment {
         var startSeconds: Double
         var samples: [Float]
         var synthesized: Bool
         var resynced: Bool
     }
 
-    private nonisolated struct State: Sendable {
+    private nonisolated struct State {
         var segments: [Segment] = []
         var frameCount = 0
     }
@@ -259,7 +261,7 @@ final nonisolated class MeetingVPIOAcousticCaptureCollector: @unchecked Sendable
 /// Controlled acoustic Trial B: render a deterministic stimulus through the running VPIO
 /// engine's own output and measure what the VPIO input returns, once per control variant.
 nonisolated enum MeetingVPIOAcousticTrialB {
-    struct Variant: Sendable {
+    struct Variant {
         var name: String
         var bypassVoiceProcessing: Bool
         var agcEnabled: Bool
@@ -304,7 +306,9 @@ nonisolated enum MeetingVPIOAcousticTrialB {
         return renderActivityStartHostSeconds - Double(leadingSilenceFrameCount) / sampleRate
     }
 
-    static func isRequested() -> Bool { MeetingVPIOAcousticGate.isEnabled }
+    static func isRequested() -> Bool {
+        MeetingVPIOAcousticGate.isEnabled
+    }
 
     static func run(
         capture: MeetingMicrophoneCapture,

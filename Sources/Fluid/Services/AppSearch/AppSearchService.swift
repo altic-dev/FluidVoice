@@ -3,7 +3,7 @@ import Foundation
 import ZeppelinEmbed
 
 /// The sections a search result can belong to, in the order groups are shown.
-nonisolated enum AppSearchKind: CaseIterable, Sendable {
+nonisolated enum AppSearchKind: CaseIterable {
     case history, transcripts, chats, dictionary, prompts, vocabulary, punctuation, settings
 
     var title: String {
@@ -20,9 +20,9 @@ nonisolated enum AppSearchKind: CaseIterable, Sendable {
     }
 }
 
-nonisolated struct AppSearchHit: Identifiable, Equatable, Sendable {
+nonisolated struct AppSearchHit: Identifiable, Equatable {
     /// What to open when the row is chosen.
-    enum Target: Hashable, Sendable {
+    enum Target: Hashable {
         case history(UUID)
         case transcript(UUID)
         case chat(String)
@@ -44,7 +44,7 @@ nonisolated struct AppSearchHit: Identifiable, Equatable, Sendable {
     }
 }
 
-nonisolated struct AppSearchGroup: Identifiable, Equatable, Sendable {
+nonisolated struct AppSearchGroup: Identifiable, Equatable {
     let kind: AppSearchKind
     let hits: [AppSearchHit]
 

@@ -661,7 +661,9 @@ final class MeetingStillRecordingNudgeController: ObservableObject {
     private var countdownTask: Task<Void, Never>?
     private let now: () -> TimeInterval
 
-    var presentationID: UUID? { self.countdown.ticket?.generation }
+    var presentationID: UUID? {
+        self.countdown.ticket?.generation
+    }
 
     init(now: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }) {
         self.now = now

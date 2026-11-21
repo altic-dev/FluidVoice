@@ -89,7 +89,7 @@ final class FunctionCallingProvider {
         let choices: [ChatChoice]
     }
 
-    // Helper for encoding/decoding Any
+    /// Helper for encoding/decoding Any
     struct AnyCodable: Codable {
         let value: Any
 
@@ -143,7 +143,7 @@ final class FunctionCallingProvider {
         case error(String)
     }
 
-    // Helper function to detect if the endpoint is local
+    /// Helper function to detect if the endpoint is local
     private func isLocalEndpoint(_ urlString: String) -> Bool {
         guard let url = URL(string: urlString),
               let host = url.host else { return false }

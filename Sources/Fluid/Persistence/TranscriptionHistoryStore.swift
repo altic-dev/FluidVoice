@@ -9,7 +9,7 @@ import AppKit
 import Combine
 import Foundation
 
-nonisolated struct AudioBudgetMeasurementGate: Equatable, Sendable {
+nonisolated struct AudioBudgetMeasurementGate: Equatable {
     let revision: UInt64
     let budgetBytes: Int64
 
@@ -20,7 +20,7 @@ nonisolated struct AudioBudgetMeasurementGate: Equatable, Sendable {
 
 // MARK: - Transcription History Entry Model
 
-struct TranscriptionHistoryEntry: Codable, Identifiable, Equatable, Sendable {
+struct TranscriptionHistoryEntry: Codable, Identifiable, Equatable {
     let id: UUID
     let timestamp: Date
     let rawText: String
@@ -815,7 +815,7 @@ final class TranscriptionHistoryStore: ObservableObject {
 // MARK: - Stats Computation Extension
 
 extension TranscriptionHistoryStore {
-    nonisolated struct TodaySummary: Equatable, Sendable {
+    nonisolated struct TodaySummary: Equatable {
         let words: Int
         let transcriptions: Int
 

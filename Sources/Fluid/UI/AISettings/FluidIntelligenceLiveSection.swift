@@ -18,7 +18,7 @@ struct FluidIntelligenceLiveSection<Management: View>: View {
     @State private var snapshots: [String: ModelFiles] = [:]
     @State private var recommendedModelID: String?
 
-    private struct ModelFiles: Sendable {
+    private struct ModelFiles {
         let installed: Bool
         let removable: Bool
     }

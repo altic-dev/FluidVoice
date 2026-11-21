@@ -17,7 +17,10 @@ nonisolated struct FileTranscriptionEntry: Codable, Identifiable, Equatable {
     /// User-facing name; never changes the source file or its original filename.
     var customTitle: String?
     var searchRevision: UInt64?
-    var displayTitle: String { self.customTitle ?? self.fileName }
+    var displayTitle: String {
+        self.customTitle ?? self.fileName
+    }
+
     let duration: TimeInterval
     let processingTime: TimeInterval
     let confidence: Float
@@ -152,7 +155,7 @@ nonisolated struct FileTranscriptionEntry: Codable, Identifiable, Equatable {
 
 @MainActor
 final class FileTranscriptionHistoryStore: ObservableObject {
-    // Explicitly nonisolated: on macOS 15.4+ the synthesized main-actor deinit can abort until the OS runtime has the fix (swiftlang/swift#88036).
+    /// Explicitly nonisolated: on macOS 15.4+ the synthesized main-actor deinit can abort until the OS runtime has the fix (swiftlang/swift#88036).
     nonisolated deinit {}
 
     static let shared = FileTranscriptionHistoryStore()

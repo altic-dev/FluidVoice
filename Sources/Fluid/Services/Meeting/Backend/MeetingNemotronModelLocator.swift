@@ -11,7 +11,7 @@ import Foundation
 // `recheck` re-walks the package when it is opened and refuses a missing or changed artifact.
 
 /// A validated local Nemotron model package plus the facts measured while validating it.
-nonisolated struct MeetingNemotronModelArtifact: Equatable, Sendable {
+nonisolated struct MeetingNemotronModelArtifact: Equatable {
     let packageURL: URL
     let totalByteCount: Int64
     let fileCount: Int

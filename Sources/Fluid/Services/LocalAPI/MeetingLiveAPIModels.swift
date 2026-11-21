@@ -6,7 +6,7 @@ nonisolated protocol MeetingLiveTranscriptProviding: Sendable {
 }
 
 /// The live snapshot together with the session it belongs to, read at the same moment.
-nonisolated struct MeetingLiveTranscriptReading: Sendable, Equatable {
+nonisolated struct MeetingLiveTranscriptReading: Equatable {
     let sessionID: UUID?
     let snapshot: MeetingLiveTranscriptSnapshot
 

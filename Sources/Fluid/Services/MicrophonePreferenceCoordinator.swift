@@ -10,8 +10,13 @@ protocol AudioDeviceManaging {
 }
 
 extension AudioDeviceManaging {
-    var isClamshellClosed: Bool { false }
-    func isInputDeviceUsable(_: AudioDevice.Device) -> Bool { true }
+    var isClamshellClosed: Bool {
+        false
+    }
+
+    func isInputDeviceUsable(_: AudioDevice.Device) -> Bool {
+        true
+    }
 }
 
 struct CoreAudioDeviceManager: AudioDeviceManaging {
@@ -34,7 +39,7 @@ struct CoreAudioDeviceManager: AudioDeviceManaging {
 
 @MainActor
 final class MicrophonePreferenceCoordinator: ObservableObject {
-    // Explicitly nonisolated: on macOS 15.4+ the synthesized main-actor deinit can abort until the OS runtime has the fix (swiftlang/swift#88036).
+    /// Explicitly nonisolated: on macOS 15.4+ the synthesized main-actor deinit can abort until the OS runtime has the fix (swiftlang/swift#88036).
     nonisolated deinit {}
 
     private let settings: SettingsStore

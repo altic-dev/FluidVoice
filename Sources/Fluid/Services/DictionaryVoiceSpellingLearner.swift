@@ -44,7 +44,9 @@ final class DictionaryVoiceSpellingLearner {
         self.save = save
     }
 
-    var pendingCount: Int { self.pending.count }
+    var pendingCount: Int {
+        self.pending.count
+    }
 
     /// Called once the dictation has been delivered where its edits can be observed.
     func propose(_ spellings: [DictionaryVoiceSpelling], recordingID: UUID? = nil) {

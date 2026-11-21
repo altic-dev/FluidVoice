@@ -101,7 +101,7 @@ final class LocalAPIServer {
     }
 }
 
-// Preserve one request per connection, including rejections that leave the request body unread.
+/// Preserve one request per connection, including rejections that leave the request body unread.
 private final nonisolated class CloseAfterResponse: ChannelOutboundHandler, RemovableChannelHandler {
     typealias OutboundIn = HTTPResponsePart
     typealias OutboundOut = HTTPResponsePart

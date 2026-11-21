@@ -16,12 +16,12 @@ import ZeppelinEmbed
 actor SearchIndex {
     static let shared = SearchIndex()
 
-    struct ReconcileReport: Equatable, Sendable {
+    struct ReconcileReport: Equatable {
         var upserted = 0
         var deleted = 0
     }
 
-    struct Hit: Equatable, Sendable {
+    struct Hit: Equatable {
         let id: UUID
         let score: Double
     }

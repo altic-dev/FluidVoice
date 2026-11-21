@@ -9,7 +9,9 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
     private var cancellables = Set<AnyCancellable>()
     let installations = SpeechModelInstallationSnapshot.shared
 
-    var asr: ASRService { self.appServices.asr }
+    var asr: ASRService {
+        self.appServices.asr
+    }
 
     var areSpeechModelActionsBlocked: Bool {
         !self.installations.canUseModelActions

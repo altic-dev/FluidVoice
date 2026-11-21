@@ -76,8 +76,10 @@ enum AutomaticDictionaryCorrectionDetector {
 
         if change.oldRange.length == 0 {
             return change.oldRange.location >= insertedRange.location &&
-                (change.oldRange.location < insertedEnd ||
-                    (allowsInsertionAtEnd && change.oldRange.location == insertedEnd))
+                (
+                    change.oldRange.location < insertedEnd ||
+                        (allowsInsertionAtEnd && change.oldRange.location == insertedEnd)
+                )
         }
 
         return change.oldRange.location >= insertedRange.location &&

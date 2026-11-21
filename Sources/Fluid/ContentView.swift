@@ -249,9 +249,17 @@ struct ContentView: View {
         case onboardingSandbox
         case historyOnly
 
-        var savesHistory: Bool { self != .onboardingSandbox }
-        var deliversText: Bool { self == .normal }
-        var publishesEditorResult: Bool { self != .historyOnly }
+        var savesHistory: Bool {
+            self != .onboardingSandbox
+        }
+
+        var deliversText: Bool {
+            self == .normal
+        }
+
+        var publishesEditorResult: Bool {
+            self != .historyOnly
+        }
     }
 
     @EnvironmentObject private var appServices: AppServices
@@ -464,7 +472,6 @@ struct ContentView: View {
     }
     #endif
 
-    @ViewBuilder
     var body: some View {
         #if DEBUG
         if let onReady = self.dictationModeSwitchOnReadyForTesting {
@@ -3167,8 +3174,10 @@ struct ContentView: View {
         let shouldUseAIOnStop = stopSnapshot?.usesAI ?? activeDictationSlot.map {
             DictationAIPostProcessingGate.isConfigured(for: $0, appBundleID: self.recordingAppInfo?.bundleId)
         } ?? DictationAIPostProcessingGate.isConfigured(for: .primary, appBundleID: self.recordingAppInfo?.bundleId)
-        let shouldHideOverlayOnStop = route == .historyOnly || self.cancelledOutputLifecycleID == expectedOverlayLifecycleID || (route == .normal && !wasRewriteMode && !wasCommandMode
-            && !promptTest.isActive && !shouldUseAIOnStop && !self.settings.spokenSendEnabled && !autoSendAtStop)
+        let shouldHideOverlayOnStop = route == .historyOnly || self.cancelledOutputLifecycleID == expectedOverlayLifecycleID || (
+            route == .normal && !wasRewriteMode && !wasCommandMode
+                && !promptTest.isActive && !shouldUseAIOnStop && !self.settings.spokenSendEnabled && !autoSendAtStop
+        )
         DebugLogger.shared.info(
             "Routing decision snapshot | activeMode=\(modeAtStop.rawValue) | rewrite=\(wasRewriteMode) | command=\(wasCommandMode) | overlay=\(NotchContentState.shared.mode.rawValue)",
             source: "ContentView"
@@ -3505,8 +3514,8 @@ struct ContentView: View {
             SettingsStore.shared.copyTranscriptionToClipboard
         let shouldTypeExternally = shouldDeliverOutputs && !isFluidFrontmost
 
-        // Send-only stops normally have no History row. Recover their words if
-        // Escape arrives after the output decision but before delivery completes.
+        /// Send-only stops normally have no History row. Recover their words if
+        /// Escape arrives after the output decision but before delivery completes.
         func saveCancelledSendOnlyHistory() {
             guard sendsExistingDraft, self.settings.saveTranscriptionHistory else { return }
             let id = UUID()

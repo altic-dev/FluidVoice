@@ -60,7 +60,7 @@ struct LiquidBar: View {
     let icon: String
     let label: String
 
-    // Animated fill level (smoothly transitions between values)
+    /// Animated fill level (smoothly transitions between values)
     @State private var animatedFill: Double = 0
 
     var body: some View {

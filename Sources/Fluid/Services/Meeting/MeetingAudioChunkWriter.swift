@@ -587,12 +587,14 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
         if DebugLogger.diagnosticsEnabled {
             var diagnosticLayoutSize = 0
             let layout = CMAudioFormatDescriptionGetChannelLayout(formatDescription, sizeOut: &diagnosticLayoutSize)
-            FileLogger.shared.appendSync(line:
+            FileLogger.shared.appendSync(
+                line:
                 "[MeetingPCMProbe] before-format track=\(self.track.kind.rawValue) chunk=\(sequence) " +
                     "rate=\(asbd.mSampleRate) channels=\(asbd.mChannelsPerFrame) flags=\(asbd.mFormatFlags) " +
                     "bits=\(asbd.mBitsPerChannel) bytesPerFrame=\(asbd.mBytesPerFrame) bytesPerPacket=\(asbd.mBytesPerPacket) " +
                     "layoutBytes=\(diagnosticLayoutSize) layoutTag=\(layout?.pointee.mChannelLayoutTag ?? 0) " +
-                    "frames=\(CMSampleBufferGetNumSamples(sampleBuffer))")
+                    "frames=\(CMSampleBufferGetNumSamples(sampleBuffer))"
+            )
         }
         let clientFormat = try MeetingPCMFormatResolver.resolve(formatDescription)
         if DebugLogger.diagnosticsEnabled {
@@ -717,12 +719,14 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
            let description = CMSampleBufferGetFormatDescription(sampleBuffer),
            let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(description)?.pointee
         {
-            FileLogger.shared.appendSync(line:
+            FileLogger.shared.appendSync(
+                line:
                 "[MeetingPCMProbe] rejected-format track=\(self.track.kind.rawValue) " +
                     "formatID=\(asbd.mFormatID) rate=\(asbd.mSampleRate) channels=\(asbd.mChannelsPerFrame) " +
                     "flags=\(asbd.mFormatFlags) bits=\(asbd.mBitsPerChannel) " +
                     "bytesPerFrame=\(asbd.mBytesPerFrame) bytesPerPacket=\(asbd.mBytesPerPacket) " +
-                    "framesPerPacket=\(asbd.mFramesPerPacket)")
+                    "framesPerPacket=\(asbd.mFramesPerPacket)"
+            )
         }
         self.track.health.status = .degraded
         self.track.health.detail = detail

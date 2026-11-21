@@ -1,7 +1,7 @@
 import CryptoKit
 import Foundation
 
-nonisolated struct DictionaryAcousticEvidence: Sendable {
+nonisolated struct DictionaryAcousticEvidence {
     let id: UUID
     let entryID: UUID
     let label: String
@@ -16,7 +16,7 @@ nonisolated struct DictionaryAcousticEvidence: Sendable {
     }
 }
 
-nonisolated struct DictionaryNegativeCorrection: Sendable {
+nonisolated struct DictionaryNegativeCorrection {
     let evidence: DictionaryAcousticEvidence
     let correctedText: String
     let expiresAt: Date
@@ -66,7 +66,7 @@ nonisolated enum DictionaryNegativeEvidenceResolver {
 /// Separate, removable experimental store; never mutates positive enrollments or dictionary text.
 actor DictionaryNegativeExampleStore {
     static let shared = DictionaryNegativeExampleStore()
-    struct Example: Codable, Sendable {
+    struct Example: Codable {
         let id: UUID
         let entryID: UUID
         let profileKey: String
@@ -87,7 +87,9 @@ actor DictionaryNegativeExampleStore {
         self.collectionEnabled = collectionEnabled
     }
 
-    func revision() -> UUID { self.generation }
+    func revision() -> UUID {
+        self.generation
+    }
 
     private func read() throws -> [Example] {
         guard FileManager.default.fileExists(atPath: self.url.path) else { return [] }

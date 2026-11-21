@@ -200,7 +200,7 @@ struct StreamingTranscriptionWorkState {
 /// Cancelling a pending start releases its waiter without completing the active handoff.
 @MainActor
 final class RecordingBufferHandoffGate {
-    // Explicitly nonisolated: on macOS 15.4+ the synthesized main-actor deinit can abort until the OS runtime has the fix (swiftlang/swift#88036).
+    /// Explicitly nonisolated: on macOS 15.4+ the synthesized main-actor deinit can abort until the OS runtime has the fix (swiftlang/swift#88036).
     nonisolated deinit {}
 
     struct Token: Equatable {
@@ -211,8 +211,13 @@ final class RecordingBufferHandoffGate {
     private var waiters: [CheckedContinuation<Void, Never>] = []
     private(set) var isRecovering = false
 
-    var isActive: Bool { self.activeToken != nil }
-    var pendingWaiterCount: Int { self.waiters.count }
+    var isActive: Bool {
+        self.activeToken != nil
+    }
+
+    var pendingWaiterCount: Int {
+        self.waiters.count
+    }
 
     func begin() -> Token? {
         guard self.activeToken == nil else { return nil }
@@ -253,16 +258,24 @@ final class RecordingBufferHandoffGate {
 /// stop cancels only the delay; an active provider operation is allowed to settle.
 @MainActor
 final class StreamingTaskLifecycle {
-    // Explicitly nonisolated: on macOS 15.4+ the synthesized main-actor deinit can abort until the OS runtime has the fix (swiftlang/swift#88036).
+    /// Explicitly nonisolated: on macOS 15.4+ the synthesized main-actor deinit can abort until the OS runtime has the fix (swiftlang/swift#88036).
     nonisolated deinit {}
 
     private var scheduler: (id: UUID, task: Task<Void, Never>)?
     private var active: (sessionID: Int, operationID: UUID, task: Task<Void, Never>)?
     private var drainWaiters: [UUID: (operationID: UUID, continuation: CheckedContinuation<Bool, Never>, timer: Task<Void, Never>)] = [:]
 
-    var hasScheduledIdleWork: Bool { self.scheduler != nil }
-    var hasActiveWork: Bool { self.active != nil }
-    var pendingDrainCount: Int { self.drainWaiters.count }
+    var hasScheduledIdleWork: Bool {
+        self.scheduler != nil
+    }
+
+    var hasActiveWork: Bool {
+        self.active != nil
+    }
+
+    var pendingDrainCount: Int {
+        self.drainWaiters.count
+    }
 
     @discardableResult
     func schedule(
@@ -921,8 +934,10 @@ final class ASRService: ObservableObject {
     private var isPronunciationTrainingStart = false
     private var pronunciationTrainingStartGeneration: String?
     private var isPronunciationTrainingStartCurrent: Bool {
-        !self.isPronunciationTrainingStart || (DictionaryMatcherExperiment.sharedFeaturesEnabled &&
-            self.pronunciationTrainingStartGeneration == DictionaryMatcherExperiment.generation)
+        !self.isPronunciationTrainingStart || (
+            DictionaryMatcherExperiment.sharedFeaturesEnabled &&
+                self.pronunciationTrainingStartGeneration == DictionaryMatcherExperiment.generation
+        )
     }
 
     private var pendingAudioCaptureBackendStart: Task<Void, Error>?
@@ -2089,8 +2104,8 @@ final class ASRService: ObservableObject {
     }
     #endif
 
-    // Thread-safe buffer to prevent "Array mutation while enumerating" and memory corruption crashes
-    // during long sessions where reallocation occurs frequently.
+    /// Thread-safe buffer to prevent "Array mutation while enumerating" and memory corruption crashes
+    /// during long sessions where reallocation occurs frequently.
     private let audioBuffer = ThreadSafeAudioBuffer()
     // Transient, read-only audio for a focused dictionary test. No history setting or disk write.
     private let dictionaryTestAudioSubject = PassthroughSubject<[Float], Never>()
@@ -3456,7 +3471,9 @@ final class ASRService: ObservableObject {
     }
 
     /// Identifies the protected dictionary capture so a dismissed test cannot stop a newer recording.
-    var dictionaryCaptureToken: Int? { self.isDictionaryTrainingCaptureActive ? self.benchmarkSessionID : nil }
+    var dictionaryCaptureToken: Int? {
+        self.isDictionaryTrainingCaptureActive ? self.benchmarkSessionID : nil
+    }
 
     /// Stops the recording session and returns the transcribed text.
     ///
@@ -7988,7 +8005,9 @@ final nonisolated class AudioCapturePipeline: @unchecked Sendable {
     }
 
     #if DEBUG
-    var isRecordingEnabledForTesting: Bool { self.lock.withLock { self.recordingEnabled } }
+    var isRecordingEnabledForTesting: Bool {
+        self.lock.withLock { self.recordingEnabled }
+    }
     #endif
 
     func setLevelMonitoringEnabled(_ enabled: Bool) {

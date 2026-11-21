@@ -4,7 +4,7 @@ import Foundation
 /// The signed list of current speech model releases. Rules and format: docs/MODEL_UPDATE_FEED.md.
 /// Foundation and CryptoKit only: Tools/model-release compiles this file to check a feed before it is published.
 nonisolated enum SpeechModelFeed {
-    struct Entry: Codable, Equatable, Sendable {
+    struct Entry: Codable, Equatable {
         let release: String
         let url: URL
         let bytes: Int64
@@ -14,7 +14,7 @@ nonisolated enum SpeechModelFeed {
         let minBuild: Int
     }
 
-    struct Payload: Codable, Equatable, Sendable {
+    struct Payload: Codable, Equatable {
         let schema: Int
         let sequence: Int
         let models: [String: [String: [Entry]]]

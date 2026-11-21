@@ -31,19 +31,19 @@ nonisolated enum MeetingSCKPairedDiagnosticGate {
     }
 }
 
-nonisolated enum MeetingSCKPairedOutput: String, Codable, CaseIterable, Sendable {
+nonisolated enum MeetingSCKPairedOutput: String, Codable, CaseIterable {
     case applicationAudio = "audio"
     case microphone
 }
 
 /// Provenance is intentionally reduced to a scope enum and a positive selection assertion.  No
 /// application identity, window title, URL, or other user data is carried into C2 diagnostics.
-nonisolated enum MeetingSCKPairedDiagnosticScope: String, Codable, CaseIterable, Sendable {
+nonisolated enum MeetingSCKPairedDiagnosticScope: String, Codable, CaseIterable {
     case selectedApplicationWindow
     case selectedApplicationDisplay
 }
 
-nonisolated struct MeetingSCKPairedDiagnosticProvenance: Codable, Equatable, Sendable {
+nonisolated struct MeetingSCKPairedDiagnosticProvenance: Codable, Equatable {
     let scope: MeetingSCKPairedDiagnosticScope
     let applicationSelectionConfirmed: Bool
     let captureMethod: String
@@ -66,7 +66,7 @@ nonisolated struct MeetingSCKPairedDiagnosticProvenance: Codable, Equatable, Sen
 /// Metadata copied synchronously at a ScreenCaptureKit callback boundary.  This type intentionally
 /// has no buffer or sample payload.  `arrivalSeconds` should come from a monotonic clock sampled by
 /// the callback owner; it is only used to describe delivery jitter.
-nonisolated struct MeetingSCKPairedDiagnosticSample: Sendable {
+nonisolated struct MeetingSCKPairedDiagnosticSample {
     let output: MeetingSCKPairedOutput
     let presentationSeconds: Double?
     let durationSeconds: Double?
@@ -94,7 +94,7 @@ nonisolated struct MeetingSCKPairedDiagnosticSample: Sendable {
     }
 }
 
-nonisolated struct MeetingSCKPairedDiagnosticConfiguration: Equatable, Sendable {
+nonisolated struct MeetingSCKPairedDiagnosticConfiguration: Equatable {
     static let defaultMaximumSamples = 20_000
     let maximumSamples: Int
 
@@ -103,7 +103,7 @@ nonisolated struct MeetingSCKPairedDiagnosticConfiguration: Equatable, Sendable 
     }
 }
 
-nonisolated struct MeetingSCKPairedTrackReport: Codable, Equatable, Sendable {
+nonisolated struct MeetingSCKPairedTrackReport: Codable, Equatable {
     let sampleCount: Int
     let validTimestampCount: Int
     let invalidTimestampCount: Int
@@ -158,7 +158,7 @@ nonisolated struct MeetingSCKPairedTrackReport: Codable, Equatable, Sendable {
     }
 }
 
-nonisolated struct MeetingSCKPairedCrossTrackReport: Codable, Equatable, Sendable {
+nonisolated struct MeetingSCKPairedCrossTrackReport: Codable, Equatable {
     /// This is microphone PTS minus application PTS.  It is a timestamp-origin offset, not an
     /// acoustic or processing latency measurement.
     let firstPresentationOffsetSeconds: Double?
@@ -199,7 +199,7 @@ nonisolated struct MeetingSCKPairedCrossTrackReport: Codable, Equatable, Sendabl
     }
 }
 
-nonisolated struct MeetingSCKPairedDiagnosticReport: Codable, Equatable, Sendable {
+nonisolated struct MeetingSCKPairedDiagnosticReport: Codable, Equatable {
     static let currentSchemaVersion = 3
 
     let schemaVersion: Int
@@ -280,7 +280,9 @@ final nonisolated class MeetingSCKPairedDiagnosticCollector: @unchecked Sendable
         self.isEnabled = MeetingSCKPairedDiagnosticGate.enabled(environment: environment)
     }
 
-    var enabled: Bool { self.isEnabled }
+    var enabled: Bool {
+        self.isEnabled
+    }
 
     func record(_ sample: MeetingSCKPairedDiagnosticSample) {
         guard self.isEnabled else { return }

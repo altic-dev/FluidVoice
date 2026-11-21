@@ -217,10 +217,14 @@ struct TranscriptionHistoryView: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
-        .background(RoundedRectangle(cornerRadius: 8)
-            .fill(self.theme.palette.cardBackground)
-            .overlay(RoundedRectangle(cornerRadius: 8)
-                .stroke(self.theme.palette.cardBorder.opacity(0.6), lineWidth: 1)))
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(self.theme.palette.cardBackground)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(self.theme.palette.cardBorder.opacity(0.6), lineWidth: 1)
+                )
+        )
     }
 
     // MARK: - Entry List
@@ -398,8 +402,10 @@ struct TranscriptionHistoryView: View {
         }
         .padding(12)
         .background(self.theme.palette.accent.opacity(isSelected ? 0.12 : 0), in: RoundedRectangle(cornerRadius: 14))
-        .overlay(RoundedRectangle(cornerRadius: 14)
-            .strokeBorder(isSelected ? self.theme.palette.accent.opacity(0.6) : self.theme.palette.cardBorder.opacity(0.25)))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14)
+                .strokeBorder(isSelected ? self.theme.palette.accent.opacity(0.6) : self.theme.palette.cardBorder.opacity(0.25))
+        )
         .contextMenu { self.entryActions(entry) }
     }
 
@@ -891,8 +897,10 @@ private struct TranscriptionFeedbackReportSheet: View {
 
     private var isSendDisabled: Bool {
         self.isSending ||
-            (self.inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
-                self.outputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) ||
+            (
+                self.inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+                    self.outputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ) ||
             self.processingModel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 

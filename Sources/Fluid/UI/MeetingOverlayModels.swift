@@ -1,12 +1,12 @@
 import CoreGraphics
 import Foundation
 
-enum MeetingOverlayPreference: String, Codable, CaseIterable, Equatable, Sendable {
+enum MeetingOverlayPreference: String, Codable, CaseIterable, Equatable {
     case pill
     case captions
 }
 
-enum MeetingOverlayPresentation: Equatable, Sendable {
+enum MeetingOverlayPresentation: Equatable {
     case pill
     case captions
 
@@ -73,12 +73,12 @@ enum MeetingOverlayPresentation: Equatable, Sendable {
         - MeetingOverlayPresentation.captionsBottomInset
 }
 
-struct MeetingOverlayVisibleAnchor: Equatable, Sendable {
+struct MeetingOverlayVisibleAnchor: Equatable {
     var centerX: CGFloat
     var bottomY: CGFloat
 }
 
-struct MeetingOverlayPadding: Equatable, Sendable {
+struct MeetingOverlayPadding: Equatable {
     var top: CGFloat
     var left: CGFloat
     var bottom: CGFloat
@@ -89,7 +89,7 @@ struct MeetingOverlayPadding: Equatable, Sendable {
     }
 }
 
-struct MeetingOverlayLayout: Equatable, Sendable {
+struct MeetingOverlayLayout: Equatable {
     var panelFrame: CGRect
     var visibleSurfaceFrame: CGRect
 }
@@ -174,7 +174,7 @@ enum MeetingOverlayGeometry {
     }
 }
 
-enum MeetingOverlayPresentationEvent: Equatable, Sendable {
+enum MeetingOverlayPresentationEvent: Equatable {
     case recordingStarted(sessionID: UUID)
     case recordingStateChanged
     case recordingDegraded
@@ -184,7 +184,7 @@ enum MeetingOverlayPresentationEvent: Equatable, Sendable {
     case pillDismissed
 }
 
-struct MeetingOverlayPresentationReducer: Equatable, Sendable {
+struct MeetingOverlayPresentationReducer: Equatable {
     private(set) var preference: MeetingOverlayPreference
     private(set) var presentation: MeetingOverlayPresentation?
     private(set) var sessionID: UUID?

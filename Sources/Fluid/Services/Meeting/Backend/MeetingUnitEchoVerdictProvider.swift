@@ -46,8 +46,6 @@ nonisolated struct MeetingTextOverlapEchoVerdictProvider: MeetingUnitEchoVerdict
     private let tolerance = MeetingAnalysisManifestSchema.mappingToleranceSeconds
     private let wordContextSeconds: TimeInterval = 2
 
-    init() {}
-
     func echoVerdicts(
         for evidence: MeetingFinalTranscriptEvidence,
         manifest: MeetingAnalysisManifest,

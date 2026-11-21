@@ -68,7 +68,9 @@ final class BottomOverlayWindowController {
         self.window?.frame.size
     }
 
-    var contentViewForTests: NSView? { self.hostingView }
+    var contentViewForTests: NSView? {
+        self.hostingView
+    }
 
     var visibleSurfaceWidthForTests: CGFloat {
         switch SettingsStore.shared.overlaySize {
@@ -1756,11 +1758,25 @@ private struct BottomOverlayPromptMenuView: View {
     @State private var hoveredRowID: String?
 
     /// Compact overlays share a names-only menu without captions or shortcut badges.
-    private var isCompact: Bool { self.settings.overlaySize == .pill || self.settings.overlaySize == .small }
-    private var rowHorizontalPadding: CGFloat { self.isCompact ? 6 : 8 }
-    private var rowVerticalPadding: CGFloat { self.isCompact ? 3 : 6 }
-    private var rowCornerRadius: CGFloat { self.isCompact ? 5 : 7 }
-    private var checkmarkSize: CGFloat { self.isCompact ? 7 : 10 }
+    private var isCompact: Bool {
+        self.settings.overlaySize == .pill || self.settings.overlaySize == .small
+    }
+
+    private var rowHorizontalPadding: CGFloat {
+        self.isCompact ? 6 : 8
+    }
+
+    private var rowVerticalPadding: CGFloat {
+        self.isCompact ? 3 : 6
+    }
+
+    private var rowCornerRadius: CGFloat {
+        self.isCompact ? 5 : 7
+    }
+
+    private var checkmarkSize: CGFloat {
+        self.isCompact ? 7 : 10
+    }
 
     private func rowBackground(isSelected: Bool, rowID: String) -> some View {
         let isHovered = self.hoveredRowID == rowID
@@ -2594,8 +2610,13 @@ struct BottomOverlayView: View {
         self.settings.overlaySize == .pill
     }
 
-    private var isSmallSize: Bool { self.settings.overlaySize == .small }
-    private var usesCompactExpansion: Bool { self.isPillSize || self.isSmallSize }
+    private var isSmallSize: Bool {
+        self.settings.overlaySize == .small
+    }
+
+    private var usesCompactExpansion: Bool {
+        self.isPillSize || self.isSmallSize
+    }
 
     private var compactCanvasWidth: CGFloat {
         self.isPillSize ? PillShadowMetrics.canvasWidth : SmallOverlayMetrics.canvasWidth

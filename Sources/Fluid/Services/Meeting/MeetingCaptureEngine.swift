@@ -452,7 +452,7 @@ nonisolated protocol MeetingCaptureRuntime: AnyObject, Sendable {
 
 /// A candidate window for `.window`-scoped capture, in a shape independent of ScreenCaptureKit
 /// so the selection logic can be unit tested with plain values.
-nonisolated struct MeetingWindowCandidate: Sendable, Equatable {
+nonisolated struct MeetingWindowCandidate: Equatable {
     var windowID: UInt32
     var title: String?
     var frame: CGRect
@@ -495,7 +495,7 @@ nonisolated enum MeetingWindowSelector {
 /// Health of the CoreAudio listener set backing a route observation. A degraded observation means
 /// at least one required listener is missing, so the route can change without any further
 /// notification: the owner must fail closed instead of silently operating unlistened.
-nonisolated enum MeetingOutputRouteListenerHealth: Equatable, Sendable {
+nonisolated enum MeetingOutputRouteListenerHealth: Equatable {
     case healthy
     case degraded
 }
@@ -503,14 +503,14 @@ nonisolated enum MeetingOutputRouteListenerHealth: Equatable, Sendable {
 /// Identity of the SCK producer the runtime owns, plus the route revision that authorized it.
 /// Publication and AEC commit are both gated on this triple, so an in-flight operation can compare
 /// the value it captured against the live one without retaining `SCStream`.
-nonisolated struct MeetingCaptureStreamOwnership: Equatable, Sendable {
+nonisolated struct MeetingCaptureStreamOwnership: Equatable {
     var streamIdentity: UInt64
     var streamGeneration: UInt64
     var routeRevision: UInt64
 }
 
 /// Result of the final pending -> current publication decision.
-nonisolated enum MeetingCaptureStreamPublication: Equatable, Sendable {
+nonisolated enum MeetingCaptureStreamPublication: Equatable {
     /// Ownership matched: publish the candidate.
     case commit
     /// A newer revision or an ordered stop owns the outcome. Quietly abandon — never terminal.
@@ -646,7 +646,10 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
     private var rebuildOwner: UInt64?
     private var nextRebuildOwnerToken: UInt64 = 0
     /// Must be read with `stateLock` held.
-    private var rebuilding: Bool { self.rebuildOwner != nil }
+    private var rebuilding: Bool {
+        self.rebuildOwner != nil
+    }
+
     /// Unlike `rebuilding`, this records the actual ownership state of `stream`. It lets stop avoid
     /// re-stopping a producer that was deliberately retired even if replacement construction fails.
     private var currentStreamStopped = false
@@ -1520,11 +1523,13 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
             self.eventHandler(.interrupted(
                 kind: .microphoneChanged,
                 trackID: self.microphoneWriter.trackID,
-                detail: inputDetail ?? (disposition == .physicallyClosed
-                    ? "Microphone transcript admission resumed on a positively identified closed output route."
-                    : disposition == .supportedSpeaker
-                    ? "Speaker-route AEC restarted unprotected and is awaiting clock attestation and warm-up."
-                    : "Microphone transcript admission remains disabled because the output route is ambiguous.")
+                detail: inputDetail ?? (
+                    disposition == .physicallyClosed
+                        ? "Microphone transcript admission resumed on a positively identified closed output route."
+                        : disposition == .supportedSpeaker
+                        ? "Speaker-route AEC restarted unprotected and is awaiting clock attestation and warm-up."
+                        : "Microphone transcript admission remains disabled because the output route is ambiguous."
+                )
             ))
         }
     }
@@ -2009,7 +2014,9 @@ private final nonisolated class InRoomMicrophoneCaptureRuntime: NSObject, Meetin
     AVCaptureAudioDataOutputSampleBufferDelegate, @unchecked Sendable
 {
     private let microphonePCMNormalizer = MeetingMicrophonePCMNormalizer()
-    var captureScope: MeetingCaptureScope? { nil }
+    var captureScope: MeetingCaptureScope? {
+        nil
+    }
 
     private let session = AVCaptureSession()
     private let output = AVCaptureAudioDataOutput()
@@ -2558,7 +2565,7 @@ final nonisolated class MeetingEraAcceptanceFence: @unchecked Sendable {
     }
 }
 
-private nonisolated enum MeetingOneShotResult: Sendable {
+private nonisolated enum MeetingOneShotResult {
     case success
     case failure(String)
 }
@@ -2744,12 +2751,12 @@ nonisolated enum MeetingCaptureSourceCatalog {
     }
 }
 
-nonisolated struct MeetingMicrophoneCatalogSnapshot: Sendable, Equatable {
+nonisolated struct MeetingMicrophoneCatalogSnapshot: Equatable {
     var identities: [MeetingMicrophoneIdentity]
     var defaultCoreAudioUID: String?
 }
 
-nonisolated struct MeetingAVCaptureDeviceDescriptor: Equatable, Sendable {
+nonisolated struct MeetingAVCaptureDeviceDescriptor: Equatable {
     var uniqueID: String
     var displayName: String
 }
@@ -2824,7 +2831,7 @@ private extension CGRect {
     }
 }
 
-nonisolated enum MeetingCapturePathDecision: Sendable, Equatable {
+nonisolated enum MeetingCapturePathDecision: Equatable {
     case voiceProcessing
     case screenCaptureKit(reason: String)
 }
@@ -2867,7 +2874,9 @@ nonisolated enum MeetingCaptureTransitionPolicy {
 }
 
 nonisolated enum MeetingVoiceProcessingUpgradeDwell {
-    static var seconds: Double { MeetingCaptureTransitionPolicy.recoveryDwellSeconds }
+    static var seconds: Double {
+        MeetingCaptureTransitionPolicy.recoveryDwellSeconds
+    }
 
     // Keep the existing capture/processing contract explicit during integration.
     // swiftlint:disable:next function_parameter_count
@@ -3061,7 +3070,7 @@ nonisolated enum MeetingAVCaptureRebindDecision {
 }
 
 /// Output-route facts the decision needs, as a plain value so `decide` is unit-testable headless.
-nonisolated struct MeetingOutputRouteSnapshot: Sendable, Equatable {
+nonisolated struct MeetingOutputRouteSnapshot: Equatable {
     var deviceExists: Bool
     var isBluetooth: Bool
     var isBuiltIn: Bool
@@ -3138,7 +3147,7 @@ final nonisolated class MeetingMicrophoneTranscriptGate: @unchecked Sendable {
 
     /// Closes admission first and returns the last observed sample PTS. Using that PTS as the next
     /// era boundary deliberately excludes the final pre-notification buffer as a safety margin.
-    struct InvalidationBoundary: Equatable, Sendable {
+    struct InvalidationBoundary: Equatable {
         let unsafeStartSeconds: Double
         let observedSeconds: Double
     }
@@ -3350,7 +3359,9 @@ final nonisolated class MeetingVoiceProcessingCommitGate: @unchecked Sendable {
         self.ringBytes = 0
     }
 
-    var isCommitted: Bool { self.lock.withLock { self.state == .committed } }
+    var isCommitted: Bool {
+        self.lock.withLock { self.state == .committed }
+    }
 }
 
 /// Emitted-only progress: dropped/failed buffers deliver no audio, so a dropped run trips this too.
@@ -4002,7 +4013,7 @@ nonisolated enum MeetingVoiceProcessingDriftSnapshot {
 
 /// Device election for a capture-side swap. Role is retained in the schema for old manifests but
 /// never inferred or used by new capture decisions.
-nonisolated struct MeetingCaptureDeviceElection: Sendable, Equatable {
+nonisolated struct MeetingCaptureDeviceElection: Equatable {
     var identity: MeetingMicrophoneIdentity
     var role: MeetingMicrophoneRole
 
@@ -4097,7 +4108,7 @@ nonisolated struct MeetingCaptureDeviceElection: Sendable, Equatable {
     }
 }
 
-nonisolated enum MeetingCaptureDeviceTransition: Sendable, Equatable {
+nonisolated enum MeetingCaptureDeviceTransition: Equatable {
     case unchanged(MeetingCaptureDeviceElection)
     case changed(MeetingCaptureDeviceElection)
     case unavailable
@@ -5380,8 +5391,8 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
     }
 
     #if false
-    // Retained only as source history during the transition rollout. Compiled out so
-    // an AVCapture fallback cannot create a second VPIO owner in this meeting.
+    /// Retained only as source history during the transition rollout. Compiled out so
+    /// an AVCapture fallback cannot create a second VPIO owner in this meeting.
     /// `dwellArming` reserves the slot in the SAME critical section as the `dwellTask == nil` check.
     private func armUpgradeDwellIfViable() {
         guard MeetingCaptureTransitionPolicy.allowsWithinSessionVoiceProcessingUpgrade else { return }

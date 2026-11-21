@@ -21,7 +21,7 @@ nonisolated enum MeetingConfigFingerprintEncoding {
 /// Immutable value snapshot of meeting post-processing ASR configuration. The pipeline builds it
 /// once per attempt and the meeting preparation owner constructs a fixed provider from it, so an
 /// active run never follows later dictation-setting changes.
-nonisolated struct MeetingFinalProcessingConfiguration: Equatable, Sendable {
+nonisolated struct MeetingFinalProcessingConfiguration: Equatable {
     static let defaultASRModel = "fluid-parakeet-pro"
     static let defaultLanguageCode = "en"
     /// One shared immutable version keeps frozen requests and saved attempts consistent.
@@ -123,7 +123,7 @@ enum MeetingRetranscriptionLanguage {
 }
 
 /// Inert value snapshot of live-caption ASR configuration. Live captions do no diarization.
-nonisolated struct MeetingLiveCaptionsConfiguration: Equatable, Sendable {
+nonisolated struct MeetingLiveCaptionsConfiguration: Equatable {
     static let defaultModelRepositoryID = "FluidInference/parakeet-realtime-eou-120m-coreml"
     static let defaultModelVariant = "160ms"
     /// Branch selected by the current loader; source pins no resolved HF commit, so this is the

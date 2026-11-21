@@ -20,7 +20,9 @@ final class MeetingDiarizationModelStore: ObservableObject {
     /// waited on a failed download explains itself instead of showing a raw network code.
     struct DownloadError: LocalizedError {
         let message: String
-        var errorDescription: String? { self.message }
+        var errorDescription: String? {
+            self.message
+        }
     }
 
     static let shared = MeetingDiarizationModelStore()

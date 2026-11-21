@@ -45,7 +45,10 @@ struct CommandModeView: View {
     @State private var isThinkingExpanded = false
     @FocusState private var composerFocused: Bool
 
-    private var asr: ASRService { self.appServices.asr }
+    private var asr: ASRService {
+        self.appServices.asr
+    }
+
     private var inputText: Binding<String> {
         Binding(
             get: { self.drafts.text(for: self.service.currentChatID) },
@@ -518,7 +521,10 @@ struct CommandModeView: View {
         return nil
     }
 
-    private var canChangeSession: Bool { self.sessionBlockingReason == nil }
+    private var canChangeSession: Bool {
+        self.sessionBlockingReason == nil
+    }
+
     private var canSubmitCommand: Bool {
         !self.inputText.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
             !self.compactHistoryPresented && self.canChangeSession && self.settings.commandModeReadinessIssue == nil

@@ -97,14 +97,20 @@ final class MeetingASRPreparationOwner {
     }
 
     /// True from the synchronous claim through the ready state and the entire teardown.
-    var isClaimed: Bool { self.slot != nil }
+    var isClaimed: Bool {
+        self.slot != nil
+    }
 
     /// True while a release drain is in flight, including its final state-clearing tail.
-    var isDraining: Bool { self.drainTask != nil }
+    var isDraining: Bool {
+        self.drainTask != nil
+    }
 
     /// Snapshot of the currently claimed operation. A caller must capture this on the main
     /// actor before scheduling a later release; cleanup never looks this value up dynamically.
-    var currentClaimToken: MeetingASRPreparationClaimToken? { self.slot?.claimToken }
+    var currentClaimToken: MeetingASRPreparationClaimToken? {
+        self.slot?.claimToken
+    }
 
     @discardableResult
     func prepare(

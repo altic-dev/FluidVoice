@@ -55,7 +55,7 @@ final class SearchIndexCoordinator {
     }
 
     /// Chat metadata stays on the main actor; only immutable text fields cross it.
-    private nonisolated struct ChatFields: Sendable {
+    private nonisolated struct ChatFields {
         let id: UUID
         let revision: UInt64
         let timestamp: Date

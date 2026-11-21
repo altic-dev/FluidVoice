@@ -71,7 +71,10 @@ nonisolated struct MeetingLocalSileroActivityModel: MeetingSpeechActivityFrameMo
 }
 
 nonisolated struct MeetingSpeechActivityDetector<Model: MeetingSpeechActivityFrameModel> {
-    static var version: String { "speech-shadow-b2-v1" }
+    static var version: String {
+        "speech-shadow-b2-v1"
+    }
+
     struct Frame: Codable, Equatable {
         enum Unknown: String, Codable { case invalidInput, unscoredCoverage, contextWarmup, modelFailure, overBudget, cancelled, disabled }
         let start: Double
@@ -79,7 +82,9 @@ nonisolated struct MeetingSpeechActivityDetector<Model: MeetingSpeechActivityFra
         let probability: Float?
         let unknown: Unknown?
         /// Window-level activity only; not a voiced-duration annotation or near-end decision.
-        var active: Bool? { self.probability.map { $0 >= 0.85 } }
+        var active: Bool? {
+            self.probability.map { $0 >= 0.85 }
+        }
     }
 
     private var model: Model

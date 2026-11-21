@@ -13,13 +13,13 @@ import Foundation
 // here guesses priming, invents samples or bridges across spans that are not in the epoch.
 
 /// Sample range of one span inside its epoch's materialized buffer, in analysis order.
-nonisolated struct MeetingMaterializedSpanSamples: Equatable, Sendable {
+nonisolated struct MeetingMaterializedSpanSamples: Equatable {
     let spanID: String
     let sampleRange: Range<Int>
 }
 
 /// One epoch's 16 kHz mono analysis audio plus its exact span mappings.
-nonisolated struct MeetingMaterializedEpoch: Equatable, Sendable {
+nonisolated struct MeetingMaterializedEpoch: Equatable {
     let epochID: MeetingAnalysisEpochID
     let samples: [Float]
     let sampleRate: Double
