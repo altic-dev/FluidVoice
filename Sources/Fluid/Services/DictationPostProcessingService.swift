@@ -294,7 +294,8 @@ final class DictationPostProcessingService {
                     appName: "",
                     bundleID: "",
                     windowTitle: "",
-                    appVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
+                    appVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String,
+                    englishSpellingPreference: settings.englishSpellingPreference
                 )
             )
             settings.recordFluidIntelligenceUse(output: response.outputText)

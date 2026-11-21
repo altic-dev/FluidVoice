@@ -153,6 +153,8 @@ struct SettingsBackupPayload: Codable, Equatable {
     var automaticDictionaryPromptDelay: SettingsStore.AutomaticDictionaryPromptDelay? = nil
     // swiftlint:disable:next discouraged_optional_collection
     var autoSendDictationShortcuts: [HotkeyShortcut]? = nil
+    /// Optional so backups from before the English spelling preference still decode.
+    var englishSpellingPreference: String? = nil
 }
 
 struct AppBackupDocument: Codable, Equatable {

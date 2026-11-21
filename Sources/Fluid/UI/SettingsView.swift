@@ -204,6 +204,30 @@ struct SettingsView: View {
             .disabled(!isAvailable || blocker != nil)
     }
 
+    private func englishSpellingPicker() -> some View {
+        let selection = Binding<EnglishSpellingPreference>(
+            get: { self.settings.englishSpellingPreference },
+            set: { self.settings.englishSpellingPreference = $0 }
+        )
+        let title = self.settings.englishSpellingPreference.displayName
+        return HStack(spacing: 10) {
+            Text("Spelling")
+                .font(self.theme.typography.bodySmall)
+                .foregroundStyle(self.settingsSecondaryText)
+            FluidDropdown(title: title) {
+                Picker("Spelling", selection: selection) {
+                    ForEach(EnglishSpellingPreference.allCases, id: \.self) { preference in
+                        Text(preference.displayName).tag(preference)
+                    }
+                }
+                .pickerStyle(.inline)
+            }
+            .accessibilityLabel("English spelling")
+            .accessibilityValue(title)
+        }
+        .padding(.bottom, 4)
+    }
+
     var body: some View {
         SettingsPersistentScrollView(
             theme: self.theme,
@@ -487,6 +511,8 @@ struct SettingsView: View {
                                     VStack(alignment: .leading, spacing: 16) {
                                         self.dictationShortcutPackages
                                             .settingsSearchTarget(.primaryDictationShortcuts)
+                                        self.englishSpellingPicker()
+                                            .settingsSearchTarget(.englishSpelling)
                                         self.shortcutGroupDivider
                                         self.shortcutGroup {
                                             self.shortcutRow(
