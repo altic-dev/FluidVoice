@@ -71,9 +71,13 @@ struct OnboardingCarouselInteractionTracker: NSViewRepresentable {
             super.init(frame: .zero)
         }
 
-        required init?(coder: NSCoder) { nil }
+        required init?(coder: NSCoder) {
+            nil
+        }
 
-        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+        override func hitTest(_ point: NSPoint) -> NSView? {
+            nil
+        }
 
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()

@@ -1,15 +1,17 @@
 import AppKit
 import Foundation
 
-// Temporary close-path diagnostics. Store checkpoints before emitting one line;
-// never include transcript, application identity, or audio in these records.
+/// Temporary close-path diagnostics. Store checkpoints before emitting one line;
+/// never include transcript, application identity, or audio in these records.
 struct OverlayCloseTrace {
     private let name: String
     private let startedAt = ProcessInfo.processInfo.systemUptime
     private var previous = ProcessInfo.processInfo.systemUptime
     private var checkpoints: [(String, Double)] = []
 
-    init(_ name: String) { self.name = name }
+    init(_ name: String) {
+        self.name = name
+    }
 
     mutating func mark(_ phase: String, since: TimeInterval? = nil) {
         let now = ProcessInfo.processInfo.systemUptime
@@ -25,8 +27,8 @@ struct OverlayCloseTrace {
     }
 }
 
-// Temporary, bounded main-run-loop probe. Both observer and removal run only
-// on the main thread. Ignore sleep intervals; report occupied intervals >8ms.
+/// Temporary, bounded main-run-loop probe. Both observer and removal run only
+/// on the main thread. Ignore sleep intervals; report occupied intervals >8ms.
 @MainActor
 enum OverlayCloseRunLoopProbe {
     private static var observer: CFRunLoopObserver?
@@ -55,7 +57,7 @@ enum OverlayCloseRunLoopProbe {
     }
 
     private final class ProbeState: @unchecked Sendable {
-        // Explicitly nonisolated: on macOS 15.4+ the synthesized main-actor deinit can abort until the OS runtime has the fix (swiftlang/swift#88036).
+        /// Explicitly nonisolated: on macOS 15.4+ the synthesized main-actor deinit can abort until the OS runtime has the fix (swiftlang/swift#88036).
         nonisolated deinit {}
 
         var previousAt = ProcessInfo.processInfo.systemUptime

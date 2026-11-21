@@ -1,7 +1,7 @@
 import CoreMedia
 import Foundation
 
-nonisolated struct MeetingAECClockAttestor: Equatable, Sendable {
+nonisolated struct MeetingAECClockAttestor: Equatable {
     private(set) var startGrid: Int64?
     private(set) var nextExpectedGrid: Int64?
     private(set) var pairedFrameCount = 0
@@ -34,15 +34,24 @@ nonisolated struct MeetingAECClockAttestor: Equatable, Sendable {
 /// Bounded, serial-owner joiner for the two 48 kHz SCK PCM timelines. It never fills a render gap
 /// with zeros. All timestamps emitted here are derived from an original callback PTS plus an exact
 /// source-sample offset.
-nonisolated struct MeetingAECStreamJoiner: Sendable {
-    private struct BufferedBlock: Equatable, Sendable {
+nonisolated struct MeetingAECStreamJoiner {
+    private struct BufferedBlock: Equatable {
         let source: MeetingAECPCMBlock
         let startGrid: Int64
         var consumed = 0
 
-        var effectiveStart: Int64 { self.startGrid + Int64(self.consumed) }
-        var endGrid: Int64 { self.startGrid + Int64(self.source.samples.count) }
-        var remainingCount: Int { self.source.samples.count - self.consumed }
+        var effectiveStart: Int64 {
+            self.startGrid + Int64(self.consumed)
+        }
+
+        var endGrid: Int64 {
+            self.startGrid + Int64(self.source.samples.count)
+        }
+
+        var remainingCount: Int {
+            self.source.samples.count - self.consumed
+        }
+
         var effectivePresentationTime: CMTime {
             CMTimeAdd(
                 self.source.presentationTime,
@@ -51,7 +60,7 @@ nonisolated struct MeetingAECStreamJoiner: Sendable {
         }
     }
 
-    private struct TrackState: Equatable, Sendable {
+    private struct TrackState: Equatable {
         var anchorPresentationTime: CMTime?
         var anchorGrid: Int64?
         var cumulativeSamples: Int64 = 0
@@ -59,9 +68,17 @@ nonisolated struct MeetingAECStreamJoiner: Sendable {
         var format: MeetingAECPCMFormat?
         var blocks: [BufferedBlock] = []
 
-        var retainedSamples: Int { self.blocks.reduce(0) { $0 + $1.remainingCount } }
-        var latestEndGrid: Int64? { self.blocks.last?.endGrid }
-        var firstGrid: Int64? { self.blocks.first?.effectiveStart }
+        var retainedSamples: Int {
+            self.blocks.reduce(0) { $0 + $1.remainingCount }
+        }
+
+        var latestEndGrid: Int64? {
+            self.blocks.last?.endGrid
+        }
+
+        var firstGrid: Int64? {
+            self.blocks.first?.effectiveStart
+        }
     }
 
     private(set) var diagnostics = MeetingAECDiagnostics()

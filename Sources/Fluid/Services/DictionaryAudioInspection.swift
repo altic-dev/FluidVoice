@@ -2,16 +2,18 @@
 import Foundation
 
 /// Bounded local diagnostic evidence. Never used to change production matching.
-nonisolated struct DictionaryAudioInspection: Codable, Equatable, Sendable {
-    struct Frames: Codable, Equatable, Sendable {
+nonisolated struct DictionaryAudioInspection: Codable, Equatable {
+    struct Frames: Codable, Equatable {
         let offset: Double
         let frameDuration: Double
         let hiddenSize: Int
         let values: [Float]
-        var count: Int { self.hiddenSize > 0 ? self.values.count / self.hiddenSize : 0 }
+        var count: Int {
+            self.hiddenSize > 0 ? self.values.count / self.hiddenSize : 0
+        }
     }
 
-    struct Word: Codable, Equatable, Sendable {
+    struct Word: Codable, Equatable {
         let text: String
         let start: Double
         let end: Double
@@ -23,8 +25,13 @@ nonisolated struct DictionaryAudioInspection: Codable, Equatable, Sendable {
     let words: [Word]
     let selectedStart: Double
     let selectedEnd: Double
-    var duration: Double { Double(self.recordedSampleCount) / 16_000 }
-    var paddedDuration: Double { Double(self.samples.count) / 16_000 }
+    var duration: Double {
+        Double(self.recordedSampleCount) / 16_000
+    }
+
+    var paddedDuration: Double {
+        Double(self.samples.count) / 16_000
+    }
 
     var isValid: Bool {
         guard !self.samples.isEmpty, self.samples.count <= 16_000 * 120,
@@ -80,12 +87,12 @@ nonisolated struct DictionaryAudioInspection: Codable, Equatable, Sendable {
     }
 }
 
-nonisolated struct DictionaryAudioCut: Equatable, Sendable {
+nonisolated struct DictionaryAudioCut: Equatable {
     var start: Double
     var end: Double
 }
 
-nonisolated struct DictionaryAudioCutMetrics: Sendable {
+nonisolated struct DictionaryAudioCutMetrics {
     let leadingQuiet: Double
     let trailingQuiet: Double
     let suggested: DictionaryAudioCut?
@@ -168,8 +175,8 @@ actor DictionaryAudioInspector {
     }
 }
 
-// Compact Float32 blobs avoid serializing millions of boxed floating-point values.
-// Supported Macs are little-endian; the stored format is explicitly versioned.
+/// Compact Float32 blobs avoid serializing millions of boxed floating-point values.
+/// Supported Macs are little-endian; the stored format is explicitly versioned.
 extension DictionaryAudioInspection {
     private enum CodingKeys: String, CodingKey {
         case version, samples, recordedSampleCount, frames, words, selectedStart, selectedEnd

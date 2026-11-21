@@ -12,7 +12,7 @@ import Foundation
 /// One speaker-active interval from a single Nemotron epoch run, in seconds from that epoch's
 /// materialized audio start. Slot indices are Nemotron's own and are meaningful only inside the
 /// epoch that produced them.
-nonisolated struct MeetingNemotronSpeakerSegment: Equatable, Sendable {
+nonisolated struct MeetingNemotronSpeakerSegment: Equatable {
     let slotIndex: Int
     let start: TimeInterval
     let end: TimeInterval
@@ -38,14 +38,14 @@ nonisolated protocol MeetingParakeetASRSession: Sendable {
     ) async throws -> (result: ASRTranscriptionResult, words: [ASRWordTiming])
 }
 
-nonisolated struct MeetingNemotronPhaseResult: Sendable {
+nonisolated struct MeetingNemotronPhaseResult {
     var activity: [MeetingBackendSpeakerActivity] = []
     var failures: [MeetingAnalysisEpochID: String] = [:]
     var voiceSamples: [MeetingSpeakerVoiceSamples] = []
     var voiceProfiles: [MeetingSpeakerVoiceProfile] = []
 }
 
-nonisolated struct MeetingParakeetEpochOutput: Sendable {
+nonisolated struct MeetingParakeetEpochOutput {
     let epochID: MeetingAnalysisEpochID
     let text: String
     let words: [ASRWordTiming]
@@ -54,7 +54,7 @@ nonisolated struct MeetingParakeetEpochOutput: Sendable {
     let spanSamples: [MeetingMaterializedSpanSamples]
 }
 
-nonisolated struct MeetingParakeetPhaseResult: Sendable {
+nonisolated struct MeetingParakeetPhaseResult {
     var outputs: [MeetingParakeetEpochOutput] = []
     var failures: [MeetingAnalysisEpochID: String] = [:]
 }
@@ -87,5 +87,7 @@ extension MeetingParakeetNemotronRunning {
     /// Existing injected runtimes without a voice encoder retain separate speaker identities.
     nonisolated func speakerVoiceProfiles(
         samples _: [MeetingSpeakerVoiceSamples]
-    ) async throws -> [MeetingSpeakerVoiceProfile] { [] }
+    ) async throws -> [MeetingSpeakerVoiceProfile] {
+        []
+    }
 }

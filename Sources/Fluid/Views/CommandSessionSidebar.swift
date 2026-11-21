@@ -37,7 +37,9 @@ struct CommandSessionSidebar: View {
         case active = "Active"
         case archived = "Archived"
 
-        var isArchived: Bool { self == .archived }
+        var isArchived: Bool {
+            self == .archived
+        }
     }
 
     private struct SessionPresentation: Equatable {
@@ -301,9 +303,17 @@ struct CommandSessionSidebar: View {
             case archive
         }
 
-        private var showsActions: Bool { self.keyboardSelected || self.hovered || self.focusedControl != nil }
-        private var actionTitle: String { self.row.isArchived ? "Restore session" : "Archive session" }
-        private var openHint: String { self.row.isArchived ? "Restore and open this session" : "Open this session" }
+        private var showsActions: Bool {
+            self.keyboardSelected || self.hovered || self.focusedControl != nil
+        }
+
+        private var actionTitle: String {
+            self.row.isArchived ? "Restore session" : "Archive session"
+        }
+
+        private var openHint: String {
+            self.row.isArchived ? "Restore and open this session" : "Open this session"
+        }
 
         var body: some View {
             Button {

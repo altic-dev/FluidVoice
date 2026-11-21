@@ -383,8 +383,13 @@ final class AppServices: ObservableObject {
     }
 
     /// Read-only checks for MeetingAutoDetector: never force either lazy service into existence.
-    var isMeetingSessionCoordinatorMaterialized: Bool { self._meetingSessionCoordinator != nil }
-    var activeExclusiveActivityIfASRMaterialized: ASRExclusiveActivity? { self._asr?.activeExclusiveActivity }
+    var isMeetingSessionCoordinatorMaterialized: Bool {
+        self._meetingSessionCoordinator != nil
+    }
+
+    var activeExclusiveActivityIfASRMaterialized: ASRExclusiveActivity? {
+        self._asr?.activeExclusiveActivity
+    }
 
     /// Legacy UI guard; ASRService is the atomic source of truth for acquisition.
     var hasActiveMeetingActivity: Bool {

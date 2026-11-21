@@ -103,8 +103,8 @@ nonisolated enum MeetingCodecPriming: Codable, Equatable {
     }
 }
 
-// Keep the synthesized legacy shape (`{"unknown":"..."}` / `{"measuredFrames":N}`)
-// readable while adding the explicit PCM representation. New writes use the same keyed shape.
+/// Keep the synthesized legacy shape (`{"unknown":"..."}` / `{"measuredFrames":N}`)
+/// readable while adding the explicit PCM representation. New writes use the same keyed shape.
 nonisolated extension MeetingCodecPriming {
     private enum CodingKeys: String, CodingKey { case measuredFrames, unknown, notApplicable }
     private enum AssociatedValueKeys: String, CodingKey { case _0 }

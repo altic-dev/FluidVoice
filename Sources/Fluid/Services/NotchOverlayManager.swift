@@ -68,11 +68,15 @@ final class NotchOverlayManager {
 
     /// Track if expanded command output is showing
     private(set) var isCommandOutputExpanded: Bool = false
-    var hasCommandOutputToDismiss: Bool { self.isCommandOutputExpanded || self.commandOutputPresentationTask != nil }
+    var hasCommandOutputToDismiss: Bool {
+        self.isCommandOutputExpanded || self.commandOutputPresentationTask != nil
+    }
 
     /// Track if bottom overlay is visible
     private(set) var isBottomOverlayVisible: Bool = false
-    var isOverlayVisible: Bool { self.state == .visible }
+    var isOverlayVisible: Bool {
+        self.state == .visible
+    }
 
     // Callbacks for command output interaction
     var onCommandOutputDismiss: (() -> Void)?

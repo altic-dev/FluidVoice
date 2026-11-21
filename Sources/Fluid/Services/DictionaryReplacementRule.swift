@@ -1,7 +1,7 @@
 import Foundation
 
 /// Immutable literal replacement rule shared by dictation and completed meeting turns.
-nonisolated struct DictionaryReplacementRule: Sendable {
+nonisolated struct DictionaryReplacementRule {
     let entryID: UUID
     let trigger: String
     let regex: NSRegularExpression

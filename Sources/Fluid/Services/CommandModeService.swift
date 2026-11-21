@@ -17,7 +17,7 @@ final class CommandModeService: ObservableObject {
     private var currentTurnCount = 0
     private let maxTurns = 20
 
-    // Flag to enable notch output display
+    /// Flag to enable notch output display
     var enableNotchOutput: Bool = true
 
     // Streaming UI update throttling - adaptive rate based on content length

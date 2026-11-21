@@ -1,7 +1,7 @@
 import CryptoKit
 import Foundation
 
-nonisolated struct MeetingPostProcessingRequest: Sendable {
+nonisolated struct MeetingPostProcessingRequest {
     let sessionID: UUID
     let attemptID: UUID
     let transcriptHash: String
@@ -11,12 +11,12 @@ nonisolated struct MeetingPostProcessingRequest: Sendable {
     let coverageGaps: [MeetingTranscriptCoverageGap]
 }
 
-nonisolated struct MeetingPostProcessingOutput: Codable, Equatable, Sendable {
+nonisolated struct MeetingPostProcessingOutput: Codable, Equatable {
     let summary: String
     let sourceSegmentIDs: [UUID]
 }
 
-nonisolated struct MeetingPostProcessingArtifact: Codable, Equatable, Sendable {
+nonisolated struct MeetingPostProcessingArtifact: Codable, Equatable {
     let attemptID: UUID
     let transcriptHash: String
     let providerID: String
@@ -47,7 +47,9 @@ final class MeetingPostProcessingRegistry {
     static let shared = MeetingPostProcessingRegistry()
     private let residency: MeetingModelResidencyCoordinator
 
-    init(residency: MeetingModelResidencyCoordinator = .shared) { self.residency = residency }
+    init(residency: MeetingModelResidencyCoordinator = .shared) {
+        self.residency = residency
+    }
 
     private(set) var provider: (any MeetingPostProcessingProviding)?
 

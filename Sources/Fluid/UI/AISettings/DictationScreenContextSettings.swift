@@ -68,12 +68,14 @@ struct DictationScreenContextSettings: View {
                     .disabled(self.isBusy || self.permission.isRequesting)
                 }
 
-                Text(self.permission.requiresSettings
-                    ? "Allow FluidVoice under Screen & System Audio Recording."
-                    : "macOS calls this Screen Recording access.")
-                    .font(self.theme.typography.caption)
-                    .foregroundStyle(self.theme.palette.secondaryText)
-                    .fixedSize(horizontal: false, vertical: true)
+                Text(
+                    self.permission.requiresSettings
+                        ? "Allow FluidVoice under Screen & System Audio Recording."
+                        : "macOS calls this Screen Recording access."
+                )
+                .font(self.theme.typography.caption)
+                .foregroundStyle(self.theme.palette.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
             }
         }
     }

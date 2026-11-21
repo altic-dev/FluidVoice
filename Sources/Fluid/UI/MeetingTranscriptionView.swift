@@ -4,7 +4,7 @@ import Combine
 import CoreGraphics
 import SwiftUI
 
-nonisolated struct MeetingApplicationOption: Identifiable, Equatable, Sendable {
+nonisolated struct MeetingApplicationOption: Identifiable, Equatable {
     let id: String
     let identity: MeetingApplicationIdentity
     var icon: MeetingApplicationIcon?
@@ -1239,15 +1239,15 @@ struct MeetingTranscriptionView: View {
         }
     }
 
-    // Restore updates future setup only; a running meeting and an open editing sheet
-    // keep their draft until the existing activity/dismissal events reach a safe point.
+    /// Restore updates future setup only; a running meeting and an open editing sheet
+    /// keep their draft until the existing activity/dismissal events reach a safe point.
     private var canRefreshSetupAfterBackupRestore: Bool {
         self.coordinator.isQuiescent && !self.isStarting && !self.isStopping &&
             !self.isRetrying && !self.isRefreshingSources && !self.isShowingMeetingSettings
     }
 
-    // Refresh only the future app choice. An open sheet or active capture keeps
-    // its current input until it closes; rapid changes coalesce to the latest choice.
+    /// Refresh only the future app choice. An open sheet or active capture keeps
+    /// its current input until it closes; rapid changes coalesce to the latest choice.
     private func applyPendingSourceChoiceRefresh() {
         guard self.pendingSourceChoiceRefresh, self.canRefreshSetupAfterBackupRestore else { return }
         self.pendingSourceChoiceRefresh = false
@@ -1588,7 +1588,6 @@ struct MeetingTranscriptionCanvas: View {
         .background(self.theme.palette.windowBackground)
     }
 
-    @ViewBuilder
     private var canvasContent: some View {
         Group {
             switch self.state {
@@ -2003,13 +2002,17 @@ private struct MeetingSetupCanvas: View {
     @ViewBuilder private var permissionAction: some View {
         if !self.readiness.isCheckingSources,
            self.readiness.showScreenRecordingSettingsAction ||
-           (!self.canStart && (self.readiness.showMicrophoneSettingsAction ||
-                   !self.readiness.microphoneReady || self.draft.selectedMicrophoneID == nil))
+           (!self.canStart && (
+               self.readiness.showMicrophoneSettingsAction ||
+                   !self.readiness.microphoneReady || self.draft.selectedMicrophoneID == nil
+           ))
         {
             Button(
                 self.readiness.showMicrophoneSettingsAction ? "Allow microphone access" :
-                    (self.readiness.showScreenRecordingSettingsAction ? "Allow meeting audio access" :
-                        "Set up microphone…"),
+                    (
+                        self.readiness.showScreenRecordingSettingsAction ? "Allow meeting audio access" :
+                            "Set up microphone…"
+                    ),
                 systemImage: self.readiness.showMicrophoneSettingsAction || self.readiness.showScreenRecordingSettingsAction ? "arrow.up.right" : "gearshape",
                 action: self.onRepairSetup
             )

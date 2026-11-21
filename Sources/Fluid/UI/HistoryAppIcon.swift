@@ -8,7 +8,9 @@ private final class HistoryAppIconCache {
 
     private final class Result {
         let image: NSImage?
-        init(_ image: NSImage?) { self.image = image }
+        init(_ image: NSImage?) {
+            self.image = image
+        }
     }
 
     private let cache = NSCache<NSString, Result>()

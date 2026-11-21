@@ -2,18 +2,18 @@ import Foundation
 
 /// Stage A value contract only. No production call site evaluates or persists this evidence.
 /// All times are seconds in the original session capture timeline, never display-adjusted time.
-nonisolated struct MeetingMicrophoneEvidence: Equatable, Sendable {
-    enum UnknownReason: String, Equatable, Sendable {
+nonisolated struct MeetingMicrophoneEvidence: Equatable {
+    enum UnknownReason: String, Equatable {
         case notMeasured, referenceUnavailable, noDelayLock, unscoredCoverage
         case scoredInconclusive, detectorUnavailable, overBudget, staleEpoch
     }
 
-    enum Measurement<Value: Equatable & Sendable>: Equatable, Sendable {
+    enum Measurement<Value: Equatable & Sendable>: Equatable {
         case unavailable(UnknownReason)
         case measured(Value)
     }
 
-    struct Interval: Equatable, Sendable {
+    struct Interval: Equatable {
         let start: Double
         let end: Double
         init?(start: Double, end: Double) {
@@ -23,7 +23,7 @@ nonisolated struct MeetingMicrophoneEvidence: Equatable, Sendable {
         }
     }
 
-    struct Fraction: Equatable, Sendable {
+    struct Fraction: Equatable {
         let value: Double
         init?(_ value: Double) {
             guard value.isFinite, (0...1).contains(value) else { return nil }
@@ -31,13 +31,13 @@ nonisolated struct MeetingMicrophoneEvidence: Equatable, Sendable {
         }
     }
 
-    enum Observation: Equatable, Sendable {
+    enum Observation: Equatable {
         /// Multiple turns can share this key; no individual turn can bless the shared centroid.
         case clusterLabel(String)
         case unavailable
     }
 
-    struct Identity: Equatable, Sendable {
+    struct Identity: Equatable {
         let sessionID: UUID
         let chunkID: UUID
         let turnIndex: Int
@@ -55,28 +55,31 @@ nonisolated struct MeetingMicrophoneEvidence: Equatable, Sendable {
             self.observation = observation
         }
 
-        var turnKey: String { "microphone:\(self.chunkID.uuidString):\(self.turnIndex)" }
+        var turnKey: String {
+            "microphone:\(self.chunkID.uuidString):\(self.turnIndex)"
+        }
+
         var observationKey: String? {
             guard case let .clusterLabel(label) = observation else { return nil }
             return "microphone:\(self.chunkID.uuidString):\(label)"
         }
     }
 
-    enum PlaybackContext: Equatable, Sendable {
+    enum PlaybackContext: Equatable {
         case scoreablePlayback, verifiedNoPlayback, playbackExpectedButUnscoreable, unknown
     }
 
-    enum SpeechActivity: Equatable, Sendable {
+    enum SpeechActivity: Equatable {
         /// Activity alone may be leaked playback. It cannot establish near-end speech.
         case detected, notDetected
     }
 
-    enum EmbeddingProvenance: Equatable, Sendable {
+    enum EmbeddingProvenance: Equatable {
         case unavailable, sharedClusterCentroid, independentInterval
     }
 
-    struct TemporalDuplicate: Equatable, Sendable {
-        enum State: Equatable, Sendable {
+    struct TemporalDuplicate: Equatable {
+        enum State: Equatable {
             case insufficientEvidence, observing, duplicateCandidate, duplicateSupported
         }
 
@@ -121,17 +124,17 @@ nonisolated protocol MeetingPlaybackDuplicateEvidenceSource: Sendable {
 /// Conservative proposals, NOT calibrated admission. No acceptedSpeech/noSupportedSpeech can
 /// be inferred from the Stage A activity/echo inputs alone. It cannot hide text or admit profiles.
 nonisolated enum MeetingMicrophoneShadowPolicy {
-    enum ProposedOutcome: Equatable, Sendable {
+    enum ProposedOutcome: Equatable {
         case uncertainCandidate
     }
 
-    enum Reason: Equatable, Sendable {
+    enum Reason: Equatable {
         case legacyRescueDisagreement, playbackDuplicateCandidate, speechActivityIsNotNearEndProof
         case negativeActivityIsNotSpeechAbsenceProof, insufficientEvidence
         case staleTemporalEvidence, invalidTemporalEvidence, missingPlaybackContext
     }
 
-    struct Evaluation: Equatable, Sendable {
+    struct Evaluation: Equatable {
         let outcome: ProposedOutcome = .uncertainCandidate
         let experimental = true
         let reason: Reason

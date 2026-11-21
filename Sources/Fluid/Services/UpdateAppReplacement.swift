@@ -5,7 +5,7 @@ import Foundation
 /// The caller validates `stagedAppURL` and saves its durable rollback backup before commit.
 /// All methods perform disk IO and must run outside the main actor.
 final nonisolated class UpdateAppReplacement: @unchecked Sendable {
-    nonisolated struct Operations: Sendable {
+    nonisolated struct Operations {
         var createDirectory: @Sendable (URL) throws -> Void
         var copyBundle: @Sendable (URL, URL) throws -> Void
         var exchangeBundles: @Sendable (URL, URL) throws -> Void
@@ -42,7 +42,7 @@ final nonisolated class UpdateAppReplacement: @unchecked Sendable {
         )
     }
 
-    nonisolated enum Operation: String, Sendable {
+    nonisolated enum Operation: String {
         case preparation, commit, recovery, cleanup
     }
 
@@ -65,7 +65,10 @@ final nonisolated class UpdateAppReplacement: @unchecked Sendable {
     let stagedAppURL: URL
     let stagingDirectoryURL: URL
     /// After commit this contains the outgoing bundle, until recovery or finalization.
-    var recoveryAppURL: URL { self.stagedAppURL }
+    var recoveryAppURL: URL {
+        self.stagedAppURL
+    }
+
     private let operations: Operations
     private var processLock: ProcessLock?
     private let installedIdentity: BundleIdentity
@@ -209,7 +212,10 @@ final nonisolated class UpdateAppReplacement: @unchecked Sendable {
         )
     }
 
-    private var ownershipURL: URL { self.stagingDirectoryURL.appendingPathComponent("ownership") }
+    private var ownershipURL: URL {
+        self.stagingDirectoryURL.appendingPathComponent("ownership")
+    }
+
     private var ownershipData: Data {
         Data("FluidVoiceUpdateStage-v1\n\(self.installedAppURL.standardizedFileURL.path)\n".utf8)
     }
@@ -235,7 +241,7 @@ final nonisolated class UpdateAppReplacement: @unchecked Sendable {
         }
     }
 
-    private struct BundleIdentity: Equatable, Sendable {
+    private struct BundleIdentity: Equatable {
         private let device: dev_t
         private let inode: ino_t
 

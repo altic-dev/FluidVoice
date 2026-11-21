@@ -9,7 +9,7 @@ nonisolated enum ParakeetArchiveDownloader {
     typealias StageValidator = @Sendable (URL) async throws -> Void
     private static let publicationLock = NSLock()
 
-    private struct InstallationIO: Sendable {
+    private struct InstallationIO {
         let transport: Transport?
         let capacityReader: CapacityReader?
         let revisionWriter: RevisionWriter

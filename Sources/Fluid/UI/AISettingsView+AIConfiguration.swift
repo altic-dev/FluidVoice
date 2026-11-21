@@ -508,7 +508,7 @@ extension AIEnhancementSettingsView {
         let color: Color
     }
 
-    // Use cached provider items from ViewModel for scroll performance
+    /// Use cached provider items from ViewModel for scroll performance
     private var verifiedProviderItems: [ProviderItem] {
         self.viewModel.cachedVerifiedProviderItems.filter {
             !PrivateAIProviderFeature.shared.isAvailable || $0.id != PrivateAIProviderFeature.shared.providerID
@@ -527,7 +527,6 @@ extension AIEnhancementSettingsView {
 
     /// Shared companion button for provider picker rows — identical size/style everywhere.
     /// Uses a fixed square frame so icon-only buttons don't get horizontal padding from CompactButtonStyle.
-    @ViewBuilder
     func companionIconButton(
         systemName: String,
         help: String,
@@ -543,7 +542,6 @@ extension AIEnhancementSettingsView {
     }
 
     /// Shared companion button with loading state — for refresh buttons.
-    @ViewBuilder
     func companionIconButton(
         isRefreshing: Bool,
         disabled: Bool = false,
@@ -1794,8 +1792,8 @@ extension AIEnhancementSettingsView {
         self.viewModel.connectionStatus = self.viewModel.connectionStatus(for: providerID)
     }
 
-    // Match the main shortcut's routing without reading API keys or resolving an
-    // app-specific override in the view. Merely opening Manage never selects it.
+    /// Match the main shortcut's routing without reading API keys or resolving an
+    /// app-specific override in the view. Merely opening Manage never selects it.
     private var primaryDefaultProviderID: String {
         let selection = self.viewModel.dictationPromptSelection(for: .primary)
         return DictationDefaultProvider.providerID(
@@ -2213,9 +2211,13 @@ extension AIEnhancementSettingsView {
                     }
                 }
                 .fluidButton(.glass, size: .compact)
-                .disabled(!isBuiltIn &&
-                    (self.viewModel.editProviderName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
-                        self.viewModel.editProviderBaseURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty))
+                .disabled(
+                    !isBuiltIn &&
+                        (
+                            self.viewModel.editProviderName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+                                self.viewModel.editProviderBaseURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        )
+                )
 
                 Button("Cancel") {
                     self.viewModel.clearEditProviderDraft()
@@ -2278,11 +2280,13 @@ extension AIEnhancementSettingsView {
         }
         .font(.fluidSystem(.caption)).foregroundStyle(Color.fluidGreen)
         .padding(.horizontal, 12).padding(.vertical, 8)
-        .background(RoundedRectangle(cornerRadius: 8).fill(Color.fluidGreen.opacity(0.15))
-            .overlay(RoundedRectangle(cornerRadius: 8).stroke(
-                Color.fluidGreen.opacity(0.3),
-                lineWidth: 1
-            )))
+        .background(
+            RoundedRectangle(cornerRadius: 8).fill(Color.fluidGreen.opacity(0.15))
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(
+                    Color.fluidGreen.opacity(0.3),
+                    lineWidth: 1
+                ))
+        )
     }
 
     var appleIntelligenceModelRow: some View {
@@ -2548,9 +2552,13 @@ extension AIEnhancementSettingsView {
                 }
                 .fluidCompactButton(isReady: true)
                 .frame(minWidth: AISettingsLayout.primaryActionMinWidth, minHeight: AISettingsLayout.controlHeight)
-                .disabled(self.viewModel.isTestingConnection || self.viewModel.isModelVerified(for: self.viewModel.selectedProviderID) ||
-                    (!self.viewModel.isLocalEndpoint(self.viewModel.openAIBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)) &&
-                        selectedProviderAPIKey.isEmpty))
+                .disabled(
+                    self.viewModel.isTestingConnection || self.viewModel.isModelVerified(for: self.viewModel.selectedProviderID) ||
+                        (
+                            !self.viewModel.isLocalEndpoint(self.viewModel.openAIBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)) &&
+                                selectedProviderAPIKey.isEmpty
+                        )
+                )
             }
 
             // Connection Status Display
@@ -2634,8 +2642,10 @@ extension AIEnhancementSettingsView {
                 }
                 .fluidButton(.glass, size: .compact)
                 .frame(minWidth: AISettingsLayout.actionMinWidth, minHeight: AISettingsLayout.controlHeight)
-                .disabled(!self.viewModel.isLocalEndpoint(self.viewModel.openAIBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)) &&
-                    self.viewModel.newProviderApiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .disabled(
+                    !self.viewModel.isLocalEndpoint(self.viewModel.openAIBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)) &&
+                        self.viewModel.newProviderApiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                )
             }
         }
         .padding()

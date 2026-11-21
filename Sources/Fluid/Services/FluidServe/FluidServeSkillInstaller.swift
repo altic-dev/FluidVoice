@@ -6,11 +6,13 @@ nonisolated enum FluidServeSkillInstaller {
     static let skillName = FluidServeSkill.name
     static let marker = FluidServeSkill.marker
 
-    enum Agent: String, CaseIterable, Identifiable, Sendable {
+    enum Agent: String, CaseIterable, Identifiable {
         case claudeCode
         case codex
 
-        var id: String { self.rawValue }
+        var id: String {
+            self.rawValue
+        }
 
         var displayName: String {
             switch self {
@@ -28,7 +30,7 @@ nonisolated enum FluidServeSkillInstaller {
         }
     }
 
-    enum Status: Equatable, Sendable {
+    enum Status: Equatable {
         /// The tool has never been set up on this Mac.
         case agentNotFound
         case notInstalled

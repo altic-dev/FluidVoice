@@ -3,31 +3,31 @@ import Foundation
 import MediaRemoteAdapter
 #endif
 
-nonisolated struct MediaPlaybackSnapshot: Equatable, Sendable {
+nonisolated struct MediaPlaybackSnapshot: Equatable {
     let bundleIdentifier: String
     let processID: Int32
     let title: String?
     let isPlaying: Bool?
 
-    // Safari exposes its WebKit media process, not a tab ID. This comparison
-    // can reject a changed player/item, but cannot prove exact-tab identity.
+    /// Safari exposes its WebKit media process, not a tab ID. This comparison
+    /// can reject a changed player/item, but cannot prove exact-tab identity.
     func matches(_ other: Self) -> Bool {
         self.bundleIdentifier == other.bundleIdentifier &&
             self.processID == other.processID && self.title == other.title
     }
 }
 
-nonisolated enum MediaPlaybackQueryResult: Sendable {
+nonisolated enum MediaPlaybackQueryResult {
     case snapshot(MediaPlaybackSnapshot)
     case unavailable(String)
 }
 
-nonisolated enum MediaPlaybackCommand: String, Sendable {
+nonisolated enum MediaPlaybackCommand: String {
     case pause
     case play
 }
 
-nonisolated enum MediaPlaybackCommandResult: Sendable {
+nonisolated enum MediaPlaybackCommandResult {
     /// The helper exited successfully. This is NOT acknowledgement from the player.
     case helperCompleted
     case failed(String)
@@ -135,7 +135,7 @@ final nonisolated class MediaPlaybackProcessTransport: MediaPlaybackTransport, @
     }
 }
 
-nonisolated struct MediaHelperResult: Sendable {
+nonisolated struct MediaHelperResult {
     let output: Data
     let failure: String?
 }
@@ -192,7 +192,9 @@ private final nonisolated class MediaHelperDeadline: @unchecked Sendable {
     private var finished = false
     private var expired = false
 
-    init(process: Process) { self.process = process }
+    init(process: Process) {
+        self.process = process
+    }
 
     func expire() {
         self.lock.lock()
@@ -217,7 +219,9 @@ private final nonisolated class MediaHelperBuffer: @unchecked Sendable {
     private var data = Data()
     private var didOverflow = false
 
-    init(limit: Int) { self.limit = limit }
+    init(limit: Int) {
+        self.limit = limit
+    }
 
     var overflowed: Bool {
         self.lock.lock()

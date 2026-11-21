@@ -165,8 +165,8 @@ struct HotkeyShortcut: Codable, Equatable {
 extension HotkeyShortcut {
     static let relevantModifierMask: NSEvent.ModifierFlags = [.function, .command, .option, .control, .shift]
 
-    // NSEvent and CGEvent retain physical sides in the device-dependent IOKit bits.
-    // Keeping them in the existing encoded flags preserves old, either-side bindings.
+    /// NSEvent and CGEvent retain physical sides in the device-dependent IOKit bits.
+    /// Keeping them in the existing encoded flags preserves old, either-side bindings.
     private static let modifierSides: [(keyCode: UInt16, mask: UInt)] = [
         (55, UInt(NX_DEVICELCMDKEYMASK)), (54, UInt(NX_DEVICERCMDKEYMASK)),
         (58, UInt(NX_DEVICELALTKEYMASK)), (61, UInt(NX_DEVICERALTKEYMASK)),

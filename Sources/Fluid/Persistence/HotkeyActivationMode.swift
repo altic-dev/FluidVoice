@@ -3,7 +3,9 @@ import Foundation
 enum HotkeyActivationMode: String, Codable, CaseIterable, Identifiable {
     case toggle, hold, automatic
 
-    var id: String { self.rawValue }
+    var id: String {
+        self.rawValue
+    }
 
     var displayName: String {
         switch self {

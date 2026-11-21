@@ -72,7 +72,7 @@ nonisolated struct MeetingMicrophonePTSClock {
         self.framesSinceAnchor = 0
     }
 
-    // hostTime nil iff isHostTimeValid false; 0 is a legitimate mach tick, not a sentinel
+    /// hostTime nil iff isHostTimeValid false; 0 is a legitimate mach tick, not a sentinel
     mutating func stamp(hostTime: UInt64?, frameCount: Int) -> Outcome {
         guard let hostTime else {
             return self.stampInvalid(frameCount: frameCount)
@@ -266,7 +266,7 @@ nonisolated func meetingMicrophoneSynthesizeSampleBuffer(
 // MARK: - Binding
 
 /// Verified outcome of binding the AUHAL input unit to a specific CoreAudio device (plan §6).
-nonisolated enum MeetingMicrophoneBindingOutcome: Equatable, Sendable {
+nonisolated enum MeetingMicrophoneBindingOutcome: Equatable {
     case boundVerified(AudioObjectID)
     /// Bind failed but the default input already IS the requested device (Bluetooth/aggregate).
     case defaultMatchesRequested
@@ -333,7 +333,7 @@ nonisolated enum MeetingMicrophoneBindDecision {
 // MARK: - Settled configuration
 
 /// What the session actually got, not what it asked for; `Codable` for §7 provenance at rest.
-nonisolated struct MeetingMicrophoneSettledConfig: Codable, Equatable, Sendable {
+nonisolated struct MeetingMicrophoneSettledConfig: Codable, Equatable {
     var requestedMicrophone: MeetingMicrophoneIdentity
     var bindingOutcome: MeetingMicrophoneBindingOutcome
     /// TODO(probe): hard-code the measured winner; the alternate order is probe-only, never shipped.
@@ -350,7 +350,7 @@ nonisolated struct MeetingMicrophoneSettledConfig: Codable, Equatable, Sendable 
 // MARK: - Voice-processing read-back probe
 
 /// One exact `AudioUnitGetProperty` result. A failed read never carries a stale value.
-nonisolated struct MeetingAudioUnitUInt32Readback: Codable, Equatable, Sendable {
+nonisolated struct MeetingAudioUnitUInt32Readback: Codable, Equatable {
     var propertyID: UInt32
     var scope: UInt32
     var element: UInt32
@@ -371,10 +371,12 @@ nonisolated struct MeetingAudioUnitUInt32Readback: Codable, Equatable, Sendable 
         self.value = status == noErr ? value : nil
     }
 
-    var succeeded: Bool { self.status == noErr }
+    var succeeded: Bool {
+        self.status == noErr
+    }
 }
 
-nonisolated struct MeetingAudioUnitDuckingReadback: Codable, Equatable, Sendable {
+nonisolated struct MeetingAudioUnitDuckingReadback: Codable, Equatable {
     var propertyID: UInt32
     var scope: UInt32
     var element: UInt32
@@ -399,7 +401,7 @@ nonisolated struct MeetingAudioUnitDuckingReadback: Codable, Equatable, Sendable
     }
 }
 
-nonisolated struct MeetingAudioFormatProbeReadback: Codable, Equatable, Sendable {
+nonisolated struct MeetingAudioFormatProbeReadback: Codable, Equatable {
     var sampleRate: Double
     var channelCount: UInt32
     var commonFormatRawValue: UInt
@@ -413,7 +415,7 @@ nonisolated struct MeetingAudioFormatProbeReadback: Codable, Equatable, Sendable
     }
 }
 
-nonisolated struct MeetingAudioTimeProbeReadback: Codable, Equatable, Sendable {
+nonisolated struct MeetingAudioTimeProbeReadback: Codable, Equatable {
     var hostTime: UInt64?
     var sampleTime: Int64?
     var sampleRate: Double?
@@ -428,7 +430,7 @@ nonisolated struct MeetingAudioTimeProbeReadback: Codable, Equatable, Sendable {
 /// Read-only evidence from the already-running VPIO graph. This is probe output, not runtime
 /// provenance: the values are intentionally kept out of `MeetingMicrophoneSettledConfig` until
 /// the hardware matrix establishes which properties are stable and decision-relevant.
-nonisolated struct MeetingVoiceProcessingProbeSnapshot: Codable, Equatable, Sendable {
+nonisolated struct MeetingVoiceProcessingProbeSnapshot: Codable, Equatable {
     static let currentSchemaVersion = 1
 
     var schemaVersion: Int
@@ -456,7 +458,7 @@ nonisolated struct MeetingVoiceProcessingProbeSnapshot: Codable, Equatable, Send
     var otherAudioDucking: MeetingAudioUnitDuckingReadback
 }
 
-nonisolated enum MeetingVoiceProcessingProbeError: Error, Sendable {
+nonisolated enum MeetingVoiceProcessingProbeError: Error {
     case disabled
     case captureNotRunning
     case invalidPlaybackFormat
@@ -515,7 +517,7 @@ private final nonisolated class MeetingVPIOAcousticPlaybackContinuation: @unchec
 /// Numeric-only mixer tap accumulator. It records no audio; the sample values are reduced as they
 /// arrive so the render confirmation can be emitted without retaining the reference waveform.
 final nonisolated class MeetingVPIOAcousticRenderTapCollector: @unchecked Sendable {
-    private nonisolated struct State: Sendable {
+    private nonisolated struct State {
         var sampleRate = 0.0
         var channelCount = 0
         var frameCount = 0
@@ -609,14 +611,14 @@ final nonisolated class MeetingVPIOAcousticRenderTapCollector: @unchecked Sendab
 
 // MARK: - Capture events
 
-nonisolated enum MeetingMicrophoneCaptureEvent: Sendable {
+nonisolated enum MeetingMicrophoneCaptureEvent {
     case configurationChanged
     case defaultInputChanged
     case overload
     case engineStopped
 }
 
-nonisolated enum MeetingMicrophoneCaptureError: Error, Sendable {
+nonisolated enum MeetingMicrophoneCaptureError: Error {
     case alreadyStarted
     case lifecycleInterrupted
 }
@@ -640,7 +642,7 @@ nonisolated enum MeetingMicrophoneEventExecution {
 
 /// Lock-guarded, never actor-isolated: the audio thread needs priority donation.
 final class MeetingMicrophoneCaptureStats: @unchecked Sendable {
-    struct Snapshot: Sendable, Equatable {
+    struct Snapshot: Equatable {
         var buffersEmitted = 0
         var validHostTimeCount = 0
         var synthesizedCount = 0
@@ -1196,9 +1198,9 @@ actor MeetingMicrophoneCapture {
         await self.stop(teardownVoiceProcessingUnit: true)
     }
 
-    /// DEBUG diagnostic teardown that leaves the VPIO unit to process-boundary cleanup. This is
-    /// used only by isolated acoustic probes because explicit unit replacement can crash on some
-    /// macOS 26 audio stacks after a live output read-back.
+    // DEBUG diagnostic teardown that leaves the VPIO unit to process-boundary cleanup. This is
+    // used only by isolated acoustic probes because explicit unit replacement can crash on some
+    // macOS 26 audio stacks after a live output read-back.
     #if DEBUG
     func stopForPhase1Probe() async {
         await self.stop(teardownVoiceProcessingUnit: false)
@@ -1450,8 +1452,8 @@ actor MeetingMicrophoneCapture {
     }
     #endif
 
-    /// Probe-only mutation. The environment gate prevents production callers from changing VPIO
-    /// processing state through this diagnostic surface.
+    // Probe-only mutation. The environment gate prevents production callers from changing VPIO
+    // processing state through this diagnostic surface.
     #if DEBUG
     func setVoiceProcessingBypassedForProbe(_ bypassed: Bool) -> Bool? {
         guard MeetingVPIOAcousticGate.isEnabled else {
@@ -1472,12 +1474,17 @@ actor MeetingMicrophoneCapture {
         return input.isVoiceProcessingAGCEnabled
     }
     #else
-    func setVoiceProcessingBypassedForProbe(_ bypassed: Bool) -> Bool? { nil }
-    func setVoiceProcessingAGCEnabledForProbe(_ enabled: Bool) -> Bool? { nil }
+    func setVoiceProcessingBypassedForProbe(_ bypassed: Bool) -> Bool? {
+        nil
+    }
+
+    func setVoiceProcessingAGCEnabledForProbe(_ enabled: Bool) -> Bool? {
+        nil
+    }
     #endif
 
-    /// Render known local PCM through this same VPIO engine. This is Trial B only; it cannot route
-    /// another application's audio and is never reachable without the acoustic-probe environment.
+    // Render known local PCM through this same VPIO engine. This is Trial B only; it cannot route
+    // another application's audio and is never reachable without the acoustic-probe environment.
     #if DEBUG
     func playVoiceProcessingProbePCM(
         _ samples: [Float],
@@ -1610,13 +1617,12 @@ actor MeetingMicrophoneCapture {
             mixer.removeTap(onBus: 0)
             tapInstalled = false
         }
-        let report = tapCollector.report(
+        return tapCollector.report(
             scheduledFrameCount: samples.count,
             sampleRate: sampleRate,
             volume: safeVolume,
             outputPreflight: outputPreflight
         )
-        return report
     }
     #else
     func playVoiceProcessingProbePCM(
@@ -2044,7 +2050,7 @@ actor MeetingMicrophoneCapture {
 
 /// Real-hardware Phase 1 gate (plan §9), foreground only; env FLUIDVOICE_MIC_PHASE1[_DEVICE].
 enum MeetingMicrophonePhase1Probe {
-    struct Result: Sendable {
+    struct Result {
         var minutes: Double
         var outcome: MeetingMicrophoneBindingOutcome
         var settled: MeetingMicrophoneSettledConfig?

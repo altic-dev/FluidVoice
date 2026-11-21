@@ -11,7 +11,7 @@ enum PrivateAIProviderPromptFormat {
 
     /// Immutable settings only. Resolving this may query the model directory, so
     /// presentation callers resolve it on a worker, never while drawing a view.
-    nonisolated struct VerificationInput: Equatable, Sendable {
+    nonisolated struct VerificationInput: Equatable {
         let providerAvailable: Bool
         let selectedModelID: String?
         let providerFingerprint: String?

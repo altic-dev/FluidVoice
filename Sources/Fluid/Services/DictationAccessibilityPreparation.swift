@@ -38,13 +38,13 @@ final class DictationAccessibilityPreparation {
 }
 
 actor DictationAccessibilityPreparationWorker {
-    nonisolated struct Request: Hashable, Sendable {
+    nonisolated struct Request: Hashable {
         let pid: pid_t
         let launchedAt: Date?
         let bundleURL: URL
     }
 
-    nonisolated enum Outcome: Equatable, Sendable {
+    nonisolated enum Outcome: Equatable {
         case enabled, unsupported, untrusted, stale, cancelled
         case failed(Int32)
     }

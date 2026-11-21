@@ -25,10 +25,21 @@ struct FeedbackView: View {
         )
     }
 
-    private var messageCount: Int { self.message.utf16.count }
-    private var nearLimit: Bool { self.messageCount > FeedbackSubmission.messageLimit * 8 / 10 }
-    private var overLimit: Bool { self.messageCount > FeedbackSubmission.messageLimit }
-    private var emailLooksWrong: Bool { !self.email.isEmpty && !FeedbackSubmission.isValidEmail(self.email) }
+    private var messageCount: Int {
+        self.message.utf16.count
+    }
+
+    private var nearLimit: Bool {
+        self.messageCount > FeedbackSubmission.messageLimit * 8 / 10
+    }
+
+    private var overLimit: Bool {
+        self.messageCount > FeedbackSubmission.messageLimit
+    }
+
+    private var emailLooksWrong: Bool {
+        !self.email.isEmpty && !FeedbackSubmission.isValidEmail(self.email)
+    }
 
     var body: some View {
         ScrollView {

@@ -17,13 +17,13 @@ nonisolated enum DictionaryStampMatcher {
     static let greyZoneLimit: Float = 0.175
     static let maximumQueryFrames = 1500
 
-    struct Hit: Equatable, Sendable {
+    struct Hit: Equatable {
         let frames: Range<Int>
         let distance: Float
     }
 
     /// A dictation's frames, normalized once and shared by every dictionary word's search.
-    struct Query: Sendable {
+    struct Query {
         let values: [Float]
         let count: Int
         let hiddenSize: Int

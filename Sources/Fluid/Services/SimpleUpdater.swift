@@ -117,7 +117,7 @@ private struct SemanticVersion: Comparable {
 
 @MainActor
 final class SimpleUpdater: ObservableObject {
-    // Explicitly nonisolated: on macOS 15.4+ the synthesized main-actor deinit can abort until the OS runtime has the fix (swiftlang/swift#88036).
+    /// Explicitly nonisolated: on macOS 15.4+ the synthesized main-actor deinit can abort until the OS runtime has the fix (swiftlang/swift#88036).
     nonisolated deinit {}
 
     struct ReleaseBuildOption {
@@ -333,8 +333,8 @@ final class SimpleUpdater: ObservableObject {
         }
     }
 
-    // Allowed Apple Developer Team IDs for code-sign validation
-    // Restrict update transitions to FluidVoice's approved signing teams.
+    /// Allowed Apple Developer Team IDs for code-sign validation
+    /// Restrict update transitions to FluidVoice's approved signing teams.
     private nonisolated static let allowedTeamIDs: Set<String> = [
         "V4J43B279J",
         "537RRRT57V",
@@ -364,7 +364,7 @@ final class SimpleUpdater: ObservableObject {
         return trimmed
     }
 
-    // Fetch latest release notes from GitHub
+    /// Fetch latest release notes from GitHub
     func fetchLatestReleaseNotes(
         owner: String,
         repo: String,
@@ -385,7 +385,7 @@ final class SimpleUpdater: ObservableObject {
         return (version, notes)
     }
 
-    // Silent check that returns update info without showing alerts or installing
+    /// Silent check that returns update info without showing alerts or installing
     func checkForUpdate(
         owner: String,
         repo: String,
@@ -1076,7 +1076,7 @@ final class SimpleUpdater: ObservableObject {
         }
     }
 
-    nonisolated struct PreparedInstallation: Sendable {
+    nonisolated struct PreparedInstallation {
         let replacement: UpdateAppReplacement
         let backupURL: URL
     }

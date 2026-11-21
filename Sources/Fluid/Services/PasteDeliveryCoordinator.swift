@@ -85,7 +85,9 @@ protocol PasteboardManaging: AnyObject {
 
 extension PasteboardManaging {
     func recordAudit(_: String, detail _: String) {}
-    func observeTemporaryTextRead(sessionID _: String, onRead _: @escaping @MainActor @Sendable (TimeInterval) -> Void) -> Bool { false }
+    func observeTemporaryTextRead(sessionID _: String, onRead _: @escaping @MainActor @Sendable (TimeInterval) -> Void) -> Bool {
+        false
+    }
 }
 
 /// Supplies immutable text on demand. A read receipt means somebody requested
@@ -131,7 +133,7 @@ protocol PasteCommandPosting: AnyObject {
 
 @MainActor
 final class SystemPasteboardManager: PasteboardManaging {
-    // Explicitly nonisolated: on macOS 15.4+ the synthesized main-actor deinit can abort until the OS runtime has the fix (swiftlang/swift#88036).
+    /// Explicitly nonisolated: on macOS 15.4+ the synthesized main-actor deinit can abort until the OS runtime has the fix (swiftlang/swift#88036).
     nonisolated deinit {}
 
     private static let sourceType = NSPasteboard.PasteboardType("org.nspasteboard.source")
@@ -157,7 +159,9 @@ final class SystemPasteboardManager: PasteboardManaging {
         self.pasteboard = pasteboard
     }
 
-    var changeCount: Int { self.pasteboard.changeCount }
+    var changeCount: Int {
+        self.pasteboard.changeCount
+    }
 
     func recordAudit(_ event: String, detail: String) {
         ClipboardAudit.record(event, pasteboard: self.pasteboard, detail: detail)
@@ -622,11 +626,11 @@ final class SystemPasteboardManager: PasteboardManaging {
 
 @MainActor
 final class SystemPasteCommandPoster: PasteCommandPosting {
-    // Paste is an application shortcut. Inject into the login session rather
-    // than changing HID modifier state or passing through hardware hotkey taps.
+    /// Paste is an application shortcut. Inject into the login session rather
+    /// than changing HID modifier state or passing through hardware hotkey taps.
     nonisolated static let pasteEventTapLocation = CGEventTapLocation.cgSessionEventTap
-    // Flutter synchronizes Command from its left/right device bits, rather
-    // than the generic Command flag alone. Match a physical left-Command chord.
+    /// Flutter synchronizes Command from its left/right device bits, rather
+    /// than the generic Command flag alone. Match a physical left-Command chord.
     nonisolated static let commandFlags: CGEventFlags = [.maskCommand, CGEventFlags(rawValue: UInt64(NX_DEVICELCMDKEYMASK))]
 
     func postGlobalPasteCommand() async -> Bool {

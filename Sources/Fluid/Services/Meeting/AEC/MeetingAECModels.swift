@@ -2,19 +2,19 @@
 import CoreMedia
 import Foundation
 
-nonisolated enum MeetingAECInputKind: String, Sendable {
+nonisolated enum MeetingAECInputKind: String {
     case render
     case capture
 }
 
 /// A runtime-local identity. The owner still verifies `SCStream` object identity before creating
 /// this value; the token lets the pure joiner reject cross-stream data without retaining SCK.
-nonisolated struct MeetingAECStreamToken: Hashable, Sendable {
+nonisolated struct MeetingAECStreamToken: Hashable {
     let generation: UInt64
     let identity: UInt64
 }
 
-nonisolated enum MeetingAECFailure: String, Error, Equatable, Sendable {
+nonisolated enum MeetingAECFailure: String, Error, Equatable {
     case invalidSampleBuffer
     case invalidTimestamp
     case invalidDuration
@@ -41,14 +41,14 @@ nonisolated enum MeetingAECFailure: String, Error, Equatable, Sendable {
     case stopped
 }
 
-nonisolated struct MeetingAECPCMFormat: Equatable, Sendable {
+nonisolated struct MeetingAECPCMFormat: Equatable {
     let channelCount: Int
     let interleaved: Bool
 
     static let monoPlanar = Self(channelCount: 1, interleaved: false)
 }
 
-nonisolated struct MeetingAECPCMBlock: Equatable, Sendable {
+nonisolated struct MeetingAECPCMBlock: Equatable {
     let kind: MeetingAECInputKind
     let stream: MeetingAECStreamToken
     let presentationTime: CMTime
@@ -77,7 +77,7 @@ nonisolated struct MeetingAECPCMBlock: Equatable, Sendable {
     }
 }
 
-nonisolated struct MeetingAECFrame: Equatable, Sendable {
+nonisolated struct MeetingAECFrame: Equatable {
     static let sampleCount = 480
     static let sampleRateHz = 48_000
 
@@ -95,7 +95,7 @@ nonisolated struct MeetingAECFrame: Equatable, Sendable {
     }
 }
 
-nonisolated struct MeetingAECJoinedFrame: Equatable, Sendable {
+nonisolated struct MeetingAECJoinedFrame: Equatable {
     let render: MeetingAECFrame
     let capture: MeetingAECFrame
     /// True only after all 96,000 samples per source have been covered exactly once and all
@@ -104,18 +104,18 @@ nonisolated struct MeetingAECJoinedFrame: Equatable, Sendable {
     let pairedFrameCount: Int
 }
 
-nonisolated struct MeetingAECBypassSlice: Equatable, Sendable {
+nonisolated struct MeetingAECBypassSlice: Equatable {
     let presentationTime: CMTime
     let samples: [Float]
 }
 
-nonisolated enum MeetingAECJoinerEmission: Equatable, Sendable {
+nonisolated enum MeetingAECJoinerEmission: Equatable {
     case paired(MeetingAECJoinedFrame)
     case bypass(MeetingAECBypassSlice, MeetingAECFailure)
     case reset(MeetingAECFailure)
 }
 
-nonisolated struct MeetingAECBridgeStatistics: Equatable, Sendable {
+nonisolated struct MeetingAECBridgeStatistics: Equatable {
     var renderFrames: UInt64
     var captureFrames: UInt64
     var resets: UInt64
@@ -123,7 +123,7 @@ nonisolated struct MeetingAECBridgeStatistics: Equatable, Sendable {
     var residualEchoLikelihood: Float?
 }
 
-nonisolated struct MeetingAECDiagnostics: Equatable, Sendable {
+nonisolated struct MeetingAECDiagnostics: Equatable {
     var acceptedRenderBlocks = 0
     var acceptedCaptureBlocks = 0
     var pairedFrames = 0

@@ -90,7 +90,7 @@ struct TalkingAudioVisualizationView: View {
     @StateObject private var data: AudioVisualizationData
     @State private var dynamicNoiseThreshold: CGFloat = .init(SettingsStore.shared.visualizerNoiseThreshold)
 
-    // Dynamic config that updates with settings
+    /// Dynamic config that updates with settings
     private var config: TalkingAnimationConfig {
         TalkingAnimationConfig(noiseThreshold: self.dynamicNoiseThreshold)
     }
@@ -229,7 +229,7 @@ struct EnhancedTalkingAudioVisualizationView: View {
     @StateObject private var data: AudioVisualizationData
     @State private var dynamicNoiseThreshold: CGFloat = .init(SettingsStore.shared.visualizerNoiseThreshold)
 
-    // Dynamic config that updates with settings
+    /// Dynamic config that updates with settings
     private var config: EnhancedTalkingAnimationConfig {
         EnhancedTalkingAnimationConfig(noiseThreshold: self.dynamicNoiseThreshold)
     }

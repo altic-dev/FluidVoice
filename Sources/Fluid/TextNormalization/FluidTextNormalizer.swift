@@ -2,8 +2,8 @@ import Foundation
 
 /// App-independent English formatting. Call once at each boundary of AI cleanup.
 /// The caller owns language selection, resource loading, capitalization and delivery.
-nonisolated struct FluidTextNormalizer: Sendable {
-    enum Phase: String, Codable, Sendable {
+nonisolated struct FluidTextNormalizer {
+    enum Phase: String, Codable {
         case beforeCleanup
         case afterCleanup
     }

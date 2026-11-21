@@ -36,23 +36,7 @@ struct FluidOnboardingLandingHero<Actions: View>: View {
     let accentTitle: String
     let firstDetail: String
     let secondDetail: String
-    let actions: Actions
-
-    init(
-        eyebrow: String,
-        title: String,
-        accentTitle: String,
-        firstDetail: String,
-        secondDetail: String,
-        @ViewBuilder actions: () -> Actions
-    ) {
-        self.eyebrow = eyebrow
-        self.title = title
-        self.accentTitle = accentTitle
-        self.firstDetail = firstDetail
-        self.secondDetail = secondDetail
-        self.actions = actions()
-    }
+    @ViewBuilder let actions: Actions
 
     var body: some View {
         VStack(spacing: 0) {
@@ -300,7 +284,9 @@ struct FluidOnboardingLandingHoverTracker: NSViewRepresentable {
         weak var coordinator: Coordinator?
         private var trackingArea: NSTrackingArea?
 
-        override var isFlipped: Bool { true }
+        override var isFlipped: Bool {
+            true
+        }
 
         override func hitTest(_ point: NSPoint) -> NSView? {
             nil
@@ -598,7 +584,6 @@ private struct OnboardingProminentButtonModifier: ViewModifier {
     @Environment(\.theme) private var theme
     let controlSize: ControlSize?
 
-    @ViewBuilder
     func body(content: Content) -> some View {
         if let controlSize {
             content
@@ -616,7 +601,6 @@ private struct OnboardingProminentButtonModifier: ViewModifier {
 private struct OnboardingSecondaryButtonModifier: ViewModifier {
     let controlSize: ControlSize?
 
-    @ViewBuilder
     func body(content: Content) -> some View {
         if let controlSize {
             content

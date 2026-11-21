@@ -100,12 +100,14 @@ struct MeetingRecordingCanvas: View {
     }
 
     private var recordingFooter: some View {
-        Text(self.isStopping
-            ? "Saving your recording before transcription begins."
-            : "Speaker labels are added after recording.")
-            .font(self.theme.typography.caption)
-            .foregroundStyle(self.theme.palette.secondaryText)
-            .fixedSize(horizontal: false, vertical: true)
+        Text(
+            self.isStopping
+                ? "Saving your recording before transcription begins."
+                : "Speaker labels are added after recording."
+        )
+        .font(self.theme.typography.caption)
+        .foregroundStyle(self.theme.palette.secondaryText)
+        .fixedSize(horizontal: false, vertical: true)
     }
 
     private var stopButton: some View {
@@ -261,8 +263,10 @@ struct MeetingProcessingCanvas: View {
                         VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xs) {
                             Text(Self.title(for: stage))
                                 .font(self.theme.typography.bodyStrong)
-                                .foregroundStyle(self.stage != .completed && index > self.activeIndex
-                                    ? self.theme.palette.secondaryText : self.theme.palette.primaryText)
+                                .foregroundStyle(
+                                    self.stage != .completed && index > self.activeIndex
+                                        ? self.theme.palette.secondaryText : self.theme.palette.primaryText
+                                )
                             if stage == self.stage {
                                 Text(Self.detail(for: stage))
                                     .font(self.theme.typography.caption)
@@ -808,7 +812,7 @@ struct MeetingResultCanvas: View {
         return "\(speaker.displayName) (You)"
     }
 
-    // Only explicitly persisted legacy ownership metadata receives the local-user treatment.
+    /// Only explicitly persisted legacy ownership metadata receives the local-user treatment.
     private func isLocalSegment(_ segment: MeetingTranscriptSegment) -> Bool {
         guard let speakerID = segment.speakerID,
               let speaker = self.session.speakers.first(where: { $0.id == speakerID })

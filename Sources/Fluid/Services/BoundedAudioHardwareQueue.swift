@@ -26,9 +26,13 @@ final nonisolated class BoundedAudioHardwareQueue: @unchecked Sendable {
         private let lock = NSLock()
         private var cancelled = false
 
-        var isCancelled: Bool { self.lock.withLock { self.cancelled } }
+        var isCancelled: Bool {
+            self.lock.withLock { self.cancelled }
+        }
 
-        func cancel() { self.lock.withLock { self.cancelled = true } }
+        func cancel() {
+            self.lock.withLock { self.cancelled = true }
+        }
     }
 
     private struct Pending {

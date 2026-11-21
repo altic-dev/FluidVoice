@@ -35,7 +35,7 @@ struct OnboardingAIEnhancementStepView: View {
         return image
     }()
 
-    // Hide only the old title area; the menu begins below 36% of the frame.
+    /// Hide only the old title area; the menu begins below 36% of the frame.
     private static let heldFrameMask: [Gradient.Stop] = [
         .init(color: .clear, location: 0),
         .init(color: .clear, location: 0.27),
@@ -62,9 +62,18 @@ struct OnboardingAIEnhancementStepView: View {
         let isEnabled: Bool
     }
 
-    private var canNavigate: Bool { !self.isRunning && !self.isRecordingShortcut && !self.contentState.isProcessing && !self.isShowingIntroduction }
-    private var isShowingIntroduction: Bool { self.isReady && !self.setup.introductionFinished && !self.reduceMotion }
-    private var isReady: Bool { self.setup.phase == .ready }
+    private var canNavigate: Bool {
+        !self.isRunning && !self.isRecordingShortcut && !self.contentState.isProcessing && !self.isShowingIntroduction
+    }
+
+    private var isShowingIntroduction: Bool {
+        self.isReady && !self.setup.introductionFinished && !self.reduceMotion
+    }
+
+    private var isReady: Bool {
+        self.setup.phase == .ready
+    }
+
     var body: some View {
         GeometryReader { proxy in
             ZStack {
@@ -456,7 +465,9 @@ struct OnboardingAIEnhancementStepView: View {
 
     private struct SetupError: LocalizedError {
         let message: String
-        var errorDescription: String? { self.message }
+        var errorDescription: String? {
+            self.message
+        }
     }
 
     private func pillButton(

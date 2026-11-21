@@ -137,7 +137,10 @@ class NotchContentState: ObservableObject {
 
     /// The preview keeps its source position so trimming cannot move wrapped caption lines.
     @Published private(set) var captionPreview: OverlayCaptionText = .empty
-    var cachedPreviewText: String { self.captionPreview.text }
+    var cachedPreviewText: String {
+        self.captionPreview.text
+    }
+
     private var transcriptionSourceOffset = 0
 
     /// Bounded recovery context for a revision or a chunk that skips past the short preview.
@@ -885,9 +888,11 @@ struct NotchExpandedView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     let defaultAvailable = promptMode.normalized != .dictate
                         || DictationProviderRoute.isDictationDefaultAvailable(settings: self.settings, appBundleID: self.promptResolutionBundleID)
-                    let defaultSelected = defaultAvailable && (promptMode.normalized == .dictate
-                        ? (self.settings.resolvedDictationPromptSelection(for: activeDictationSlot, appBundleID: self.promptResolutionBundleID) == .default)
-                        : (self.settings.selectedPromptID(for: promptMode) == nil))
+                    let defaultSelected = defaultAvailable && (
+                        promptMode.normalized == .dictate
+                            ? (self.settings.resolvedDictationPromptSelection(for: activeDictationSlot, appBundleID: self.promptResolutionBundleID) == .default)
+                            : (self.settings.selectedPromptID(for: promptMode) == nil)
+                    )
 
                     if promptMode.normalized == .dictate {
                         self.promptMenuRow(

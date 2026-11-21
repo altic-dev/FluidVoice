@@ -1,7 +1,7 @@
 import AudioToolbox
 import Foundation
 
-nonisolated enum MeetingAECOutputRouteDisposition: Equatable, Sendable {
+nonisolated enum MeetingAECOutputRouteDisposition: Equatable {
     case physicallyClosed
     case supportedSpeaker
     case ambiguous

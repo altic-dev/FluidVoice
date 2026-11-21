@@ -8,7 +8,7 @@ nonisolated struct MeetingPlaybackDuplicateDetector {
     static let version = "temporal-shadow-b1-v1"
     static let sampleRate = 2000.0
 
-    struct Configuration: Codable, Sendable {
+    struct Configuration: Codable {
         // Exploratory engineering constants, not calibrated admission thresholds.
         var minimumCorrelation = 0.25
         var minimumControlMargin = 0.08
@@ -20,13 +20,13 @@ nonisolated struct MeetingPlaybackDuplicateDetector {
         var maximumConsecutiveBudgetFailures = 3
     }
 
-    struct PCM: Sendable {
+    struct PCM {
         let start: Double
         let samples: [Float]
         let valid: [Bool]
     }
 
-    struct Window: Sendable {
+    struct Window {
         let sessionID: UUID
         let epoch: UInt64
         let routeID: String
@@ -38,17 +38,17 @@ nonisolated struct MeetingPlaybackDuplicateDetector {
         let mismatchedReference: PCM?
     }
 
-    enum State: String, Codable, Sendable {
+    enum State: String, Codable {
         case insufficientEvidence, observing, duplicateCandidate, duplicateSupported
     }
 
-    enum Reason: String, Codable, Sendable {
+    enum Reason: String, Codable {
         case referenceUnavailable, controlUnavailable, invalidInput, unscoredCoverage, insufficientEnergy
         case ambiguousPeak, scoredInconclusive, accumulating, stableSupport, released
         case overBudget, detectorUnavailable
     }
 
-    struct Result: Codable, Sendable {
+    struct Result: Codable {
         let start: Double
         let end: Double
         let epoch: UInt64

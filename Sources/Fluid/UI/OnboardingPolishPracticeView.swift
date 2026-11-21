@@ -15,7 +15,10 @@ struct OnboardingPolishPracticeView: View {
     @State private var hasActivated = false
     @State private var isKeyPressed = false
 
-    private var blue: Color { FluidOnboardingLandingColors.blue }
+    private var blue: Color {
+        FluidOnboardingLandingColors.blue
+    }
+
     private var status: String {
         if !self.hasActivated { return "Press \(self.shortcutDisplay) to begin." }
         if self.isRunning { return "Listening" }

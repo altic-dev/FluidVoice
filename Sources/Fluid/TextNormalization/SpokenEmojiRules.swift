@@ -1,7 +1,7 @@
 import Foundation
 
 /// Exact names and explicit aliases live in JSON; this matcher has no OS or keyboard dependency.
-nonisolated struct SpokenEmojiRules: Sendable {
+nonisolated struct SpokenEmojiRules {
     private struct Catalog: Decodable {
         let schemaVersion: Int
         let language: String

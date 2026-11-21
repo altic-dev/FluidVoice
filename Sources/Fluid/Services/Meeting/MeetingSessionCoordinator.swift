@@ -14,7 +14,7 @@ enum MeetingCoordinatorState: Equatable {
     case failed(MeetingSessionID?, MeetingSessionFailure)
 }
 
-struct MeetingAudioActivityLease: Equatable, Sendable {
+struct MeetingAudioActivityLease: Equatable {
     var id: UUID
 }
 

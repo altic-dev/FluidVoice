@@ -7,9 +7,15 @@ import FluidAudio
 final class ExternalCoreMLTranscriptionProvider: TranscriptionProvider {
     let name = "External CoreML"
 
-    var isAvailable: Bool { true }
+    var isAvailable: Bool {
+        true
+    }
+
     private(set) var isReady: Bool = false
-    var prefersNativeFileTranscription: Bool { true }
+    var prefersNativeFileTranscription: Bool {
+        true
+    }
+
     private let streamingPreviewMaxSeconds: Double = 12
 
     private var cohereManager: CohereTranscribeAsrManager?

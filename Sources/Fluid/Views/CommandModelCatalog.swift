@@ -6,8 +6,10 @@ struct CommandModelOption: Identifiable, Hashable {
     let modelID: String
     let displayName: String
 
-    // Length-prefix the provider so model IDs containing separators cannot collide.
-    var id: String { "\(self.providerID.utf8.count):\(self.providerID)\(self.modelID)" }
+    /// Length-prefix the provider so model IDs containing separators cannot collide.
+    var id: String {
+        "\(self.providerID.utf8.count):\(self.providerID)\(self.modelID)"
+    }
 }
 
 enum CommandModelCatalog {

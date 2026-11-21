@@ -541,10 +541,15 @@ struct MeetingSummaryView: View {
 /// otherwise goes to other apps, and inside the app only to the sidebar search field.
 struct DictationTextTarget: NSViewRepresentable {
     final class Marker: NSView {
-        override func hitTest(_: NSPoint) -> NSView? { nil }
+        override func hitTest(_: NSPoint) -> NSView? {
+            nil
+        }
     }
 
-    func makeNSView(context _: Context) -> Marker { Marker() }
+    func makeNSView(context _: Context) -> Marker {
+        Marker()
+    }
+
     func updateNSView(_: Marker, context _: Context) {}
 
     /// True when `editor` lies on a marker. SwiftUI hosts a background view and the editor it

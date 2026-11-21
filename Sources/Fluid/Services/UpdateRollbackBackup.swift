@@ -3,7 +3,7 @@ import Foundation
 /// Called while the app replacement's process-shared lock is held.
 /// Disk and signature work must run outside the main actor.
 nonisolated enum UpdateRollbackBackup {
-    struct Operations: Sendable {
+    struct Operations {
         var createDirectory: @Sendable (URL) throws -> Void
         var copyBundle: @Sendable (URL, URL) throws -> Void
         var publishBundle: @Sendable (URL, URL) throws -> Void

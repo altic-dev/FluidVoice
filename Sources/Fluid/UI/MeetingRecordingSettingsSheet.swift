@@ -6,7 +6,9 @@ enum MeetingSettingsSection: String, CaseIterable, Identifiable {
     case automation = "Automation & storage"
     case integrations = "Integrations"
 
-    var id: String { self.rawValue }
+    var id: String {
+        self.rawValue
+    }
 
     var symbol: String {
         switch self {
@@ -50,7 +52,7 @@ struct MeetingRecordingSettingsSheet: View {
     @State private var openedDraft: MeetingTranscriptionSetupDraft
     @State private var openedRetentionPolicy: MeetingAudioRetentionPolicy
 
-    // Keeps the existing sheet's bindings and callbacks together at its presentation boundary.
+    /// Keeps the existing sheet's bindings and callbacks together at its presentation boundary.
     init(
         draft: Binding<MeetingTranscriptionSetupDraft>,
         retentionPolicy: Binding<MeetingAudioRetentionPolicy>,

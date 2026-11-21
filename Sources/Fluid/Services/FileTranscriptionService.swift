@@ -5,7 +5,7 @@ import Foundation
 import UniformTypeIdentifiers
 
 /// One speaker-attributed portion of a file transcription.
-nonisolated struct SpeakerTranscriptSegment: Identifiable, Sendable, Codable, Equatable {
+nonisolated struct SpeakerTranscriptSegment: Identifiable, Codable, Equatable {
     let speaker: String
     let startSeconds: Double
     let endSeconds: Double
@@ -36,7 +36,7 @@ nonisolated struct SpeakerTranscriptSegment: Identifiable, Sendable, Codable, Eq
 }
 
 /// An audio interval for which speaker-attributed ASR produced no usable text.
-nonisolated struct SpeakerTranscriptGap: Sendable, Codable, Equatable {
+nonisolated struct SpeakerTranscriptGap: Codable, Equatable {
     let startSeconds: Double
     let endSeconds: Double
 
@@ -56,32 +56,32 @@ nonisolated struct SpeakerTranscriptGap: Sendable, Codable, Equatable {
     }
 }
 
-nonisolated struct SpeakerChunkTranscription: Sendable, Equatable {
+nonisolated struct SpeakerChunkTranscription: Equatable {
     let text: String
     let confidence: Float
 }
 
-nonisolated struct SpeakerTurnTranscription: Sendable, Equatable {
+nonisolated struct SpeakerTurnTranscription: Equatable {
     let text: String
     let confidence: Float
     let gaps: [SpeakerTranscriptGap]
 }
 
-nonisolated struct SpeakerRecognizedTurn: Sendable, Equatable {
+nonisolated struct SpeakerRecognizedTurn: Equatable {
     let speaker: String
     let startSeconds: Double
     let endSeconds: Double
     let transcription: SpeakerTurnTranscription
 }
 
-nonisolated struct SpeakerLabeledTranscript: Sendable, Equatable {
+nonisolated struct SpeakerLabeledTranscript: Equatable {
     let segments: [SpeakerTranscriptSegment]
     let confidence: Float
     let gaps: [SpeakerTranscriptGap]
     let notice: String?
 }
 
-nonisolated struct SpeakerLabelingCoverage: Sendable, Equatable {
+nonisolated struct SpeakerLabelingCoverage: Equatable {
     let gapCount: Int
     let skippedDurationSeconds: Double
     let maxGapDurationSeconds: Double
@@ -226,7 +226,7 @@ nonisolated enum SpeakerLabeledTranscriptionPolicy {
 }
 
 /// Result of a transcription operation
-nonisolated struct TranscriptionResult: Identifiable, Sendable, Codable {
+nonisolated struct TranscriptionResult: Identifiable, Codable {
     let id: UUID
     let text: String
     let confidence: Float

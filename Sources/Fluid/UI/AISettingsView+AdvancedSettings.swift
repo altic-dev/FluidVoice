@@ -1124,12 +1124,14 @@ extension AIEnhancementSettingsView {
                                 Text("Where custom styles apply")
                                     .font(self.theme.typography.bodyStrong)
                                 self.promptRoutingScopeRow(mode: mode)
-                                Text(isSelectedAppsOnly
-                                    ? "Custom styles run only in the apps listed below. Other apps use the built-in prompt for the selected mode."
-                                    : "Your chosen custom style can run in any app. Add an app rule below to use a different style there.")
-                                    .font(.fluidSystem(.caption))
-                                    .foregroundStyle(self.theme.palette.secondaryText)
-                                    .fixedSize(horizontal: false, vertical: true)
+                                Text(
+                                    isSelectedAppsOnly
+                                        ? "Custom styles run only in the apps listed below. Other apps use the built-in prompt for the selected mode."
+                                        : "Your chosen custom style can run in any app. Add an app rule below to use a different style there."
+                                )
+                                .font(.fluidSystem(.caption))
+                                .foregroundStyle(self.theme.palette.secondaryText)
+                                .fixedSize(horizontal: false, vertical: true)
                                 self.appPromptBindingsSection(mode: mode, isEmphasized: isSelectedAppsOnly, isEnabled: true)
                             }
                             .padding(.top, 12)

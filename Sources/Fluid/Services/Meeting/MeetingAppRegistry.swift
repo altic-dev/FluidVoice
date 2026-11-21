@@ -2,7 +2,7 @@ import Foundation
 
 /// Detection tier for a registry app. Tier 1 (native) is default-on; Tier 2 (browser) is an
 /// opt-in sub-toggle because it reads the frontmost tab's URL.
-nonisolated enum MeetingDetectionTier: Sendable, Equatable {
+nonisolated enum MeetingDetectionTier: Equatable {
     case nativeTier1
     case browserTier2
 }

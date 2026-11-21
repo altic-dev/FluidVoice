@@ -2,11 +2,11 @@ import CoreML
 import FluidAudio
 import Foundation
 
-nonisolated enum ExternalCoreMLASRBackend: Sendable {
+nonisolated enum ExternalCoreMLASRBackend {
     case cohereTranscribe
 }
 
-nonisolated struct ExternalCoreMLManifestIdentity: Decodable, Sendable {
+nonisolated struct ExternalCoreMLManifestIdentity: Decodable {
     let modelID: String
     let sampleRate: Int
     let maxAudioSamples: Int
@@ -57,7 +57,7 @@ nonisolated enum ExternalCoreMLArtifactsValidationError: LocalizedError {
     }
 }
 
-nonisolated struct ExternalCoreMLASRModelSpec: Sendable {
+nonisolated struct ExternalCoreMLASRModelSpec {
     private static let bundleStampFileName = ".fluid_artifact_bundle_version"
 
     let backend: ExternalCoreMLASRBackend

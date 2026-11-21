@@ -5,18 +5,18 @@ import Foundation
 /// Internal live-only source tags: `.you` is the microphone track and `.them` is application audio.
 /// The UI deliberately presents neutral source labels because live capture has no speaker identity;
 /// the offline pipeline resolves speakers and replaces this transcript on completion.
-nonisolated enum MeetingLiveSpeaker: Sendable, Equatable {
+nonisolated enum MeetingLiveSpeaker: Equatable {
     case you
     case them
 }
 
-nonisolated enum MeetingLiveAvailability: Sendable, Equatable {
+nonisolated enum MeetingLiveAvailability: Equatable {
     case unavailable(reason: String)
     case degraded(reason: String)
     case available
 }
 
-nonisolated struct MeetingLiveUtterance: Identifiable, Sendable, Equatable {
+nonisolated struct MeetingLiveUtterance: Identifiable, Equatable {
     var id: UUID
     var speaker: MeetingLiveSpeaker
     var text: String
@@ -27,7 +27,7 @@ nonisolated struct MeetingLiveUtterance: Identifiable, Sendable, Equatable {
 
 /// `id` is minted at the turn's first partial and reused as the `MeetingLiveUtterance.id` at EOU,
 /// so SwiftUI keeps one continuous row identity as the bubble "solidifies".
-nonisolated struct MeetingLivePartial: Sendable, Equatable, Identifiable {
+nonisolated struct MeetingLivePartial: Equatable, Identifiable {
     var id: UUID
     var text: String
     var start: TimeInterval
@@ -36,7 +36,7 @@ nonisolated struct MeetingLivePartial: Sendable, Equatable, Identifiable {
 /// In-memory only. Never written into `MeetingSession.transcriptSegments`, so it can never reach
 /// the manifest, Copy Transcript, or Export — those all read a `MeetingSession` value, a type this
 /// struct cannot become.
-nonisolated struct MeetingLiveTranscriptSnapshot: Sendable, Equatable {
+nonisolated struct MeetingLiveTranscriptSnapshot: Equatable {
     private static let finalizedTurnIDCap = 64
 
     /// Assigned under the coordinator's state lock, independently of callback delivery order.

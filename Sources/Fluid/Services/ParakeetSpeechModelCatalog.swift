@@ -4,18 +4,18 @@ import Foundation
 /// Immutable metadata shared by model selection, cache ownership and ASR routing.
 /// Resolving a descriptor performs no hardware, network or filesystem queries.
 nonisolated enum ParakeetSpeechModelCatalog {
-    enum Variant: String, CaseIterable, Sendable {
+    enum Variant: String, CaseIterable {
         case v2, v3, mini, pico, pro
     }
 
-    struct PerformanceRatings: Equatable, Sendable {
+    struct PerformanceRatings: Equatable {
         let speedRating: Int
         let accuracyRating: Int
         let speedPercent: Double
         let accuracyPercent: Double
     }
 
-    struct Descriptor: Equatable, Sendable {
+    struct Descriptor: Equatable {
         enum InstallationRevisionError: Error { case invalidChecksum }
         let modelID: String
         let variant: Variant
@@ -34,10 +34,14 @@ nonisolated enum ParakeetSpeechModelCatalog {
         let performanceRatings: PerformanceRatings?
         var manifestSHA256: String? = nil
 
-        var isEnglishOnly: Bool { self.supportedLanguageCodes == ["en"] }
+        var isEnglishOnly: Bool {
+            self.supportedLanguageCodes == ["en"]
+        }
 
         /// Downloaded as one tar from our own host, with an archive marker and manifest.
-        var isHostedPack: Bool { self.variant == .mini || self.variant == .pico || self.variant == .pro }
+        var isHostedPack: Bool {
+            self.variant == .mini || self.variant == .pico || self.variant == .pro
+        }
 
         var attribution: String {
             switch self.variant {

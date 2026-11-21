@@ -14,7 +14,6 @@ extension EnvironmentValues {
 
 extension View {
     /// Applies an app theme to the view hierarchy.
-    @ViewBuilder
     func appTheme(_ theme: AppTheme) -> some View {
         Group {
             if FluidTypography.overridesStandard {

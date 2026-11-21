@@ -14,9 +14,18 @@ struct DashboardLayout {
         self.contentWidth = max(0, min(width, Self.maximumWidth) - Self.inset * 2)
     }
 
-    var hasActionColumn: Bool { self.contentWidth >= 640 + Self.gap + Self.actionWidth }
-    var mainWidth: CGFloat { self.hasActionColumn ? self.contentWidth - Self.gap - Self.actionWidth : self.contentWidth }
-    var hasHorizontalActions: Bool { !self.hasActionColumn && self.contentWidth >= 620 }
+    var hasActionColumn: Bool {
+        self.contentWidth >= 640 + Self.gap + Self.actionWidth
+    }
+
+    var mainWidth: CGFloat {
+        self.hasActionColumn ? self.contentWidth - Self.gap - Self.actionWidth : self.contentWidth
+    }
+
+    var hasHorizontalActions: Bool {
+        !self.hasActionColumn && self.contentWidth >= 620
+    }
+
     func setupColumns(count: Int) -> Int {
         guard count > 0 else { return 1 }
         return self.contentWidth >= CGFloat(count) * 280 + CGFloat(count - 1) * 10 ? count : 1
@@ -89,9 +98,17 @@ struct DashboardView: View {
         self._recommendations = StateObject(wrappedValue: recommendations ?? DashboardRecommendationsController(asr: asr))
     }
 
-    private var busy: Bool { self.asr.isRunning || self.asr.isStarting || self.contentState.isProcessing }
-    private var shortcut: String { self.settings.primaryDictationShortcutDisplayString }
-    private var supportsScreenContext: Bool { PrivateAIProviderFeature.shared.isAvailable && CPUArchitecture.isAppleSilicon }
+    private var busy: Bool {
+        self.asr.isRunning || self.asr.isStarting || self.contentState.isProcessing
+    }
+
+    private var shortcut: String {
+        self.settings.primaryDictationShortcutDisplayString
+    }
+
+    private var supportsScreenContext: Bool {
+        PrivateAIProviderFeature.shared.isAvailable && CPUArchitecture.isAppleSilicon
+    }
 
     var body: some View {
         GeometryReader { geometry in

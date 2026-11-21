@@ -14,16 +14,18 @@ protocol MeetingClockProviding: AnyObject {
 
 @MainActor
 final class SystemClock: MeetingClockProviding {
-    func now() -> Date { Date() }
+    func now() -> Date {
+        Date()
+    }
 }
 
-nonisolated enum WorkspaceEventKind: Sendable, Equatable {
+nonisolated enum WorkspaceEventKind: Equatable {
     case launched
     case terminated
     case activated
 }
 
-nonisolated struct WorkspaceEvent: Sendable, Equatable {
+nonisolated struct WorkspaceEvent: Equatable {
     var kind: WorkspaceEventKind
     var bundleIdentifier: String
     var processID: Int32
@@ -41,10 +43,12 @@ protocol WorkspaceEventsProviding: AnyObject {
 }
 
 extension WorkspaceEventsProviding {
-    var frontmostProcessID: Int32? { nil }
+    var frontmostProcessID: Int32? {
+        nil
+    }
 }
 
-nonisolated struct MicActivityEdge: Sendable, Equatable {
+nonisolated struct MicActivityEdge: Equatable {
     /// true = device went from silent to in-use (0→1); false = the reverse.
     var isActive: Bool
 }
@@ -61,7 +65,7 @@ protocol AudioProcessActivityProviding: AnyObject {
     func snapshot() async -> AudioProcessActivitySnapshot
 }
 
-nonisolated struct AudioProcessDescriptor: Sendable, Equatable {
+nonisolated struct AudioProcessDescriptor: Equatable {
     var processID: Int32
     var bundleIdentifier: String?
     var executablePath: String?
@@ -69,14 +73,14 @@ nonisolated struct AudioProcessDescriptor: Sendable, Equatable {
     var isOutputRunning: Bool
 }
 
-nonisolated struct MeetingProcessOwner: Sendable, Equatable {
+nonisolated struct MeetingProcessOwner: Equatable {
     var processID: Int32
     var bundleIdentifier: String
     var bundlePath: String
 }
 
-nonisolated struct AudioProcessActivitySnapshot: Sendable, Equatable {
-    enum QueryState: Sendable, Equatable { case valid, unknown }
+nonisolated struct AudioProcessActivitySnapshot: Equatable {
+    enum QueryState: Equatable { case valid, unknown }
     var processes: [AudioProcessDescriptor]
     var owners: [MeetingProcessOwner]
     var queryState: QueryState
@@ -123,7 +127,7 @@ nonisolated enum MeetingAudioProcessResolver {
     }
 }
 
-nonisolated struct WindowSnapshot: Sendable, Equatable {
+nonisolated struct WindowSnapshot: Equatable {
     var processID: Int32
     var windowID: UInt32
     /// Never logged — window titles are PII (repo invariant).
@@ -133,13 +137,13 @@ nonisolated struct WindowSnapshot: Sendable, Equatable {
 
 /// Readiness is deliberately separate from meeting identity. A busy recorder is not a setup
 /// problem and must remain silent; an idle, confirmed meeting may still safely offer setup.
-nonisolated enum DetectionPreflightState: Sendable, Equatable {
+nonisolated enum DetectionPreflightState: Equatable {
     case ready
     case busy
     case needsSetup(DetectionSetupReason)
 }
 
-nonisolated enum DetectionSetupReason: String, Sendable, Equatable {
+nonisolated enum DetectionSetupReason: String, Equatable {
     case screenRecording
     case microphone
     case noInputDevice
@@ -155,7 +159,7 @@ protocol WindowSnapshotProviding: AnyObject {
     func titles(processID: Int32) async -> [String]
 }
 
-nonisolated struct BrowserTabURL: Sendable, Equatable {
+nonisolated struct BrowserTabURL: Equatable {
     var host: String
     var path: String
     var callState: MeetingBrowserCallState = .unknown
@@ -177,7 +181,9 @@ protocol DetectionActivityGate: AnyObject {
 }
 
 extension WindowSnapshotProviding {
-    func titles(processID: Int32) async -> [String] { [] }
+    func titles(processID: Int32) async -> [String] {
+        []
+    }
 }
 
 extension DetectionActivityGate {
@@ -192,7 +198,9 @@ extension DetectionActivityGate {
 @MainActor
 final class WorkspaceEventsMonitor: WorkspaceEventsProviding {
     var onEvent: ((WorkspaceEvent) -> Void)?
-    var frontmostProcessID: Int32? { NSWorkspace.shared.frontmostApplication?.processIdentifier }
+    var frontmostProcessID: Int32? {
+        NSWorkspace.shared.frontmostApplication?.processIdentifier
+    }
 
     private var observers: [NSObjectProtocol] = []
 
@@ -242,7 +250,7 @@ final class WorkspaceEventsMonitor: WorkspaceEventsProviding {
 /// (deadlock-avoidance precedent) rather than acting synchronously inside the HAL callback.
 @MainActor
 final class CoreAudioMicActivitySignal: MicActivitySignalProviding {
-    private struct ListenerIdentity: Equatable, Sendable {
+    private struct ListenerIdentity: Equatable {
         let deviceID: AudioObjectID
         let uid: String
         let listenerEpoch: UInt64

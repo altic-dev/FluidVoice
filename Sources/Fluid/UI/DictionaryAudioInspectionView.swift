@@ -225,11 +225,13 @@ struct DictionaryAudioInspectionView: View {
                 }
                 .disclosureGroupStyle(FluidDisclosureGroupStyle())
             } else {
-                Text(self.loadingReferences && self.enrollments[index].inspectionID != nil ? "Loading audio…" : self.loadErrors.contains(index)
-                    ? "Saved audio couldn't be loaded. Its stored embedding is still compared."
-                    : "Audio wasn't saved for this older example. Record a new example to hear it; its stored embedding is still compared.")
-                    .font(self.theme.typography.caption).foregroundStyle(self.theme.palette.secondaryText)
-                    .fixedSize(horizontal: false, vertical: true)
+                Text(
+                    self.loadingReferences && self.enrollments[index].inspectionID != nil ? "Loading audio…" : self.loadErrors.contains(index)
+                        ? "Saved audio couldn't be loaded. Its stored embedding is still compared."
+                        : "Audio wasn't saved for this older example. Record a new example to hear it; its stored embedding is still compared."
+                )
+                .font(self.theme.typography.caption).foregroundStyle(self.theme.palette.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
             }
         }
     }

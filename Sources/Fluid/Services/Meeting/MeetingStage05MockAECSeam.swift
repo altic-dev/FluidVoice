@@ -2,7 +2,7 @@
 
 import Foundation
 
-nonisolated struct MeetingStage05MockAECObservation: Equatable, Sendable {
+nonisolated struct MeetingStage05MockAECObservation: Equatable {
     let frameIndex: Int
     let epochID: Int
     let reset: Bool
@@ -13,7 +13,7 @@ nonisolated struct MeetingStage05MockAECObservation: Equatable, Sendable {
     let unknownReasons: [MeetingSynchronizerUnknownReason]
 }
 
-nonisolated struct MeetingStage05MockAECSeamResult: Equatable, Sendable {
+nonisolated struct MeetingStage05MockAECSeamResult: Equatable {
     /// Synchronized hops returned unchanged; the mock seam never transforms audio.
     let frames: [MeetingSynchronizedFrame]
     /// Ordering contract events only: render strictly precedes capture per eligible hop.
@@ -30,7 +30,7 @@ nonisolated struct MeetingStage05MockAECSeamResult: Equatable, Sendable {
 /// Identity/mock AEC seam. It consumes a synchronization result, checks the AEC-facing
 /// ordering contract, and returns audio arrays unchanged. It performs no echo
 /// cancellation: no resampling, delay, scaling, suppression, synthesis, or replacement.
-nonisolated struct MeetingStage05MockAECSeam: Sendable {
+nonisolated struct MeetingStage05MockAECSeam {
     func process(_ result: MeetingSynchronizationResult) -> MeetingStage05MockAECSeamResult {
         let structuralContract = MeetingAECDelayContract(renderLeadSeconds: 0)
         guard !result.failedOpen,

@@ -6,8 +6,8 @@ nonisolated enum DictationQuantityFormatter {
     private static let number = DictationNumberParser.phrasePattern
     private static let boundary = "(?<![\\p{L}\\p{M}\\p{N}_.,€£$+/@#\\\\−-])"
     private static let ending = "(?![\\p{L}\\p{M}\\p{N}_/@#\\\\-]|\\.+[\\p{L}\\p{M}\\p{N}_]|['’][\\p{L}\\p{M}\\p{N}_])"
-    // Keep a recognized minor amount attached when rejecting a filename suffix;
-    // otherwise regex backtracking could rewrite only the major amount.
+    /// Keep a recognized minor amount attached when rejecting a filename suffix;
+    /// otherwise regex backtracking could rewrite only the major amount.
     private static let money = regex(
         boundary + "(" + number + ")[ \\t]+(euros?|dollars?|British pounds?|pounds? sterling|pounds?)"
             + "(?![ \\t]+cents?\\b)(?:[ \\t]+and[ \\t]+(" + number + ")[ \\t]+(cents?|pence|penny))?+" + ending

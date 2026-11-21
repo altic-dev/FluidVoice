@@ -8,8 +8,8 @@ import FluidAudio
 final class ParakeetVocabularyStore {
     static let shared = ParakeetVocabularyStore()
 
-    nonisolated struct VocabularyConfig: Codable, Sendable {
-        nonisolated struct Term: Codable, Hashable, Sendable {
+    nonisolated struct VocabularyConfig: Codable {
+        nonisolated struct Term: Codable, Hashable {
             let text: String
             let weight: Float?
             let aliases: [String]
@@ -51,7 +51,7 @@ final class ParakeetVocabularyStore {
         let terms: [Term]
     }
 
-    struct ResolvedConfig: Sendable {
+    struct ResolvedConfig {
         let alpha: Float
         let minCtcScore: Float
         let minSimilarity: Float
@@ -233,8 +233,7 @@ final class ParakeetVocabularyStore {
                 .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
                 .filter { !$0.isEmpty }
                 .filter { $0.caseInsensitiveCompare(text) != .orderedSame }
-            let deduped = Array(Set(normalized.map { $0.lowercased() })).sorted()
-            return deduped
+            return Array(Set(normalized.map { $0.lowercased() })).sorted()
         }
 
         func upsert(_ term: VocabularyConfig.Term) {

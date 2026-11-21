@@ -45,7 +45,7 @@ struct FileTranscriptionView: View {
 
     @State private var rowMetadata: [UUID: RowMetadata] = [:]
     @State private var filteredEntries: [FileTranscriptionEntry] = []
-    // Only an explicit global-search reveal may move the library viewport.
+    /// Only an explicit global-search reveal may move the library viewport.
     @State private var pendingRevealID: UUID?
 
     private func updateSearchResults(entries: [FileTranscriptionEntry]) {
@@ -60,7 +60,7 @@ struct FileTranscriptionView: View {
         return entries.first { $0.id == self.fileHistoryStore.selectedEntryID } ?? entries.first
     }
 
-    enum ExportFormat: String, CaseIterable, Sendable {
+    enum ExportFormat: String, CaseIterable {
         case text = "Text (.txt)"
         case json = "JSON (.json)"
 
@@ -457,8 +457,10 @@ struct FileTranscriptionView: View {
                 .fill(self.theme.palette.cardBorder)
                 .frame(width: 1)
             Capsule()
-                .fill(self.isSplitterHovered || self.splitterDragStart != nil
-                    ? self.theme.palette.accent : self.theme.palette.secondaryText.opacity(0.5))
+                .fill(
+                    self.isSplitterHovered || self.splitterDragStart != nil
+                        ? self.theme.palette.accent : self.theme.palette.secondaryText.opacity(0.5)
+                )
                 .frame(width: 3, height: 28)
         }
         .frame(width: 10)

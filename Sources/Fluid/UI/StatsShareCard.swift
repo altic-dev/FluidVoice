@@ -17,7 +17,9 @@ struct StatsShareContent {
     let activity: [Int]
 
     /// A paperback page holds roughly 275 words.
-    var pagesEquivalent: Int { self.totalWords / 275 }
+    var pagesEquivalent: Int {
+        self.totalWords / 275
+    }
 
     var headline: String {
         if self.pagesEquivalent >= 300 {
@@ -38,7 +40,9 @@ enum StatsShareStat: String, CaseIterable, Identifiable {
     static let maxSelected = 4
     static let defaults: [StatsShareStat] = [.keystrokes, .timeSaved, .streak, .dictations]
 
-    var id: String { self.rawValue }
+    var id: String {
+        self.rawValue
+    }
 
     var title: String {
         switch self {

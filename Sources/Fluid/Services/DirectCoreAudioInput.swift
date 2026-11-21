@@ -794,7 +794,9 @@ final nonisolated class DirectCoreAudioLifecycleController: @unchecked Sendable 
         return snapshot
     }
 
-    var isRecoveringHardware: Bool { self.hardwareOperations.isAvailable == false }
+    var isRecoveringHardware: Bool {
+        self.hardwareOperations.isAvailable == false
+    }
 
     func waitForHardwareAvailability() async -> Bool {
         await self.hardwareOperations.waitUntilAvailable(timeout: self.recoveryTimeout)
@@ -880,7 +882,7 @@ final nonisolated class DirectCoreAudioLifecycleController: @unchecked Sendable 
         }
     }
 
-    struct DeviceSnapshot: Sendable {
+    struct DeviceSnapshot {
         let devices: [AudioDevice.Device]
         let defaultInputUID: String?
     }

@@ -4,14 +4,14 @@ import Foundation
 /// Owns one explicit setup attempt. Reads and cancelled work never commit a model selection.
 @MainActor
 final class OnboardingAISetupController: ObservableObject {
-    struct Model: Equatable, Sendable {
+    struct Model: Equatable {
         let id: String
         let name: String
         let byteCount: Int64?
         let installed: Bool
     }
 
-    struct Progress: Equatable, Sendable {
+    struct Progress: Equatable {
         let fraction: Double?
         let status: String
         let bytes: String?
@@ -73,9 +73,13 @@ final class OnboardingAISetupController: ObservableObject {
         !self.activationRequested && (self.phase == .offered || (self.isPrefetching && self.phase != .cancelling))
     }
 
-    var showsPreparationProgress: Bool { self.activationRequested && self.isBusy }
+    var showsPreparationProgress: Bool {
+        self.activationRequested && self.isBusy
+    }
 
-    var isBusy: Bool { [.downloading, .loading, .cancelling].contains(self.phase) }
+    var isBusy: Bool {
+        [.downloading, .loading, .cancelling].contains(self.phase)
+    }
 
     init(dependencies: Dependencies) {
         self.dependencies = dependencies

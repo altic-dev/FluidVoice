@@ -56,7 +56,7 @@ nonisolated enum MeetingSCKPairedAutorun {
         return true
     }
 
-    private struct Outcome: Sendable {
+    private struct Outcome {
         let exitStatus: Int32
         let line: String
     }

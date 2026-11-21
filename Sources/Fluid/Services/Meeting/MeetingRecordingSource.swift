@@ -2,7 +2,7 @@ import Foundation
 
 /// A chosen application is separate from an automatic suggestion. A missing suggestion
 /// must never change an online call into a microphone-only recording.
-nonisolated enum MeetingRecordingSource: Equatable, Sendable {
+nonisolated enum MeetingRecordingSource: Equatable {
     case automatic
     case allInstances(bundleIdentifier: String, displayName: String)
     case application(bundleIdentifier: String, processID: Int32?, displayName: String)

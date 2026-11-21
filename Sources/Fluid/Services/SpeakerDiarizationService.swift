@@ -9,7 +9,7 @@ actor SpeakerDiarizationService {
     static let isSupported = true
 
     /// A contiguous stretch of speech attributed to one speaker.
-    nonisolated struct SpeakerTurn: Sendable, Equatable {
+    nonisolated struct SpeakerTurn: Equatable {
         let speakerLabel: String
         let startSeconds: Double
         let endSeconds: Double
@@ -19,12 +19,12 @@ actor SpeakerDiarizationService {
         }
     }
 
-    nonisolated struct SpeakerProfile: Sendable, Equatable {
+    nonisolated struct SpeakerProfile: Equatable {
         let embedding: [Float]
         let averageQuality: Float
     }
 
-    nonisolated struct DiarizationOutput: Sendable, Equatable {
+    nonisolated struct DiarizationOutput: Equatable {
         let turns: [SpeakerTurn]
         let profilesByLabel: [String: SpeakerProfile]
     }
@@ -165,7 +165,7 @@ actor SpeakerDiarizationService {
 actor SpeakerDiarizationService {
     static let isSupported = false
 
-    nonisolated struct SpeakerTurn: Sendable, Equatable {
+    nonisolated struct SpeakerTurn: Equatable {
         let speakerLabel: String
         let startSeconds: Double
         let endSeconds: Double
@@ -175,12 +175,12 @@ actor SpeakerDiarizationService {
         }
     }
 
-    nonisolated struct SpeakerProfile: Sendable, Equatable {
+    nonisolated struct SpeakerProfile: Equatable {
         let embedding: [Float]
         let averageQuality: Float
     }
 
-    nonisolated struct DiarizationOutput: Sendable, Equatable {
+    nonisolated struct DiarizationOutput: Equatable {
         let turns: [SpeakerTurn]
         let profilesByLabel: [String: SpeakerProfile]
     }

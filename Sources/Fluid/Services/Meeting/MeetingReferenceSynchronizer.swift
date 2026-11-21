@@ -842,9 +842,11 @@ public nonisolated struct MeetingReferenceSynchronizer: Sendable {
                 if normalized.last != nil || referenceAnchorPTS != nil {
                     let gapStart = previousRejectedEnd ?? normalized.last.map {
                         $0.start + self.referenceSessionDuration(Double($0.values.count) / $0.frame.sampleRate)
-                    } ?? (frame.presentationTime.isFinite
-                        ? self.referenceSessionTime(sourceTime: frame.presentationTime - (referenceAnchorPTS ?? frame.presentationTime))
-                        : 0)
+                    } ?? (
+                        frame.presentationTime.isFinite
+                            ? self.referenceSessionTime(sourceTime: frame.presentationTime - (referenceAnchorPTS ?? frame.presentationTime))
+                            : 0
+                    )
                     let gapDuration = frame.sampleRate.isFinite && frame.sampleRate > 0
                         ? self.referenceSessionDuration(Double(max(1, frame.samples.count / max(frame.channelCount, 1))) / frame.sampleRate)
                         : self.configuration.frameDuration
@@ -1216,5 +1218,7 @@ public nonisolated struct MeetingReferenceSynchronizer: Sendable {
         return Int(rounded)
     }
 
-    private func finite(_ value: Double) -> Bool { value.isFinite }
+    private func finite(_ value: Double) -> Bool {
+        value.isFinite
+    }
 }

@@ -9,7 +9,9 @@ struct SpokenSendParseResult: Equatable {
 struct SpokenSendArmingState: Equatable {
     private(set) var armedText: String?
 
-    var wasArmed: Bool { self.armedText != nil }
+    var wasArmed: Bool {
+        self.armedText != nil
+    }
 
     mutating func reset() {
         self.armedText = nil

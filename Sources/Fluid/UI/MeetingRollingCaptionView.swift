@@ -97,15 +97,26 @@ struct MeetingRollingCaptionLayout {
 }
 
 final class MeetingRollingCaptionNSView: NSView {
-    var text = "" { didSet { if oldValue != self.text { self.invalidateCaption() } } }
-    var foregroundColor = NSColor.white { didSet { if !oldValue.isEqual(self.foregroundColor) { self.invalidateCaption() } } }
+    var text = "" {
+        didSet { if oldValue != self.text { self.invalidateCaption() } }
+    }
+
+    var foregroundColor = NSColor.white {
+        didSet { if !oldValue.isEqual(self.foregroundColor) { self.invalidateCaption() } }
+    }
+
     private var cachedText = ""
     private var cachedSize: CGSize = .zero
     private var cachedColor: NSColor = .clear
     private var cachedLayout: MeetingRollingCaptionLayout?
 
-    override var isFlipped: Bool { true }
-    override var intrinsicContentSize: NSSize { NSSize(width: NSView.noIntrinsicMetric, height: NSView.noIntrinsicMetric) }
+    override var isFlipped: Bool {
+        true
+    }
+
+    override var intrinsicContentSize: NSSize {
+        NSSize(width: NSView.noIntrinsicMetric, height: NSView.noIntrinsicMetric)
+    }
 
     override func draw(_ dirtyRect: NSRect) {
         let captionLayout = self.captionLayout

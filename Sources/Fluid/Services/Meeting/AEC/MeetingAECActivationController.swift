@@ -3,7 +3,7 @@ import Foundation
 /// Pure token/state owner for the AEC startup handshake. Runtime resources remain under the
 /// `ScreenCaptureMeetingRuntime` lock, while this value makes every legal transition explicit and
 /// independently testable without constructing an `SCStream`.
-nonisolated enum MeetingAECActivationState: Equatable, Sendable {
+nonisolated enum MeetingAECActivationState: Equatable {
     case raw
     case constructing(UInt64)
     case ready(UInt64)
@@ -11,7 +11,7 @@ nonisolated enum MeetingAECActivationState: Equatable, Sendable {
     case active(UInt64)
 }
 
-nonisolated struct MeetingAECActivationController: Equatable, Sendable {
+nonisolated struct MeetingAECActivationController: Equatable {
     static let formatValidationTimeoutSeconds: TimeInterval = 2
     private(set) var generation: UInt64 = 0
     private(set) var state: MeetingAECActivationState = .raw
