@@ -1,8 +1,9 @@
 import Foundation
+import os
 
 /// Simple terminal command execution service
 /// All responses are JSON-parsable for easy AI processing
-final class TerminalService {
+final nonisolated class TerminalService: Sendable {
     // MARK: - JSON Response Types
 
     struct CommandResult: Codable {
@@ -63,7 +64,9 @@ final class TerminalService {
 
     // MARK: - Execution
 
-    /// Execute a terminal command and return JSON-parsable result
+    /// Execute a terminal command and return JSON-parsable result.
+    /// `@concurrent` keeps it off the caller's actor; command-mode callers are on the main actor.
+    @concurrent
     func execute(
         command: String,
         workingDirectory: String? = nil,
@@ -94,41 +97,20 @@ final class TerminalService {
         }
         process.environment = environment
 
+        process.standardInput = FileHandle.nullDevice
         process.standardOutput = outputPipe
         process.standardError = errorPipe
 
+        // Drain both pipes while the command runs; a full pipe blocks the command forever.
+        let stdout = PipeCollector(outputPipe)
+        let stderr = PipeCollector(errorPipe)
+
+        let timedOut: Bool
         do {
-            try process.run()
-
-            // Wait with timeout
-            let timeoutTask = Task {
-                try await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
-                if process.isRunning {
-                    process.terminate()
-                }
-            }
-
-            process.waitUntilExit()
-            timeoutTask.cancel()
-
-            let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
-            let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
-
-            let output = String(data: outputData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            let errorOutput = String(data: errorData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
-
-            let executionTime = Int(Date().timeIntervalSince(startTime) * 1000)
-
-            return CommandResult(
-                success: process.terminationStatus == 0,
-                command: command,
-                output: output,
-                error: errorOutput?.isEmpty == true ? nil : errorOutput,
-                exitCode: process.terminationStatus,
-                executionTimeMs: executionTime
-            )
-
+            timedOut = try await Self.run(process, timeout: timeout)
         } catch {
+            stdout.finish()
+            stderr.finish()
             let executionTime = Int(Date().timeIntervalSince(startTime) * 1000)
             return CommandResult(
                 success: false,
@@ -139,6 +121,56 @@ final class TerminalService {
                 executionTimeMs: executionTime
             )
         }
+
+        // Backgrounded children inherit the pipes and can keep them open after the shell exits.
+        async let outputData = stdout.collect(grace: 1)
+        async let errorData = stderr.collect(grace: 1)
+        let (outputBytes, errorBytes) = await (outputData, errorData)
+
+        let output = (String(bytes: outputBytes, encoding: .utf8) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        var errorOutput = (String(bytes: errorBytes, encoding: .utf8) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if timedOut {
+            let note = "Command timed out after \(Int(timeout))s and was terminated."
+            errorOutput = errorOutput.isEmpty ? note : "\(errorOutput)\n\(note)"
+        }
+
+        let executionTime = Int(Date().timeIntervalSince(startTime) * 1000)
+
+        return CommandResult(
+            success: !timedOut && process.terminationStatus == 0,
+            command: command,
+            output: output,
+            error: errorOutput.isEmpty ? nil : errorOutput,
+            exitCode: process.terminationStatus,
+            executionTimeMs: executionTime
+        )
+    }
+
+    /// Runs `process` to completion without blocking a thread. Returns whether the timeout fired.
+    private static func run(_ process: Process, timeout: TimeInterval) async throws -> Bool {
+        let timedOut = OSAllocatedUnfairLock(initialState: false)
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            process.terminationHandler = { _ in continuation.resume() }
+            do {
+                try process.run()
+            } catch {
+                process.terminationHandler = nil
+                continuation.resume(throwing: error)
+                return
+            }
+            // Weak so a pending timer doesn't keep a finished process and its pipes alive.
+            DispatchQueue.global().asyncAfter(deadline: .now() + timeout) { [weak process] in
+                guard let process, process.isRunning else { return }
+                timedOut.withLock { $0 = true }
+                process.terminate()
+                DispatchQueue.global().asyncAfter(deadline: .now() + 2) { [weak process] in
+                    if let process, process.isRunning {
+                        kill(process.processIdentifier, SIGKILL)
+                    }
+                }
+            }
+        }
+        return timedOut.withLock { $0 }
     }
 
     /// Convert result to JSON string for AI processing
@@ -167,5 +199,55 @@ final class TerminalService {
 
         // If serialization fails for any reason, return minimal safe JSON
         return #"{"success":false,"output":"<json-serialization-failed>","exitCode":-1}"#
+    }
+}
+
+/// Accumulates a pipe's output as it arrives.
+private final nonisolated class PipeCollector: @unchecked Sendable {
+    private let handle: FileHandle
+    private let lock = NSLock()
+    private var data = Data()
+    private var finished = false
+    private var waiter: CheckedContinuation<Void, Never>?
+
+    init(_ pipe: Pipe) {
+        self.handle = pipe.fileHandleForReading
+        // `finish()` clears the handler, which breaks this retain cycle.
+        self.handle.readabilityHandler = { handle in
+            let chunk = handle.availableData
+            if chunk.isEmpty {
+                self.finish()
+            } else {
+                self.lock.withLock { self.data.append(chunk) }
+            }
+        }
+    }
+
+    /// Waits for EOF, or at most `grace` seconds, then returns what was read.
+    func collect(grace: TimeInterval) async -> Data {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            let alreadyFinished = self.lock.withLock {
+                if self.finished { return true }
+                self.waiter = continuation
+                return false
+            }
+            if alreadyFinished {
+                continuation.resume()
+                return
+            }
+            DispatchQueue.global().asyncAfter(deadline: .now() + grace) { [weak self] in self?.finish() }
+        }
+        return self.lock.withLock { self.data }
+    }
+
+    func finish() {
+        self.handle.readabilityHandler = nil
+        let waiter = self.lock.withLock {
+            self.finished = true
+            let waiter = self.waiter
+            self.waiter = nil
+            return waiter
+        }
+        waiter?.resume()
     }
 }
