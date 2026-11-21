@@ -733,10 +733,8 @@ final nonisolated class LLMClient: @unchecked Sendable {
         var usesSeparateReasoningFields = false
         var didLogFirstContent = false
 
-        // Tool call accumulation
-        var toolCallId: String?
-        var toolCallName: String?
-        var toolCallArguments = ""
+        // Tool call accumulation, keyed by the stream's `index` so parallel calls stay separate
+        var toolCallsByIndex: [Int: ResponsesToolCallAccumulator] = [:]
 
         // Process SSE lines
         for try await rawLine in bytes.lines {
@@ -850,20 +848,35 @@ final nonisolated class LLMClient: @unchecked Sendable {
             }
 
             // Handle tool calls (streamed in parts)
-            if let toolCalls = delta["tool_calls"] as? [[String: Any]],
-               let tc = toolCalls.first
-            {
-                if let id = tc["id"] as? String {
-                    toolCallId = id
-                }
-                if let function = tc["function"] as? [String: Any] {
-                    if let name = function["name"] as? String {
-                        toolCallName = name
-                        config.onToolCallStart?(name)
+            if let toolCalls = delta["tool_calls"] as? [[String: Any]] {
+                for tc in toolCalls {
+                    let id = tc["id"] as? String
+                    let index: Int
+                    if let streamIndex = tc["index"] as? Int {
+                        index = streamIndex
+                    } else if let id, !toolCallsByIndex.values.contains(where: { $0.id == id }) {
+                        // Some providers omit `index`; a new id starts a new call.
+                        index = toolCallsByIndex.count
+                    } else {
+                        index = max(toolCallsByIndex.count - 1, 0)
                     }
-                    if let args = function["arguments"] as? String {
-                        toolCallArguments += args
+
+                    var call = toolCallsByIndex[index] ?? ResponsesToolCallAccumulator()
+                    if let id {
+                        call.id = id
                     }
+                    if let function = tc["function"] as? [String: Any] {
+                        if let name = function["name"] as? String, !name.isEmpty {
+                            if call.name == nil {
+                                config.onToolCallStart?(name)
+                            }
+                            call.name = name
+                        }
+                        if let args = function["arguments"] as? String {
+                            call.arguments += args
+                        }
+                    }
+                    toolCallsByIndex[index] = call
                 }
             }
         }
@@ -888,19 +901,22 @@ final nonisolated class LLMClient: @unchecked Sendable {
         DebugLogger.shared.debug("LLMClient: Streaming complete. Thinking: \(thinkingText.count) chars, Content: \(contentText.count) chars", source: "LLMClient")
 
         // Build tool calls array
-        var parsedToolCalls: [ToolCall] = []
-        if let name = toolCallName,
-           let argsData = toolCallArguments.data(using: .utf8),
-           let args = try? JSONSerialization.jsonObject(with: argsData) as? [String: Any]
-        {
-            parsedToolCalls = [
-                ToolCall(
-                    id: toolCallId ?? "call_\(UUID().uuidString.prefix(8))",
-                    name: name,
-                    arguments: args
-                ),
-            ]
-            DebugLogger.shared.debug("LLMClient: Parsed tool call: \(name)", source: "LLMClient")
+        let parsedToolCalls = toolCallsByIndex.keys.sorted().compactMap { index -> ToolCall? in
+            guard let call = toolCallsByIndex[index], let name = call.name else { return nil }
+            let arguments = call.arguments.isEmpty ? "{}" : call.arguments
+            guard let argsData = arguments.data(using: .utf8),
+                  let args = try? JSONSerialization.jsonObject(with: argsData) as? [String: Any]
+            else {
+                DebugLogger.shared.warning(
+                    "LLMClient: Dropping streamed tool call \(name) with unparseable arguments (\(call.arguments.count) chars)",
+                    source: "LLMClient"
+                )
+                return nil
+            }
+            return ToolCall(id: call.id ?? "call_\(UUID().uuidString.prefix(8))", name: name, arguments: args)
+        }
+        if !parsedToolCalls.isEmpty {
+            DebugLogger.shared.debug("LLMClient: Parsed \(parsedToolCalls.count) tool call(s)", source: "LLMClient")
         }
 
         DebugLogger.shared.debug(
