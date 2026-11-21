@@ -41,7 +41,7 @@ struct ChangelogView: View {
 
                 self.footer
             }
-            .fluidPageContent(width: .reading)
+            .fluidPageContent(width: .form, alignment: .center)
         }
         .fluidPageActions {
             Button {
@@ -84,6 +84,7 @@ struct ChangelogView: View {
                     .font(self.theme.typography.body)
                     .foregroundStyle(self.theme.palette.secondaryText)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
@@ -97,6 +98,7 @@ struct ChangelogView: View {
                     .font(self.theme.typography.bodySmall)
                     .foregroundStyle(self.theme.palette.secondaryText)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
@@ -112,9 +114,8 @@ struct ChangelogView: View {
                 .fluidButton(.glass, size: .medium)
                 .buttonHoverEffect()
             }
-
-            Spacer()
         }
+        .frame(maxWidth: .infinity)
     }
 
     /// The page stays built across visits, so a beta setting change must replace the notes on screen.
@@ -190,12 +191,12 @@ private struct ChangelogReleaseCard: View {
 
     var body: some View {
         ThemedCard(style: self.isLatest ? .prominent : .standard, hoverEffect: false) {
-            VStack(alignment: .leading, spacing: self.theme.metrics.spacing.md) {
-                HStack(alignment: .firstTextBaseline, spacing: self.theme.metrics.spacing.sm) {
-                    VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: self.theme.metrics.spacing.lg) {
+                HStack(alignment: .top, spacing: self.theme.metrics.spacing.sm) {
+                    VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xs) {
                         HStack(spacing: self.theme.metrics.spacing.sm) {
                             Text(self.release.title)
-                                .font(self.theme.typography.sectionTitle)
+                                .font(.fluidSystem(size: 17, weight: .semibold))
                                 .foregroundStyle(self.theme.palette.primaryText)
                                 .lineLimit(2)
 
@@ -224,9 +225,11 @@ private struct ChangelogReleaseCard: View {
                             }
                         }
 
-                        Text(self.metadataText)
-                            .font(self.theme.typography.caption)
-                            .foregroundStyle(self.theme.palette.tertiaryText)
+                        if let metadataText = self.metadataText {
+                            Text(metadataText)
+                                .font(self.theme.typography.bodySmall)
+                                .foregroundStyle(self.theme.palette.secondaryText)
+                        }
                     }
 
                     Spacer()
@@ -243,19 +246,24 @@ private struct ChangelogReleaseCard: View {
                 }
 
                 VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
-                    ForEach(self.noteBlocks, id: \.self) { block in
+                    ForEach(Array(self.noteBlocks.enumerated()), id: \.offset) { index, block in
                         ChangelogNoteBlock(block: block, theme: self.theme)
+                            .padding(.top, block.kind == .heading && index > 0 ? self.theme.metrics.spacing.lg : 0)
                     }
                 }
+                // Keeps note lines near 80 characters at 14pt.
+                .frame(maxWidth: 580, alignment: .leading)
             }
         }
     }
 
-    private var metadataText: String {
-        if let publishedAt = self.release.publishedAt {
-            return "\(self.release.version) - \(publishedAt.formatted(date: .abbreviated, time: .omitted))"
+    private var metadataText: String? {
+        let showsVersion = !self.release.title.contains(self.release.version)
+        guard let publishedAt = self.release.publishedAt else {
+            return showsVersion ? self.release.version : nil
         }
-        return self.release.version
+        let date = publishedAt.formatted(date: .long, time: .omitted)
+        return showsVersion ? "Version \(self.release.version), released \(date)" : "Released \(date)"
     }
 
     private var noteBlocks: [ChangelogNoteBlock.Model] {
@@ -328,25 +336,37 @@ private struct ChangelogNoteBlock: View {
         switch self.block.kind {
         case .heading:
             Text(self.block.text)
-                .font(self.theme.typography.bodySmallStrong)
+                .font(self.theme.typography.sectionTitle)
                 .foregroundStyle(self.theme.palette.primaryText)
-                .padding(.top, 2)
         case .bullet:
-            HStack(alignment: .firstTextBaseline, spacing: self.theme.metrics.spacing.sm) {
-                Circle()
-                    .fill(self.theme.palette.accent.opacity(0.75))
-                    .frame(width: 4, height: 4)
-                Text(self.markdownAttributedString(from: self.block.text))
-                    .font(self.theme.typography.bodySmall)
-                    .foregroundStyle(self.theme.palette.secondaryText)
-                    .fixedSize(horizontal: false, vertical: true)
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                Text("•")
+                    .font(self.theme.typography.body)
+                    .foregroundStyle(self.theme.palette.tertiaryText)
+                self.noteText
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
         case .paragraph:
-            Text(self.markdownAttributedString(from: self.block.text))
-                .font(self.theme.typography.bodySmall)
-                .foregroundStyle(self.theme.palette.secondaryText)
-                .fixedSize(horizontal: false, vertical: true)
+            self.noteText
         }
+    }
+
+    private var noteText: some View {
+        Text(self.markdownAttributedString(from: Self.emphasizingLeadIn(self.block.text)))
+            .font(self.theme.typography.body)
+            .foregroundStyle(self.theme.palette.primaryText.opacity(0.88))
+            .lineSpacing(4)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    /// Bolds a short "Feature name:" lead-in so a long list can be scanned by name.
+    private static func emphasizingLeadIn(_ text: String) -> String {
+        guard let colon = text.range(of: ": ") else { return text }
+        let leadIn = text[..<colon.lowerBound]
+        guard leadIn.count <= 40,
+              !leadIn.contains(where: { "*`[.".contains($0) })
+        else { return text }
+        return "**\(leadIn):** \(text[colon.upperBound...])"
     }
 
     private func markdownAttributedString(from text: String) -> AttributedString {
