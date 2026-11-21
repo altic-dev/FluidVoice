@@ -299,10 +299,9 @@ Contributions are welcome! Read the [contribution guidelines](CONTRIBUTING.md) b
 1. Clone and open in Xcode as above.
 2. **Signing:** `FluidVoice → Signing & Capabilities → Automatically manage signing → pick your Team` (Personal Team is fine). If you have certificates for multiple teams, select one without changing the project by running `FLUIDVOICE_DEVELOPMENT_TEAM=YOUR_TEAM_ID ./build.sh`.
 3. Build and run — SPM handles dependencies.
-4. **(Optional) Pre-commit hook** to prevent accidental team ID commits:
+4. **Pre-commit hook** to block accidental team ID commits and format staged Swift files:
    ```bash
-   cp scripts/check-team-id.sh .git/hooks/pre-commit
-   chmod +x .git/hooks/pre-commit
+   git config core.hooksPath .githooks
    ```
 
 ### Pull Request Guidelines

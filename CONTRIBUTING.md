@@ -54,7 +54,7 @@ Incomplete bug reports may be labeled `needs reproduction`. If the missing repro
 
 ## Formatting
 
-Enable the pre-commit hook once per clone. It runs SwiftFormat on staged files in `Sources/` and re-stages them:
+Enable the pre-commit hook once per clone. It blocks `DEVELOPMENT_TEAM` changes in `project.pbxproj`, then runs SwiftFormat on staged files in `Sources/` and re-stages them:
 
 ```bash
 git config core.hooksPath .githooks

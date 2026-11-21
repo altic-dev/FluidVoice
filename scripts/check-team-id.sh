@@ -1,6 +1,6 @@
 #!/bin/bash
 # Pre-commit hook to warn about potential team ID changes
-# To install: cp scripts/check-team-id.sh .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
+# Runs from .githooks/pre-commit (git config core.hooksPath .githooks).
 
 # Your official team ID
 OFFICIAL_TEAM_ID="V4J43B279J"

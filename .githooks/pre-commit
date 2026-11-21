@@ -1,9 +1,12 @@
 #!/bin/bash
-# Formats staged Swift files in Sources/ with SwiftFormat and re-stages them.
+# Blocks DEVELOPMENT_TEAM changes, then formats staged Swift files in Sources/ and re-stages them.
 # Enable with: git config core.hooksPath .githooks
 set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"
+
+# core.hooksPath replaces .git/hooks, so the team-ID check must run from here.
+scripts/check-team-id.sh
 
 if ! command -v swiftformat >/dev/null 2>&1; then
   echo "pre-commit: swiftformat not found, skipping formatting (brew install swiftformat)." >&2
