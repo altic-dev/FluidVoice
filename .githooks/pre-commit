@@ -1,0 +1,36 @@
+#!/bin/bash
+# Formats staged Swift files in Sources/ with SwiftFormat and re-stages them.
+# Enable with: git config core.hooksPath .githooks
+set -euo pipefail
+
+cd "$(git rev-parse --show-toplevel)"
+
+if ! command -v swiftformat >/dev/null 2>&1; then
+  echo "pre-commit: swiftformat not found, skipping formatting (brew install swiftformat)." >&2
+  exit 0
+fi
+
+files=()
+while IFS= read -r -d '' file; do
+  files+=("$file")
+done < <(git diff --cached --name-only --diff-filter=ACMR -z -- 'Sources/*.swift')
+
+[ "${#files[@]}" -eq 0 ] && exit 0
+
+# Re-staging a file that also has unstaged edits would sneak those edits into the commit.
+partial=()
+for file in "${files[@]}"; do
+  if ! git diff --quiet -- "$file"; then
+    partial+=("$file")
+  fi
+done
+
+swiftformat --config .swiftformat --quiet "${files[@]}"
+
+if [ "${#partial[@]}" -gt 0 ]; then
+  echo "pre-commit: formatted files that have unstaged changes; review and stage them, then commit again:" >&2
+  printf '  %s\n' "${partial[@]}" >&2
+  exit 1
+fi
+
+git add -- "${files[@]}"
