@@ -5,7 +5,7 @@ import Foundation
 /// Stores only hashes and timestamps, never API keys, URLs, or request contents.
 @MainActor
 final class ProviderModelVerificationStore {
-    // Explicitly nonisolated: on macOS 15.4+ the synthesized main-actor deinit can abort until the OS runtime has the fix (swiftlang/swift#88036).
+    /// Explicitly nonisolated: on macOS 15.4+ the synthesized main-actor deinit can abort until the OS runtime has the fix (swiftlang/swift#88036).
     nonisolated deinit {}
 
     static let defaultsKey = "ProviderModelVerificationsV1"
@@ -16,11 +16,13 @@ final class ProviderModelVerificationStore {
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         let stored = defaults.dictionary(forKey: Self.defaultsKey) as? [String: Double] ?? [:]
-        self.successes = Dictionary(uniqueKeysWithValues: stored
-            .filter { $0.key.count == 64 && $0.value.isFinite }
-            .sorted { $0.value > $1.value }
-            .prefix(Self.maximumEntries)
-            .map { ($0.key, $0.value) })
+        self.successes = Dictionary(
+            uniqueKeysWithValues: stored
+                .filter { $0.key.count == 64 && $0.value.isFinite }
+                .sorted { $0.value > $1.value }
+                .prefix(Self.maximumEntries)
+                .map { ($0.key, $0.value) }
+        )
     }
 
     static func identity(providerID: String, baseURL: String, apiKey: String, model: String) -> String {
@@ -29,7 +31,9 @@ final class ProviderModelVerificationStore {
         return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
 
-    func contains(_ identity: String) -> Bool { self.successes[identity] != nil }
+    func contains(_ identity: String) -> Bool {
+        self.successes[identity] != nil
+    }
 
     func recordSuccess(_ identity: String, now: Date = Date()) {
         self.successes[identity] = now.timeIntervalSince1970

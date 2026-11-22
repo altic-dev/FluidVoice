@@ -3,11 +3,11 @@ import Foundation
 import SwiftUI
 
 /// A small block parser keeps completed replies unchanged while a streaming reply updates.
-struct CommandMarkdownBlock: Identifiable, Equatable, Sendable {
+struct CommandMarkdownBlock: Identifiable, Equatable {
     let id: Int
     let content: Content
 
-    enum Content: Equatable, Sendable {
+    enum Content: Equatable {
         case paragraph(AttributedString)
         case heading(AttributedString, level: Int)
         case listItem(AttributedString, marker: String, depth: Int)

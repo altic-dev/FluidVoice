@@ -38,7 +38,9 @@ final class DeliveryFailureOverlayController {
             }
         }
 
-        var offersAccessibilitySettings: Bool { self == .accessibilityNotTrusted }
+        var offersAccessibilitySettings: Bool {
+            self == .accessibilityNotTrusted
+        }
     }
 
     static let accessibilitySettingsURL = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")

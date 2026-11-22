@@ -249,7 +249,9 @@ private struct OverlayAppearanceSample: View {
     let size: SettingsStore.OverlaySize
     let appearance: BottomOverlayAppearance
 
-    private var layout: BottomOverlayView.LayoutConstants { .get(for: self.size) }
+    private var layout: BottomOverlayView.LayoutConstants {
+        .get(for: self.size)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: self.layout.vPadding / 2) {

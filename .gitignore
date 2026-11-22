@@ -237,3 +237,7 @@ builds/
 
 # Local Claude Code settings and worktrees
 .claude/
+
+# Python bytecode from test helpers
+__pycache__/
+*.pyc

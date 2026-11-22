@@ -477,6 +477,7 @@ final class SettingsStore: ObservableObject {
             } else {
                 self.defaults.removeObject(forKey: Keys.dictationPromptConfigurations)
             }
+            self.pruneAutoSendDictationShortcuts()
         }
     }
 
@@ -548,7 +549,7 @@ final class SettingsStore: ObservableObject {
     func dictationPromptConfigurationKey(for selection: DictationPromptSelection) -> String? {
         switch selection {
         case .off:
-            return nil
+            return "__off__"
         case .privateAI:
             return "__privateAI__"
         case .default:
@@ -560,6 +561,9 @@ final class SettingsStore: ObservableObject {
     }
 
     func dictationPromptSelection(forConfigurationKey key: String) -> DictationPromptSelection? {
+        if key == "__off__" {
+            return .off
+        }
         if key == "__privateAI__" {
             return .privateAI
         }
@@ -609,19 +613,10 @@ final class SettingsStore: ObservableObject {
 
     func dictationPromptShortcutAssignments() -> [(selection: DictationPromptSelection, shortcut: HotkeyShortcut)] {
         self.dictationPromptConfigurations.compactMap { key, configuration in
-            guard let shortcut = configuration.shortcut, !shortcut.requiresModifierForRecording else { return nil }
-            if key == "__default__" {
-                return (.default, shortcut)
-            }
-            if key == "__privateAI__" {
-                return (.privateAI, shortcut)
-            }
-            if key.hasPrefix("profile:") {
-                let id = String(key.dropFirst("profile:".count))
-                guard self.dictationPromptProfiles.contains(where: { $0.id == id && $0.mode.normalized == .dictate }) else { return nil }
-                return (.profile(id), shortcut)
-            }
-            return nil
+            guard let shortcut = configuration.shortcut, !shortcut.requiresModifierForRecording,
+                  let selection = self.dictationPromptSelection(forConfigurationKey: key)
+            else { return nil }
+            return (selection, shortcut)
         }
     }
 
@@ -1699,7 +1694,9 @@ final class SettingsStore: ObservableObject {
         case thirtyMinutes = 30
         case oneHour = 60
 
-        var id: Int { self.rawValue }
+        var id: Int {
+            self.rawValue
+        }
 
         var title: String {
             switch self {
@@ -1883,6 +1880,30 @@ final class SettingsStore: ObservableObject {
         }
     }
 
+    var autoSendDictationShortcuts: [HotkeyShortcut] {
+        get { DictationAutoSendPreferences(defaults: self.defaults).shortcuts }
+        set {
+            self.objectWillChange.send()
+            DictationAutoSendPreferences(defaults: self.defaults).shortcuts = newValue
+            self.pruneAutoSendDictationShortcuts()
+        }
+    }
+
+    func autoSendEnabled(for shortcut: HotkeyShortcut?) -> Bool {
+        DictationAutoSendPreferences(defaults: self.defaults).isEnabled(for: shortcut)
+    }
+
+    func setAutoSendEnabled(_ enabled: Bool, for shortcut: HotkeyShortcut) {
+        var shortcuts = self.autoSendDictationShortcuts.filter { $0 != shortcut }
+        if enabled { shortcuts.append(shortcut) }
+        self.autoSendDictationShortcuts = shortcuts
+    }
+
+    private func pruneAutoSendDictationShortcuts() {
+        let configured = self.primaryDictationShortcuts + self.dictationPromptShortcutAssignments().map(\.shortcut) + [self.promptModeHotkeyShortcut]
+        DictationAutoSendPreferences(defaults: self.defaults).retain(configured)
+    }
+
     private static var defaultPrimaryDictationShortcut: HotkeyShortcut {
         HotkeyShortcut(keyCode: 61, modifierFlags: [])
     }
@@ -1909,6 +1930,7 @@ final class SettingsStore: ObservableObject {
     private func storePrimaryDictationShortcuts(_ shortcuts: [HotkeyShortcut]) {
         if let data = try? JSONEncoder().encode(shortcuts) {
             self.defaults.set(data, forKey: Keys.primaryDictationShortcutsKey)
+            self.pruneAutoSendDictationShortcuts()
         }
     }
 
@@ -3223,6 +3245,7 @@ final class SettingsStore: ObservableObject {
             objectWillChange.send()
             if let data = try? JSONEncoder().encode(newValue) {
                 self.defaults.set(data, forKey: Keys.promptModeHotkeyShortcut)
+                self.pruneAutoSendDictationShortcuts()
             }
         }
     }
@@ -3826,9 +3849,9 @@ final class SettingsStore: ObservableObject {
             copyTranscriptionToClipboard: self.copyTranscriptionToClipboard,
             textInsertionMode: self.textInsertionMode,
             spokenSendEnabled: self.spokenSendEnabled,
-            spokenSendImmediatelyEnabled: self.spokenSendImmediatelyEnabled,
             spokenSendPhrase: self.spokenSendPhrase,
             spokenSendKey: self.spokenSendKey,
+            spokenSendWait: self.spokenSendWait,
             preferredInputDeviceUID: self.preferredInputDeviceUID,
             microphonePriority: self.microphonePriority,
             suppressedMicrophoneUIDs: self.suppressedMicrophoneUIDs.sorted(),
@@ -3887,7 +3910,8 @@ final class SettingsStore: ObservableObject {
             meetingRecordingDefaults: self.meetingRecordingDefaults,
             privateAIIdleUnload: self.privateAIIdleUnload,
             dictationPromptConfigurations: self.dictationPromptConfigurations,
-            automaticDictionaryPromptDelay: self.automaticDictionaryPromptDelay
+            automaticDictionaryPromptDelay: self.automaticDictionaryPromptDelay,
+            autoSendDictationShortcuts: self.autoSendDictationShortcuts
         )
     }
 
@@ -4004,14 +4028,14 @@ final class SettingsStore: ObservableObject {
         if let spokenSendEnabled = payload.spokenSendEnabled {
             self.spokenSendEnabled = spokenSendEnabled
         }
-        if let spokenSendImmediatelyEnabled = payload.spokenSendImmediatelyEnabled {
-            self.spokenSendImmediatelyEnabled = spokenSendImmediatelyEnabled
-        }
         if let spokenSendPhrase = payload.spokenSendPhrase {
             self.spokenSendPhrase = spokenSendPhrase
         }
         if let spokenSendKey = payload.spokenSendKey {
             self.spokenSendKey = spokenSendKey
+        }
+        if let spokenSendWait = payload.spokenSendWait {
+            self.spokenSendWait = spokenSendWait
         }
         self.preferredInputDeviceUID = payload.preferredInputDeviceUID
         self.suppressedMicrophoneUIDs = Set(payload.suppressedMicrophoneUIDs ?? [])
@@ -4141,6 +4165,7 @@ final class SettingsStore: ObservableObject {
         }
         self.purgeRetiredAppleIntelligenceState()
         self.makeEditModeIndependentIfNeeded()
+        if let shortcuts = payload.autoSendDictationShortcuts { self.autoSendDictationShortcuts = shortcuts }
     }
 
     // MARK: - Private Methods
@@ -4425,7 +4450,7 @@ final class SettingsStore: ObservableObject {
 
     private func normalizeDictationPromptConfigurationsIfNeeded() {
         let validKeys = Set(
-            ["__default__", "__privateAI__"] + self.dictationPromptProfiles
+            ["__off__", "__default__", "__privateAI__"] + self.dictationPromptProfiles
                 .filter { $0.mode.normalized == .dictate }
                 .map { "profile:\($0.id)" }
         )
@@ -5212,23 +5237,55 @@ final class SettingsStore: ObservableObject {
 
     /// A custom dictionary entry that maps multiple misheard/alternate spellings to a correct replacement.
     /// For example: ["fluid voice", "fluid boys"] -> "FluidVoice"
-    nonisolated struct CustomDictionaryEntry: Codable, Identifiable, Hashable, Sendable {
+    nonisolated struct CustomDictionaryEntry: Codable, Identifiable, Hashable {
         let id: UUID
-        /// Words/phrases to look for (case-insensitive matching)
+        /// Words/phrases to look for, preserving the capitalization the user entered.
         var triggers: [String]
         /// The correct replacement text
         var replacement: String
+        var caseSensitive: Bool
 
-        init(triggers: [String], replacement: String) {
-            self.id = UUID()
-            self.triggers = triggers.map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
-            self.replacement = replacement
+        init(triggers: [String], replacement: String, caseSensitive: Bool = false) {
+            self.init(id: UUID(), triggers: triggers, replacement: replacement, caseSensitive: caseSensitive)
         }
 
-        init(id: UUID, triggers: [String], replacement: String) {
+        init(id: UUID, triggers: [String], replacement: String, caseSensitive: Bool = false) {
             self.id = id
-            self.triggers = triggers.map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
+            self.triggers = triggers.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             self.replacement = replacement
+            self.caseSensitive = caseSensitive
+        }
+
+        private enum CodingKeys: String, CodingKey {
+            case id, triggers, replacement, caseSensitive
+        }
+
+        init(from decoder: Decoder) throws {
+            let values = try decoder.container(keyedBy: CodingKeys.self)
+            try self.init(
+                id: values.decode(UUID.self, forKey: .id),
+                triggers: values.decode([String].self, forKey: .triggers),
+                replacement: values.decode(String.self, forKey: .replacement),
+                caseSensitive: values.decodeIfPresent(Bool.self, forKey: .caseSensitive) ?? false
+            )
+        }
+
+        func encode(to encoder: Encoder) throws {
+            var values = encoder.container(keyedBy: CodingKeys.self)
+            try values.encode(self.id, forKey: .id)
+            try values.encode(self.triggers, forKey: .triggers)
+            try values.encode(self.replacement, forKey: .replacement)
+            if self.caseSensitive { try values.encode(true, forKey: .caseSensitive) }
+        }
+
+        /// A broad rule conflicts with every case variant; exact rules conflict only with the same spelling.
+        static func triggersOverlap(_ lhs: String, caseSensitive lhsSensitive: Bool, _ rhs: String, caseSensitive rhsSensitive: Bool) -> Bool {
+            let exact = lhsSensitive && rhsSensitive
+            return self.triggerKey(lhs, caseSensitive: exact) == self.triggerKey(rhs, caseSensitive: exact)
+        }
+
+        static func triggerKey(_ trigger: String, caseSensitive: Bool) -> String {
+            caseSensitive ? trigger : trigger.folding(options: .caseInsensitive, locale: nil)
         }
 
         /// Trims padding around visible replacement text while preserving an intentional
@@ -5256,7 +5313,9 @@ final class SettingsStore: ObservableObject {
         case second = 2
         case third = 3
 
-        var id: Int { self.rawValue }
+        var id: Int {
+            self.rawValue
+        }
 
         var displayName: String {
             switch self {
@@ -5273,7 +5332,10 @@ final class SettingsStore: ObservableObject {
         case two = 2000
         case three = 3000
 
-        var id: Int { self.rawValue }
+        var id: Int {
+            self.rawValue
+        }
+
         var displayName: String {
             switch self {
             case .threeQuarters: "0.75 seconds"
@@ -5283,9 +5345,14 @@ final class SettingsStore: ObservableObject {
             }
         }
 
-        var inactivityNanoseconds: UInt64 { UInt64(self.rawValue) * 1_000_000 }
-        // Leaving the corrected word should never wait longer than inactivity.
-        var completionNanoseconds: UInt64 { min(self.inactivityNanoseconds, 1_000_000_000) }
+        var inactivityNanoseconds: UInt64 {
+            UInt64(self.rawValue) * 1_000_000
+        }
+
+        /// Leaving the corrected word should never wait longer than inactivity.
+        var completionNanoseconds: UInt64 {
+            min(self.inactivityNanoseconds, 1_000_000_000)
+        }
     }
 
     var automaticDictionaryPromptDelay: AutomaticDictionaryPromptDelay {
@@ -5482,14 +5549,19 @@ final class SettingsStore: ObservableObject {
 
         var requiresAppleSilicon: Bool {
             switch self {
-            case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico, .fluidParakeetPro, .parakeetRealtime, .qwen3Asr, .qwen3Asr17B, .cohereTranscribeSixBit, .senseVoiceSmall, .nemotronOffline, .nemotronStreaming, .nemotronStreaming320: return true
+            case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico, .fluidParakeetPro,
+                 .parakeetRealtime, .qwen3Asr, .qwen3Asr17B, .cohereTranscribeSixBit, .senseVoiceSmall,
+                 .nemotronOffline, .nemotronStreaming, .nemotronStreaming320:
+                return true
             default: return false
             }
         }
 
         var isWhisperModel: Bool {
             switch self {
-            case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico, .fluidParakeetPro, .parakeetRealtime, .qwen3Asr, .qwen3Asr17B, .cohereTranscribeSixBit, .senseVoiceSmall, .nemotronOffline, .nemotronStreaming, .nemotronStreaming320, .appleSpeech,
+            case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico, .fluidParakeetPro,
+                 .parakeetRealtime, .qwen3Asr, .qwen3Asr17B, .cohereTranscribeSixBit, .senseVoiceSmall,
+                 .nemotronOffline, .nemotronStreaming, .nemotronStreaming320, .appleSpeech,
                  .appleSpeechAnalyzer: return false
             default: return true
             }
@@ -5822,7 +5894,9 @@ final class SettingsStore: ObservableObject {
         /// Optimization level for Apple Silicon (for display)
         var appleSiliconOptimized: Bool {
             switch self {
-            case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico, .fluidParakeetPro, .parakeetRealtime, .qwen3Asr, .cohereTranscribeSixBit, .senseVoiceSmall, .nemotronOffline, .nemotronStreaming, .nemotronStreaming320, .appleSpeechAnalyzer:
+            case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico, .fluidParakeetPro,
+                 .parakeetRealtime, .qwen3Asr, .cohereTranscribeSixBit, .senseVoiceSmall,
+                 .nemotronOffline, .nemotronStreaming, .nemotronStreaming320, .appleSpeechAnalyzer:
                 return true
             default:
                 return false
@@ -6198,9 +6272,9 @@ private extension SettingsStore {
         static let copyTranscriptionToClipboard = "CopyTranscriptionToClipboard"
         static let textInsertionMode = "TextInsertionMode"
         static let spokenSendEnabled = "SpokenSendEnabled"
-        static let spokenSendImmediatelyEnabled = "SpokenSendImmediatelyEnabled"
         static let spokenSendPhrase = "SpokenSendPhrase"
         static let spokenSendKey = "SpokenSendKey"
+        static let spokenSendWait = "SpokenSendWait"
         static let reliablePasteMigrationV1 = "TextInsertionModeMigratedToReliablePasteV1"
         static let autoUpdateCheckEnabled = UpdateKeys.autoUpdateCheckEnabled
         static let showUpdatePopups = UpdateKeys.showUpdatePopups
@@ -6374,19 +6448,44 @@ extension SettingsStore {
         }
     }
 
+    /// How long Spoken Send waits after the phrase before it stops and sends.
+    enum SpokenSendWait: String, CaseIterable, Identifiable, Codable {
+        case short
+        case normal
+        case long
+
+        var id: String {
+            self.rawValue
+        }
+
+        var seconds: TimeInterval {
+            switch self {
+            case .short:
+                return 0.5
+            case .normal:
+                return 1.5
+            case .long:
+                return 3
+            }
+        }
+
+        var displayName: String {
+            switch self {
+            case .short:
+                return "0.5 seconds"
+            case .normal:
+                return "1.5 seconds"
+            case .long:
+                return "3 seconds"
+            }
+        }
+    }
+
     var spokenSendEnabled: Bool {
         get { self.defaults.object(forKey: Keys.spokenSendEnabled) as? Bool ?? false }
         set {
             objectWillChange.send()
             self.defaults.set(newValue, forKey: Keys.spokenSendEnabled)
-        }
-    }
-
-    var spokenSendImmediatelyEnabled: Bool {
-        get { self.defaults.object(forKey: Keys.spokenSendImmediatelyEnabled) as? Bool ?? true }
-        set {
-            objectWillChange.send()
-            self.defaults.set(newValue, forKey: Keys.spokenSendImmediatelyEnabled)
         }
     }
 
@@ -6410,6 +6509,21 @@ extension SettingsStore {
         set {
             objectWillChange.send()
             self.defaults.set(newValue.rawValue, forKey: Keys.spokenSendKey)
+        }
+    }
+
+    var spokenSendWait: SpokenSendWait {
+        get {
+            guard let raw = self.defaults.string(forKey: Keys.spokenSendWait),
+                  let wait = SpokenSendWait(rawValue: raw)
+            else {
+                return .normal
+            }
+            return wait
+        }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue.rawValue, forKey: Keys.spokenSendWait)
         }
     }
 

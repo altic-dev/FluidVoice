@@ -1,7 +1,7 @@
 import Foundation
 
 /// Alignment always describes the original ASR output, before dictionary rules or AI rewriting.
-nonisolated struct DictionaryLearningAlignment: Sendable {
+nonisolated struct DictionaryLearningAlignment {
     let modelKey: String
     let words: [ASRWordTiming]
     var acousticOutput: String? = nil
@@ -10,14 +10,14 @@ nonisolated struct DictionaryLearningAlignment: Sendable {
     var voiceSpellings: [DictionaryVoiceSpelling] = []
 }
 
-nonisolated struct DictionaryVoiceSpelling: Equatable, Sendable {
+nonisolated struct DictionaryVoiceSpelling: Equatable {
     let entryID: UUID
     let label: String
     let spelling: String
 }
 
 /// Short-lived ownership of original PCM, independent from the consume-once history snapshot.
-nonisolated struct DictionaryLearningRecording: Sendable {
+nonisolated struct DictionaryLearningRecording {
     static let sampleRate = 16_000
     static let maximumSamples = sampleRate * 60 * 15
     static let lifetime: TimeInterval = 120
@@ -46,14 +46,14 @@ nonisolated struct DictionaryLearningRecording: Sendable {
 }
 
 /// Immutable link from an observed text edit to the recording delivered to that field.
-nonisolated struct DictionaryLearningCorrectionContext: Sendable {
+nonisolated struct DictionaryLearningCorrectionContext {
     let recording: DictionaryLearningRecording
     let deliveredTextBeforeEdit: String
     let selectedUTF16Range: NSRange
 }
 
 /// The bounded original context and exact focal occurrence used for one pronunciation example.
-nonisolated struct DictionaryLearningAudioEvidence: Sendable {
+nonisolated struct DictionaryLearningAudioEvidence {
     let recordingID: UUID
     let modelKey: String
     let observedText: String

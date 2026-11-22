@@ -34,7 +34,7 @@ struct DictationProviderRoute: Equatable {
 
     /// Model routing without credentials or private-model installation checks.
     /// The overlay can snapshot this on main and resolve its display name off main.
-    enum ModelChoice: Equatable, Sendable {
+    enum ModelChoice: Equatable {
         case none
         case privateAI
         case provider(String, String?)

@@ -52,6 +52,16 @@ For an approved major feature, link the accepted Discussion in the tracking issu
 
 Incomplete bug reports may be labeled `needs reproduction`. If the missing reproduction details are not provided after 14 days, the issue may be closed.
 
+## Formatting
+
+Enable the pre-commit hook once per clone. It blocks `DEVELOPMENT_TEAM` changes in `project.pbxproj`, then runs SwiftFormat on staged files in `Sources/` and re-stages them:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+It needs `swiftformat` (`brew install swiftformat`). To format and lint everything, run `scripts/format-and-lint.sh`.
+
 ## Pull Requests
 
 Every pull request must link a tracking issue. Before opening a PR:

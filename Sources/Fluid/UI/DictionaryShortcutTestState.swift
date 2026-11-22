@@ -89,7 +89,7 @@ enum DictionaryWordTestResult {
 }
 
 /// One exact textbox attempt. Changing the text invalidates its audio score.
-struct DictionaryTestRecording: Identifiable, Sendable {
+struct DictionaryTestRecording: Identifiable {
     let id: UUID
     let text: String
     let samples: [Float]

@@ -87,7 +87,11 @@ nonisolated enum CompactSpeechModelRuntimeCheck {
         let samples = try self.samples()
         do {
             try await self.withDeadline {
-                let stagedModels = try await AsrModels.loadLocalOnly(from: directory, version: descriptor.asrModelVersion)
+                let stagedModels = try await LocalParakeetModelLoader.load(
+                    from: directory,
+                    version: descriptor.asrModelVersion,
+                    archiveSHA256: descriptor.archiveSHA256
+                )
                 let manager = AsrManager(config: ASRConfig.default)
                 do {
                     try await manager.initialize(models: stagedModels)
@@ -123,7 +127,7 @@ nonisolated enum MeetingProviderOptionsError: Error, Equatable {
 /// Immutable provider options for meeting post-processing. Pro is the default;
 /// v3 is the installed fallback. Other models are not supported for meetings.
 /// Unsupported model/language combinations and enhancement features are rejected.
-nonisolated struct MeetingProviderOptions: Equatable, Sendable {
+nonisolated struct MeetingProviderOptions: Equatable {
     private static let supportedModels: Set<SettingsStore.SpeechModel> = [
         .parakeetTDT, .fluidParakeetPro,
     ]
@@ -201,7 +205,7 @@ import FluidAudio
 /// TranscriptionProvider implementation using FluidAudio (optimized for Apple Silicon)
 /// This wraps the existing FluidAudio-based ASR for use on Apple Silicon Macs.
 final class FluidAudioProvider: TranscriptionProvider {
-    // Explicitly nonisolated: on macOS 15.4+ the synthesized main-actor deinit can abort until the OS runtime has the fix (swiftlang/swift#88036).
+    /// Explicitly nonisolated: on macOS 15.4+ the synthesized main-actor deinit can abort until the OS runtime has the fix (swiftlang/swift#88036).
     nonisolated deinit {}
 
     private static let incrementalChunkingThresholdSamples = 240_000
@@ -215,10 +219,18 @@ final class FluidAudioProvider: TranscriptionProvider {
         private(set) var byteCount = 0
         let byteLimit: Int
 
-        init(byteLimit: Int = 32 * 1024 * 1024) { self.byteLimit = byteLimit }
+        init(byteLimit: Int = 32 * 1024 * 1024) {
+            self.byteLimit = byteLimit
+        }
+
         // swiftlint:disable:next discouraged_optional_collection
-        subscript(key: String) -> [DictionaryMatchFrames]? { self.entries[key] }
-        func canFit(_ bytes: Int) -> Bool { bytes >= 0 && bytes <= self.byteLimit - self.byteCount }
+        subscript(key: String) -> [DictionaryMatchFrames]? {
+            self.entries[key]
+        }
+
+        func canFit(_ bytes: Int) -> Bool {
+            bytes >= 0 && bytes <= self.byteLimit - self.byteCount
+        }
 
         @discardableResult mutating func insert(_ frames: [DictionaryMatchFrames], for key: String) -> Bool {
             if self.entries[key] != nil { return true }
@@ -237,7 +249,9 @@ final class FluidAudioProvider: TranscriptionProvider {
             }
         }
 
-        mutating func removeAll() { self.entries.removeAll(); self.byteCount = 0 }
+        mutating func removeAll() {
+            self.entries.removeAll(); self.byteCount = 0
+        }
     }
 
     struct PronunciationTextReplacement {
@@ -269,7 +283,9 @@ final class FluidAudioProvider: TranscriptionProvider {
 
     /// Boosting rescores tokens without moving their timings. Checked up front so a chunk that
     /// cannot be aligned is never transcribed twice.
-    var supportsWordTimings: Bool { !self.isWordBoostingActive }
+    var supportsWordTimings: Bool {
+        !self.isWordBoostingActive
+    }
 
     private var streamingAsrManager: AsrManager?
     private var finalAsrManager: AsrManager?
@@ -295,7 +311,9 @@ final class FluidAudioProvider: TranscriptionProvider {
     private var pronunciationModelKey = ""
     #if DEBUG
     var modelCacheRootForTesting: URL?
-    var pronunciationModelKeyForTesting: String { self.pronunciationModelKey }
+    var pronunciationModelKeyForTesting: String {
+        self.pronunciationModelKey
+    }
     #endif
     private var edgeReferenceCache: [UUID: PronunciationEmbedding] = [:]
     private var incrementalSharedFeatures = false
@@ -376,13 +394,17 @@ final class FluidAudioProvider: TranscriptionProvider {
 
     private var automaticPronunciationMatchingEnabled: Bool {
         self.meetingOptions == nil && self.enhancementOptions == nil
-            && (SettingsStore.shared.automaticDictionaryLearningEnabled
-                || self.automaticPronunciationProfiles.contains { $0.automaticMatchingEnabled == true })
+            && (
+                SettingsStore.shared.automaticDictionaryLearningEnabled
+                    || self.automaticPronunciationProfiles.contains { $0.automaticMatchingEnabled == true }
+            )
     }
 
     private var effectivePronunciationMatchingEnabled: Bool {
-        DictionaryMatcherExperiment.sharedFeaturesEnabled && ((self.explicitPronunciationMatchingEnabled && self.hasEligibleExplicitPronunciationProfiles)
-            || (self.automaticPronunciationMatchingEnabled && !self.automaticPronunciationProfiles.isEmpty))
+        DictionaryMatcherExperiment.sharedFeaturesEnabled && (
+            (self.explicitPronunciationMatchingEnabled && self.hasEligibleExplicitPronunciationProfiles)
+                || (self.automaticPronunciationMatchingEnabled && !self.automaticPronunciationProfiles.isEmpty)
+        )
     }
 
     /// Read the actor-owned store once after capture begins, never on the microphone startup path.
@@ -577,7 +599,11 @@ final class FluidAudioProvider: TranscriptionProvider {
                 }
                 try Task.checkCancellation()
                 progressRelay.report(.loading)
-                models = try await AsrModels.loadLocalOnly(from: modelCacheDirectory, version: asrModelVersion)
+                models = try await LocalParakeetModelLoader.load(
+                    from: modelCacheDirectory,
+                    version: asrModelVersion,
+                    archiveSHA256: installedHash ?? descriptor.archiveSHA256
+                )
             } else {
                 models = try await AsrModels.downloadAndLoad(
                     version: asrModelVersion,
@@ -1536,7 +1562,10 @@ final class FluidAudioProvider: TranscriptionProvider {
 
     #if DEBUG
     /// Test synchronization observes actual preparation; it never starts inference itself.
-    var pronunciationReferencePreparationTask: Task<Void, Never>? { self.temporalWarmTask }
+    var pronunciationReferencePreparationTask: Task<Void, Never>? {
+        self.temporalWarmTask
+    }
+
     var pronunciationReferencesReady: Bool {
         !self.pronunciationProfilesToWarm.isEmpty
             && self.pronunciationProfilesToWarm.allSatisfy {
@@ -1990,16 +2019,24 @@ final class FluidAudioProvider: TranscriptionProvider {
 #else
 /// Check-shim for Intel Macs where FluidAudio is not available
 final class FluidAudioProvider: TranscriptionProvider {
-    // Explicitly nonisolated: on macOS 15.4+ the synthesized main-actor deinit can abort until the OS runtime has the fix (swiftlang/swift#88036).
+    /// Explicitly nonisolated: on macOS 15.4+ the synthesized main-actor deinit can abort until the OS runtime has the fix (swiftlang/swift#88036).
     nonisolated deinit {}
 
     let name = "FluidAudio (Apple Silicon ONLY)"
-    var isAvailable: Bool { false }
-    var isReady: Bool { false }
+    var isAvailable: Bool {
+        false
+    }
+
+    var isReady: Bool {
+        false
+    }
+
     private(set) var isWordBoostingActive: Bool = false
     private(set) var boostedVocabularyTermsCount: Int = 0
 
-    var preservesInstalledCompactWeights: Bool { false }
+    var preservesInstalledCompactWeights: Bool {
+        false
+    }
 
     init(
         modelOverride: SettingsStore.SpeechModel? = nil,

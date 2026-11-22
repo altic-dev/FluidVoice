@@ -57,8 +57,8 @@ struct AIEnhancementSettingsView: View {
     var body: some View {
         self.aiConfigurationCard
             .onAppear {
-                self.viewModel.onAppear()
-                self.privateAIController.synchronizeSelection()
+                let didReload = self.viewModel.onAppear()
+                if didReload { self.privateAIController.synchronizeSelection() }
                 self.privateAIController.refreshPrivateAILoadState()
                 self.privateAIController.refreshPrivateAIModelUpdateStatus(self.privateAIController.selectedPrivateAIModel)
             }

@@ -13,7 +13,7 @@ import Foundation
 
 /// Encoder weight variant. int8 and fp16 are only numerically correct on the Neural Engine
 /// (the fp16 CPU/GPU path yields NaN); fp32 runs on any compute unit.
-nonisolated enum SenseVoiceEncoderVariant: String, CaseIterable, Sendable {
+nonisolated enum SenseVoiceEncoderVariant: String, CaseIterable {
     case int8
     case fp16
     case fp32
@@ -26,7 +26,9 @@ nonisolated enum SenseVoiceEncoderVariant: String, CaseIterable, Sendable {
         }
     }
 
-    var bundleName: String { self.modelName + ".mlmodelc" }
+    var bundleName: String {
+        self.modelName + ".mlmodelc"
+    }
 
     var computeUnits: MLComputeUnits {
         self == .fp32 ? .all : .cpuAndNeuralEngine
@@ -52,12 +54,12 @@ nonisolated enum SenseVoiceConstants {
     /// LFR hop: 10 ms fbank shift × n=6 → one encoder frame per 960 samples.
     static let samplesPerFrame = 960
     /// Below ~0.2 s the fbank/LFR front end has almost nothing to work with.
-    static let minimumSamples = 3_200
+    static let minimumSamples = 3200
     /// Peak amplitude under which a buffer is treated as digital silence.
     static let silencePeak: Float = 1e-4
 }
 
-nonisolated struct SenseVoiceTranscription: Sendable {
+nonisolated struct SenseVoiceTranscription {
     let text: String
     /// Detected language tag (`zh`, `en`, `yue`, `ja`, `ko`, `nospeech`, …) of the first chunk.
     let detectedLanguage: String?
@@ -132,7 +134,9 @@ actor SenseVoiceEngine {
         Double(self.maxChunkSamples) / Double(SenseVoiceConstants.sampleRate)
     }
 
-    var acceptedFrameCounts: [Int] { self.encoderFrameCounts }
+    var acceptedFrameCounts: [Int] {
+        self.encoderFrameCounts
+    }
 
     /// Transcribe 16 kHz mono samples in [-1, 1]. Long audio is split near quiet points.
     func transcribe(
@@ -183,7 +187,8 @@ actor SenseVoiceEngine {
         let dst = waveform.dataPointer.assumingMemoryBound(to: Float.self)
         var scale = SenseVoiceConstants.waveformScale
         samples.withUnsafeBufferPointer { src in
-            vDSP_vsmul(src.baseAddress!, 1, &scale, dst, 1, vDSP_Length(n))
+            guard let srcBase = src.baseAddress else { return }
+            vDSP_vsmul(srcBase, 1, &scale, dst, 1, vDSP_Length(n))
         }
         let input = try MLDictionaryFeatureProvider(dictionary: ["waveform": MLFeatureValue(multiArray: waveform)])
         let output = try self.preprocessor.prediction(from: input)
@@ -219,9 +224,9 @@ actor SenseVoiceEngine {
 
         let input = try MLDictionaryFeatureProvider(dictionary: [
             "speech": MLFeatureValue(multiArray: speech),
-            "speech_lengths": MLFeatureValue(multiArray: try Self.int32Scalar(Int32(t))),
-            "language": MLFeatureValue(multiArray: try Self.int32Scalar(language)),
-            "textnorm": MLFeatureValue(multiArray: try Self.int32Scalar(textNorm)),
+            "speech_lengths": MLFeatureValue(multiArray: Self.int32Scalar(Int32(t))),
+            "language": MLFeatureValue(multiArray: Self.int32Scalar(language)),
+            "textnorm": MLFeatureValue(multiArray: Self.int32Scalar(textNorm)),
         ])
         let output = try self.encoder.prediction(from: input)
         guard let logits = output.featureValue(for: "ctc_logits")?.multiArrayValue else {
@@ -263,15 +268,19 @@ actor SenseVoiceEngine {
         let count = frames * stride
         var widened = [Float](repeating: 0, count: count)
         widened.withUnsafeMutableBufferPointer { dst in
+            guard let dstBase = dst.baseAddress else { return }
             var srcBuffer = vImage_Buffer(
                 data: logits.dataPointer, height: 1, width: vImagePixelCount(count), rowBytes: count * 2
             )
             var dstBuffer = vImage_Buffer(
-                data: dst.baseAddress!, height: 1, width: vImagePixelCount(count), rowBytes: count * 4
+                data: dstBase, height: 1, width: vImagePixelCount(count), rowBytes: count * 4
             )
             vImageConvert_Planar16FtoPlanarF(&srcBuffer, &dstBuffer, 0)
         }
-        return try widened.withUnsafeBufferPointer { try scan($0.baseAddress!) }
+        return try widened.withUnsafeBufferPointer { buffer in
+            guard let base = buffer.baseAddress else { return [] }
+            return try scan(base)
+        }
     }
 
     // MARK: - Text
@@ -326,10 +335,10 @@ actor SenseVoiceEngine {
 
     private nonisolated static func isUnspacedCJK(_ scalar: Unicode.Scalar) -> Bool {
         switch scalar.value {
-        case 0x3000...0x303F, // CJK punctuation
-             0x3040...0x30FF, // hiragana, katakana
-             0x3400...0x4DBF, 0x4E00...0x9FFF, 0xF900...0xFAFF, // Han
-             0xFF00...0xFFEF: // full-width forms
+        case 0x3000...0x303f, // CJK punctuation
+             0x3040...0x30ff, // hiragana, katakana
+             0x3400...0x4dbf, 0x4e00...0x9fff, 0xf900...0xfaff, // Han
+             0xff00...0xffef: // full-width forms
             return true
         default:
             return false
@@ -352,9 +361,9 @@ actor SenseVoiceEngine {
 
     private nonisolated static func isSpaced(_ scalar: Unicode.Scalar) -> Bool {
         switch scalar.value {
-        case 0x1100...0x11FF, 0x3130...0x318F, 0xAC00...0xD7AF:
+        case 0x1100...0x11ff, 0x3130...0x318f, 0xac00...0xd7af:
             return true // Hangul: Korean separates words with spaces
-        case 0x2E80...:
+        case 0x2e80...:
             return false // CJK and kana: no inter-chunk space
         default:
             break
@@ -381,9 +390,10 @@ actor SenseVoiceEngine {
             var position = hardEnd - window
             let lowerBound = hardEnd - searchSpan
             samples.withUnsafeBufferPointer { buffer in
+                guard let base = buffer.baseAddress else { return }
                 while position >= lowerBound {
                     var energy: Float = 0
-                    vDSP_svesq(buffer.baseAddress! + position, 1, &energy, vDSP_Length(window))
+                    vDSP_svesq(base + position, 1, &energy, vDSP_Length(window))
                     if energy < bestEnergy {
                         bestEnergy = energy
                         bestEnd = position + window / 2
@@ -419,7 +429,9 @@ actor SenseVoiceEngine {
             let pairs = dict.compactMap { key, value in Int(key).map { ($0, value) } }
             guard let maxID = pairs.map(\.0).max() else { throw SenseVoiceError.vocabularyUnreadable }
             var list = [String](repeating: "", count: maxID + 1)
-            for (id, token) in pairs { list[id] = token }
+            for (id, token) in pairs {
+                list[id] = token
+            }
             return list
         }
         throw SenseVoiceError.vocabularyUnreadable

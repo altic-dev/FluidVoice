@@ -22,7 +22,7 @@ final class OpenAICompatibleProvider: AIProvider {
     struct ChatChoice: Codable { let index: Int?; let message: ChatChoiceMessage }
     struct ChatResponse: Codable { let choices: [ChatChoice] }
 
-    // Helper function to detect if the endpoint is local
+    /// Helper function to detect if the endpoint is local
     private func isLocalEndpoint(_ urlString: String) -> Bool {
         guard let url = URL(string: urlString),
               let host = url.host else { return false }
@@ -61,7 +61,7 @@ final class OpenAICompatibleProvider: AIProvider {
         return false
     }
 
-    // Helper function to detect if model is a gpt-oss model (Groq reasoning models)
+    /// Helper function to detect if model is a gpt-oss model (Groq reasoning models)
     private func isGptOssModel(_ modelName: String) -> Bool {
         let modelLower = modelName.lowercased()
         // Check for gpt-oss pattern or openai/ prefix (Groq's naming convention)

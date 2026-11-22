@@ -48,7 +48,9 @@ struct FluidIntelligenceDemoView: View {
         ]
     }()
 
-    private var busy: Bool { self.asr.isRunningOrStarting || self.overlay.isProcessing || self.sandbox.isProcessing || self.runningSample || self.stoppingVoice }
+    private var busy: Bool {
+        self.asr.isRunningOrStarting || self.overlay.isProcessing || self.sandbox.isProcessing || self.runningSample || self.stoppingVoice
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
@@ -102,8 +104,10 @@ struct FluidIntelligenceDemoView: View {
                             }
                         }
                         .fluidGlassAction(prominent: true)
-                        .disabled(self.runningSample || self.stoppingVoice || self.overlay.isProcessing || self.sandbox.isProcessing || self.asr.isStarting || !self.asr.isAsrReady || self.asr
-                            .micStatus != .authorized)
+                        .disabled(
+                            self.runningSample || self.stoppingVoice || self.overlay.isProcessing || self.sandbox.isProcessing || self.asr.isStarting || !self.asr.isAsrReady || self.asr
+                                .micStatus != .authorized
+                        )
                     } else {
                         Button("Set up Fluid Intelligence", action: self.onSetup).fluidGlassAction(prominent: true)
                     }

@@ -1,20 +1,25 @@
 import AppKit
 import Foundation
 
-nonisolated struct MeetingInstalledCallApplication: Sendable {
+nonisolated struct MeetingInstalledCallApplication {
     let bundleIdentifier: String
     let displayName: String
     var isRunning = false
 }
 
-nonisolated struct MeetingAppPickerEntry: Identifiable, Sendable {
+nonisolated struct MeetingAppPickerEntry: Identifiable {
     let bundleIdentifier: String
     let displayName: String
     let application: MeetingApplicationIdentity?
     var isRunning = false
 
-    var id: String { "\(self.bundleIdentifier)-\(self.application?.processID ?? 0)" }
-    var unavailableLabel: String { "\(self.displayName) · \(self.isRunning ? "Not available" : "Not running")" }
+    var id: String {
+        "\(self.bundleIdentifier)-\(self.application?.processID ?? 0)"
+    }
+
+    var unavailableLabel: String {
+        "\(self.displayName) · \(self.isRunning ? "Not available" : "Not running")"
+    }
 
     static func entries(
         applications: [MeetingApplicationIdentity],
@@ -59,7 +64,9 @@ nonisolated enum MeetingInstalledCallApplications {
 nonisolated struct MeetingApplicationIcon: @unchecked Sendable, Equatable {
     let image: NSImage
 
-    static func == (lhs: Self, rhs: Self) -> Bool { lhs.image === rhs.image }
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.image === rhs.image
+    }
 
     static func snapshot(bundleIdentifiers: [String]) async -> [String: Self] {
         await Task.detached(priority: .utility) {

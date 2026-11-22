@@ -126,7 +126,9 @@ enum PasteVerifier {
     nonisolated static let firstCheckDelay: TimeInterval = 0.15
     nonisolated static let secondCheckDelay: TimeInterval = 0.35
     nonisolated static let finalCheckDelay: TimeInterval = 1.5
-    nonisolated static var totalDecisionDelay: TimeInterval { self.firstCheckDelay + self.secondCheckDelay + self.finalCheckDelay }
+    nonisolated static var totalDecisionDelay: TimeInterval {
+        self.firstCheckDelay + self.secondCheckDelay + self.finalCheckDelay
+    }
 
     /// A key press or click after the paste means the user acted on the field
     /// (typically Return to send), so an unchanged field proves nothing.
@@ -292,11 +294,16 @@ final class PasteRecoveryEvidence {
     private var reported = false
     private let report: (Recovery) -> Void
 
-    init(report: @escaping (Recovery) -> Void) { self.report = report }
+    init(report: @escaping (Recovery) -> Void) {
+        self.report = report
+    }
 
     nonisolated deinit {}
 
-    func clipboardTimedOut() { self.unread = true; self.evaluate() }
+    func clipboardTimedOut() {
+        self.unread = true; self.evaluate()
+    }
+
     func verified(_ verdict: PasteVerifier.Verdict) {
         guard self.verdict == nil else { return }
         self.verdict = verdict
@@ -341,7 +348,9 @@ final class PasteRecoveryInbox {
         return true
     }
 
-    var pendingID: UInt64? { self.pending?.id }
+    var pendingID: UInt64? {
+        self.pending?.id
+    }
 
     enum Disposition: String { case none, alertsDisabled, expired, waitingForIdle, ready }
 

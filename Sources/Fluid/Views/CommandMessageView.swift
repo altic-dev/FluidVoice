@@ -198,7 +198,7 @@ struct CommandMessageView: View {
 }
 
 /// Accept both the saved terminal result schema and unfamiliar results without losing their text.
-struct CommandToolOutput: Sendable, Equatable {
+struct CommandToolOutput: Equatable {
     let success: Bool?
     let title: String
     let output: String

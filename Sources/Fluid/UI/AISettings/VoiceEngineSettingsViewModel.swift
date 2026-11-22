@@ -9,7 +9,9 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
     private var cancellables = Set<AnyCancellable>()
     let installations = SpeechModelInstallationSnapshot.shared
 
-    var asr: ASRService { self.appServices.asr }
+    var asr: ASRService {
+        self.appServices.asr
+    }
 
     var areSpeechModelActionsBlocked: Bool {
         !self.installations.canUseModelActions
@@ -23,6 +25,7 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
             || (!self.asr.isAsrReady && (self.asr.isDownloadingModel || self.asr.isLoadingModel))
     }
 
+    private var lastInstallationRefresh: Date?
     @Published var modelSortOption: ModelSortOption = .provider
     @Published var providerFilter: SpeechProviderFilter = .all
     @Published var englishOnlyFilter: Bool = false
@@ -66,15 +69,38 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
     }
 
     func onAppear() {
-        self.previewSpeechModel = self.settings.selectedSpeechModel
-        self.selectedSpeechProvider = self.settings.selectedSpeechModel.provider
+        let selectedModel = self.settings.selectedSpeechModel
+        if self.previewSpeechModel != selectedModel { self.previewSpeechModel = selectedModel }
+        if self.selectedSpeechProvider != selectedModel.provider {
+            self.selectedSpeechProvider = selectedModel.provider
+        }
 
-        self.installations.refresh()
+        self.refreshInstallationsIfStale()
+    }
+
+    /// The catalog applies its own refresh and retry intervals.
+    func refreshCatalog() {
         Task {
             let catalog = CompactSpeechModelReleaseCatalog.shared
             let revision = catalog.revision
             await catalog.refreshIfNeeded()
             if catalog.revision != revision { self.installations.refresh() }
+        }
+    }
+
+    /// A refresh invalidates every model card, so a return visit waits for the page to settle.
+    private func refreshInstallationsIfStale() {
+        let now = Date()
+        guard let lastRefresh = self.lastInstallationRefresh else {
+            self.lastInstallationRefresh = now
+            self.installations.refresh()
+            return
+        }
+        guard now.timeIntervalSince(lastRefresh) >= 60 else { return }
+        self.lastInstallationRefresh = now
+        Task {
+            try? await Task.sleep(for: .milliseconds(600))
+            self.installations.refresh()
         }
     }
 
@@ -247,7 +273,7 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
         case .cohereTranscribeSixBit:
             return "Cohere Transcribe downloads a CoreML pipeline from Hugging Face and caches it locally. Select the language manually before dictation. Best on Apple Silicon with 8GB+ RAM."
         case .senseVoiceSmall:
-            return "SenseVoice Small (FunAudioLLM) downloads a ~229 MiB int8 CoreML model from Hugging Face and runs on the Neural Engine. Supports Mandarin, Cantonese, English, Japanese, and Korean with auto-detect or a fixed language. The first load optimizes the model for this Mac and can take a minute or two."
+            return "SenseVoice Small (FunAudioLLM) downloads a ~229 MiB int8 CoreML model and runs on the Neural Engine. Supports Mandarin, Cantonese, English, Japanese, and Korean. The first load optimizes for this Mac and can take a minute or two."
         case .nemotronOffline:
             return "Nemotron 3.5 Multilingual is slower but more accurate. Supports around 40 languages with auto or manual language selection. Best on Apple Silicon with 8GB+ RAM."
         case .nemotronStreaming, .nemotronStreaming320:

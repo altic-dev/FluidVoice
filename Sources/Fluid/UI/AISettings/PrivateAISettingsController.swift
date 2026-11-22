@@ -67,13 +67,24 @@ enum PrivateAIModelLoadState: Equatable {
 final class PrivateAISettingsController: ObservableObject {
     let viewModel: AIEnhancementSettingsViewModel
 
-    private var settings: SettingsStore { self.viewModel.settings }
+    private var settings: SettingsStore {
+        self.viewModel.settings
+    }
 
     @Published private var session: PrivateAISettingsSession
 
-    var privateAISelectedModelID: String { self.session.selectedModelID }
-    var previewModelID: String { self.session.previewModelID }
-    var isBusy: Bool { self.session.isBusy || self.viewModel.isTestingConnection }
+    var privateAISelectedModelID: String {
+        self.session.selectedModelID
+    }
+
+    var previewModelID: String {
+        self.session.previewModelID
+    }
+
+    var isBusy: Bool {
+        self.session.isBusy || self.viewModel.isTestingConnection
+    }
+
     @Published var privateAILoadState: PrivateAIModelLoadState = .idle
     private var runtimeObserver: NSObjectProtocol?
     @Published var privateAIModelUpdateStatusByID: [String: PrivateAIModelUpdateStatus] = [:]
@@ -120,7 +131,9 @@ final class PrivateAISettingsController: ObservableObject {
 
     /// Drives the Deactivate affordance: stays true after the idle unloader frees the runtime,
     /// because dictation would still reload Fluid Intelligence on the next run.
-    var routesDictationThroughPrivateAI: Bool { self.viewModel.routesDictationThroughPrivateAI }
+    var routesDictationThroughPrivateAI: Bool {
+        self.viewModel.routesDictationThroughPrivateAI
+    }
 
     /// Inverse of `usePreviewModel`: stops routing dictation through Fluid Intelligence
     /// and frees the loaded runtime. The model stays installed and selected.
@@ -317,8 +330,10 @@ final class PrivateAISettingsController: ObservableObject {
                     ? "Model verification failed."
                     : self.viewModel.connectionErrorMessage(for: PrivateAIProviderFeature.shared.providerID)
                 self.recordFailure(modelID: model.id, message: message)
-                onCompletion?(self.privateAILoadState.needsDownload(model.id)
-                    ? "Model files are missing. Download again to repair." : message)
+                onCompletion?(
+                    self.privateAILoadState.needsDownload(model.id)
+                        ? "Model files are missing. Download again to repair." : message
+                )
             }
             self.viewModel.refreshProviderItems()
         }
@@ -434,7 +449,9 @@ final class PrivateAISettingsController: ObservableObject {
 
     private struct MaintenanceError: LocalizedError {
         let message: String
-        var errorDescription: String? { self.message }
+        var errorDescription: String? {
+            self.message
+        }
     }
 
     /// Inspect or update a downloaded model without publishing it as the active provider.

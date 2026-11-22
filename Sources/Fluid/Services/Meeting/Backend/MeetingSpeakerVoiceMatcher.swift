@@ -1,7 +1,7 @@
 import Foundation
 
 /// Attempt-local audio only. Never persisted or sent to a service.
-nonisolated struct MeetingSpeakerVoiceSamples: Sendable {
+nonisolated struct MeetingSpeakerVoiceSamples {
     let token: MeetingBackendSpeakerToken
     let clips: [[Float]]
 
@@ -74,13 +74,13 @@ nonisolated struct MeetingSpeakerVoiceSamples: Sendable {
     }
 }
 
-nonisolated struct MeetingSpeakerVoiceProfile: Codable, Equatable, Sendable {
+nonisolated struct MeetingSpeakerVoiceProfile: Codable, Equatable {
     let token: MeetingBackendSpeakerToken
     let embeddings: [[Float]]
 }
 
 /// Explicit identity evidence across resets. Backend tokens remain epoch-scoped.
-nonisolated struct MeetingSpeakerIdentityLink: Codable, Equatable, Sendable {
+nonisolated struct MeetingSpeakerIdentityLink: Codable, Equatable {
     let token: MeetingBackendSpeakerToken
     let canonicalToken: MeetingBackendSpeakerToken
 }

@@ -264,10 +264,12 @@ struct MeetingAssignSpeakersSheet: View {
                         .disabled(self.isSaving)
                 }
             } else if speaker.isLocalUser || targets.isEmpty {
-                Text(speaker.isLocalUser ? "Your microphone voice is kept separate" :
-                    (speaker.trackKind == .microphone ? "No other microphone speakers" : "No other meeting-audio speakers"))
-                    .font(self.theme.typography.caption)
-                    .foregroundStyle(self.theme.palette.tertiaryText)
+                Text(
+                    speaker.isLocalUser ? "Your microphone voice is kept separate" :
+                        (speaker.trackKind == .microphone ? "No other microphone speakers" : "No other meeting-audio speakers")
+                )
+                .font(self.theme.typography.caption)
+                .foregroundStyle(self.theme.palette.tertiaryText)
             }
         }
     }

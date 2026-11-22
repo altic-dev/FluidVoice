@@ -1,6 +1,6 @@
 import Foundation
 
-struct PronunciationEnrollmentCapture: Codable, Equatable, Sendable {
+struct PronunciationEnrollmentCapture: Codable, Equatable {
     let values: [Float]
     let sourceFrameCount: Int
     let modelKey: String
@@ -14,7 +14,7 @@ struct PronunciationEnrollmentCapture: Codable, Equatable, Sendable {
     // swiftlint:disable:next discouraged_optional_collection
     var edgeEmbedding: [Float]?
     var edgeFrameCount: Int?
-    // Only held until the profile save. Large evidence is stored separately on disk.
+    /// Only held until the profile save. Large evidence is stored separately on disk.
     var pendingInspection: DictionaryAudioInspection? = nil
 
     private enum CodingKeys: String, CodingKey {
@@ -23,7 +23,7 @@ struct PronunciationEnrollmentCapture: Codable, Equatable, Sendable {
     }
 }
 
-struct PronunciationDictionaryProfile: Codable, Equatable, Identifiable, Sendable {
+struct PronunciationDictionaryProfile: Codable, Equatable, Identifiable {
     let dictionaryEntryID: UUID
     var label: String
     let modelKey: String
@@ -32,7 +32,10 @@ struct PronunciationDictionaryProfile: Codable, Equatable, Identifiable, Sendabl
     var automaticMatchingEnabled: Bool? = nil
     var matchThreshold: Float? = nil
 
-    var hasOriginalAudio: Bool { self.enrollments.contains { $0.originalAudioID != nil } }
+    var hasOriginalAudio: Bool {
+        self.enrollments.contains { $0.originalAudioID != nil }
+    }
+
     var isEligibleForMatching: Bool {
         (self.enrollments.count >= 3 || self.hasOriginalAudio) && self.enrollments.allSatisfy {
             $0.extractorVersion == nil || $0.extractorVersion == "parakeet-encoder-mean-l2-v1"
@@ -45,7 +48,9 @@ struct PronunciationDictionaryProfile: Codable, Equatable, Identifiable, Sendabl
         }
     }
 
-    var id: String { "\(self.dictionaryEntryID.uuidString):\(self.modelKey)" }
+    var id: String {
+        "\(self.dictionaryEntryID.uuidString):\(self.modelKey)"
+    }
 }
 
 enum PronunciationDictionaryStoreError: LocalizedError, Equatable {
@@ -344,7 +349,7 @@ actor PronunciationDictionaryStore {
         }
     }
 
-    struct Revision: Equatable, Sendable {
+    struct Revision: Equatable {
         let entry: UUID
         let generation: UUID
     }

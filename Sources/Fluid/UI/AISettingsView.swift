@@ -64,7 +64,9 @@ enum ModelSortOption: String, CaseIterable, Identifiable {
     case accuracy = "Accuracy"
     case speed = "Speed"
 
-    var id: String { self.rawValue }
+    var id: String {
+        self.rawValue
+    }
 }
 
 enum SpeechProviderFilter: String, CaseIterable, Identifiable {
@@ -76,8 +78,13 @@ enum SpeechProviderFilter: String, CaseIterable, Identifiable {
     case openai = "OpenAI"
     case qwen = "Qwen"
 
-    var id: String { self.rawValue }
-    var displayName: String { self == .nvidia ? "FluidVoice / NVIDIA" : self.rawValue }
+    var id: String {
+        self.rawValue
+    }
+
+    var displayName: String {
+        self == .nvidia ? "FluidVoice / NVIDIA" : self.rawValue
+    }
 }
 
 enum AISettingsLayout {

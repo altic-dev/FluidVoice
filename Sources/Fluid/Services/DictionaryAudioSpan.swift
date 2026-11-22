@@ -43,7 +43,9 @@ nonisolated enum DictionaryAudioSpan {
             let text = run.map { tokens[$0] }.joined()
             return goals.map { self.similarity(text, $0) }.max() ?? 0
         }
-        func free(_ index: Int) -> Bool { tokens.indices.contains(index) && !claimed.contains(index) }
+        func free(_ index: Int) -> Bool {
+            tokens.indices.contains(index) && !claimed.contains(index)
+        }
 
         var best: (run: ClosedRange<Int>, score: Double)?
         for group in self.groups(touched.filter(free).sorted()) {

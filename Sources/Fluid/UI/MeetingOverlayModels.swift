@@ -1,12 +1,12 @@
 import CoreGraphics
 import Foundation
 
-enum MeetingOverlayPreference: String, Codable, CaseIterable, Equatable, Sendable {
+enum MeetingOverlayPreference: String, Codable, CaseIterable, Equatable {
     case pill
     case captions
 }
 
-enum MeetingOverlayPresentation: Equatable, Sendable {
+enum MeetingOverlayPresentation: Equatable {
     case pill
     case captions
 
@@ -33,7 +33,7 @@ enum MeetingOverlayPresentation: Equatable, Sendable {
     var visibleSize: CGSize {
         switch self {
         case .pill:
-            return CGSize(width: 84, height: 32)
+            return CGSize(width: 120, height: 36)
         case .captions:
             return CGSize(width: 420, height: 220)
         }
@@ -73,12 +73,12 @@ enum MeetingOverlayPresentation: Equatable, Sendable {
         - MeetingOverlayPresentation.captionsBottomInset
 }
 
-struct MeetingOverlayVisibleAnchor: Equatable, Sendable {
+struct MeetingOverlayVisibleAnchor: Equatable {
     var centerX: CGFloat
     var bottomY: CGFloat
 }
 
-struct MeetingOverlayPadding: Equatable, Sendable {
+struct MeetingOverlayPadding: Equatable {
     var top: CGFloat
     var left: CGFloat
     var bottom: CGFloat
@@ -89,7 +89,7 @@ struct MeetingOverlayPadding: Equatable, Sendable {
     }
 }
 
-struct MeetingOverlayLayout: Equatable, Sendable {
+struct MeetingOverlayLayout: Equatable {
     var panelFrame: CGRect
     var visibleSurfaceFrame: CGRect
 }
@@ -106,6 +106,17 @@ enum MeetingOverlayGeometry {
         return MeetingOverlayVisibleAnchor(
             centerX: screenFrame.midX,
             bottomY: max(min(screenVisible.minY + bottomOffset, maxY), minY)
+        )
+    }
+
+    static func draggedAnchor(
+        from start: MeetingOverlayVisibleAnchor,
+        pointerStart: CGPoint,
+        pointer: CGPoint
+    ) -> MeetingOverlayVisibleAnchor {
+        MeetingOverlayVisibleAnchor(
+            centerX: start.centerX + pointer.x - pointerStart.x,
+            bottomY: start.bottomY + pointer.y - pointerStart.y
         )
     }
 
@@ -163,24 +174,28 @@ enum MeetingOverlayGeometry {
     }
 }
 
-enum MeetingOverlayPresentationEvent: Equatable, Sendable {
+enum MeetingOverlayPresentationEvent: Equatable {
     case recordingStarted(sessionID: UUID)
     case recordingStateChanged
     case recordingDegraded
     case recordingStopped
     case preferenceChanged(MeetingOverlayPreference)
     case toggleRequested
+    case pillDismissed
 }
 
-struct MeetingOverlayPresentationReducer: Equatable, Sendable {
+struct MeetingOverlayPresentationReducer: Equatable {
     private(set) var preference: MeetingOverlayPreference
     private(set) var presentation: MeetingOverlayPresentation?
     private(set) var sessionID: UUID?
+    /// Lasts for the current meeting only; recording continues while the pill is hidden.
+    private(set) var isPillDismissed: Bool
 
     init(preference: MeetingOverlayPreference = .pill) {
         self.preference = preference
         self.presentation = nil
         self.sessionID = nil
+        self.isPillDismissed = false
     }
 
     mutating func apply(_ event: MeetingOverlayPresentationEvent) {
@@ -189,16 +204,22 @@ struct MeetingOverlayPresentationReducer: Equatable, Sendable {
             guard self.sessionID != sessionID else { return }
             self.sessionID = sessionID
             self.presentation = MeetingOverlayPresentation(self.preference)
+            self.isPillDismissed = false
         case .recordingStateChanged, .recordingDegraded:
             break
         case .recordingStopped:
             self.sessionID = nil
             self.presentation = nil
+            self.isPillDismissed = false
         case let .preferenceChanged(preference):
             self.preference = preference
         case .toggleRequested:
             guard self.sessionID != nil, let presentation else { return }
             self.presentation = presentation.toggled
+            self.isPillDismissed = false
+        case .pillDismissed:
+            guard self.sessionID != nil, self.presentation == .pill else { return }
+            self.isPillDismissed = true
         }
     }
 }

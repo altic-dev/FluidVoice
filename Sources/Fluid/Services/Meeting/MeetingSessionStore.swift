@@ -18,10 +18,15 @@ nonisolated protocol MeetingSessionStoring: Sendable {
     func deleteAudioFiles(for id: MeetingSessionID) async throws
 }
 
-// Test/custom stores retain their existing behavior unless they provide the lighter reads.
+/// Test/custom stores retain their existing behavior unless they provide the lighter reads.
 nonisolated extension MeetingSessionStoring {
-    func loadHistory() async throws -> [MeetingSession] { try await self.loadAll() }
-    func loadTranscript(id: MeetingSessionID) async throws -> MeetingSession? { try await self.load(id: id) }
+    func loadHistory() async throws -> [MeetingSession] {
+        try await self.loadAll()
+    }
+
+    func loadTranscript(id: MeetingSessionID) async throws -> MeetingSession? {
+        try await self.load(id: id)
+    }
 }
 
 private final nonisolated class MeetingSessionFileSystem: @unchecked Sendable {

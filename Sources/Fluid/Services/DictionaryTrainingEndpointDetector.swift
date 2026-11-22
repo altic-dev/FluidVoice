@@ -6,12 +6,12 @@ import FluidAudio
 actor DictionaryTrainingEndpointDetector {
     static let chunkSize = 4096
 
-    enum Event: Sendable {
+    enum Event {
         case speechStarted
         case speechEnded
     }
 
-    struct Session: Equatable, Sendable {
+    struct Session: Equatable {
         let id: UUID
     }
 
@@ -133,7 +133,9 @@ actor DictionaryTrainingEndpointDetector {
         }
     }
     #else
-    func residencySnapshot() -> MeetingResidentModel? { nil }
+    func residencySnapshot() -> MeetingResidentModel? {
+        nil
+    }
 
     func unloadForMeeting() async {}
 

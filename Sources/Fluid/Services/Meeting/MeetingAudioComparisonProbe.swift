@@ -10,7 +10,7 @@ final nonisolated class MeetingAudioComparisonProbe: @unchecked Sendable {
     static let requestLifetime: TimeInterval = 30 * 60
     static let maximumSeconds: TimeInterval = 300
 
-    enum Stage: String, CaseIterable, Codable, Sendable {
+    enum Stage: String, CaseIterable, Codable {
         case browser
         case microphoneInput = "microphone-before-aec"
         case microphoneOutput = "microphone-after-aec"

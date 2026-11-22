@@ -183,10 +183,12 @@ struct AddProviderSheet<Logo: View>: View {
             if self.showingManualModel {
                 self.field("Model ID") { TextField("Enter a model ID", text: self.$draft.model) }
             }
-            Text(self.draft.requiresAPIKey && self.draft.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                ? "Enter your API key, then load models with the reload button."
-                : "Load models with the reload button, or use + to enter a model ID.")
-                .font(self.theme.typography.caption).foregroundStyle(self.theme.palette.secondaryText)
+            Text(
+                self.draft.requiresAPIKey && self.draft.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    ? "Enter your API key, then load models with the reload button."
+                    : "Load models with the reload button, or use + to enter a model ID."
+            )
+            .font(self.theme.typography.caption).foregroundStyle(self.theme.palette.secondaryText)
             if let error = self.modelFetchError {
                 Text(error).font(self.theme.typography.caption).foregroundStyle(.red)
                     .textSelection(.enabled)

@@ -12,7 +12,7 @@ import Foundation
 /// The sink's packet-writing API reports the count it actually accepted. A conforming sink reports
 /// `framesWritten == framesAccepted` on success and throws a poisoning short-write error otherwise.
 /// A caller comparing the two fields never needs to infer persistence from producer enqueue.
-nonisolated struct MeetingPCMAppendReceipt: Equatable, Sendable {
+nonisolated struct MeetingPCMAppendReceipt: Equatable {
     var framesAccepted: Int64
     var framesWritten: Int64
     var presentationStart: CMTime
@@ -23,7 +23,7 @@ nonisolated struct MeetingPCMAppendReceipt: Equatable, Sendable {
 /// independently re-derived from the finalized file on disk after a fresh read-only reopen — never
 /// carried forward from the in-memory append tally — so a caller can trust this value even if the
 /// in-process writer state were somehow wrong.
-nonisolated struct MeetingPCMFinalization: Equatable, Sendable {
+nonisolated struct MeetingPCMFinalization: Equatable {
     var relativeFilePath: String
     var byteCount: Int64
     var sha256: String
@@ -32,7 +32,7 @@ nonisolated struct MeetingPCMFinalization: Equatable, Sendable {
     var frameCount: Int64
 }
 
-nonisolated enum MeetingPCMSinkError: Error, Equatable, Sendable {
+nonisolated enum MeetingPCMSinkError: Error, Equatable {
     case alreadyBegun
     case notBegun
     case unsupportedClientFormat(String)

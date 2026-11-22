@@ -6,16 +6,18 @@ typealias MeetingAudioChunkID = UUID
 typealias SessionSpeakerID = UUID
 typealias MeetingTranscriptSegmentID = UUID
 
-nonisolated enum MeetingCaptureMode: String, Codable, CaseIterable, Sendable {
+nonisolated enum MeetingCaptureMode: String, Codable, CaseIterable {
     case onlineCall
     case systemAudio
     /// Retained only to read and process older microphone-only recordings.
     case inRoom
 
-    var capturesComputerAudio: Bool { self != .inRoom }
+    var capturesComputerAudio: Bool {
+        self != .inRoom
+    }
 }
 
-nonisolated enum MeetingSessionState: String, Codable, Sendable {
+nonisolated enum MeetingSessionState: String, Codable {
     case preparing
     case recording
     case recordingDegraded
@@ -26,12 +28,12 @@ nonisolated enum MeetingSessionState: String, Codable, Sendable {
     case failed
 }
 
-nonisolated enum MeetingAudioTrackKind: String, Codable, CaseIterable, Sendable {
+nonisolated enum MeetingAudioTrackKind: String, Codable, CaseIterable {
     case applicationAudio
     case microphone
 }
 
-nonisolated enum MeetingTrackHealthStatus: String, Codable, Sendable {
+nonisolated enum MeetingTrackHealthStatus: String, Codable {
     case waiting
     case healthy
     case degraded
@@ -39,7 +41,7 @@ nonisolated enum MeetingTrackHealthStatus: String, Codable, Sendable {
     case stopped
 }
 
-nonisolated enum MeetingInterruptionKind: String, Codable, Sendable {
+nonisolated enum MeetingInterruptionKind: String, Codable {
     case sourceLost
     case sourceRecovered
     case applicationExited
@@ -64,13 +66,13 @@ nonisolated enum MeetingInterruptionKind: String, Codable, Sendable {
     case echoFilteringRestored
 }
 
-nonisolated enum MeetingFailureDomain: String, Codable, Sendable {
+nonisolated enum MeetingFailureDomain: String, Codable {
     case capture
     case processing
     case persistence
 }
 
-nonisolated enum MeetingProcessingStage: String, Codable, Sendable {
+nonisolated enum MeetingProcessingStage: String, Codable {
     case pending
     case saving
     case identifyingSpeakers
@@ -79,19 +81,19 @@ nonisolated enum MeetingProcessingStage: String, Codable, Sendable {
     case completed
 }
 
-nonisolated enum MeetingTranscriptStatus: String, Codable, Sendable {
+nonisolated enum MeetingTranscriptStatus: String, Codable {
     case provisional
     case final
 }
 
-nonisolated enum MeetingTranscriptCompleteness: String, Codable, Sendable {
+nonisolated enum MeetingTranscriptCompleteness: String, Codable {
     case complete
     case incompleteTrack
     case noSpeech
     case processingFailed
 }
 
-nonisolated enum MeetingTranscriptOverlap: String, Codable, Sendable {
+nonisolated enum MeetingTranscriptOverlap: String, Codable {
     case none
     case overlapsOtherTrack
     case ambiguous
@@ -99,7 +101,7 @@ nonisolated enum MeetingTranscriptOverlap: String, Codable, Sendable {
 
 /// Why a segment does or does not carry a resolved speaker. Additive alongside `speakerID` and
 /// `overlap`; optional so pre-fix manifests still decode.
-nonisolated enum MeetingTranscriptAttributionState: String, Codable, Sendable {
+nonisolated enum MeetingTranscriptAttributionState: String, Codable {
     /// A single speaker was confidently resolved.
     case assigned
     /// Two or more speakers overlapped and could not be separated.
@@ -110,7 +112,7 @@ nonisolated enum MeetingTranscriptAttributionState: String, Codable, Sendable {
     case timingUncertain
 }
 
-nonisolated enum MeetingTranscriptCoverageGapReason: String, Codable, Sendable {
+nonisolated enum MeetingTranscriptCoverageGapReason: String, Codable {
     case unprotectedMicrophone
     // Canonical-assembly reasons (C2b2). Additive: old sessions keep decoding, and legacy output
     // still only ever reports `unprotectedMicrophone`.
@@ -125,20 +127,20 @@ nonisolated enum MeetingTranscriptCoverageGapReason: String, Codable, Sendable {
     case inadmissibleCaptureEra
 }
 
-nonisolated struct MeetingTranscriptCoverageGap: Codable, Equatable, Sendable {
+nonisolated struct MeetingTranscriptCoverageGap: Codable, Equatable {
     var trackID: MeetingAudioTrackID
     var start: TimeInterval
     var end: TimeInterval
     var reason: MeetingTranscriptCoverageGapReason
 }
 
-nonisolated enum MeetingMicrophoneRole: String, Codable, CaseIterable, Sendable {
+nonisolated enum MeetingMicrophoneRole: String, Codable, CaseIterable {
     case personal
     case shared
     case unknown
 }
 
-nonisolated struct MeetingRecordingDefaults: Codable, Equatable, Sendable {
+nonisolated struct MeetingRecordingDefaults: Codable, Equatable {
     var isConfigured: Bool
     var mode: MeetingCaptureMode
     var applicationBundleIdentifier: String?
@@ -172,7 +174,7 @@ nonisolated struct MeetingRecordingDefaults: Codable, Equatable, Sendable {
     }
 }
 
-nonisolated struct MeetingApplicationIdentity: Codable, Equatable, Sendable {
+nonisolated struct MeetingApplicationIdentity: Codable, Equatable {
     var bundleIdentifier: String
     var processID: Int32?
     var displayName: String
@@ -200,7 +202,7 @@ nonisolated struct MeetingApplicationIdentity: Codable, Equatable, Sendable {
     }
 }
 
-nonisolated struct MeetingMicrophoneIdentity: Codable, Equatable, Sendable {
+nonisolated struct MeetingMicrophoneIdentity: Codable, Equatable {
     /// Stable product-selection identifier. New identities use the Core Audio UID;
     /// manifests written before identity schema 2 may contain an AVCaptureDevice uniqueID.
     var captureDeviceID: String
@@ -257,7 +259,7 @@ nonisolated enum MeetingMicrophonePreselection {
     }
 }
 
-nonisolated struct MeetingPlatformProfile: Codable, Equatable, Sendable {
+nonisolated struct MeetingPlatformProfile: Codable, Equatable {
     var identifier: String
     var displayName: String
     var version: Int
@@ -269,7 +271,7 @@ nonisolated struct MeetingPlatformProfile: Codable, Equatable, Sendable {
     }
 }
 
-nonisolated struct MeetingCaptureConfiguration: Codable, Equatable, Sendable {
+nonisolated struct MeetingCaptureConfiguration: Codable, Equatable {
     static let defaultChunkDuration: TimeInterval = 60
 
     var mode: MeetingCaptureMode
@@ -321,7 +323,7 @@ nonisolated struct MeetingCaptureConfiguration: Codable, Equatable, Sendable {
     }
 }
 
-nonisolated struct MeetingMediaTime: Codable, Equatable, Comparable, Sendable {
+nonisolated struct MeetingMediaTime: Codable, Equatable, Comparable {
     var value: Int64
     var timescale: Int32
 
@@ -335,34 +337,34 @@ nonisolated struct MeetingMediaTime: Codable, Equatable, Comparable, Sendable {
     }
 }
 
-nonisolated struct MeetingTimebaseMetadata: Codable, Equatable, Sendable {
+nonisolated struct MeetingTimebaseMetadata: Codable, Equatable {
     var startedHostTime: UInt64
     var machTimebaseNumerator: UInt32
     var machTimebaseDenominator: UInt32
     var firstPresentationTime: MeetingMediaTime?
 }
 
-nonisolated struct MeetingAudioFormat: Codable, Equatable, Sendable {
+nonisolated struct MeetingAudioFormat: Codable, Equatable {
     var codec: String
     var sampleRate: Double
     var channelCount: Int
     var bitRate: Int?
 }
 
-nonisolated struct MeetingAudioDiscontinuity: Codable, Equatable, Sendable {
+nonisolated struct MeetingAudioDiscontinuity: Codable, Equatable {
     var kind: MeetingInterruptionKind
     var presentationTime: MeetingMediaTime?
     var gapSeconds: TimeInterval?
     var detail: String?
 }
 
-nonisolated enum MeetingAudioChunkFinalizationState: String, Codable, Sendable {
+nonisolated enum MeetingAudioChunkFinalizationState: String, Codable {
     case writing
     case finalized
     case failed
 }
 
-nonisolated struct MeetingAudioChunk: Codable, Identifiable, Equatable, Sendable {
+nonisolated struct MeetingAudioChunk: Codable, Identifiable, Equatable {
     var id: MeetingAudioChunkID
     var sequence: Int
     /// Relative to the session directory so sessions can be moved or exported safely.
@@ -456,7 +458,7 @@ nonisolated struct MeetingAudioChunk: Codable, Identifiable, Equatable, Sendable
     }
 }
 
-nonisolated struct MeetingTrackHealth: Codable, Equatable, Sendable {
+nonisolated struct MeetingTrackHealth: Codable, Equatable {
     var status: MeetingTrackHealthStatus
     var lastPresentationTime: MeetingMediaTime?
     var lastSampleAt: Date?
@@ -477,7 +479,7 @@ nonisolated struct MeetingTrackHealth: Codable, Equatable, Sendable {
     )
 }
 
-nonisolated enum MeetingAudioTrackCaptureMethod: String, Codable, Sendable {
+nonisolated enum MeetingAudioTrackCaptureMethod: String, Codable {
     case screenCaptureKit
     case avCaptureSession
     case voiceProcessing
@@ -485,7 +487,7 @@ nonisolated enum MeetingAudioTrackCaptureMethod: String, Codable, Sendable {
 
 /// Whether microphone audio from a capture era is safe to use as speech evidence.
 /// This is deliberately independent of speaker identity or microphone ownership.
-nonisolated enum MeetingMicrophoneEchoProtection: String, Codable, Sendable {
+nonisolated enum MeetingMicrophoneEchoProtection: String, Codable {
     case voiceProcessed
     case acousticallyClosed
     /// Microphone PCM processed by the pinned WebRTC AEC3 bridge after clock attestation and
@@ -508,21 +510,21 @@ nonisolated enum MeetingMicrophoneEchoProtection: String, Codable, Sendable {
     }
 }
 
-nonisolated struct MeetingAECProvenance: Codable, Equatable, Sendable {
+nonisolated struct MeetingAECProvenance: Codable, Equatable {
     var upstreamRevision: String
     var bridgeConfigurationID: String
     var sampleRateHz: Int
     var frameDurationMilliseconds: Int
 }
 
-nonisolated struct MeetingClockDriftRecord: Codable, Equatable, Sendable {
+nonisolated struct MeetingClockDriftRecord: Codable, Equatable {
     var cumulativeAbsorbedSeconds: Double
     var elapsedValidHostSeconds: Double
     var eligible: Bool
 }
 
 /// Provenance for one contiguous span of a track's capture. Absence of `captureEras` means single-era legacy.
-nonisolated struct MeetingCaptureEra: Codable, Equatable, Sendable {
+nonisolated struct MeetingCaptureEra: Codable, Equatable {
     var method: MeetingAudioTrackCaptureMethod
     var deviceUID: String?
     var deviceName: String?
@@ -620,7 +622,7 @@ nonisolated enum MeetingMicrophoneDeDrift {
     }
 }
 
-nonisolated struct MeetingAudioTrack: Identifiable, Equatable, Sendable {
+nonisolated struct MeetingAudioTrack: Identifiable, Equatable {
     var id: MeetingAudioTrackID
     var kind: MeetingAudioTrackKind
     var sourceIdentifier: String
@@ -745,7 +747,7 @@ extension MeetingAudioTrack: Codable {
     }
 }
 
-nonisolated struct MeetingSessionEvent: Codable, Identifiable, Equatable, Sendable {
+nonisolated struct MeetingSessionEvent: Codable, Identifiable, Equatable {
     var id: UUID
     var occurredAt: Date
     var kind: MeetingInterruptionKind
@@ -753,7 +755,7 @@ nonisolated struct MeetingSessionEvent: Codable, Identifiable, Equatable, Sendab
     var detail: String?
 }
 
-nonisolated struct MeetingSessionFailure: Codable, Identifiable, Equatable, Sendable {
+nonisolated struct MeetingSessionFailure: Codable, Identifiable, Equatable {
     var id: UUID
     var occurredAt: Date
     var domain: MeetingFailureDomain
@@ -762,7 +764,7 @@ nonisolated struct MeetingSessionFailure: Codable, Identifiable, Equatable, Send
     var recoverable: Bool
 }
 
-nonisolated struct MeetingIdentityCandidate: Codable, Identifiable, Equatable, Sendable {
+nonisolated struct MeetingIdentityCandidate: Codable, Identifiable, Equatable {
     var id: UUID
     var displayName: String
     var source: String
@@ -770,7 +772,7 @@ nonisolated struct MeetingIdentityCandidate: Codable, Identifiable, Equatable, S
     var confirmedAt: Date?
 }
 
-nonisolated struct MeetingSessionSpeaker: Codable, Identifiable, Equatable, Sendable {
+nonisolated struct MeetingSessionSpeaker: Codable, Identifiable, Equatable {
     var id: SessionSpeakerID
     var displayName: String
     var diarizationClusterID: String?
@@ -787,7 +789,7 @@ nonisolated struct MeetingSessionSpeaker: Codable, Identifiable, Equatable, Send
     var mergedIntoSpeakerID: SessionSpeakerID? = nil
 }
 
-nonisolated struct MeetingTranscriptSegment: Codable, Identifiable, Equatable, Sendable {
+nonisolated struct MeetingTranscriptSegment: Codable, Identifiable, Equatable {
     var id: MeetingTranscriptSegmentID
     var start: MeetingMediaTime
     var end: MeetingMediaTime
@@ -813,11 +815,11 @@ nonisolated struct MeetingTranscriptSegment: Codable, Identifiable, Equatable, S
 /// Persisted product transcript timestamps are elapsed seconds from the meeting's presentation
 /// origin. Optional on `MeetingSession` so legacy sessions and canonical sessions written before
 /// the contract was explicit remain decodable and can be handled separately.
-nonisolated enum MeetingTranscriptTimeDomain: String, Codable, Sendable {
+nonisolated enum MeetingTranscriptTimeDomain: String, Codable {
     case meetingRelative
 }
 
-nonisolated struct MeetingProcessingAttempt: Codable, Identifiable, Equatable, Sendable {
+nonisolated struct MeetingProcessingAttempt: Codable, Identifiable, Equatable {
     var id: UUID
     var startedAt: Date
     var completedAt: Date?
@@ -837,7 +839,7 @@ nonisolated struct MeetingProcessingAttempt: Codable, Identifiable, Equatable, S
     var backendVersion: String? = nil
 }
 
-nonisolated struct MeetingRetentionState: Codable, Equatable, Sendable {
+nonisolated struct MeetingRetentionState: Codable, Equatable {
     var audioDeletedAt: Date?
     var meetingDeletedAt: Date?
     var retainAudioUntil: Date?
@@ -845,7 +847,7 @@ nonisolated struct MeetingRetentionState: Codable, Equatable, Sendable {
 
 /// Applied retroactively from the CURRENT global setting — deliberate: there is no per-session
 /// retention snapshot, so changing the setting re-evaluates every session's deadline immediately.
-nonisolated enum MeetingAudioRetentionPolicy: String, Codable, CaseIterable, Sendable {
+nonisolated enum MeetingAudioRetentionPolicy: String, Codable, CaseIterable {
     case afterTranscription
     case days7
     case days30
@@ -883,7 +885,7 @@ nonisolated enum MeetingAudioRetentionPolicy: String, Codable, CaseIterable, Sen
 }
 
 /// A speaker editor draft. Nothing is persisted until names and merges are saved together.
-nonisolated struct MeetingSpeakerEdits: Equatable, Sendable {
+nonisolated struct MeetingSpeakerEdits: Equatable {
     var names: [SessionSpeakerID: String]
     var merges: [SessionSpeakerID: SessionSpeakerID] = [:]
 
@@ -911,7 +913,7 @@ nonisolated struct MeetingSpeakerEdits: Equatable, Sendable {
     }
 }
 
-nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
+nonisolated struct MeetingSession: Codable, Identifiable, Equatable {
     static let currentSchemaVersion = 1
 
     var schemaVersion: Int
@@ -1432,7 +1434,7 @@ final nonisolated class MeetingCaptureMethodChangeAck: @unchecked Sendable {
     }
 }
 
-nonisolated enum MeetingCaptureEvent: Sendable {
+nonisolated enum MeetingCaptureEvent {
     /// Explicit local investigation only; never persisted as a session interruption.
     case audioComparisonProbeStarted(MeetingAudioComparisonProbe)
     case trackHealth(trackID: MeetingAudioTrackID, health: MeetingTrackHealth)
@@ -1440,29 +1442,33 @@ nonisolated enum MeetingCaptureEvent: Sendable {
     case microphoneEchoProtectionChanged(MeetingMicrophoneEchoProtection)
     case chunkFinalized(trackID: MeetingAudioTrackID, chunk: MeetingAudioChunk, format: MeetingAudioFormat)
     case interrupted(kind: MeetingInterruptionKind, trackID: MeetingAudioTrackID?, detail: String?)
+    /// The captured meeting app is no longer available to capture (for example the host ended the call),
+    /// and stream recovery could not re-attach to it. Persisted as `captureStoppedUnexpectedly`, but the call is over: the coordinator
+    /// transcribes the preserved audio instead of waiting for a manual retry.
+    case sourceApplicationEnded(detail: String?)
     /// `ack` is `nil` for downgrades — the mic is already dead, no race to gate on.
     case captureMethodChanged(trackID: MeetingAudioTrackID, method: MeetingAudioTrackCaptureMethod, ack: MeetingCaptureMethodChangeAck?)
 }
 
 /// The scope ScreenCaptureKit was filtering to for this capture. `nil` when the runtime has no
 /// ScreenCaptureKit stream at all (in-room microphone-only capture).
-nonisolated enum MeetingCaptureScope: Sendable {
+nonisolated enum MeetingCaptureScope {
     case display
     case window
 }
 
-nonisolated struct MeetingCaptureStartResult: Sendable {
+nonisolated struct MeetingCaptureStartResult {
     var tracks: [MeetingAudioTrack]
     var firstPresentationTime: MeetingMediaTime?
     var captureScope: MeetingCaptureScope? = nil
 }
 
-nonisolated struct MeetingCaptureStopResult: Sendable {
+nonisolated struct MeetingCaptureStopResult {
     var tracks: [MeetingAudioTrack]
     var stoppedAt: Date
 }
 
-nonisolated struct MeetingProcessingResult: Codable, Sendable {
+nonisolated struct MeetingProcessingResult: Codable {
     var postProcessing: MeetingPostProcessingArtifact? = nil
     var speakers: [MeetingSessionSpeaker]
     var segments: [MeetingTranscriptSegment]
@@ -1482,7 +1488,7 @@ nonisolated struct MeetingProcessingResult: Codable, Sendable {
 /// embeddings already stored on `MeetingSessionSpeaker` instead of rebuilding that index.
 /// No pipelineVersion bump for batch de-drift: this checkpoint snapshots only the application-audio
 /// pass; the mic pass re-derives its correction deterministically from `clockDrift` every run.
-nonisolated struct MeetingProcessingCheckpoint: Codable, Equatable, Sendable {
+nonisolated struct MeetingProcessingCheckpoint: Codable, Equatable {
     static let currentVersion = 2
 
     /// Immutable identity of the diarization implementation used to produce persisted speaker
@@ -1491,13 +1497,13 @@ nonisolated struct MeetingProcessingCheckpoint: Codable, Equatable, Sendable {
     static let currentDiarizationFingerprint =
         "FluidAudio-offline-v1@3fd63887eef1dc25edea8263ce4b44aa854d898b;config=community-default-v1"
 
-    nonisolated struct ChunkFingerprint: Codable, Equatable, Sendable {
+    nonisolated struct ChunkFingerprint: Codable, Equatable {
         var id: MeetingAudioChunkID
         var byteCount: Int64
         var sha256: String
     }
 
-    nonisolated struct SpeechInterval: Codable, Equatable, Sendable {
+    nonisolated struct SpeechInterval: Codable, Equatable {
         var start: TimeInterval
         var end: TimeInterval
     }

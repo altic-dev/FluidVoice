@@ -1,12 +1,12 @@
 import Accelerate
 import Foundation
 
-nonisolated struct DelayEstimate: Equatable, Sendable {
+nonisolated struct DelayEstimate: Equatable {
     let seconds: TimeInterval
     let confidence: Double
 }
 
-nonisolated enum TurnEchoVerdict: Equatable, Sendable {
+nonisolated enum TurnEchoVerdict: Equatable {
     case echo
     /// Low playback explanation; not positive evidence of near-end speech.
     case residualNotExplained
@@ -19,7 +19,7 @@ nonisolated enum TurnEchoVerdict: Equatable, Sendable {
     }
 }
 
-nonisolated struct EchoFrameScores: Equatable, Sendable {
+nonisolated struct EchoFrameScores: Equatable {
     let fractions: [Double]
     let hopSeconds: Double
 }

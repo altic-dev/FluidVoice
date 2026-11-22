@@ -8,9 +8,18 @@ struct StatsTodayHero: View {
     let activity: [(date: Date, words: Int)]
     @Environment(\.theme) private var theme
 
-    private var milestone: StatsDailyMilestone { StatsDailyMilestone(words: self.words) }
-    private var nextTarget: Int? { self.milestone.nextTarget }
-    private var progress: Double { self.milestone.progress }
+    private var milestone: StatsDailyMilestone {
+        StatsDailyMilestone(words: self.words)
+    }
+
+    private var nextTarget: Int? {
+        self.milestone.nextTarget
+    }
+
+    private var progress: Double {
+        self.milestone.progress
+    }
+
     private var savedTime: String {
         if self.savedMinutes < 1 { return "< 1 min" }
         if self.savedMinutes < 60 { return "\(Int(self.savedMinutes)) min" }

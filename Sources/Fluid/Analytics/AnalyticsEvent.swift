@@ -17,9 +17,9 @@ enum AnalyticsEvent: String {
 }
 
 enum AnalyticsBuildPolicy {
-    // Release artifacts identify the beta cohort in their installed version
-    // (e.g. 1.6.10-beta.1). The updater preference only selects future updates;
-    // enabling it on a stable installation must not turn on beta telemetry.
+    /// Release artifacts identify the beta cohort in their installed version
+    /// (e.g. 1.6.10-beta.1). The updater preference only selects future updates;
+    /// enabling it on a stable installation must not turn on beta telemetry.
     static func automaticallyCollectsDictationPerformance(appVersion: String) -> Bool {
         appVersion
             .lowercased()

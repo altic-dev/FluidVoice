@@ -1,15 +1,17 @@
 import Foundation
 
 /// Bounded, presentation-only word/punctuation comparison. Whitespace is preserved verbatim.
-struct HistoryTextDiff: Sendable {
-    struct Run: Equatable, Sendable {
+struct HistoryTextDiff {
+    struct Run: Equatable {
         var text: String
         let changed: Bool
     }
 
     let original: [Run]
     let final: [Run]
-    var hasChanges: Bool { self.original.contains { $0.changed } || self.final.contains { $0.changed } }
+    var hasChanges: Bool {
+        self.original.contains { $0.changed } || self.final.contains { $0.changed }
+    }
 
     static func compare(original: String, final: String) -> HistoryTextDiff? {
         guard original.utf8.count + final.utf8.count <= 24_000 else { return nil }

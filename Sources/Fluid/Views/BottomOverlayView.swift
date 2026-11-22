@@ -68,7 +68,9 @@ final class BottomOverlayWindowController {
         self.window?.frame.size
     }
 
-    var contentViewForTests: NSView? { self.hostingView }
+    var contentViewForTests: NSView? {
+        self.hostingView
+    }
 
     var visibleSurfaceWidthForTests: CGFloat {
         switch SettingsStore.shared.overlaySize {
@@ -361,6 +363,7 @@ final class BottomOverlayWindowController {
         var trace = OverlayCloseTrace("bottom.clearState")
         defer { trace.finish() }
         NotchContentState.shared.setBottomOverlayPresented(false)
+        NotchContentState.shared.isAutoSendArmed = false
         trace.mark("presentedFalse")
         self.endReleaseTransition(flushDeferredUpdate: false)
         trace.mark("releaseTransition")
@@ -465,6 +468,7 @@ final class BottomOverlayWindowController {
 
         window.alphaValue = 0
         NotchContentState.shared.setBottomOverlayPresented(false)
+        NotchContentState.shared.isAutoSendArmed = false
         self.endReleaseTransition(flushDeferredUpdate: false)
         NotchContentState.shared.setBottomOverlayDismissing(false)
         NotchContentState.shared.targetAppIcon = nil
@@ -1754,11 +1758,25 @@ private struct BottomOverlayPromptMenuView: View {
     @State private var hoveredRowID: String?
 
     /// Compact overlays share a names-only menu without captions or shortcut badges.
-    private var isCompact: Bool { self.settings.overlaySize == .pill || self.settings.overlaySize == .small }
-    private var rowHorizontalPadding: CGFloat { self.isCompact ? 6 : 8 }
-    private var rowVerticalPadding: CGFloat { self.isCompact ? 3 : 6 }
-    private var rowCornerRadius: CGFloat { self.isCompact ? 5 : 7 }
-    private var checkmarkSize: CGFloat { self.isCompact ? 7 : 10 }
+    private var isCompact: Bool {
+        self.settings.overlaySize == .pill || self.settings.overlaySize == .small
+    }
+
+    private var rowHorizontalPadding: CGFloat {
+        self.isCompact ? 6 : 8
+    }
+
+    private var rowVerticalPadding: CGFloat {
+        self.isCompact ? 3 : 6
+    }
+
+    private var rowCornerRadius: CGFloat {
+        self.isCompact ? 5 : 7
+    }
+
+    private var checkmarkSize: CGFloat {
+        self.isCompact ? 7 : 10
+    }
 
     private func rowBackground(isSelected: Bool, rowID: String) -> some View {
         let isHovered = self.hoveredRowID == rowID
@@ -2592,8 +2610,13 @@ struct BottomOverlayView: View {
         self.settings.overlaySize == .pill
     }
 
-    private var isSmallSize: Bool { self.settings.overlaySize == .small }
-    private var usesCompactExpansion: Bool { self.isPillSize || self.isSmallSize }
+    private var isSmallSize: Bool {
+        self.settings.overlaySize == .small
+    }
+
+    private var usesCompactExpansion: Bool {
+        self.isPillSize || self.isSmallSize
+    }
 
     private var compactCanvasWidth: CGFloat {
         self.isPillSize ? PillShadowMetrics.canvasWidth : SmallOverlayMetrics.canvasWidth
@@ -2632,10 +2655,12 @@ struct BottomOverlayView: View {
         }
     }
 
+    private var sendIndicatorState: SpokenSendIndicatorState {
+        self.contentState.sendIndicatorState(spokenSendEnabled: self.settings.spokenSendEnabled)
+    }
+
     private var showsSpokenSendIndicator: Bool {
-        self.contentState.mode == .dictation &&
-            self.settings.spokenSendEnabled &&
-            self.contentState.spokenSendIndicatorState.isVisible
+        self.sendIndicatorState.isVisible
     }
 
     private var spokenSendIndicatorSize: CGFloat {
@@ -3364,9 +3389,11 @@ struct BottomOverlayView: View {
         HStack(spacing: self.isPillSize ? 4 : 8) {
             if self.showsSpokenSendIndicator {
                 SpokenSendIndicatorView(
-                    state: self.contentState.spokenSendIndicatorState,
+                    state: self.sendIndicatorState,
                     color: self.modeColor,
-                    size: self.isPillSize ? 14 : self.spokenSendIndicatorSize
+                    size: self.isPillSize ? 14 : self.spokenSendIndicatorSize,
+                    countdownDuration: self.contentState.spokenSendCountdownDuration,
+                    countdownStartedAt: self.contentState.spokenSendCountdownStartedAt
                 )
                 .id(self.contentState.spokenSendCountdownID)
                 .transition(.scale(scale: 0.8).combined(with: .opacity))
@@ -3376,7 +3403,7 @@ struct BottomOverlayView: View {
         }
         .animation(
             self.reduceMotion ? nil : .easeOut(duration: 0.14),
-            value: self.contentState.spokenSendIndicatorState
+            value: self.sendIndicatorState
         )
     }
 

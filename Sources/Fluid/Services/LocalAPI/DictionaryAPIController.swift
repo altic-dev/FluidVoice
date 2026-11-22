@@ -5,6 +5,7 @@ struct DictionaryAPIController: LocalAPIRouteHandler {
         let id: UUID?
         let triggers: [String]
         let replacement: String
+        let caseSensitive: Bool?
     }
 
     struct ReplacementListResponse: Encodable {
@@ -23,6 +24,7 @@ struct DictionaryAPIController: LocalAPIRouteHandler {
             case entries
             case triggers
             case replacement
+            case caseSensitive
         }
 
         init(from decoder: Decoder) throws {
@@ -34,7 +36,7 @@ struct DictionaryAPIController: LocalAPIRouteHandler {
             let triggers = try container.decodeIfPresent([String].self, forKey: .triggers) ?? []
             let replacement = try container.decodeIfPresent(String.self, forKey: .replacement)
             if let replacement, !triggers.isEmpty {
-                self.singleEntry = ReplacementEntry(id: nil, triggers: triggers, replacement: replacement)
+                self.singleEntry = try ReplacementEntry(id: nil, triggers: triggers, replacement: replacement, caseSensitive: container.decodeIfPresent(Bool.self, forKey: .caseSensitive))
             } else {
                 self.singleEntry = nil
             }
@@ -143,11 +145,11 @@ struct DictionaryAPIController: LocalAPIRouteHandler {
 
                 stored.removeAll { existing in
                     if let id = entry.id, existing.id == id { return true }
-                    return existing.replacement.caseInsensitiveCompare(normalized.replacement) == .orderedSame
+                    return existing.caseSensitive == normalized.caseSensitive && (existing.caseSensitive ? existing.replacement == normalized.replacement : existing.replacement.caseInsensitiveCompare(normalized.replacement) == .orderedSame)
                 }
                 incomingEntries.removeAll { existing in
                     if let id = entry.id, existing.id == id { return true }
-                    return existing.replacement.caseInsensitiveCompare(normalized.replacement) == .orderedSame
+                    return existing.caseSensitive == normalized.caseSensitive && (existing.caseSensitive ? existing.replacement == normalized.replacement : existing.replacement.caseInsensitiveCompare(normalized.replacement) == .orderedSame)
                 }
                 incomingEntries.append(normalized)
             }
@@ -216,14 +218,14 @@ struct DictionaryAPIController: LocalAPIRouteHandler {
     }
 
     private static func apiEntry(from entry: SettingsStore.CustomDictionaryEntry) -> ReplacementEntry {
-        ReplacementEntry(id: entry.id, triggers: entry.triggers, replacement: entry.replacement)
+        ReplacementEntry(id: entry.id, triggers: entry.triggers, replacement: entry.replacement, caseSensitive: entry.caseSensitive ? true : nil)
     }
 
     private static func storeEntry(from entry: ReplacementEntry) -> SettingsStore.CustomDictionaryEntry {
         if let id = entry.id {
-            return SettingsStore.CustomDictionaryEntry(id: id, triggers: entry.triggers, replacement: entry.replacement)
+            return SettingsStore.CustomDictionaryEntry(id: id, triggers: entry.triggers, replacement: entry.replacement, caseSensitive: entry.caseSensitive ?? false)
         }
-        return SettingsStore.CustomDictionaryEntry(triggers: entry.triggers, replacement: entry.replacement)
+        return SettingsStore.CustomDictionaryEntry(triggers: entry.triggers, replacement: entry.replacement, caseSensitive: entry.caseSensitive ?? false)
     }
 
     private static func apiEntry(from term: ParakeetVocabularyStore.VocabularyConfig.Term) -> CustomWordEntry {

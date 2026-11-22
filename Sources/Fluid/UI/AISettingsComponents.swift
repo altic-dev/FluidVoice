@@ -52,6 +52,7 @@ struct LiquidLayer: Shape {
 /// A vertical liquid-filled bar with animated fill level
 struct LiquidBar: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.controlActiveState) private var controlActiveState
     @Environment(\.theme) private var theme
     let fillPercent: Double
     let color: Color
@@ -59,7 +60,7 @@ struct LiquidBar: View {
     let icon: String
     let label: String
 
-    // Animated fill level (smoothly transitions between values)
+    /// Animated fill level (smoothly transitions between values)
     @State private var animatedFill: Double = 0
 
     var body: some View {
@@ -110,7 +111,10 @@ struct LiquidBar: View {
                                 )
                                 .frame(height: displayHeight)
                         } else {
-                            TimelineView(.animation(minimumInterval: 1.0 / 12.0)) { timeline in
+                            TimelineView(.animation(
+                                minimumInterval: 1.0 / 12.0,
+                                paused: self.controlActiveState == .inactive
+                            )) { timeline in
                                 let time = timeline.date.timeIntervalSinceReferenceDate
 
                                 // Single organic liquid surface

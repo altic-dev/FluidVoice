@@ -182,8 +182,10 @@ struct ProviderDefaultButton: View {
         }
         .fluidGlassAction()
         .disabled(self.isCurrent || !self.isEnabled)
-        .help(self.isCurrent ? "Used by your main dictation shortcut. App-specific cleanup styles can override it."
-            : "Use this provider for your main dictation shortcut. Choose a model and complete setup first; verification is optional.")
+        .help(
+            self.isCurrent ? "Used by your main dictation shortcut. App-specific cleanup styles can override it."
+                : "Use this provider for your main dictation shortcut. Choose a model and complete setup first; verification is optional."
+        )
     }
 }
 
@@ -209,7 +211,7 @@ private struct FluidGlassActionModifier: ViewModifier {
     let spacious: Bool
     let quiet: Bool
 
-    @ViewBuilder func body(content: Content) -> some View {
+    func body(content: Content) -> some View {
         if self.quiet, !self.prominent {
             content.buttonStyle(FluidQuietActionStyle(circular: self.circular, tone: self.tone, spacious: self.spacious))
         } else if #available(macOS 26, *), !self.reduceTransparency {
@@ -262,7 +264,7 @@ private struct FluidGlassMenuActionModifier: ViewModifier {
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.theme) private var theme
 
-    @ViewBuilder func body(content: Content) -> some View {
+    func body(content: Content) -> some View {
         let menu = content
             .menuStyle(.button)
             .menuIndicator(.hidden)

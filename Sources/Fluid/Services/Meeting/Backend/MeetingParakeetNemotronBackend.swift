@@ -11,7 +11,7 @@ import Foundation
 
 @MainActor
 final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
-    // Explicitly nonisolated: on macOS 15.4+ the synthesized main-actor deinit can abort until the OS runtime has the fix (swiftlang/swift#88036).
+    /// Explicitly nonisolated: on macOS 15.4+ the synthesized main-actor deinit can abort until the OS runtime has the fix (swiftlang/swift#88036).
     nonisolated deinit {}
 
     static let descriptor = MeetingBackendDescriptor(
@@ -125,7 +125,7 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
     /// Silence placed between a track's epochs when they are diarized as one stream.
     private nonisolated static let epochJoinSilenceSeconds = 0.5
 
-    private nonisolated struct EpochWork: Sendable {
+    private nonisolated struct EpochWork {
         let track: MeetingAnalysisTrackManifest
         let epoch: MeetingAnalysisEpochRecord
         let spans: [MeetingAnalysisSpan]

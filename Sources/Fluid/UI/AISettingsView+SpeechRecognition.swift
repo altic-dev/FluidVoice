@@ -105,7 +105,7 @@ extension VoiceEngineSettingsView {
                                 Text(hasActiveModel ? "Other Models" : "Available Models")
                                     .font(self.theme.typography.sectionTitle)
                                     .foregroundStyle(self.voiceEngineTitleText)
-                                VStack(spacing: 8) {
+                                LazyVStack(spacing: 8) {
                                     ForEach(otherModels) { model in
                                         self.speechModelCard(for: model)
                                     }
@@ -356,9 +356,11 @@ extension VoiceEngineSettingsView {
                     .controlSize(.small)
                     .disabled(self.viewModel.isCancellingModelDownload)
                 }
-            } else if (self.viewModel.asr.isDownloadingModel
-                || self.viewModel.asr.isLoadingModel
-                || self.viewModel.asr.isCancellingModelPreparation)
+            } else if (
+                self.viewModel.asr.isDownloadingModel
+                    || self.viewModel.asr.isLoadingModel
+                    || self.viewModel.asr.isCancellingModelPreparation
+            )
                 && isConfiguredActive
                 && !self.viewModel.asr.isAsrReady
             {
@@ -883,9 +885,11 @@ extension VoiceEngineSettingsView {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
-        .background(RoundedRectangle(cornerRadius: 8)
-            .fill(self.theme.palette.cardBackground.opacity(0.8))
-            .overlay(RoundedRectangle(cornerRadius: 8).stroke(self.theme.palette.cardBorder.opacity(0.5), lineWidth: 1)))
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(self.theme.palette.cardBackground.opacity(0.8))
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(self.theme.palette.cardBorder.opacity(0.5), lineWidth: 1))
+        )
     }
 
     // MARK: - Speech Model Logo View

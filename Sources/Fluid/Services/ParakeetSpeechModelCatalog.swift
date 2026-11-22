@@ -4,18 +4,18 @@ import Foundation
 /// Immutable metadata shared by model selection, cache ownership and ASR routing.
 /// Resolving a descriptor performs no hardware, network or filesystem queries.
 nonisolated enum ParakeetSpeechModelCatalog {
-    enum Variant: String, CaseIterable, Sendable {
+    enum Variant: String, CaseIterable {
         case v2, v3, mini, pico, pro
     }
 
-    struct PerformanceRatings: Equatable, Sendable {
+    struct PerformanceRatings: Equatable {
         let speedRating: Int
         let accuracyRating: Int
         let speedPercent: Double
         let accuracyPercent: Double
     }
 
-    struct Descriptor: Equatable, Sendable {
+    struct Descriptor: Equatable {
         enum InstallationRevisionError: Error { case invalidChecksum }
         let modelID: String
         let variant: Variant
@@ -34,10 +34,14 @@ nonisolated enum ParakeetSpeechModelCatalog {
         let performanceRatings: PerformanceRatings?
         var manifestSHA256: String? = nil
 
-        var isEnglishOnly: Bool { self.supportedLanguageCodes == ["en"] }
+        var isEnglishOnly: Bool {
+            self.supportedLanguageCodes == ["en"]
+        }
 
         /// Downloaded as one tar from our own host, with an archive marker and manifest.
-        var isHostedPack: Bool { self.variant == .mini || self.variant == .pico || self.variant == .pro }
+        var isHostedPack: Bool {
+            self.variant == .mini || self.variant == .pico || self.variant == .pro
+        }
 
         var attribution: String {
             switch self.variant {
@@ -256,13 +260,14 @@ nonisolated enum ParakeetSpeechModelCatalog {
 
     /// One int8 encoder next to its own preprocessor, so the Mac pack is not split like Mini and Pico.
     static let proName = "Fluid Speech Pro"
+    static let proVersion1ArchiveSHA256 = "f7af24d8352757b088dd18d150dfbbd2adf37f1d5013ebb036674f507a794333"
     static let pro = Descriptor(
         modelID: "fluid-parakeet-pro",
         variant: .pro,
         folderName: "fluid-parakeet-pro-coreml",
         expectedDownloadBytes: 652_482_560,
         archiveURL: URL(string: "https://models.fluidvoice.com/parakeet/fluid-pro/1.0.0/fluid-parakeet-pro-coreml.tar"),
-        archiveSHA256: "f7af24d8352757b088dd18d150dfbbd2adf37f1d5013ebb036674f507a794333",
+        archiveSHA256: ParakeetSpeechModelCatalog.proVersion1ArchiveSHA256,
         requiredModelNames: ParakeetSpeechModelCatalog.standardModelNames,
         vocabularyFile: "parakeet_vocab.json",
         displayName: ParakeetSpeechModelCatalog.proName,

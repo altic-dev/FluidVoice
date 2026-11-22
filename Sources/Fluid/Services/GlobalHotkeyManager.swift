@@ -284,6 +284,12 @@ final class GlobalHotkeyManager: NSObject {
     private var recordingActionRevisions: [HotkeyHoldModeType: UInt64] = [:]
     private var pendingRecordingActionCounts: [HotkeyHoldModeType: Int] = [:]
     private var activeRecordingActionShortcuts: [HotkeyHoldModeType: HotkeyShortcut] = [:]
+
+    /// Valid only while the queued callback runs; callers snapshot it before awaiting capture.
+    func shortcutForCurrentRecordingAction(_ type: HotkeyHoldModeType) -> HotkeyShortcut? {
+        self.activeRecordingActionShortcuts[type]
+    }
+
     private var pendingRecordingActions: [HotkeyHoldModeType: Task<Void, Never>] = [:]
     private var primaryShortcuts: [HotkeyShortcut]
     private var promptModeShortcut: HotkeyShortcut
@@ -996,7 +1002,7 @@ final class GlobalHotkeyManager: NSObject {
         DebugLogger.shared.info("Mouse observer tap enabled (listen-only)", source: "GlobalHotkeyManager")
     }
 
-    // Filter tap, created only for the button families that have a shortcut.
+    /// Filter tap, created only for the button families that have a shortcut.
     private func setupMouseShortcutTap(mouseButtons: Set<Int>, preservePrimaryPress: Bool = false) {
         let preservesHeldPress = preservePrimaryPress && self.activePrimaryShortcutPress?.mouseButton != nil
         if !preservesHeldPress { self.finishInterruptedMouseShortcutPress(reason: "mouse shortcut tap rebuilt") }

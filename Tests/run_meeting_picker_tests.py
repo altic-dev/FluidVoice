@@ -5,17 +5,9 @@ from pathlib import Path
 import subprocess
 import tempfile
 
+from swift_source import declaration
+
 ROOT = Path(__file__).resolve().parents[1]
-
-
-def declaration(source, marker):
-    start = source.index(marker)
-    brace = source.index('{', start)
-    depth, end = 1, brace + 1
-    while depth:
-        depth += (source[end] == '{') - (source[end] == '}')
-        end += 1
-    return source[start:end]
 
 
 def main():
@@ -53,7 +45,7 @@ struct MeetingRecordingDefaults: Equatable, Sendable, Codable {
     var applicationBundleIdentifier: String?
     var applicationDisplayName: String?
 }
-enum MeetingCaptureError: Error { case applicationNotSelected, applicationUnavailable(String) }
+enum MeetingCaptureError: Error { case applicationNotSelected, applicationUnavailable(String), applicationAmbiguous(String) }
 enum MeetingAutoDetector { struct ResolvedTarget { var bundleIdentifier: String; var pid: Int32; var windowID: UInt32? } }
 @MainActor final class SettingsStore {
     static let shared = SettingsStore()

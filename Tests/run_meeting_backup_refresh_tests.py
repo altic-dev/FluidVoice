@@ -6,19 +6,10 @@ from pathlib import Path
 import subprocess
 import tempfile
 
+from swift_source import declaration
+
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "Sources/Fluid/UI/MeetingTranscriptionView.swift"
-
-
-def declaration(source: str, marker: str) -> str:
-    start = source.index(marker)
-    brace = source.index("{", start)
-    depth = 1
-    end = brace + 1
-    while depth:
-        depth += (source[end] == "{") - (source[end] == "}")
-        end += 1
-    return source[start:end]
 
 
 def main() -> None:
@@ -39,7 +30,7 @@ def main() -> None:
             cwd=ROOT, text=True, timeout=10,
         )
         assert "settingsBackupDidRestore" not in baseline
-    assert "self.appDetailContent\n" in (ROOT / "Sources/Fluid/ContentView.swift").read_text()
+    assert "AppPageHost(\n" in (ROOT / "Sources/Fluid/ContentView.swift").read_text()
     assert ".onReceive(NotificationCenter.default.publisher(for: .settingsBackupDidRestore))" in source
     assert ".onChange(of: self.canRefreshSetupAfterBackupRestore)" in source
     mode_observer = declaration(source, ".onChange(of: self.setupDraft.mode)")

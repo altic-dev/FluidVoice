@@ -754,13 +754,13 @@ final class DirectAudioReliabilityTests: XCTestCase {
         // Formatting may wrap this call; the same arguments and lifecycle binding must remain.
         let compactSource = source.filter { !$0.isWhitespace }
         XCTAssertTrue(compactSource.contains(
-            "awaitself.routePromptTestResult(transcribedText,sessionID:promptTestSessionID,lifecycleID:expectedOverlayLifecycleID)"
+            "awaitself.routePromptTestResult(transcribedText,initialDictionaryRule:initialDictionaryRule,sessionID:promptTestSessionID,lifecycleID:expectedOverlayLifecycleID)"
         ))
         let routingSection = try XCTUnwrap(
             source.components(separatedBy: "private func routePromptTestResult(").last?
                 .components(separatedBy: "private func makeAIProcessingFeedback(").first
         )
-        XCTAssertTrue(routingSection.contains("await self.processDictationPromptTest(text, lifecycleID: lifecycleID)"))
+        XCTAssertTrue(routingSection.contains("await self.processDictationPromptTest(text, initialDictionaryRule: initialDictionaryRule, lifecycleID: lifecycleID)"))
         XCTAssertTrue(routingSection.contains("acceptsResult(for: sessionID)"))
         let promptTestSection = try XCTUnwrap(
             source.components(separatedBy: "private func processDictationPromptTest(").last?

@@ -5,17 +5,9 @@ from pathlib import Path
 import subprocess
 import tempfile
 
+from swift_source import declaration
+
 ROOT = Path(__file__).resolve().parents[1]
-
-
-def declaration(source, marker):
-    start = source.index(marker)
-    brace = source.index("{", start)
-    depth, end = 1, brace + 1
-    while depth:
-        depth += (source[end] == "{") - (source[end] == "}")
-        end += 1
-    return source[start:end]
 
 
 def main():
@@ -29,7 +21,7 @@ def main():
 import CoreMedia
 enum VoiceEngineLanguageCatalog { static let parakeetV3LanguageIDs: Set<String> = ["en", "de"] }
 enum MeetingAutoDetector { struct ResolvedTarget { var bundleIdentifier: String; var pid: Int32; var windowID: UInt32? } }
-enum MeetingCaptureError: Error { case applicationNotSelected, applicationUnavailable(String), noCaptureDisplay, screenCapturePermissionDenied(String) }
+enum MeetingCaptureError: Error { case applicationNotSelected, applicationUnavailable(String), applicationAmbiguous(String), noCaptureDisplay, screenCapturePermissionDenied(String) }
 struct SCRunningApplication { let bundleIdentifier: String; let processID: Int32; let applicationName: String }
 struct SCDisplay { let displayID: UInt32 }
 struct SCWindow {}
@@ -162,7 +154,7 @@ struct MeetingAudioTrack {
             .init(bundleIdentifier: "chrome", processID: 99, applicationName: "Chrome")
         ], displays: [.init(displayID: 1)])
         do { _ = try await Runtime.buildStream(application: second, microphone: mic, includeMicrophone: true, allowApplicationRelaunch: true); preconditionFailure("Recovery cannot guess between replacements") }
-        catch MeetingCaptureError.applicationUnavailable { count += 1 }
+        catch MeetingCaptureError.applicationAmbiguous { count += 1 }
         SCShareableContent.fixture = .init(applications: [.init(bundleIdentifier: "other", processID: 20, applicationName: "Other")], displays: [.init(displayID: 1)])
         do { _ = try await Runtime.buildStream(application: second, microphone: mic, includeMicrophone: true, allowApplicationRelaunch: true); preconditionFailure("Reused PID cannot capture another app") }
         catch MeetingCaptureError.applicationUnavailable { count += 1 }

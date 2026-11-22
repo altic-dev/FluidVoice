@@ -39,6 +39,7 @@ jobs:
             - 'Info.plist'
             - 'Fluid.entitlements'
             - '.swiftlint.yml'
+            - '.swiftformat'
             - '.github/workflows/build.yml'
 
   lint:
@@ -59,6 +60,35 @@ jobs:
           --workdir "$PWD" \
           ghcr.io/realm/swiftlint:0.63.2 \
           lint --strict --config .swiftlint.yml
+
+  format:
+    name: SwiftFormat
+    if: needs.changes.outputs.relevant == 'true' && (github.event_name == 'push' || github.event.pull_request.draft == false)
+    needs: changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    # Keep the version in sync with the one contributors run locally; output differs across releases.
+    - name: Run SwiftFormat
+      run: |
+        docker run --rm \
+          --volume "$PWD:$PWD" \
+          --workdir "$PWD" \
+          ghcr.io/nicklockwood/swiftformat:0.61.1 \
+          --config .swiftformat Sources
+
+    - name: Fail if formatting changed files
+      run: |
+        git config --global --add safe.directory "$PWD"
+        if ! git diff --exit-code --stat; then
+          git diff
+          echo "::error::SwiftFormat changed files. Run 'swiftformat --config .swiftformat Sources' and commit the result."
+          exit 1
+        fi
 
   build:
     name: Build FluidVoice

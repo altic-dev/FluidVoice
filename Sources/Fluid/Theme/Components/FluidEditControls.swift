@@ -3,7 +3,9 @@ import SwiftUI
 struct FluidPencilShape: Shape {
     func path(in rect: CGRect) -> Path {
         var path = Path()
-        func point(_ x: CGFloat, _ y: CGFloat) -> CGPoint { CGPoint(x: rect.minX + x * rect.width, y: rect.minY + y * rect.height) }
+        func point(_ x: CGFloat, _ y: CGFloat) -> CGPoint {
+            CGPoint(x: rect.minX + x * rect.width, y: rect.minY + y * rect.height)
+        }
         path.move(to: point(0.12, 0.88))
         path.addLine(to: point(0.19, 0.62))
         path.addLine(to: point(0.69, 0.12))

@@ -7,7 +7,7 @@ import Foundation
 
 /// Machine-stable reasons. Every unusable number carries one; absence of a reason is never
 /// how a caller learns a metric was skipped.
-nonisolated enum MeetingVPIOAcousticReason: String, Codable, Sendable {
+nonisolated enum MeetingVPIOAcousticReason: String, Codable {
     case insufficientFrames
     case referenceBelowExcitationFloor
     case capturedBelowNoiseFloor
@@ -45,7 +45,7 @@ nonisolated enum MeetingVPIOAcousticReason: String, Codable, Sendable {
 
 /// Numeric description of the rendered stimulus. Records what was actually synthesized, not
 /// what was requested: `measuredPeak`/`measuredRMS` are computed from the emitted samples.
-nonisolated struct MeetingVPIOAcousticStimulusDescriptor: Codable, Equatable, Sendable {
+nonisolated struct MeetingVPIOAcousticStimulusDescriptor: Codable, Equatable {
     static let currentSchemaVersion = 1
 
     var schemaVersion: Int
@@ -96,7 +96,7 @@ nonisolated enum MeetingVPIOAcousticStimulus {
     static let speechF0StartHz = 115.0
     static let speechF0EndHz = 145.0
 
-    nonisolated struct Generated: Equatable, Sendable {
+    nonisolated struct Generated: Equatable {
         var samples: [Float]
         var descriptor: MeetingVPIOAcousticStimulusDescriptor
 

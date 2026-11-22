@@ -130,11 +130,31 @@ final nonisolated class LLMClient: @unchecked Sendable {
         }
     }
 
-    private struct ResponsesToolCallAccumulator {
+    /// Collects one streamed tool call from either the Chat Completions or Responses stream.
+    private struct ToolCallAccumulator {
         var id: String?
         var callID: String?
         var name: String?
         var arguments: String = ""
+
+        static func toolCalls(from calls: [Int: Self]) -> [ToolCall] {
+            calls.keys.sorted().compactMap { calls[$0]?.toolCall() }
+        }
+
+        private func toolCall() -> ToolCall? {
+            guard let name else { return nil }
+            let arguments = self.arguments.isEmpty ? "{}" : self.arguments
+            guard let argsData = arguments.data(using: .utf8),
+                  let args = try? JSONSerialization.jsonObject(with: argsData) as? [String: Any]
+            else {
+                DebugLogger.shared.warning(
+                    "LLMClient: Dropping streamed tool call \(name) with unparseable arguments (\(self.arguments.count) chars)",
+                    source: "LLMClient"
+                )
+                return nil
+            }
+            return ToolCall(id: self.callID ?? self.id ?? "call_\(UUID().uuidString.prefix(8))", name: name, arguments: args)
+        }
     }
 
     // MARK: - Configuration
@@ -611,7 +631,7 @@ final nonisolated class LLMClient: @unchecked Sendable {
         }
 
         var contentBuffer: [String] = []
-        var toolCallsByIndex: [Int: ResponsesToolCallAccumulator] = [:]
+        var toolCallsByIndex: [Int: ToolCallAccumulator] = [:]
         var didLogFirstContent = false
 
         for try await rawLine in bytes.lines {
@@ -648,7 +668,7 @@ final nonisolated class LLMClient: @unchecked Sendable {
                       item["type"] as? String == "function_call"
                 else { continue }
                 let index = event["output_index"] as? Int ?? 0
-                var call = toolCallsByIndex[index] ?? ResponsesToolCallAccumulator()
+                var call = toolCallsByIndex[index] ?? ToolCallAccumulator()
                 call.id = item["id"] as? String ?? call.id
                 call.callID = item["call_id"] as? String ?? call.callID
                 call.name = item["name"] as? String ?? call.name
@@ -661,12 +681,10 @@ final nonisolated class LLMClient: @unchecked Sendable {
                 }
             case "response.function_call_arguments.delta":
                 let index = event["output_index"] as? Int ?? 0
-                var call = toolCallsByIndex[index] ?? ResponsesToolCallAccumulator()
-                call.arguments += event["delta"] as? String ?? ""
-                toolCallsByIndex[index] = call
+                toolCallsByIndex[index, default: ToolCallAccumulator()].arguments += event["delta"] as? String ?? ""
             case "response.function_call_arguments.done":
                 let index = event["output_index"] as? Int ?? 0
-                var call = toolCallsByIndex[index] ?? ResponsesToolCallAccumulator()
+                var call = toolCallsByIndex[index] ?? ToolCallAccumulator()
                 call.id = event["item_id"] as? String ?? call.id
                 call.callID = event["call_id"] as? String ?? call.callID
                 call.name = event["name"] as? String ?? call.name
@@ -683,19 +701,7 @@ final nonisolated class LLMClient: @unchecked Sendable {
             }
         }
 
-        let toolCalls = toolCallsByIndex.keys.sorted().compactMap { index -> ToolCall? in
-            guard let call = toolCallsByIndex[index],
-                  let name = call.name,
-                  let argsData = call.arguments.data(using: .utf8),
-                  let args = try? JSONSerialization.jsonObject(with: argsData) as? [String: Any]
-            else { return nil }
-
-            return ToolCall(
-                id: call.callID ?? call.id ?? "call_\(UUID().uuidString.prefix(8))",
-                name: name,
-                arguments: args
-            )
-        }
+        let toolCalls = ToolCallAccumulator.toolCalls(from: toolCallsByIndex)
 
         let parsed = Response(
             thinking: nil,
@@ -733,10 +739,8 @@ final nonisolated class LLMClient: @unchecked Sendable {
         var usesSeparateReasoningFields = false
         var didLogFirstContent = false
 
-        // Tool call accumulation
-        var toolCallId: String?
-        var toolCallName: String?
-        var toolCallArguments = ""
+        // Tool call accumulation, keyed by the stream's `index` so parallel calls stay separate
+        var toolCallsByIndex: [Int: ToolCallAccumulator] = [:]
 
         // Process SSE lines
         for try await rawLine in bytes.lines {
@@ -850,19 +854,29 @@ final nonisolated class LLMClient: @unchecked Sendable {
             }
 
             // Handle tool calls (streamed in parts)
-            if let toolCalls = delta["tool_calls"] as? [[String: Any]],
-               let tc = toolCalls.first
-            {
-                if let id = tc["id"] as? String {
-                    toolCallId = id
-                }
-                if let function = tc["function"] as? [String: Any] {
-                    if let name = function["name"] as? String {
-                        toolCallName = name
+            if let toolCalls = delta["tool_calls"] as? [[String: Any]] {
+                for tc in toolCalls {
+                    let index: Int
+                    if let streamIndex = tc["index"] as? Int {
+                        index = streamIndex
+                    } else if let id = tc["id"] as? String {
+                        // Without `index`, the id identifies the call; an unseen id starts a new one.
+                        index = toolCallsByIndex.first(where: { $0.value.id == id })?.key
+                            ?? (toolCallsByIndex.keys.max() ?? -1) + 1
+                    } else {
+                        index = toolCallsByIndex.keys.max() ?? 0
+                    }
+                    if let id = tc["id"] as? String {
+                        toolCallsByIndex[index, default: ToolCallAccumulator()].id = id
+                    }
+                    guard let function = tc["function"] as? [String: Any] else { continue }
+                    if let name = function["name"] as? String, !name.isEmpty, toolCallsByIndex[index]?.name == nil {
+                        toolCallsByIndex[index, default: ToolCallAccumulator()].name = name
                         config.onToolCallStart?(name)
                     }
+                    // Append in place; copying the accumulator out would copy the whole string per chunk.
                     if let args = function["arguments"] as? String {
-                        toolCallArguments += args
+                        toolCallsByIndex[index, default: ToolCallAccumulator()].arguments += args
                     }
                 }
             }
@@ -887,20 +901,9 @@ final nonisolated class LLMClient: @unchecked Sendable {
 
         DebugLogger.shared.debug("LLMClient: Streaming complete. Thinking: \(thinkingText.count) chars, Content: \(contentText.count) chars", source: "LLMClient")
 
-        // Build tool calls array
-        var parsedToolCalls: [ToolCall] = []
-        if let name = toolCallName,
-           let argsData = toolCallArguments.data(using: .utf8),
-           let args = try? JSONSerialization.jsonObject(with: argsData) as? [String: Any]
-        {
-            parsedToolCalls = [
-                ToolCall(
-                    id: toolCallId ?? "call_\(UUID().uuidString.prefix(8))",
-                    name: name,
-                    arguments: args
-                ),
-            ]
-            DebugLogger.shared.debug("LLMClient: Parsed tool call: \(name)", source: "LLMClient")
+        let parsedToolCalls = ToolCallAccumulator.toolCalls(from: toolCallsByIndex)
+        if !parsedToolCalls.isEmpty {
+            DebugLogger.shared.debug("LLMClient: Parsed \(parsedToolCalls.count) tool call(s)", source: "LLMClient")
         }
 
         DebugLogger.shared.debug(

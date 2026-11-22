@@ -1,6 +1,6 @@
 import Foundation
 
-struct DictationAudioSnapshot: Sendable {
+struct DictationAudioSnapshot {
     let samples: [Float]
     let sampleRate: Int
     let channels: Int
@@ -12,7 +12,7 @@ struct DictationAudioSnapshot: Sendable {
     }
 }
 
-struct DictationAudioMetadata: Codable, Equatable, Sendable {
+struct DictationAudioMetadata: Codable, Equatable {
     let fileName: String
     let durationMilliseconds: Int
     let byteCount: Int

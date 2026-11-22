@@ -25,11 +25,12 @@ enum SpokenSendIndicatorState: Equatable {
 
 struct SpokenSendIndicatorView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var progress: CGFloat = 0
 
     let state: SpokenSendIndicatorState
     let color: Color
     let size: CGFloat
+    var countdownDuration: TimeInterval = SettingsStore.SpokenSendWait.normal.seconds
+    var countdownStartedAt: Date = .distantPast
 
     var body: some View {
         Group {
@@ -39,28 +40,23 @@ struct SpokenSendIndicatorView: View {
             case .detected:
                 self.symbol("paperplane.fill", color: self.color, accessibilityLabel: "Send detected")
             case .countingDown:
-                ZStack {
-                    Circle()
-                        .stroke(self.color.opacity(0.22), lineWidth: self.lineWidth)
+                TimelineView(.animation(minimumInterval: self.reduceMotion ? 0.1 : 1.0 / 30)) { timeline in
+                    ZStack {
+                        Circle()
+                            .stroke(self.color.opacity(0.22), lineWidth: self.lineWidth)
 
-                    Circle()
-                        .trim(from: 0, to: self.progress)
-                        .stroke(
-                            self.color,
-                            style: StrokeStyle(lineWidth: self.lineWidth, lineCap: .round)
-                        )
-                        .rotationEffect(.degrees(-90))
+                        Circle()
+                            .trim(from: 0, to: Self.countdownProgress(at: timeline.date, startedAt: self.countdownStartedAt, duration: self.countdownDuration))
+                            .stroke(
+                                self.color,
+                                style: StrokeStyle(lineWidth: self.lineWidth, lineCap: .round)
+                            )
+                            .rotationEffect(.degrees(-90))
 
-                    self.symbol("paperplane.fill", color: self.color, accessibilityLabel: "Waiting to send")
-                }
-                .onAppear {
-                    guard !self.reduceMotion else {
-                        self.progress = 1
-                        return
+                        self.symbol("paperplane.fill", color: self.color, accessibilityLabel: "Waiting to send")
                     }
-                    withAnimation(.linear(duration: SpokenSendParser.immediateStopSettleDuration)) {
-                        self.progress = 1
-                    }
+                    // Elapsed time drives the ring; inherited transitions must not fill it early.
+                    .transaction { $0.animation = nil }
                 }
             case .sending:
                 ZStack {
@@ -69,12 +65,17 @@ struct SpokenSendIndicatorView: View {
                     self.symbol("paperplane.fill", color: self.color, accessibilityLabel: "Sending")
                 }
             case .sent:
-                self.symbol("checkmark.circle.fill", color: self.color, accessibilityLabel: "Sent")
+                self.symbol("paperplane.fill", color: self.color, accessibilityLabel: "Sent")
             case .failed:
                 self.symbol("exclamationmark.circle.fill", color: .orange, accessibilityLabel: "Send skipped")
             }
         }
         .frame(width: self.size, height: self.size)
+    }
+
+    static func countdownProgress(at date: Date, startedAt: Date, duration: TimeInterval) -> CGFloat {
+        guard duration > 0 else { return 1 }
+        return CGFloat(min(1, max(0, date.timeIntervalSince(startedAt) / duration)))
     }
 
     private var lineWidth: CGFloat {
@@ -107,8 +108,11 @@ class NotchContentState: ObservableObject {
     @Published private(set) var canRetryAIProcessingFailure: Bool = true
     /// Set only while a model download would fix the failure on screen.
     @Published private(set) var aiProcessingFailureDownloadAction: (() -> Void)?
+    @Published var isAutoSendArmed = false
     @Published private(set) var spokenSendIndicatorState: SpokenSendIndicatorState = .hidden
     @Published private(set) var spokenSendCountdownID: UInt64 = 0
+    private(set) var spokenSendCountdownDuration = SettingsStore.SpokenSendWait.normal.seconds
+    private(set) var spokenSendCountdownStartedAt: Date = .distantPast
     @Published var isTextDeliveryFailureVisible: Bool = false
     @Published private(set) var textDeliveryFailureMessage: String = "Text could not be inserted"
     private(set) var textDeliveryFailureID = UUID()
@@ -133,7 +137,10 @@ class NotchContentState: ObservableObject {
 
     /// The preview keeps its source position so trimming cannot move wrapped caption lines.
     @Published private(set) var captionPreview: OverlayCaptionText = .empty
-    var cachedPreviewText: String { self.captionPreview.text }
+    var cachedPreviewText: String {
+        self.captionPreview.text
+    }
+
     private var transcriptionSourceOffset = 0
 
     /// Bounded recovery context for a revision or a chunk that skips past the short preview.
@@ -213,13 +220,26 @@ class NotchContentState: ObservableObject {
         self.aiProcessingFailureDownloadAction = nil
     }
 
+    /// The recording's captured setting remains visible through transcription and cleanup.
+    /// It is independent of the spoken phrase preference and is cleared when the overlay hides.
+    func sendIndicatorState(spokenSendEnabled: Bool) -> SpokenSendIndicatorState {
+        guard self.mode == .dictation else { return .hidden }
+        if spokenSendEnabled || self.isAutoSendArmed, self.spokenSendIndicatorState.isVisible {
+            return self.spokenSendIndicatorState
+        }
+        guard self.isAutoSendArmed, !self.isAIProcessingFailureVisible, !self.isTextDeliveryFailureVisible else { return .hidden }
+        return .detected
+    }
+
     func setSpokenSendIndicatorState(_ state: SpokenSendIndicatorState) {
         guard self.spokenSendIndicatorState != state else { return }
         self.spokenSendIndicatorState = state
     }
 
     @discardableResult
-    func beginSpokenSendCountdown() -> UInt64 {
+    func beginSpokenSendCountdown(duration: TimeInterval) -> UInt64 {
+        self.spokenSendCountdownDuration = duration
+        self.spokenSendCountdownStartedAt = Date()
         self.spokenSendCountdownID &+= 1
         self.spokenSendIndicatorState = .countingDown
         return self.spokenSendCountdownID
@@ -580,10 +600,12 @@ struct NotchExpandedView: View {
         self.contentState.mode.notchColor
     }
 
+    private var sendIndicatorState: SpokenSendIndicatorState {
+        self.contentState.sendIndicatorState(spokenSendEnabled: self.settings.spokenSendEnabled)
+    }
+
     private var showsSpokenSendIndicator: Bool {
-        self.contentState.mode == .dictation &&
-            self.settings.spokenSendEnabled &&
-            self.contentState.spokenSendIndicatorState.isVisible
+        self.sendIndicatorState.isVisible
     }
 
     private var presentationPolicy: NotchOverlayManager.NotchPresentationPolicy {
@@ -866,9 +888,11 @@ struct NotchExpandedView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     let defaultAvailable = promptMode.normalized != .dictate
                         || DictationProviderRoute.isDictationDefaultAvailable(settings: self.settings, appBundleID: self.promptResolutionBundleID)
-                    let defaultSelected = defaultAvailable && (promptMode.normalized == .dictate
-                        ? (self.settings.resolvedDictationPromptSelection(for: activeDictationSlot, appBundleID: self.promptResolutionBundleID) == .default)
-                        : (self.settings.selectedPromptID(for: promptMode) == nil))
+                    let defaultSelected = defaultAvailable && (
+                        promptMode.normalized == .dictate
+                            ? (self.settings.resolvedDictationPromptSelection(for: activeDictationSlot, appBundleID: self.promptResolutionBundleID) == .default)
+                            : (self.settings.selectedPromptID(for: promptMode) == nil)
+                    )
 
                     if promptMode.normalized == .dictate {
                         self.promptMenuRow(
@@ -1066,9 +1090,11 @@ struct NotchExpandedView: View {
 
                 if self.showsSpokenSendIndicator {
                     SpokenSendIndicatorView(
-                        state: self.contentState.spokenSendIndicatorState,
+                        state: self.sendIndicatorState,
                         color: self.modeColor,
-                        size: 14
+                        size: 14,
+                        countdownDuration: self.contentState.spokenSendCountdownDuration,
+                        countdownStartedAt: self.contentState.spokenSendCountdownStartedAt
                     )
                     .id(self.contentState.spokenSendCountdownID)
                     .transition(.scale(scale: 0.8).combined(with: .opacity))
@@ -1076,7 +1102,7 @@ struct NotchExpandedView: View {
             }
             .frame(maxWidth: .infinity, alignment: .center)
             .offset(x: 4, y: 0)
-            .animation(.easeOut(duration: 0.14), value: self.contentState.spokenSendIndicatorState)
+            .animation(.easeOut(duration: 0.14), value: self.sendIndicatorState)
 
             self.promptHoverMenuRow
 
@@ -1371,10 +1397,12 @@ struct NotchCompactTrailingView: View {
     @ObservedObject private var contentState = NotchContentState.shared
     @ObservedObject private var settings = SettingsStore.shared
 
+    private var sendIndicatorState: SpokenSendIndicatorState {
+        self.contentState.sendIndicatorState(spokenSendEnabled: self.settings.spokenSendEnabled)
+    }
+
     private var showsSpokenSendIndicator: Bool {
-        self.contentState.mode == .dictation &&
-            self.settings.spokenSendEnabled &&
-            self.contentState.spokenSendIndicatorState.isVisible
+        self.sendIndicatorState.isVisible
     }
 
     var body: some View {
@@ -1388,15 +1416,17 @@ struct NotchCompactTrailingView: View {
 
             if self.showsSpokenSendIndicator {
                 SpokenSendIndicatorView(
-                    state: self.contentState.spokenSendIndicatorState,
+                    state: self.sendIndicatorState,
                     color: self.contentState.mode.notchColor,
-                    size: 13
+                    size: 13,
+                    countdownDuration: self.contentState.spokenSendCountdownDuration,
+                    countdownStartedAt: self.contentState.spokenSendCountdownStartedAt
                 )
                 .id(self.contentState.spokenSendCountdownID)
             }
         }
         .frame(width: 34, height: 16)
-        .animation(.easeOut(duration: 0.14), value: self.contentState.spokenSendIndicatorState)
+        .animation(.easeOut(duration: 0.14), value: self.sendIndicatorState)
     }
 }
 

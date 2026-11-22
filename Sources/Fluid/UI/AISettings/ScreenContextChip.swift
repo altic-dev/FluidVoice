@@ -12,7 +12,9 @@ struct ScreenContextChip: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject var settings: SettingsStore
 
-    private var isOn: Bool { self.settings.dictationScreenContextEnabled }
+    private var isOn: Bool {
+        self.settings.dictationScreenContextEnabled
+    }
 
     var body: some View {
         Button {

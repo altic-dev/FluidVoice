@@ -2,7 +2,7 @@ import Foundation
 
 /// A chosen application is separate from an automatic suggestion. A missing suggestion
 /// must never change an online call into a microphone-only recording.
-nonisolated enum MeetingRecordingSource: Equatable, Sendable {
+nonisolated enum MeetingRecordingSource: Equatable {
     case automatic
     case allInstances(bundleIdentifier: String, displayName: String)
     case application(bundleIdentifier: String, processID: Int32?, displayName: String)
@@ -64,6 +64,23 @@ nonisolated enum MeetingRecordingSourceResolver {
                 throw MeetingCaptureError.applicationUnavailable(displayName)
             }
             return application
+        }
+    }
+
+    /// Capture recovery after the captured process may have relaunched. No running copy of the app
+    /// means it is gone (`applicationUnavailable`). Several copies only mean recovery cannot pick one,
+    /// and the call may still be live in one of them (`applicationAmbiguous`).
+    static func resolveRecovery(
+        source: MeetingRecordingSource,
+        applications: [MeetingApplicationIdentity]
+    ) throws -> MeetingApplicationIdentity? {
+        do {
+            return try self.resolve(mode: .onlineCall, source: source, target: nil, applications: applications)
+        } catch let MeetingCaptureError.applicationUnavailable(name) {
+            guard case let .application(bundleIdentifier, _, _) = source,
+                  applications.filter({ $0.bundleIdentifier == bundleIdentifier && ($0.processID ?? 0) > 0 }).count > 1
+            else { throw MeetingCaptureError.applicationUnavailable(name) }
+            throw MeetingCaptureError.applicationAmbiguous(name)
         }
     }
 

@@ -7,7 +7,7 @@ import CoreFoundation
 import Darwin
 import Foundation
 
-nonisolated enum AudioTopologyTraceEvent: UInt32, CaseIterable, Sendable {
+nonisolated enum AudioTopologyTraceEvent: UInt32, CaseIterable {
     case callback = 1
     case enumerationBegin
     case enumerationEnd
@@ -59,7 +59,7 @@ nonisolated enum AudioTopologyTraceEvent: UInt32, CaseIterable, Sendable {
     }
 }
 
-nonisolated enum AudioTopologyTraceOwner: UInt32, CaseIterable, Sendable {
+nonisolated enum AudioTopologyTraceOwner: UInt32, CaseIterable {
     case unknown = 0
     case diagnostics
     case audioHardwareObserver
@@ -85,7 +85,7 @@ nonisolated enum AudioTopologyTraceOwner: UInt32, CaseIterable, Sendable {
     }
 }
 
-nonisolated enum AudioTopologyTraceQueueRole: UInt32, CaseIterable, Sendable {
+nonisolated enum AudioTopologyTraceQueueRole: UInt32, CaseIterable {
     case unknown = 0
     case mainDelivery
     case dedicatedDelivery
@@ -99,7 +99,7 @@ nonisolated enum AudioTopologyTraceQueueRole: UInt32, CaseIterable, Sendable {
     }
 }
 
-nonisolated enum AudioTopologyTracePhase: UInt32, CaseIterable, Sendable {
+nonisolated enum AudioTopologyTracePhase: UInt32, CaseIterable {
     case none = 0
     case catalog
     case vpio
@@ -124,7 +124,7 @@ nonisolated enum AudioTopologyTracePhase: UInt32, CaseIterable, Sendable {
     }
 }
 
-nonisolated enum AudioTopologyTraceTransport: UInt32, CaseIterable, Sendable {
+nonisolated enum AudioTopologyTraceTransport: UInt32, CaseIterable {
     case unknown = 0
     case builtIn
     case bluetooth
@@ -138,7 +138,7 @@ nonisolated enum AudioTopologyTraceTransport: UInt32, CaseIterable, Sendable {
     }
 }
 
-nonisolated struct AudioTopologyDiagnosticsConfiguration: Equatable, Sendable {
+nonisolated struct AudioTopologyDiagnosticsConfiguration: Equatable {
     static let enabledKey = "FLUIDVOICE_AUDIO_TOPOLOGY_DIAGNOSTICS"
     static let outputDirectoryKey = "FLUIDVOICE_AUDIO_TOPOLOGY_TRACE_DIRECTORY"
     static let stallThresholdKey = "FLUIDVOICE_AUDIO_TOPOLOGY_STALL_SECONDS"
@@ -164,7 +164,7 @@ nonisolated struct AudioTopologyDiagnosticsConfiguration: Equatable, Sendable {
     }
 }
 
-nonisolated enum AudioTopologyStallClassification: String, Sendable {
+nonisolated enum AudioTopologyStallClassification: String {
     case heartbeatHealthy
     case heartbeatMissing
     case heartbeatStalledPhaseOpen

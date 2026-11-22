@@ -209,10 +209,98 @@ final class DashboardRecommendationTests: XCTestCase {
         XCTAssertEqual(DashboardModelRecommendationPolicy.speechModel(memoryBytes: 16 * gib, language: "en", available: available), .fluidParakeetPro)
         XCTAssertEqual(DashboardModelRecommendationPolicy.speechModel(memoryBytes: 8 * gib, language: "de", available: available), .fluidParakeetMini)
         XCTAssertNil(DashboardModelRecommendationPolicy.speechModel(memoryBytes: 4 * gib, language: "en", available: available))
+        XCTAssertEqual(DashboardModelRecommendationPolicy.speechModel(memoryBytes: 32 * gib, language: "en", available: [.fluidParakeetMini]), .fluidParakeetMini)
         XCTAssertNil(DashboardModelRecommendationPolicy.speechModel(memoryBytes: 32 * gib, language: "en", available: [.whisperSmall]))
         for language: String? in [nil, "auto", "ta", "zh", "unknown"] {
             XCTAssertNil(DashboardModelRecommendationPolicy.speechModel(memoryBytes: 32 * gib, language: language, available: available))
         }
+    }
+
+    func testSpeechRecommendationUsesQwenOrWhisperOutsideProLanguagesAndNeverPico() {
+        let gib: UInt64 = 1024 * 1024 * 1024
+        let all: [SettingsStore.SpeechModel] = [.fluidParakeetPro, .fluidParakeetMini, .fluidParakeetPico, .qwen3Asr17B, .whisperLargeTurbo, .whisperLarge]
+        func pick(_ language: String?, _ memory: UInt64, _ available: [SettingsStore.SpeechModel] = all) -> SettingsStore.SpeechModel? {
+            DashboardModelRecommendationPolicy.speechModel(memoryBytes: memory, language: language, available: available)
+        }
+        for memory in [8 * gib, 64 * gib] {
+            for language in ["zh", "ja", "ko", "th", "vi", "id", "ms", "hi", "ar", "fa", "mk"] {
+                XCTAssertEqual(pick(language, memory), .qwen3Asr17B, language)
+            }
+            for language in ["tl", "tr", "ta", "he", "ur", "bn"] {
+                XCTAssertEqual(pick(language, memory), .whisperLargeTurbo, language)
+            }
+        }
+        for language in ["en", "de", "fr", "pl"] { // Qwen covers these too, but Pro's family wins.
+            XCTAssertEqual(pick(language, 8 * gib), .fluidParakeetMini, language)
+            XCTAssertEqual(pick(language, 16 * gib), .fluidParakeetPro, language)
+        }
+        for language in ["ja", "ta", "en"] {
+            XCTAssertNil(pick(language, 8 * gib - 1), language)
+        }
+        XCTAssertEqual(pick("ja", 16 * gib, [.whisperLargeTurbo]), .whisperLargeTurbo)
+        XCTAssertNil(pick("ja", 16 * gib, [.whisperSmall]))
+        XCTAssertNil(pick("auto", 16 * gib))
+        for language in VoiceEngineLanguageCatalog.allLanguages(availableModels: all) {
+            for memory in [4 * gib, 8 * gib, 16 * gib, 64 * gib] {
+                XCTAssertNotEqual(pick(language.id, memory), .fluidParakeetPico, language.id)
+            }
+        }
+    }
+
+    func testSpeechSuggestionNeverDowngradesToALighterSibling() {
+        func suggest(_ target: SettingsStore.SpeechModel, from selected: SettingsStore.SpeechModel) -> Bool {
+            DashboardModelRecommendationPolicy.shouldSuggestSpeech(targetID: target.id, selectedID: selected.id, dismissedID: nil)
+        }
+        XCTAssertFalse(suggest(.fluidParakeetMini, from: .fluidParakeetPro))
+        XCTAssertFalse(suggest(.whisperLargeTurbo, from: .whisperLarge))
+        XCTAssertFalse(suggest(.qwen3Asr17B, from: .qwen3Asr17B))
+        XCTAssertTrue(suggest(.fluidParakeetPro, from: .fluidParakeetMini))
+        XCTAssertTrue(suggest(.qwen3Asr17B, from: .whisperLargeTurbo))
+        XCTAssertTrue(suggest(.whisperLargeTurbo, from: .whisperSmall))
+    }
+
+    func testWhisperActivationAppliesRecommendedLanguageAndRestoresItOnFailure() async throws {
+        let settings = SettingsStore.shared
+        let (model, language) = (settings.selectedSpeechModel, settings.selectedWhisperLanguageCode)
+        defer {
+            settings.selectedSpeechModel = model
+            settings.selectedWhisperLanguageCode = language
+        }
+        settings.selectedSpeechModel = .appleSpeech
+        settings.selectedWhisperLanguageCode = "en"
+        do {
+            try await DashboardRecommendationsController.activateSpeech(.whisperLargeTurbo, languageID: "tr", settings: settings, reset: {}) {
+                XCTAssertEqual(settings.selectedWhisperLanguageCode, "tr")
+                throw CancellationError()
+            }
+            XCTFail("Preparation should fail")
+        } catch is CancellationError {}
+        XCTAssertEqual(settings.selectedSpeechModel, .appleSpeech)
+        XCTAssertEqual(settings.selectedWhisperLanguageCode, "en")
+        try await DashboardRecommendationsController.activateSpeech(.whisperLargeTurbo, languageID: "tr", settings: settings, reset: {}, prepare: {})
+        XCTAssertEqual(settings.selectedWhisperLanguageCode, "tr")
+        XCTAssertEqual(settings.selectedSpeechModel, .whisperLargeTurbo)
+    }
+
+    func testQwenUsersAreNotJudgedByAStaleWhisperLanguage() {
+        let settings = SettingsStore.shared
+        let (model, whisperLanguage) = (settings.selectedSpeechModel, settings.selectedWhisperLanguageCode)
+        defer {
+            settings.selectedSpeechModel = model
+            settings.selectedWhisperLanguageCode = whisperLanguage
+        }
+        settings.selectedWhisperLanguageCode = "en"
+        settings.selectedSpeechModel = .qwen3Asr17B
+        XCTAssertNil(DashboardModelRecommendationPolicy.speechLanguage(settings: settings))
+        settings.selectedSpeechModel = .whisperSmall
+        XCTAssertEqual(DashboardModelRecommendationPolicy.speechLanguage(settings: settings), "en")
+    }
+
+    func testQwenAndWhisperSuggestionsSayTheLanguageAndWhenWordsAppear() {
+        let qwen = DashboardRecommendationsController.speechDetail(for: .qwen3Asr17B, languageID: "ja")
+        XCTAssertTrue(qwen.contains("Japanese"))
+        XCTAssertTrue(qwen.contains("when you stop talking"))
+        XCTAssertFalse(DashboardRecommendationsController.speechDetail(for: .fluidParakeetPro, languageID: "en").contains("stop talking"))
     }
 
     func testCleanupSuggestionRequiresEnabledAndVerifiedCurrentModel() {

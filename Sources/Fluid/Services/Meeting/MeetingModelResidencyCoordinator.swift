@@ -16,7 +16,7 @@ nonisolated enum MeetingModelResidencyError: LocalizedError {
     }
 }
 
-nonisolated struct MeetingResidentModel: Equatable, Sendable {
+nonisolated struct MeetingResidentModel: Equatable {
     let id: String
     let configuration: String
 }
@@ -30,7 +30,7 @@ struct MeetingModelParticipant {
     var finish: () async -> Void = {}
 }
 
-nonisolated struct MeetingModelGrant: Sendable {
+nonisolated struct MeetingModelGrant {
     let attempt: UUID
     let generation: UUID
     let owner: String
@@ -46,7 +46,7 @@ nonisolated enum MeetingModelContext {
 final class MeetingModelResidencyCoordinator {
     static let shared = MeetingModelResidencyCoordinator()
 
-    enum Phase: String, Sendable {
+    enum Phase: String {
         case normal, suspending, transcription, summary, cleaning, restoring, terminating
     }
 
@@ -58,9 +58,13 @@ final class MeetingModelResidencyCoordinator {
     private var vetoedOwners: Set<String> = []
     private var terminating = false
 
-    var isExclusive: Bool { self.attempt != nil || self.terminating }
+    var isExclusive: Bool {
+        self.attempt != nil || self.terminating
+    }
 
-    var warmupGeneration: UUID? { self.isExclusive ? nil : self.generation }
+    var warmupGeneration: UUID? {
+        self.isExclusive ? nil : self.generation
+    }
 
     func canRunWarmup(_ generation: UUID?) -> Bool {
         generation != nil && generation == self.warmupGeneration
@@ -82,7 +86,9 @@ final class MeetingModelResidencyCoordinator {
         return token
     }
 
-    func endOperation(_ token: UUID) { self.operations.remove(token) }
+    func endOperation(_ token: UUID) {
+        self.operations.remove(token)
+    }
 
     /// Decide whether an unload belongs to the meeting or ordinary work in one actor turn.
     /// Separate checks allow a meeting to start between checking exclusivity and admission.
@@ -107,7 +113,9 @@ final class MeetingModelResidencyCoordinator {
     }
 
     /// Explicit unload/disable may remove restoration eligibility, never add a new model.
-    func vetoRestoration(owner: String) { if self.attempt != nil { self.vetoedOwners.insert(owner) } }
+    func vetoRestoration(owner: String) {
+        if self.attempt != nil { self.vetoedOwners.insert(owner) }
+    }
 
     func beginTermination() {
         self.terminating = true

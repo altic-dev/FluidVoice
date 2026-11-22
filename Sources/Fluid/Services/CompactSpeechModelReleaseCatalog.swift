@@ -9,20 +9,20 @@ final class CompactSpeechModelReleaseCatalog: ObservableObject {
     typealias Variant = ParakeetSpeechModelCatalog.Variant
     typealias Fetcher = @Sendable () async throws -> Data
 
-    nonisolated struct Snapshot: Equatable, Sendable {
+    nonisolated struct Snapshot: Equatable {
         let revision: UInt64
         let sequence: Int
         let descriptors: [Variant: Descriptor]
         let rejectedManifestHashes: Set<String>
     }
 
-    private nonisolated struct StoredState: Codable, Sendable {
+    private nonisolated struct StoredState: Codable {
         let lastCheck: Date?
         let lastCheckSucceeded: Bool
         let rejectedManifestHashes: [String]
     }
 
-    private nonisolated struct FeedCommit: Sendable {
+    private nonisolated struct FeedCommit {
         let payload: SpeechModelFeed.Payload
         let acceptedIncoming: Bool
     }
@@ -45,7 +45,9 @@ final class CompactSpeechModelReleaseCatalog: ObservableObject {
         descriptors: [.mini: ParakeetSpeechModelCatalog.mini, .pico: ParakeetSpeechModelCatalog.pico],
         rejectedManifestHashes: []
     )
-    var revision: UInt64 { self.snapshot.revision }
+    var revision: UInt64 {
+        self.snapshot.revision
+    }
 
     private let keys: [String]
     private let cacheURL: URL?

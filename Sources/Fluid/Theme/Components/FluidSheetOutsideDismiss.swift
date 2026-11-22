@@ -24,7 +24,9 @@ struct FluidSheetOutsideDismiss: NSViewRepresentable {
         var onCancel: (() -> Void)?
         private var monitor: Any?
 
-        override func hitTest(_: NSPoint) -> NSView? { nil }
+        override func hitTest(_: NSPoint) -> NSView? {
+            nil
+        }
 
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()

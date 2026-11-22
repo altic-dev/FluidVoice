@@ -11,7 +11,10 @@ import Foundation
 @available(macOS 14.0, *)
 final class SenseVoiceProvider: TranscriptionProvider {
     let name = "SenseVoice Small"
-    var isAvailable: Bool { true }
+    var isAvailable: Bool {
+        true
+    }
+
     private(set) var isReady: Bool = false
 
     private var engine: SenseVoiceEngine?
@@ -53,10 +56,12 @@ final class SenseVoiceProvider: TranscriptionProvider {
     }
 
     private nonisolated static func downloadItems(for variant: SenseVoiceEncoderVariant) -> [HuggingFaceModelDownloader.ModelItem] {
-        (self.bundleFiles(SenseVoiceConstants.preprocessorBundle)
-            + self.bundleFiles(variant.bundleName)
-            + [SenseVoiceConstants.vocabularyFile, SenseVoiceConstants.configFile])
-            .map { .init(path: $0, isDirectory: false) }
+        (
+            self.bundleFiles(SenseVoiceConstants.preprocessorBundle)
+                + self.bundleFiles(variant.bundleName)
+                + [SenseVoiceConstants.vocabularyFile, SenseVoiceConstants.configFile]
+        )
+        .map { .init(path: $0, isDirectory: false) }
     }
 
     nonisolated static func isComplete(_ variant: SenseVoiceEncoderVariant, at directory: URL) -> Bool {
@@ -262,7 +267,10 @@ final class SenseVoiceProvider: TranscriptionProvider {
             textNorm: SenseVoiceConstants.textNormWithITN
         )
         let elapsed = Date().timeIntervalSince(started)
-        let message = "SenseVoice: \(logLevel == .info ? "final" : "preview") \(String(format: "%.2f", Double(samples.count) / 16_000))s audio in \(Int(elapsed * 1000))ms [lang=\(language.rawValue), detected=\(result.detectedLanguage ?? "-"), chars=\(result.text.count)]"
+        let phase = logLevel == .info ? "final" : "preview"
+        let seconds = String(format: "%.2f", Double(samples.count) / 16_000)
+        let message = "SenseVoice: \(phase) \(seconds)s audio in \(Int(elapsed * 1000))ms "
+            + "[lang=\(language.rawValue), detected=\(result.detectedLanguage ?? "-"), chars=\(result.text.count)]"
         switch logLevel {
         case .debug: DebugLogger.shared.debug(message, source: Self.logSource)
         case .info: DebugLogger.shared.info(message, source: Self.logSource)
@@ -305,7 +313,9 @@ final class SenseVoiceProvider: TranscriptionProvider {
         throw Self.unsupported
     }
 
-    func modelsExistOnDisk() -> Bool { false }
+    func modelsExistOnDisk() -> Bool {
+        false
+    }
 
     private static let unsupported = NSError(
         domain: "SenseVoiceProvider",

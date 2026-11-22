@@ -14,7 +14,7 @@ import IOKit.pwr_mgt
 // MARK: - Audio Device Manager
 
 nonisolated enum AudioDevice {
-    enum LivenessDiagnosticsOwner: Sendable {
+    enum LivenessDiagnosticsOwner {
         case audioHardwareObserver
         case asrService
 
@@ -28,7 +28,7 @@ nonisolated enum AudioDevice {
         #endif
     }
 
-    struct Device: Identifiable, Hashable, Sendable {
+    struct Device: Identifiable, Hashable {
         static let externalMicrophoneDataSourceID: UInt32 = 0x656d6963 // 'emic'
 
         let id: AudioObjectID

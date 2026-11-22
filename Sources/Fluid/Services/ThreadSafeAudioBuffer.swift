@@ -21,7 +21,9 @@ final nonisolated class ThreadSafeAudioBuffer {
     }
 
     /// Returns the current number of samples
-    var isEmpty: Bool { self.lock.withLock { self.buffer.isEmpty } }
+    var isEmpty: Bool {
+        self.lock.withLock { self.buffer.isEmpty }
+    }
 
     var count: Int {
         self.lock.lock()

@@ -44,7 +44,9 @@ final class DictionaryVoiceSpellingLearner {
         self.save = save
     }
 
-    var pendingCount: Int { self.pending.count }
+    var pendingCount: Int {
+        self.pending.count
+    }
 
     /// Called once the dictation has been delivered where its edits can be observed.
     func propose(_ spellings: [DictionaryVoiceSpelling], recordingID: UUID? = nil) {
@@ -99,7 +101,7 @@ final class DictionaryVoiceSpellingLearner {
         var entries = self.load()
         // The word may have been deleted or renamed meanwhile; only add to the same word.
         guard let entryIndex = entries.firstIndex(where: {
-            $0.id == spelling.entryID && $0.replacement.caseInsensitiveCompare(spelling.label) == .orderedSame
+            $0.id == spelling.entryID && !$0.caseSensitive && $0.replacement.caseInsensitiveCompare(spelling.label) == .orderedSame
         }) else { return }
         let trigger = spelling.spelling.trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters)).lowercased()
         let existing = entries[entryIndex].triggers.map(DictionaryAudioSpan.normalized)

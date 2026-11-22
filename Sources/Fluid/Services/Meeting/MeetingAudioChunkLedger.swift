@@ -5,7 +5,7 @@ import Foundation
 /// P0b writer-ledger facts. These are intentionally standalone and optional at the session layer:
 /// old session JSON never contains them, while the PCM-first writer durably checkpoints each new
 /// capture chunk. Legacy AAC sessions continue to decode without these records.
-nonisolated struct MeetingAudioChunkLedgerIntent: Codable, Equatable, Sendable {
+nonisolated struct MeetingAudioChunkLedgerIntent: Codable, Equatable {
     var chunkID: MeetingAudioChunkID
     var sequence: Int
     var canonicalStart: MeetingMediaTime
@@ -15,7 +15,7 @@ nonisolated struct MeetingAudioChunkLedgerIntent: Codable, Equatable, Sendable {
     var createdAt: Date
 }
 
-nonisolated struct MeetingAudioChunkLedgerCheckpoint: Codable, Equatable, Sendable {
+nonisolated struct MeetingAudioChunkLedgerCheckpoint: Codable, Equatable {
     var chunkID: MeetingAudioChunkID
     var expectedFrames: Int64
     var writtenFrames: Int64
@@ -23,7 +23,7 @@ nonisolated struct MeetingAudioChunkLedgerCheckpoint: Codable, Equatable, Sendab
     var updatedAt: Date
 }
 
-nonisolated enum MeetingAudioChunkLedgerTerminalStatus: Equatable, Sendable {
+nonisolated enum MeetingAudioChunkLedgerTerminalStatus: Equatable {
     case ready
     case failed
     case unknown(String)
@@ -36,22 +36,29 @@ nonisolated enum MeetingAudioChunkLedgerTerminalStatus: Equatable, Sendable {
         }
     }
 
-    init(rawValue: String) { self = rawValue == "ready" ? .ready : rawValue == "failed" ? .failed : .unknown(rawValue) }
+    init(rawValue: String) {
+        self = rawValue == "ready" ? .ready : rawValue == "failed" ? .failed : .unknown(rawValue)
+    }
 }
 
 nonisolated extension MeetingAudioChunkLedgerTerminalStatus: Codable {
-    init(from decoder: Decoder) throws { try self.init(rawValue: decoder.singleValueContainer().decode(String.self)) }
-    func encode(to encoder: Encoder) throws { var c = encoder.singleValueContainer(); try c.encode(self.rawValue) }
+    init(from decoder: Decoder) throws {
+        try self.init(rawValue: decoder.singleValueContainer().decode(String.self))
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.singleValueContainer(); try c.encode(self.rawValue)
+    }
 }
 
-nonisolated struct MeetingAudioChunkLedgerTerminal: Codable, Equatable, Sendable {
+nonisolated struct MeetingAudioChunkLedgerTerminal: Codable, Equatable {
     var chunkID: MeetingAudioChunkID
     var status: MeetingAudioChunkLedgerTerminalStatus
     var updatedAt: Date
     var detail: String?
 }
 
-nonisolated enum MeetingAudioChunkLedgerError: Error, Equatable, Sendable {
+nonisolated enum MeetingAudioChunkLedgerError: Error, Equatable {
     case invalidChunkID
     case pathRejected
     case conflictingIntent
@@ -69,7 +76,9 @@ final nonisolated class MeetingAudioChunkLedgerStore: @unchecked Sendable {
     let sessionDirectory: URL
     private let ledgerDirectoryName = "chunk-ledger"
 
-    init(sessionDirectory: URL) { self.sessionDirectory = sessionDirectory.standardizedFileURL }
+    init(sessionDirectory: URL) {
+        self.sessionDirectory = sessionDirectory.standardizedFileURL
+    }
 
     func writeIntent(_ intent: MeetingAudioChunkLedgerIntent) throws {
         try self.validate(intent.partialRelativeFilePath)
@@ -113,18 +122,26 @@ final nonisolated class MeetingAudioChunkLedgerStore: @unchecked Sendable {
         try self.writeImmutable(self.encode(terminal), to: self.recordURL(chunkID: chunkID, suffix: "terminal"), conflict: .terminalAlreadyExists)
     }
 
-    func readIntent(for chunkID: MeetingAudioChunkID) throws -> MeetingAudioChunkLedgerIntent? { try self.read(
-        MeetingAudioChunkLedgerIntent.self,
-        at: self.recordURL(chunkID: chunkID, suffix: "intent")
-    ) }
-    func readCheckpoint(for chunkID: MeetingAudioChunkID) throws -> MeetingAudioChunkLedgerCheckpoint? { try self.read(
-        MeetingAudioChunkLedgerCheckpoint.self,
-        at: self.recordURL(chunkID: chunkID, suffix: "checkpoint")
-    ) }
-    func readTerminal(for chunkID: MeetingAudioChunkID) throws -> MeetingAudioChunkLedgerTerminal? { try self.read(
-        MeetingAudioChunkLedgerTerminal.self,
-        at: self.recordURL(chunkID: chunkID, suffix: "terminal")
-    ) }
+    func readIntent(for chunkID: MeetingAudioChunkID) throws -> MeetingAudioChunkLedgerIntent? {
+        try self.read(
+            MeetingAudioChunkLedgerIntent.self,
+            at: self.recordURL(chunkID: chunkID, suffix: "intent")
+        )
+    }
+
+    func readCheckpoint(for chunkID: MeetingAudioChunkID) throws -> MeetingAudioChunkLedgerCheckpoint? {
+        try self.read(
+            MeetingAudioChunkLedgerCheckpoint.self,
+            at: self.recordURL(chunkID: chunkID, suffix: "checkpoint")
+        )
+    }
+
+    func readTerminal(for chunkID: MeetingAudioChunkID) throws -> MeetingAudioChunkLedgerTerminal? {
+        try self.read(
+            MeetingAudioChunkLedgerTerminal.self,
+            at: self.recordURL(chunkID: chunkID, suffix: "terminal")
+        )
+    }
 
     private func validate(_ relative: String) throws {
         let parts = relative.split(separator: "/", omittingEmptySubsequences: false)
@@ -166,11 +183,13 @@ final nonisolated class MeetingAudioChunkLedgerStore: @unchecked Sendable {
         return next.seconds >= previous.seconds
     }
 
-    private func encode<T: Encodable>(_ value: T) throws -> Data { let encoder = JSONEncoder(); encoder.dateEncodingStrategy = .iso8601; encoder.outputFormatting = [.sortedKeys]; return try encoder
-        .encode(value)
+    private func encode<T: Encodable>(_ value: T) throws -> Data {
+        let encoder = JSONEncoder(); encoder.dateEncodingStrategy = .iso8601; encoder.outputFormatting = [.sortedKeys]; return try encoder
+            .encode(value)
     }
 
-    private func read<T: Decodable>(_ type: T.Type, at url: URL) throws -> T? { guard FileManager.default.fileExists(atPath: url.path)
+    private func read<T: Decodable>(_ type: T.Type, at url: URL) throws -> T? {
+        guard FileManager.default.fileExists(atPath: url.path)
         else { return nil }; let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601; return try decoder.decode(
             type,
             from: Data(contentsOf: url, options: .mappedIfSafe)
@@ -185,7 +204,10 @@ final nonisolated class MeetingAudioChunkLedgerStore: @unchecked Sendable {
         try self.writeTemp(data, destination: destination, exclusive: true, conflict: conflict)
     }
 
-    private func writeReplacing(_ data: Data, to destination: URL) throws { try self.writeTemp(data, destination: destination, exclusive: false) }
+    private func writeReplacing(_ data: Data, to destination: URL) throws {
+        try self.writeTemp(data, destination: destination, exclusive: false)
+    }
+
     private func writeTemp(_ data: Data, destination: URL, exclusive: Bool, conflict: MeetingAudioChunkLedgerError? = nil) throws {
         let temp = destination.deletingLastPathComponent().appendingPathComponent(".\(destination.lastPathComponent).\(UUID().uuidString).tmp")
         try data.write(to: temp, options: [])

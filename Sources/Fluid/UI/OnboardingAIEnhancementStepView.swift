@@ -35,7 +35,7 @@ struct OnboardingAIEnhancementStepView: View {
         return image
     }()
 
-    // Hide only the old title area; the menu begins below 36% of the frame.
+    /// Hide only the old title area; the menu begins below 36% of the frame.
     private static let heldFrameMask: [Gradient.Stop] = [
         .init(color: .clear, location: 0),
         .init(color: .clear, location: 0.27),
@@ -62,9 +62,18 @@ struct OnboardingAIEnhancementStepView: View {
         let isEnabled: Bool
     }
 
-    private var canNavigate: Bool { !self.isRunning && !self.isRecordingShortcut && !self.contentState.isProcessing && !self.isShowingIntroduction }
-    private var isShowingIntroduction: Bool { self.isReady && !self.setup.introductionFinished && !self.reduceMotion }
-    private var isReady: Bool { self.setup.phase == .ready }
+    private var canNavigate: Bool {
+        !self.isRunning && !self.isRecordingShortcut && !self.contentState.isProcessing && !self.isShowingIntroduction
+    }
+
+    private var isShowingIntroduction: Bool {
+        self.isReady && !self.setup.introductionFinished && !self.reduceMotion
+    }
+
+    private var isReady: Bool {
+        self.setup.phase == .ready
+    }
+
     var body: some View {
         GeometryReader { proxy in
             ZStack {
@@ -158,7 +167,7 @@ struct OnboardingAIEnhancementStepView: View {
                 VStack(spacing: 0) {
                     self.hero.padding(.bottom, 16)
                     OnboardingCleanupExampleCarousel(autoplay: self.carouselAutoplay)
-                    Text("You can choose a different model or turn off Fluid Intelligence anytime in Settings.")
+                    Text("Research preview · Review your text before sending. Cleanup may make inaccurate changes.")
                         .font(self.theme.typography.caption)
                         .foregroundStyle(.white.opacity(0.46))
                         .multilineTextAlignment(.center)
@@ -177,7 +186,7 @@ struct OnboardingAIEnhancementStepView: View {
         VStack(spacing: 10) {
             FluidOnboardingCompactAppIconMark(size: 40)
                 .padding(.bottom, 4)
-            Text("Meet Fluid Intelligence")
+            Text(self.setup.model.map { "Meet \($0.name)" } ?? "Meet Fluid Intelligence")
                 .font(.fluidSystem(size: 28, weight: .semibold))
                 .foregroundStyle(.white)
                 .multilineTextAlignment(.center)
@@ -456,7 +465,9 @@ struct OnboardingAIEnhancementStepView: View {
 
     private struct SetupError: LocalizedError {
         let message: String
-        var errorDescription: String? { self.message }
+        var errorDescription: String? {
+            self.message
+        }
     }
 
     private func pillButton(

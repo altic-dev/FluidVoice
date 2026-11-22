@@ -3,7 +3,7 @@ import Foundation
 /// The kinds of content the sidebar search indexes in Zeppelin. Each is one
 /// record-only namespace, so results are grouped by kind rather than ranked across
 /// kinds: BM25 scores from different namespaces are not comparable.
-nonisolated enum SearchIndexKind: String, CaseIterable, Sendable {
+nonisolated enum SearchIndexKind: String, CaseIterable {
     case history = "search-history"
     case transcripts = "search-transcripts"
     case chats = "search-chats"
@@ -12,7 +12,7 @@ nonisolated enum SearchIndexKind: String, CaseIterable, Sendable {
 /// One row as the index sees it: identity, a revision that rises when the text
 /// changes, and the text itself. The stores build these; the index never reads a
 /// store directly.
-nonisolated struct SearchIndexRecord: Sendable, Equatable {
+nonisolated struct SearchIndexRecord: Equatable {
     let id: UUID
     /// Compared with what the namespace holds. A higher value re-indexes the row.
     /// Rows whose text never changes use 1; chats use their update time, and history

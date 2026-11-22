@@ -30,13 +30,13 @@ private nonisolated enum ProbeLimits {
     static let saltBytes = 16
 }
 
-private nonisolated enum ProbeEvent: String, Codable, Sendable {
+private nonisolated enum ProbeEvent: String, Codable {
     case start
     case sample
     case terminal
 }
 
-private nonisolated enum TerminalReason: String, Codable, Sendable {
+private nonisolated enum TerminalReason: String, Codable {
     case completed
     case deadlineExceeded
     case cancelled
@@ -46,32 +46,32 @@ private nonisolated enum TerminalReason: String, Codable, Sendable {
     case setupFailure
 }
 
-private nonisolated enum ProbeNote: String, Codable, Sendable {
+private nonisolated enum ProbeNote: String, Codable {
     case tempMayBePurged
 }
 
-private nonisolated enum ProbeReadStatus: String, Codable, Sendable {
+private nonisolated enum ProbeReadStatus: String, Codable {
     case ok
     case readError
     case unsupported
     case invalidLayout
 }
 
-private nonisolated enum ProbeStreamState: String, Codable, Sendable {
+private nonisolated enum ProbeStreamState: String, Codable {
     case active
     case inactive
     case readError
     case unsupported
 }
 
-private nonisolated enum ProbeRunningState: String, Codable, Sendable {
+private nonisolated enum ProbeRunningState: String, Codable {
     case running
     case notRunning
     case readError
     case unsupported
 }
 
-private nonisolated enum ProbeFamily: String, Codable, Sendable {
+private nonisolated enum ProbeFamily: String, Codable {
     case zoom
     case teams
     case webex
@@ -79,7 +79,7 @@ private nonisolated enum ProbeFamily: String, Codable, Sendable {
     case other
 }
 
-private nonisolated enum ProbeTransport: String, Codable, Sendable {
+private nonisolated enum ProbeTransport: String, Codable {
     case builtIn
     case bluetooth
     case usb
@@ -89,14 +89,14 @@ private nonisolated enum ProbeTransport: String, Codable, Sendable {
     case unknown
 }
 
-private nonisolated struct ProbeStartLine: Codable, Sendable {
+private nonisolated struct ProbeStartLine: Codable {
     var schemaVersion: Int
     var event: ProbeEvent
     var durationSeconds: Int
     var note: ProbeNote
 }
 
-private nonisolated struct ProbeTerminalLine: Codable, Sendable {
+private nonisolated struct ProbeTerminalLine: Codable {
     var schemaVersion: Int
     var event: ProbeEvent
     var monotonicOffsetMs: Int
@@ -104,7 +104,7 @@ private nonisolated struct ProbeTerminalLine: Codable, Sendable {
     var recordCount: Int
 }
 
-private nonisolated struct ProbeSampleLine: Codable, Sendable {
+private nonisolated struct ProbeSampleLine: Codable {
     var schemaVersion: Int
     var event: ProbeEvent
     var monotonicOffsetMs: Int
@@ -121,13 +121,13 @@ private nonisolated struct ProbeSampleLine: Codable, Sendable {
     var devices: [DeviceEntry]
 }
 
-private nonisolated struct ProcessEntry: Codable, Sendable {
+private nonisolated struct ProcessEntry: Codable {
     var family: ProbeFamily
     var input: ProbeStreamState
     var output: ProbeStreamState
 }
 
-private nonisolated struct DeviceEntry: Codable, Sendable {
+private nonisolated struct DeviceEntry: Codable {
     var token: String?
     var inputChannels: Int
     var streamStatus: ProbeReadStatus
@@ -161,7 +161,7 @@ private final nonisolated class ProbeSession: @unchecked Sendable {
     private let baseInstant = ContinuousClock.now
     private let salt: [UInt8]
     private let samplingQueue = DispatchQueue(label: "com.fluidvoice.meetingprobe.sampling", qos: .utility)
-    // Sole owner of encoder, fileHandle, deadlineTimer, terminalReason, recordCount, outputPath, sampleInFlight.
+    /// Sole owner of encoder, fileHandle, deadlineTimer, terminalReason, recordCount, outputPath, sampleInFlight.
     private let controlQueue = DispatchQueue(label: "com.fluidvoice.meetingprobe.control")
 
     private let encoder = JSONEncoder()
@@ -172,7 +172,9 @@ private final nonisolated class ProbeSession: @unchecked Sendable {
     private var outputPath = ""
     private var sampleInFlight = false
 
-    private var deadlineMs: Int { self.durationSeconds * 1000 }
+    private var deadlineMs: Int {
+        self.durationSeconds * 1000
+    }
 
     init(durationSeconds: Int) {
         self.durationSeconds = durationSeconds

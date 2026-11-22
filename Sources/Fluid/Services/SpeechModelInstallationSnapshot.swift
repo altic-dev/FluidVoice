@@ -9,12 +9,12 @@ import FluidAudio
 final class SpeechModelInstallationSnapshot: ObservableObject {
     static let shared = SpeechModelInstallationSnapshot()
 
-    nonisolated enum State: Equatable, Sendable {
+    nonisolated enum State: Equatable {
         case checking, ready, failed
     }
 
-    nonisolated struct Probe: Sendable {
-        nonisolated enum Kind: Sendable {
+    nonisolated struct Probe {
+        nonisolated enum Kind {
             case builtIn
             case parakeet(ParakeetSpeechModelCatalog.Descriptor)
             case realtime(folder: String, requiredModels: [String])
@@ -30,7 +30,7 @@ final class SpeechModelInstallationSnapshot: ObservableObject {
         var rejectedManifestHashes: Set<String> = []
     }
 
-    nonisolated struct ScanResult: Equatable, Sendable {
+    nonisolated struct ScanResult: Equatable {
         let installedIDs: Set<String>
         let updateAvailableIDs: Set<String>
         let installedArchiveHashes: [String: String]
@@ -44,7 +44,7 @@ final class SpeechModelInstallationSnapshot: ObservableObject {
         }
     }
 
-    nonisolated struct Value: Equatable, Sendable {
+    nonisolated struct Value: Equatable {
         let state: State
         let result: ScanResult
         let latestDescriptors: [String: ParakeetSpeechModelCatalog.Descriptor]
@@ -53,14 +53,37 @@ final class SpeechModelInstallationSnapshot: ObservableObject {
     typealias Scanner = @Sendable ([Probe]) async throws -> Set<String>
     typealias ResultScanner = @Sendable ([Probe]) async throws -> ScanResult
     @Published private(set) var value = Value(state: .checking, result: ScanResult(installedIDs: []), latestDescriptors: [:])
-    var installedIDs: Set<String> { self.value.result.installedIDs }
-    var updateAvailableIDs: Set<String> { self.value.result.updateAvailableIDs }
-    var installedArchiveHashes: [String: String] { self.value.result.installedArchiveHashes }
-    var installedManifestHashes: [String: String] { self.value.result.installedManifestHashes }
-    var latestDescriptors: [String: ParakeetSpeechModelCatalog.Descriptor] { self.value.latestDescriptors }
-    var state: State { self.value.state }
-    var isChecking: Bool { self.state == .checking }
-    var canUseModelActions: Bool { self.state == .ready }
+    var installedIDs: Set<String> {
+        self.value.result.installedIDs
+    }
+
+    var updateAvailableIDs: Set<String> {
+        self.value.result.updateAvailableIDs
+    }
+
+    var installedArchiveHashes: [String: String] {
+        self.value.result.installedArchiveHashes
+    }
+
+    var installedManifestHashes: [String: String] {
+        self.value.result.installedManifestHashes
+    }
+
+    var latestDescriptors: [String: ParakeetSpeechModelCatalog.Descriptor] {
+        self.value.latestDescriptors
+    }
+
+    var state: State {
+        self.value.state
+    }
+
+    var isChecking: Bool {
+        self.state == .checking
+    }
+
+    var canUseModelActions: Bool {
+        self.state == .ready
+    }
 
     private let capture: @MainActor () -> [Probe]
     private let scanner: ResultScanner
@@ -86,8 +109,13 @@ final class SpeechModelInstallationSnapshot: ObservableObject {
         }
     }
 
-    func isInstalled(modelID: String) -> Bool { self.installedIDs.contains(modelID) }
-    func isUpdateAvailable(modelID: String) -> Bool { self.updateAvailableIDs.contains(modelID) }
+    func isInstalled(modelID: String) -> Bool {
+        self.installedIDs.contains(modelID)
+    }
+
+    func isUpdateAvailable(modelID: String) -> Bool {
+        self.updateAvailableIDs.contains(modelID)
+    }
 
     /// A display/profile key lookup only; it never starts download or reads disk.
     func installedDescriptor(for model: SettingsStore.SpeechModel) -> ParakeetSpeechModelCatalog.Descriptor? {

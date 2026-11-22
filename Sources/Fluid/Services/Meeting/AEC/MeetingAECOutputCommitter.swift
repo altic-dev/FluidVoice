@@ -9,7 +9,9 @@ final nonisolated class MeetingAECOutputCommitter: @unchecked Sendable {
     private final class SampleBox: @unchecked Sendable {
         let sampleBuffer: CMSampleBuffer
 
-        init(_ sampleBuffer: CMSampleBuffer) { self.sampleBuffer = sampleBuffer }
+        init(_ sampleBuffer: CMSampleBuffer) {
+            self.sampleBuffer = sampleBuffer
+        }
     }
 
     private enum State: Equatable {

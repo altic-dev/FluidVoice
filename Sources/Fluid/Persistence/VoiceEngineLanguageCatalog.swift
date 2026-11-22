@@ -111,6 +111,26 @@ enum VoiceEngineLanguageCatalog {
         self.allLanguages(availableModels: availableModels).first { $0.id == id }
     }
 
+    /// The language the selected model's own setting fixes, or nil when the model detects it.
+    static func boundLanguageID(settings: SettingsStore) -> String? {
+        let model = settings.selectedSpeechModel
+        if model.isWhisperModel { return settings.selectedWhisperLanguageCode }
+        switch model {
+        case .appleSpeech, .appleSpeechAnalyzer:
+            return settings.selectedAppleSpeechLocaleIdentifier.split(separator: "-").first.map(String.init)
+        case .cohereTranscribeSixBit:
+            return settings.selectedCohereLanguage.rawValue
+        case .senseVoiceSmall:
+            // Auto-detect covers five languages; like other automatic routes, report none.
+            let language = settings.selectedSenseVoiceLanguage
+            return language == .automatic ? nil : language.rawValue
+        case .nemotronOffline, .nemotronStreaming, .nemotronStreaming320:
+            return self.languageID(forNemotronLanguage: settings.selectedNemotronLanguage)
+        default:
+            return nil
+        }
+    }
+
     static var whisperLanguages: [VoiceEngineLanguage] {
         self.languageDefinitions.filter { self.whisperLanguageCode(for: $0.id) != nil }
     }
@@ -192,6 +212,10 @@ enum VoiceEngineLanguageCatalog {
             }
         }
 
+        if Self.qwenLanguageIDs.contains(language.id) {
+            routes.append(Self.route(language, .qwen3Asr17B, .automatic))
+        }
+
         if let appleSpeechAnalyzerLocale = Self.appleSpeechAnalyzerLocaleIdentifier(for: language.id) {
             routes.append(Self.route(language, .appleSpeechAnalyzer, .appleSpeech(localeIdentifier: appleSpeechAnalyzerLocale)))
         }
@@ -258,6 +282,13 @@ enum VoiceEngineLanguageCatalog {
         "ko": .korean,
         "yue": .cantonese,
         "zh": .mandarinChinese,
+    ]
+
+    /// Qwen3-ASR's 30 recognition languages in this catalog's IDs (Qwen calls Filipino "fil"; Cantonese has no entry here).
+    nonisolated static let qwenLanguageIDs: Set<String> = [
+        "ar", "cs", "da", "de", "el", "en", "es", "fa", "fi", "fr",
+        "hi", "hu", "id", "it", "ja", "ko", "mk", "ms", "nl", "pl",
+        "pt", "ro", "ru", "sv", "th", "tl", "tr", "vi", "zh",
     ]
 
     private static let cohereLanguageMap: [String: SettingsStore.CohereLanguage] = [

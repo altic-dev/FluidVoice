@@ -3,7 +3,10 @@ import Foundation
 /// Pure projections of the bounded snapshot. No settings, persistence, or timers.
 nonisolated struct StatsActivityPeriod {
     struct Day: Identifiable {
-        var id: Date { self.date }
+        var id: Date {
+            self.date
+        }
+
         let date: Date
         let words: Int
         let cumulativeWords: Int
@@ -24,7 +27,10 @@ nonisolated struct StatsActivityPeriod {
     let peakWords: Int
     let calendar: Calendar
 
-    var peakWeekdayAverage: Double { self.weekdays.map(\.averageWords).max() ?? 0 }
+    var peakWeekdayAverage: Double {
+        self.weekdays.map(\.averageWords).max() ?? 0
+    }
+
     var strongestWeekday: String? {
         guard self.peakWeekdayAverage > 0 else { return nil }
         return self.weekdays.first { $0.averageWords == self.peakWeekdayAverage }?.fullLabel
@@ -79,10 +85,23 @@ nonisolated struct StatsDailyMilestone {
     private static let targets = [100, 250, 500, 1000, 2500, 5000, 10_000, 25_000]
     let words: Int
 
-    init(words: Int) { self.words = max(0, words) }
+    init(words: Int) {
+        self.words = max(0, words)
+    }
 
-    var nextTarget: Int? { Self.targets.first { $0 > self.words } }
-    var reachedTarget: Int? { Self.targets.last { $0 <= self.words } }
-    var remaining: Int { self.nextTarget.map { $0 - self.words } ?? 0 }
-    var progress: Double { min(1, Double(self.words) / Double(self.nextTarget ?? max(1, self.words))) }
+    var nextTarget: Int? {
+        Self.targets.first { $0 > self.words }
+    }
+
+    var reachedTarget: Int? {
+        Self.targets.last { $0 <= self.words }
+    }
+
+    var remaining: Int {
+        self.nextTarget.map { $0 - self.words } ?? 0
+    }
+
+    var progress: Double {
+        min(1, Double(self.words) / Double(self.nextTarget ?? max(1, self.words)))
+    }
 }

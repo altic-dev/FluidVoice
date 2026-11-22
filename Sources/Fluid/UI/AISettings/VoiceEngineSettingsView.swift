@@ -27,6 +27,7 @@ struct VoiceEngineSettingsView: View {
     var body: some View {
         self.speechRecognitionCard
             .onAppear { self.viewModel.onAppear() }
+            .onFluidPagePresented { self.viewModel.refreshCatalog() }
             .onChange(of: self.settings.selectedSpeechModel) { _, newValue in
                 self.viewModel.handleSelectedSpeechModelChange(newValue)
             }

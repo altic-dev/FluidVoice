@@ -13,9 +13,17 @@ struct FluidIntelligenceModelCarousel<Controls: View>: View {
     @ViewBuilder let controls: (PrivateAIRegisteredModel) -> Controls
     @State private var upcomingPreviewID: String?
 
-    private var spacing: AppTheme.Metrics.Spacing { self.theme.metrics.spacing }
-    private var itemIDs: [String] { self.models.map(\.id) + PrivateAIUpcomingModel.allCases.map(\.id) }
-    private var displayedPreviewID: String { self.upcomingPreviewID ?? self.previewID }
+    private var spacing: AppTheme.Metrics.Spacing {
+        self.theme.metrics.spacing
+    }
+
+    private var itemIDs: [String] {
+        self.models.map(\.id) + PrivateAIUpcomingModel.allCases.map(\.id)
+    }
+
+    private var displayedPreviewID: String {
+        self.upcomingPreviewID ?? self.previewID
+    }
 
     var body: some View {
         VStack(spacing: self.spacing.sm) {

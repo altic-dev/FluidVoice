@@ -79,6 +79,68 @@ final class MeetingSummaryInputTests: XCTestCase {
         }
     }
 
+    @MainActor
+    func testSummarySurvivesClosingItsPresenterAndStillSupportsCancel() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = MeetingSessionStore(rootDirectory: root)
+        let meeting = self.session(origin: 0, segmentStart: 0, segmentEnd: 1, gapStart: 2, gapEnd: 3)
+        try await store.create(meeting)
+
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [MeetingSummaryURLProtocol.self]
+        let urlSession = URLSession(configuration: configuration)
+        defer { urlSession.invalidateAndCancel() }
+        let activity = MeetingSummaryActivityCoordinator()
+        let generation = MeetingSummaryGeneration(
+            store: store, remoteService: MeetingSummaryRemoteService(session: urlSession), activity: activity
+        )
+        let route = MeetingSummaryRoute(
+            providerID: "fixture",
+            providerName: "Fixture",
+            modelID: "fixture-model",
+            baseURL: "https://gateway.example/v1/",
+            apiKey: "fixture-key",
+            reasoning: nil,
+            supportsTemperature: false
+        )
+
+        let saved = self.expectation(description: "summary saved after its presenter closes")
+        let savedObservation = generation.$savedRevision.dropFirst().first().sink { _ in saved.fulfill() }
+        defer { savedObservation.cancel() }
+        do {
+            let presenter = MeetingSummaryController(store: store)
+            await presenter.refresh(session: meeting, kind: .actions)
+            generation.summarize(session: meeting, kind: .actions, route: route, customPrompt: "")
+            XCTAssertTrue(generation.isRunning)
+            XCTAssertEqual(generation.request?.sessionID, meeting.id)
+            XCTAssertEqual(generation.request?.kind, .actions)
+            presenter.cancelModelOperation()
+        }
+        await self.fulfillment(of: [saved], timeout: 5)
+        XCTAssertFalse(generation.isRunning)
+        XCTAssertNil(activity.selectionLock)
+
+        let reopened = MeetingSummaryController(store: store)
+        await reopened.refresh(session: meeting, kind: .actions)
+        XCTAssertEqual(reopened.output, "Release agreed")
+        await reopened.refresh(session: meeting, kind: .executive)
+        XCTAssertTrue(reopened.output.isEmpty)
+
+        let cancelled = self.expectation(description: "explicit cancellation drains the summary")
+        let cancelledObservation = generation.$isRunning.dropFirst(2).first().sink { _ in cancelled.fulfill() }
+        defer { cancelledObservation.cancel() }
+        generation.summarize(session: meeting, kind: .executive, route: route, customPrompt: "")
+        generation.cancel()
+        await self.fulfillment(of: [cancelled], timeout: 5)
+        XCTAssertFalse(generation.isRunning)
+        XCTAssertNil(activity.selectionLock)
+        XCTAssertNil(generation.error)
+        XCTAssertEqual(generation.savedRevision, 1)
+        await reopened.refresh(session: meeting, kind: .executive)
+        XCTAssertTrue(reopened.output.isEmpty)
+    }
+
     private func session(
         origin: TimeInterval,
         segmentStart: TimeInterval,

@@ -4,7 +4,7 @@ import CoreGraphics
 import SwiftUI
 
 /// A single snapshot keeps the app shown in the confirmation identical to the app recorded.
-nonisolated struct MeetingRecordingSourceSnapshot: Sendable {
+nonisolated struct MeetingRecordingSourceSnapshot {
     var defaults: MeetingRecordingDefaults
     var applications: [MeetingApplicationIdentity]
     var microphones: MeetingMicrophoneCatalogSnapshot

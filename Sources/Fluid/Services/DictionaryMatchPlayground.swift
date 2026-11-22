@@ -4,8 +4,8 @@ import Foundation
 import FluidAudio
 #endif
 
-nonisolated struct DictionaryMatchReport: Codable, Sendable {
-    struct Candidate: Codable, Identifiable, Sendable {
+nonisolated struct DictionaryMatchReport: Codable {
+    struct Candidate: Codable, Identifiable {
         let id: String
         let word: String
         var sampleNumber: Int?
@@ -74,7 +74,7 @@ actor DictionaryMatchPlayground {
     nonisolated static func installedModelKeys(
         cacheDirectory: (ParakeetSpeechModelCatalog.Descriptor) -> URL
     ) -> Set<String> {
-        var keys: Set<String> = ["parakeet-v2", "parakeet-v3"]
+        var keys: Set = ["parakeet-v2", "parakeet-v3"]
         for descriptor in ParakeetSpeechModelCatalog.descriptors where descriptor.isHostedPack {
             if let hash = descriptor.installedArchiveSHA256(at: cacheDirectory(descriptor)) {
                 keys.insert(descriptor.modelID + ":sha256:" + hash)
@@ -92,9 +92,13 @@ actor DictionaryMatchPlayground {
     ) throws -> PronunciationDictionaryProfile {
         let matching = profiles.filter { $0.label.caseInsensitiveCompare(target) == .orderedSame }
         if let current = matching.first(where: {
-            (compatibleModelKeys.contains($0.modelKey)
-                || ($0.modelKey == ParakeetSpeechModelCatalog.pro.modelID
-                    && compatibleModelKeys.contains(ParakeetSpeechModelCatalog.pro.pronunciationModelKey)))
+            (
+                compatibleModelKeys.contains($0.modelKey)
+                    || (
+                        $0.modelKey == ParakeetSpeechModelCatalog.pro.modelID
+                            && compatibleModelKeys.contains(ParakeetSpeechModelCatalog.pro.pronunciationModelKey)
+                    )
+            )
                 && ParakeetSpeechModelCatalog.descriptor(forInstalledPronunciationModelKey: $0.modelKey) != nil
         }) {
             return current
@@ -156,7 +160,7 @@ actor DictionaryMatchPlayground {
         else {
             throw PronunciationDictionaryStoreError.outdatedModelRevision
         }
-        let models = try await AsrModels.loadLocalOnly(from: directory, version: version)
+        let models = try await LocalParakeetModelLoader.load(from: directory, version: version, archiveSHA256: descriptor.archiveSHA256)
         try Task.checkCancellation()
         guard descriptor.installationRevisionMatches(at: directory) else {
             throw PronunciationDictionaryStoreError.outdatedModelRevision

@@ -9,7 +9,9 @@ final class DictationAppSession: @unchecked Sendable {
     private var state = ForegroundAppOverride<SettingsStore.DictationPromptSelection>()
     private var observer: NSObjectProtocol?
     private var mainWindowObserver: NSObjectProtocol?
-    var appID: String? { self.lock.withLock { self.state.appID } }
+    var appID: String? {
+        self.lock.withLock { self.state.appID }
+    }
 
     @MainActor
     func start() {

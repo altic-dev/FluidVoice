@@ -11,7 +11,7 @@ nonisolated enum MeetingReferenceAttributionSchema {
     static let sidecarVersion = 1
 }
 
-nonisolated enum MeetingReferenceAttributionOutcome: String, Codable, CaseIterable, Hashable, Sendable {
+nonisolated enum MeetingReferenceAttributionOutcome: String, Codable, CaseIterable, Hashable {
     case likelyPlaybackOnly
     case acceptedNearEndSpeech
     case mixedOrUncertain
@@ -21,7 +21,7 @@ nonisolated enum MeetingReferenceAttributionOutcome: String, Codable, CaseIterab
 
 /// A typed reason is intentionally more specific than an outcome.  In particular, missing data
 /// is never represented by `silence`, `noSpeech`, or a playback-only outcome.
-nonisolated enum MeetingReferenceAttributionReasonCode: String, Codable, CaseIterable, Hashable, Sendable {
+nonisolated enum MeetingReferenceAttributionReasonCode: String, Codable, CaseIterable, Hashable {
     case referenceAbsent
     case referenceGap
     case referenceScopeLimited
@@ -56,7 +56,7 @@ nonisolated enum MeetingReferenceAttributionReasonCode: String, Codable, CaseIte
     case fallbackToOriginal
 }
 
-nonisolated enum MeetingReferenceAttributionSpeechState: String, Codable, CaseIterable, Hashable, Sendable {
+nonisolated enum MeetingReferenceAttributionSpeechState: String, Codable, CaseIterable, Hashable {
     case unknown
     case silence
     case noSpeech
@@ -67,7 +67,7 @@ nonisolated enum MeetingReferenceAttributionSpeechState: String, Codable, CaseIt
 
 // Keep the subsystem-qualified name distinct from other capture and analysis contracts.
 // swiftlint:disable:next type_name
-nonisolated enum MeetingReferenceAttributionResidualVariant: String, Codable, CaseIterable, Hashable, Sendable {
+nonisolated enum MeetingReferenceAttributionResidualVariant: String, Codable, CaseIterable, Hashable {
     case originalMicrophone
     case linearResidual
     case suppressedResidual
@@ -75,14 +75,14 @@ nonisolated enum MeetingReferenceAttributionResidualVariant: String, Codable, Ca
 
 // Keep the subsystem-qualified name distinct from other capture and analysis contracts.
 // swiftlint:disable:next type_name
-nonisolated enum MeetingReferenceAttributionReferenceScope: String, Codable, CaseIterable, Hashable, Sendable {
+nonisolated enum MeetingReferenceAttributionReferenceScope: String, Codable, CaseIterable, Hashable {
     case selectedWindow
     case selectedApplication
     case authorizedSystemMix
     case unknown
 }
 
-nonisolated enum MeetingReferenceAttributionFallback: String, Codable, CaseIterable, Hashable, Sendable {
+nonisolated enum MeetingReferenceAttributionFallback: String, Codable, CaseIterable, Hashable {
     case none
     case originalMicrophone
 }
@@ -173,11 +173,13 @@ private nonisolated enum MeetingReferenceAttributionCanonical {
         return value
     }
 
-    static func nonNegativeInt(_ value: Int) -> Int { max(0, value) }
+    static func nonNegativeInt(_ value: Int) -> Int {
+        max(0, value)
+    }
 }
 
 /// A named source revision/artifact digest.  `name` is a logical identifier, never a file path.
-nonisolated struct MeetingReferenceAttributionSourceHash: Codable, Equatable, Sendable {
+nonisolated struct MeetingReferenceAttributionSourceHash: Codable, Equatable {
     let name: String
     let hash: String
 
@@ -211,7 +213,7 @@ nonisolated struct MeetingReferenceAttributionSourceHash: Codable, Equatable, Se
 // its spelling.  Callers must provide logical names, not absolute paths.
 // Keep the subsystem-qualified name distinct from other capture and analysis contracts.
 // swiftlint:disable:next type_name
-nonisolated struct MeetingReferenceAttributionEngineIdentity: Codable, Equatable, Sendable {
+nonisolated struct MeetingReferenceAttributionEngineIdentity: Codable, Equatable {
     let schemaVersion: Int
     let engineID: String
     let engineVersion: String
@@ -302,13 +304,18 @@ nonisolated struct MeetingReferenceAttributionEngineIdentity: Codable, Equatable
     }
 
     /// Stable across source-hash insertion order and JSON encoder formatting.
-    var stableIdentity: String { MeetingReferenceAttributionCanonical.hash(self) }
-    var identityHash: String { self.stableIdentity }
+    var stableIdentity: String {
+        MeetingReferenceAttributionCanonical.hash(self)
+    }
+
+    var identityHash: String {
+        self.stableIdentity
+    }
 }
 
 /// Configuration for an offline fixed-frame engine.  Invalid floating-point values are omitted
 /// as `nil`, preserving unknown rather than turning bad input into measured silence.
-nonisolated struct MeetingReferenceAttributionConfiguration: Codable, Equatable, Sendable {
+nonisolated struct MeetingReferenceAttributionConfiguration: Codable, Equatable {
     let schemaVersion: Int
     let sampleRateHz: Int
     let frameDurationMilliseconds: Int
@@ -370,29 +377,31 @@ nonisolated struct MeetingReferenceAttributionConfiguration: Codable, Equatable,
         )
     }
 
-    var stableIdentity: String { MeetingReferenceAttributionCanonical.hash(self) }
-    var configurationHash: String { self.stableIdentity }
+    var stableIdentity: String {
+        MeetingReferenceAttributionCanonical.hash(self)
+    }
+
+    var configurationHash: String {
+        self.stableIdentity
+    }
 }
 
 /// A frame input is intentionally not Codable: it may carry PCM to an offline implementation, but
 /// PCM never crosses into a Codable result or sidecar.  Every frame is fixed-width by the caller.
-nonisolated struct MeetingReferenceAttributionPCMFrame: Sendable {
+nonisolated struct MeetingReferenceAttributionPCMFrame {
     let samples: [Float]
     let valid: [Bool]
-
-    init(samples: [Float], valid: [Bool]) {
-        self.samples = samples
-        self.valid = valid
-    }
 
     var hasValidShape: Bool {
         self.samples.count == self.valid.count && !self.samples.isEmpty
     }
 
-    var containsOnlyFiniteSamples: Bool { self.samples.allSatisfy(\.isFinite) }
+    var containsOnlyFiniteSamples: Bool {
+        self.samples.allSatisfy(\.isFinite)
+    }
 }
 
-nonisolated struct MeetingReferenceAttributionFrame: Sendable {
+nonisolated struct MeetingReferenceAttributionFrame {
     let frameIndex: Int
     let epoch: UInt64
     let startSeconds: Double
@@ -419,7 +428,10 @@ nonisolated struct MeetingReferenceAttributionFrame: Sendable {
         self.referenceScope = referenceScope
     }
 
-    var endSeconds: Double { self.startSeconds + self.durationSeconds }
+    var endSeconds: Double {
+        self.startSeconds + self.durationSeconds
+    }
+
     var hasValidTiming: Bool {
         self.startSeconds.isFinite && self.startSeconds >= 0 && self.durationSeconds.isFinite && self.durationSeconds > 0
             && self.endSeconds.isFinite
@@ -444,7 +456,9 @@ nonisolated struct MeetingReferenceAttributionFrame: Sendable {
         return Array(Set(reasons)).sorted { $0.rawValue < $1.rawValue }
     }
 
-    var isValid: Bool { self.validationReasons.isEmpty }
+    var isValid: Bool {
+        self.validationReasons.isEmpty
+    }
 
     func validate() throws {
         guard self.isValid else {
@@ -455,11 +469,11 @@ nonisolated struct MeetingReferenceAttributionFrame: Sendable {
 
 // Keep the subsystem-qualified name distinct from other capture and analysis contracts.
 // swiftlint:disable:next type_name
-nonisolated struct MeetingReferenceAttributionFrameValidationError: Error, Equatable, Sendable {
+nonisolated struct MeetingReferenceAttributionFrameValidationError: Error, Equatable {
     let reasons: [MeetingReferenceAttributionReasonCode]
 }
 
-nonisolated struct MeetingReferenceAttributionEpoch: Codable, Equatable, Sendable {
+nonisolated struct MeetingReferenceAttributionEpoch: Codable, Equatable {
     let epoch: UInt64
     let resetReason: MeetingReferenceAttributionReasonCode?
 
@@ -479,7 +493,7 @@ nonisolated struct MeetingReferenceAttributionEpoch: Codable, Equatable, Sendabl
 
 /// Numeric candidate/quality metrics.  Nil means unavailable/unknown; zero is a real measured
 /// value.  This distinction is important for coverage accounting and fail-open behavior.
-nonisolated struct MeetingReferenceAttributionMetrics: Codable, Equatable, Sendable {
+nonisolated struct MeetingReferenceAttributionMetrics: Codable, Equatable {
     let delaySeconds: Double?
     let delayJitterSeconds: Double?
     let convergence: Double?
@@ -593,12 +607,20 @@ nonisolated struct MeetingReferenceAttributionMetrics: Codable, Equatable, Senda
 
     static let unavailable = Self()
 
-    var residualEnergyRatio: Double? { self.residualToOriginalEnergyRatio }
-    var echoReturnLossDB: Double? { self.erlDB }
-    var echoReturnLossEnhancementDB: Double? { self.erleDB }
+    var residualEnergyRatio: Double? {
+        self.residualToOriginalEnergyRatio
+    }
+
+    var echoReturnLossDB: Double? {
+        self.erlDB
+    }
+
+    var echoReturnLossEnhancementDB: Double? {
+        self.erleDB
+    }
 }
 
-nonisolated struct MeetingReferenceAttributionFrameResult: Codable, Equatable, Sendable {
+nonisolated struct MeetingReferenceAttributionFrameResult: Codable, Equatable {
     let schemaVersion: Int
     let frameIndex: Int
     let epoch: UInt64
@@ -825,13 +847,18 @@ nonisolated struct MeetingReferenceAttributionFrameResult: Codable, Equatable, S
         )
     }
 
-    var endSeconds: Double { self.startSeconds + self.durationSeconds }
-    var isKnownSpeechState: Bool { self.speechState != .unknown }
+    var endSeconds: Double {
+        self.startSeconds + self.durationSeconds
+    }
+
+    var isKnownSpeechState: Bool {
+        self.speechState != .unknown
+    }
 }
 
 // Keep the subsystem-qualified name distinct from other capture and analysis contracts.
 // swiftlint:disable:next type_name
-nonisolated struct MeetingReferenceAttributionWouldChangeCounts: Codable, Equatable, Sendable {
+nonisolated struct MeetingReferenceAttributionWouldChangeCounts: Codable, Equatable {
     let words: Int
     let segments: Int
     let profileObservations: Int
@@ -886,7 +913,7 @@ nonisolated struct MeetingReferenceAttributionWouldChangeCounts: Codable, Equata
 
 /// Duration-weighted coverage.  Counts are informational; percentages are derived from durations
 /// so a 10 ms frame and a 30 ms frame cannot accidentally receive equal weight.
-nonisolated struct MeetingReferenceAttributionCoverage: Codable, Equatable, Sendable {
+nonisolated struct MeetingReferenceAttributionCoverage: Codable, Equatable {
     let totalDurationSeconds: Double
     let scoredDurationSeconds: Double
     let likelyPlaybackOnlyDurationSeconds: Double
@@ -929,12 +956,16 @@ nonisolated struct MeetingReferenceAttributionCoverage: Codable, Equatable, Send
             unscoredDurationSeconds,
         ]
         guard values.allSatisfy({ $0.isFinite && $0 >= 0 }), frameCount >= 0,
-              abs(scoredDurationSeconds - (likelyPlaybackOnlyDurationSeconds
-                      + acceptedNearEndSpeechDurationSeconds + mixedOrUncertainDurationSeconds)) <= 1e-9,
+              abs(scoredDurationSeconds - (
+                  likelyPlaybackOnlyDurationSeconds
+                      + acceptedNearEndSpeechDurationSeconds + mixedOrUncertainDurationSeconds
+              )) <= 1e-9,
               scoredDurationSeconds + unscoredDurationSeconds <= totalDurationSeconds + 1e-9,
-              abs((likelyPlaybackOnlyDurationSeconds + acceptedNearEndSpeechDurationSeconds
+              abs((
+                  likelyPlaybackOnlyDurationSeconds + acceptedNearEndSpeechDurationSeconds
                       + mixedOrUncertainDurationSeconds + scopeLimitedDurationSeconds
-                      + unscoredDurationSeconds) - totalDurationSeconds) <= 1e-9 else { return nil }
+                      + unscoredDurationSeconds
+              ) - totalDurationSeconds) <= 1e-9 else { return nil }
         self.totalDurationSeconds = totalDurationSeconds
         self.scoredDurationSeconds = scoredDurationSeconds
         self.likelyPlaybackOnlyDurationSeconds = likelyPlaybackOnlyDurationSeconds
@@ -945,8 +976,13 @@ nonisolated struct MeetingReferenceAttributionCoverage: Codable, Equatable, Send
         self.frameCount = frameCount
     }
 
-    var scoredFraction: Double { self.totalDurationSeconds > 0 ? self.scoredDurationSeconds / self.totalDurationSeconds : 0 }
-    var unscoredFraction: Double { self.totalDurationSeconds > 0 ? self.unscoredDurationSeconds / self.totalDurationSeconds : 0 }
+    var scoredFraction: Double {
+        self.totalDurationSeconds > 0 ? self.scoredDurationSeconds / self.totalDurationSeconds : 0
+    }
+
+    var unscoredFraction: Double {
+        self.totalDurationSeconds > 0 ? self.unscoredDurationSeconds / self.totalDurationSeconds : 0
+    }
 
     private enum CodingKeys: String, CodingKey {
         case totalDurationSeconds, scoredDurationSeconds, likelyPlaybackOnlyDurationSeconds,
@@ -984,7 +1020,7 @@ nonisolated struct MeetingReferenceAttributionCoverage: Codable, Equatable, Send
     }
 }
 
-nonisolated struct MeetingReferenceAttributionResourceCost: Codable, Equatable, Sendable {
+nonisolated struct MeetingReferenceAttributionResourceCost: Codable, Equatable {
     let processingMilliseconds: Double?
     let peakMemoryBytes: Int?
     let derivedSidecarBytes: Int?
@@ -1053,7 +1089,7 @@ private nonisolated struct MeetingReferenceAttributionReasonCountEntry: Codable 
 
 /// Aggregate result constructed from fixed-frame results.  Invalid/nonfinite frame timing is
 /// excluded from measured coverage and represented in `reasonCounts`, never as silence.
-nonisolated struct MeetingReferenceAttributionAggregate: Codable, Equatable, Sendable {
+nonisolated struct MeetingReferenceAttributionAggregate: Codable, Equatable {
     let schemaVersion: Int
     let coverage: MeetingReferenceAttributionCoverage
     let outcomeCounts: [MeetingReferenceAttributionOutcome: Int]
@@ -1073,9 +1109,11 @@ nonisolated struct MeetingReferenceAttributionAggregate: Codable, Equatable, Sen
         resourceCost: MeetingReferenceAttributionResourceCost = .init()
     ) {
         var durations = [MeetingReferenceAttributionOutcome: Double](
-            uniqueKeysWithValues: MeetingReferenceAttributionOutcome.allCases.map { ($0, 0) })
+            uniqueKeysWithValues: MeetingReferenceAttributionOutcome.allCases.map { ($0, 0) }
+        )
         var outcomeCounts = [MeetingReferenceAttributionOutcome: Int](
-            uniqueKeysWithValues: MeetingReferenceAttributionOutcome.allCases.map { ($0, 0) })
+            uniqueKeysWithValues: MeetingReferenceAttributionOutcome.allCases.map { ($0, 0) }
+        )
         var reasonCounts = [MeetingReferenceAttributionReasonCode: Int]()
         var total = 0.0
         var seenFrames = Set<String>()
@@ -1201,7 +1239,7 @@ nonisolated struct MeetingReferenceAttributionAggregate: Codable, Equatable, Sen
 
 /// Numeric-only, deterministic sidecar.  `sidecarHash` hashes the complete Codable payload and is
 /// therefore stable for the same engine/configuration/results, independent of dictionary order.
-nonisolated struct MeetingReferenceAttributionSidecar: Codable, Equatable, Sendable {
+nonisolated struct MeetingReferenceAttributionSidecar: Codable, Equatable {
     let schemaVersion: Int
     let engineIdentity: MeetingReferenceAttributionEngineIdentity
     let configuration: MeetingReferenceAttributionConfiguration
@@ -1209,7 +1247,7 @@ nonisolated struct MeetingReferenceAttributionSidecar: Codable, Equatable, Senda
     let frameResults: [MeetingReferenceAttributionFrameResult]
     let aggregate: MeetingReferenceAttributionAggregate
 
-    nonisolated enum ValidationError: Error, Equatable, Sendable {
+    nonisolated enum ValidationError: Error, Equatable {
         case invalid(String)
     }
 
@@ -1237,7 +1275,9 @@ nonisolated struct MeetingReferenceAttributionSidecar: Codable, Equatable, Senda
         self.aggregate = aggregate ?? MeetingReferenceAttributionAggregate(frameResults: sortedFrames)
     }
 
-    var sidecarHash: String { MeetingReferenceAttributionCanonical.hash(self) }
+    var sidecarHash: String {
+        MeetingReferenceAttributionCanonical.hash(self)
+    }
 
     /// Structural validation is exposed for programmatic construction; decoding throws the same
     /// errors so a corrupt sidecar cannot be treated as measured evidence.
@@ -1301,7 +1341,9 @@ nonisolated struct MeetingReferenceAttributionSidecar: Codable, Equatable, Senda
         return nil
     }
 
-    var isValid: Bool { self.validationError == nil }
+    var isValid: Bool {
+        self.validationError == nil
+    }
 
     private enum CodingKeys: String, CodingKey {
         case schemaVersion, engineIdentity, configuration, epochs, frameResults, aggregate

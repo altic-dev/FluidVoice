@@ -12,7 +12,7 @@ actor PrivateAIIntegrationService {
         PrivateAIProviderFeature.shared.localModelPathDefaultsKey
     }
 
-    struct RuntimeConfiguration: Sendable, Equatable {
+    struct RuntimeConfiguration: Equatable {
         let selectedProviderID: String
         let providerKey: String
         let baseURL: String
@@ -24,7 +24,7 @@ actor PrivateAIIntegrationService {
         let contextTokenLimit: Int
     }
 
-    struct AppContext: Sendable, Equatable {
+    struct AppContext: Equatable {
         let appName: String
         let bundleID: String
         let windowTitle: String
@@ -43,7 +43,7 @@ actor PrivateAIIntegrationService {
         var userDisplayName: String? = nil
     }
 
-    struct EnhancementResult: Sendable, Equatable {
+    struct EnhancementResult: Equatable {
         let outputText: String
         let backendKind: String?
         let latencyMilliseconds: Int?
@@ -62,7 +62,7 @@ actor PrivateAIIntegrationService {
         }
     }
 
-    struct LoadedModelState: Sendable, Equatable {
+    struct LoadedModelState: Equatable {
         let modelID: String
         let state: PrivateAIRuntimeState
         let message: String?
@@ -492,9 +492,18 @@ private struct PrivateAIModelRemovalError: LocalizedError {
 private struct UnavailableAIIntegrationShim: PrivateAIIntegrationProviding {
     static let shared = UnavailableAIIntegrationShim()
 
-    var configuredModelID: String { PrivateAIModelRegistry.defaultModelID }
-    var selectedModel: PrivateAIRegisteredModel { PrivateAIModelRegistry.defaultModel }
-    var configuredLocalModelPath: String? { nil }
+    var configuredModelID: String {
+        PrivateAIModelRegistry.defaultModelID
+    }
+
+    var selectedModel: PrivateAIRegisteredModel {
+        PrivateAIModelRegistry.defaultModel
+    }
+
+    var configuredLocalModelPath: String? {
+        nil
+    }
+
     var modelDirectoryURL: URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)
             .first?
@@ -507,14 +516,21 @@ private struct UnavailableAIIntegrationShim: PrivateAIIntegrationProviding {
             .appendingPathComponent("Models", isDirectory: true)
     }
 
-    var isLocalRuntimeConfigured: Bool { false }
+    var isLocalRuntimeConfigured: Bool {
+        false
+    }
 
     func expectedLocalModelURL(for model: PrivateAIRegisteredModel) -> URL {
         PrivateAIModelRegistry.localModelURL(for: model, directoryURL: self.modelDirectoryURL)
     }
 
-    func localModelPath(for _: PrivateAIRegisteredModel) -> String? { nil }
-    func isModelInstalled(_: PrivateAIRegisteredModel) -> Bool { false }
+    func localModelPath(for _: PrivateAIRegisteredModel) -> String? {
+        nil
+    }
+
+    func isModelInstalled(_: PrivateAIRegisteredModel) -> Bool {
+        false
+    }
 
     func prepareModel(
         _: PrivateAIRegisteredModel,
@@ -523,7 +539,9 @@ private struct UnavailableAIIntegrationShim: PrivateAIIntegrationProviding {
         throw PrivateAIUnavailableError()
     }
 
-    func shouldHandleDictation(model _: String) -> Bool { false }
+    func shouldHandleDictation(model _: String) -> Bool {
+        false
+    }
 
     func status(for _: PrivateAIIntegrationService.RuntimeConfiguration) async -> PrivateAIStatus {
         PrivateAIStatus(
@@ -532,7 +550,9 @@ private struct UnavailableAIIntegrationShim: PrivateAIIntegrationProviding {
         )
     }
 
-    func loadedModelState() async -> PrivateAIIntegrationService.LoadedModelState? { nil }
+    func loadedModelState() async -> PrivateAIIntegrationService.LoadedModelState? {
+        nil
+    }
 
     func loadModel(_: PrivateAIRegisteredModel) async throws -> PrivateAIStatus {
         throw PrivateAIUnavailableError()
@@ -554,9 +574,11 @@ private struct UnavailableAIIntegrationShim: PrivateAIIntegrationProviding {
     }
 }
 
-// Accept the current provider bridge's name without changing existing callers or stored settings.
+/// Accept the current provider bridge's name without changing existing callers or stored settings.
 extension PrivateAIIntegrationService.RuntimeConfiguration {
-    var usesBoost: Bool { self.usesFluid1Boost }
+    var usesBoost: Bool {
+        self.usesFluid1Boost
+    }
 
     init(
         selectedProviderID: String,

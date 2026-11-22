@@ -1604,9 +1604,11 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         }
 
         let echoProvider: any MeetingUnitEchoVerdictProviding = self.echoVerdictProvider
-            ?? (plan.backendID == .parakeetNemotron
-                ? MeetingTextOverlapEchoVerdictProvider()
-                : MeetingFailClosedEchoVerdictProvider())
+            ?? (
+                plan.backendID == .parakeetNemotron
+                    ? MeetingTextOverlapEchoVerdictProvider()
+                    : MeetingFailClosedEchoVerdictProvider()
+            )
         let echoVerdicts = try await echoProvider.echoVerdicts(
             for: bundle.evidence,
             manifest: manifest,

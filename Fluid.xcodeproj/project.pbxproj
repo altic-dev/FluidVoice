@@ -11,6 +11,8 @@
 		AD1130000000000000000004 /* OverlayCaptionPresentationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD1130000000000000000003 /* OverlayCaptionPresentationTests.swift */; };
 		AD1030000000000000000004 /* HoldToMutePresentationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD1030000000000000000003 /* HoldToMutePresentationTests.swift */; };
 		AD1030000000000000000002 /* HoldToMuteTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD1030000000000000000001 /* HoldToMuteTests.swift */; };
+		7E5C000000000000000000A2 /* TerminalServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E5C000000000000000000A1 /* TerminalServiceTests.swift */; };
+		7E5C000000000000000000B2 /* LLMClientStreamingToolCallTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E5C000000000000000000B1 /* LLMClientStreamingToolCallTests.swift */; };
 		D63B0F8456B440F1A123B987 /* PronunciationModelRevisionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AFA73C8D5E7647C4AB125DEE /* PronunciationModelRevisionTests.swift */; };
 		5D4A9F54826FD6BB32CE13F8 /* SpeechModelInstallationSnapshotTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D47EF42AC1B641A705AC302 /* SpeechModelInstallationSnapshotTests.swift */; };
 		B51B7EE5BA8CE09BC09A47DB /* ProgressiveFileDownloaderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70362FCD2F941BFB800AD8E8 /* ProgressiveFileDownloaderTests.swift */; };
@@ -147,6 +149,8 @@
 		F5E000000000000000000014 /* fv-serve in Embed Helpers */ = {isa = PBXBuildFile; fileRef = F5E000000000000000000005 /* fv-serve */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
 		C0DE123A0000000000000002 /* DictationContextCaptureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE123A0000000000000001 /* DictationContextCaptureTests.swift */; };
 		E01100000000000000000002 /* EditModeRouteTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E01100000000000000000001 /* EditModeRouteTests.swift */; };
+		4F1300000000000000000001 /* Hummingbird in Frameworks */ = {isa = PBXBuildFile; productRef = 4F1300000000000000000004 /* Hummingbird */; };
+		4F1300000000000000000002 /* Hummingbird in Frameworks */ = {isa = PBXBuildFile; productRef = 4F1300000000000000000004 /* Hummingbird */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -214,6 +218,8 @@
 		AD1130000000000000000003 /* OverlayCaptionPresentationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OverlayCaptionPresentationTests.swift; sourceTree = "<group>"; };
 		AD1030000000000000000003 /* HoldToMutePresentationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HoldToMutePresentationTests.swift; sourceTree = "<group>"; };
 		AD1030000000000000000001 /* HoldToMuteTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HoldToMuteTests.swift; sourceTree = "<group>"; };
+		7E5C000000000000000000A1 /* TerminalServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalServiceTests.swift; sourceTree = "<group>"; };
+		7E5C000000000000000000B1 /* LLMClientStreamingToolCallTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LLMClientStreamingToolCallTests.swift; sourceTree = "<group>"; };
 		AFA73C8D5E7647C4AB125DEE /* PronunciationModelRevisionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PronunciationModelRevisionTests.swift; sourceTree = "<group>"; };
 		7D47EF42AC1B641A705AC302 /* SpeechModelInstallationSnapshotTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeechModelInstallationSnapshotTests.swift; sourceTree = "<group>"; };
 		70362FCD2F941BFB800AD8E8 /* ProgressiveFileDownloaderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProgressiveFileDownloaderTests.swift; sourceTree = "<group>"; };
@@ -392,6 +398,7 @@
 				7C5AF14B2F15041600DE21B0 /* MediaRemoteAdapter in Frameworks */,
 				7C9A71022F58B00000FB7CAF /* TranscribeCpp in Frameworks */,
 				7CE006BD2E80EBE600DDCCD6 /* AppUpdater in Frameworks */,
+				4F1300000000000000000001 /* Hummingbird in Frameworks */,
 				7C078DA52E3B386A00FB7CAC /* FluidAudio in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -414,6 +421,7 @@
 				A5B000000000000000000015 /* MediaRemoteAdapter in Frameworks */,
 				A5B000000000000000000016 /* TranscribeCpp in Frameworks */,
 				A5B000000000000000000017 /* AppUpdater in Frameworks */,
+				4F1300000000000000000002 /* Hummingbird in Frameworks */,
 				A5B000000000000000000013 /* FluidAudio in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -495,6 +503,8 @@
 				AD1130000000000000000003 /* OverlayCaptionPresentationTests.swift */,
 				AD1030000000000000000003 /* HoldToMutePresentationTests.swift */,
 				AD1030000000000000000001 /* HoldToMuteTests.swift */,
+				7E5C000000000000000000A1 /* TerminalServiceTests.swift */,
+				7E5C000000000000000000B1 /* LLMClientStreamingToolCallTests.swift */,
 				DAB600000000000000000002 /* DashboardLayoutTests.swift */,
 				FEB700000000000000000002 /* FeedbackClientTests.swift */,
 				7C91B0A22F42AA0100C0DEF0 /* DeliveryTargetAssessmentTests.swift */,
@@ -664,6 +674,7 @@
 				7C078DA42E3B386A00FB7CAC /* FluidAudio */,
 				7C3697882ED70F9C005874CE /* DynamicNotchKit */,
 				7CE006BC2E80EBE600DDCCD6 /* AppUpdater */,
+				4F1300000000000000000004 /* Hummingbird */,
 				7C9A71012F58B00000FB7CAF /* TranscribeCpp */,
 				7C5AF14A2F15041600DE21B0 /* MediaRemoteAdapter */,
 				2E9B00000000000000000004 /* ZeppelinEmbed */,
@@ -717,6 +728,7 @@
 				7C078DA42E3B386A00FB7CAC /* FluidAudio */,
 				7C3697882ED70F9C005874CE /* DynamicNotchKit */,
 				7CE006BC2E80EBE600DDCCD6 /* AppUpdater */,
+				4F1300000000000000000004 /* Hummingbird */,
 				7C9A71012F58B00000FB7CAF /* TranscribeCpp */,
 				7C5AF14A2F15041600DE21B0 /* MediaRemoteAdapter */,
 			);
@@ -805,6 +817,7 @@
 				AEC300000000000000000001 /* XCLocalSwiftPackageReference "WebRTCAudioProcessing" */,
 				7C078DA32E3B386A00FB7CAC /* XCRemoteSwiftPackageReference "FluidAudio" */,
 				7CE006BB2E80EBE600DDCCD6 /* XCRemoteSwiftPackageReference "AppUpdater" */,
+				4F1300000000000000000003 /* XCRemoteSwiftPackageReference "hummingbird" */,
 				7C3697872ED70F9C005874CE /* XCRemoteSwiftPackageReference "DynamicNotchKit" */,
 				7C9A71002F58B00000FB7CAF /* XCRemoteSwiftPackageReference "transcribe-cpp-swift" */,
 				7C5AF1492F15041600DE21B0 /* XCRemoteSwiftPackageReference "mediaremote-adapter" */,
@@ -909,6 +922,8 @@
 				AD1130000000000000000004 /* OverlayCaptionPresentationTests.swift in Sources */,
 				AD1030000000000000000004 /* HoldToMutePresentationTests.swift in Sources */,
 				AD1030000000000000000002 /* HoldToMuteTests.swift in Sources */,
+				7E5C000000000000000000A2 /* TerminalServiceTests.swift in Sources */,
+				7E5C000000000000000000B2 /* LLMClientStreamingToolCallTests.swift in Sources */,
 				DAB600000000000000000001 /* DashboardLayoutTests.swift in Sources */,
 				FEB700000000000000000001 /* FeedbackClientTests.swift in Sources */,
 				7C91B0A12F42AA0100C0DEF0 /* DeliveryTargetAssessmentTests.swift in Sources */,
@@ -1619,6 +1634,14 @@
 				minimumVersion = 1.1.1;
 			};
 		};
+		4F1300000000000000000003 /* XCRemoteSwiftPackageReference "hummingbird" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/hummingbird-project/hummingbird.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 2.28.1;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -1666,6 +1689,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 7C9A71002F58B00000FB7CAF /* XCRemoteSwiftPackageReference "transcribe-cpp-swift" */;
 			productName = TranscribeCpp;
+		};
+		4F1300000000000000000004 /* Hummingbird */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 4F1300000000000000000003 /* XCRemoteSwiftPackageReference "hummingbird" */;
+			productName = Hummingbird;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

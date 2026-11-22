@@ -7,7 +7,7 @@ import UniformTypeIdentifiers
 
 @MainActor
 final class AIEnhancementSettingsViewModel: ObservableObject {
-    // Explicitly nonisolated: on macOS 15.4+ the synthesized main-actor deinit can abort until the OS runtime has the fix (swiftlang/swift#88036).
+    /// Explicitly nonisolated: on macOS 15.4+ the synthesized main-actor deinit can abort until the OS runtime has the fix (swiftlang/swift#88036).
     nonisolated deinit {}
 
     private let modelVerifications = ProviderModelVerificationStore()
@@ -133,6 +133,8 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
     @Published var pendingDeletePromptName: String = ""
 
     private var newPromptShortcutCancellable: AnyCancellable?
+    private var settingsReloadCancellables = Set<AnyCancellable>()
+    private var needsSettingsReload = true
 
     init(settings: SettingsStore, menuBarManager: MenuBarManager, promptTest: DictationPromptTestCoordinator) {
         self.settings = settings
@@ -140,6 +142,13 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         self.promptTest = promptTest
         self.openAIBaseURL = ""
         self.selectedProviderID = settings.selectedProviderID
+
+        settings.objectWillChange
+            .sink { [weak self] _ in self?.needsSettingsReload = true }
+            .store(in: &self.settingsReloadCancellables)
+        NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)
+            .sink { [weak self] _ in self?.needsSettingsReload = true }
+            .store(in: &self.settingsReloadCancellables)
 
         self.newPromptShortcutCancellable = NotificationCenter.default
             .publisher(for: .newPromptShortcutRecorded)
@@ -153,9 +162,15 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
             }
     }
 
-    func onAppear() {
+    /// Returns whether settings were reloaded. Reloading republishes every field and redraws the page.
+    @discardableResult
+    func onAppear() -> Bool {
         self.appear = true
+        guard self.needsSettingsReload else { return false }
         self.loadSettings()
+        // Loading can normalize stored values, which reports a change of its own.
+        self.needsSettingsReload = false
+        return true
     }
 
     // MARK: - Load Settings
@@ -376,8 +391,8 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         let configuredModelID = PrivateAIIntegrationService.configuredModelID
         let fingerprint = self.privateAIFingerprint(for: currentModel.id)
 
-        // Navigation may expose another settings owner while verification is awaiting the runtime.
-        // Do not publish an old verification into a newly selected model/backend configuration.
+        /// Navigation may expose another settings owner while verification is awaiting the runtime.
+        /// Do not publish an old verification into a newly selected model/backend configuration.
         func configurationIsCurrent() -> Bool {
             PrivateAIIntegrationService.configuredModelID == configuredModelID
                 && self.privateAIFingerprint(for: currentModel.id) == fingerprint

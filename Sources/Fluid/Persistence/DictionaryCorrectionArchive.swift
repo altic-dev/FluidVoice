@@ -2,7 +2,7 @@ import AVFoundation
 import Foundation
 
 /// Kept only in memory until a correction is explicitly saved. Independent of pronunciation matching.
-nonisolated struct DictionaryCorrectionRecording: Sendable {
+nonisolated struct DictionaryCorrectionRecording {
     static let sampleRate = 16_000
     static let maximumSamples = sampleRate * 60 * 15
     static let lifetime: TimeInterval = 120
@@ -23,7 +23,7 @@ nonisolated struct DictionaryCorrectionRecording: Sendable {
     }
 }
 
-nonisolated struct DictionaryCorrectionExample: Sendable {
+nonisolated struct DictionaryCorrectionExample {
     let id: UUID
     let recording: DictionaryCorrectionRecording
     let originalText: String
@@ -66,7 +66,7 @@ actor DictionaryCorrectionArchive {
     static let directory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         .appendingPathComponent("FluidVoice/Dictionary/TrainingExamples", isDirectory: true)
 
-    struct Metadata: Codable, Sendable {
+    struct Metadata: Codable {
         let schemaVersion: Int
         let id: UUID
         let recordingID: UUID

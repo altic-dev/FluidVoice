@@ -18,13 +18,13 @@ nonisolated enum MeetingStage05StimulusHandshake {
     static let maximumPlayingSeconds = 24
     static let minimumRemainingSeconds = 22
 
-    enum Decision: Equatable, Sendable {
+    enum Decision: Equatable {
         case waiting
         case success(MeetingExternalReferenceTrialAWindowCandidate)
         case failure(Failure)
     }
 
-    enum Failure: Error, Equatable, Sendable {
+    enum Failure: Error, Equatable {
         case ambiguous
         case ownerChanged
         case processChanged
@@ -101,7 +101,7 @@ nonisolated enum MeetingStage05StimulusHandshake {
 /// synchronizer and identity/mock AEC seam. Every stored property is numeric or Boolean;
 /// callback times, audio, device/process identity, paths, titles, and arbitrary labels are
 /// deliberately excluded.
-nonisolated struct MeetingStage05LiveAdapterSummary: Codable, Equatable, Sendable {
+nonisolated struct MeetingStage05LiveAdapterSummary: Codable, Equatable {
     static let schemaVersion = 1
     static let maximumCount = 2_000_000
 
@@ -263,8 +263,10 @@ nonisolated struct MeetingStage05LiveAdapterSummary: Codable, Equatable, Sendabl
             || self.mockFrozenFrameCount > self.synchronizerOutputFrameCount
             || self.mockBoundaryCount > self.synchronizerOutputFrameCount
             || mockClassifiedOverflow
-            || (self.mockAuthorized
-                && mockClassifiedCount != self.synchronizerOutputFrameCount)
+            || (
+                self.mockAuthorized
+                    && mockClassifiedCount != self.synchronizerOutputFrameCount
+            )
         {
             reasons.append("relationships")
         }
@@ -331,7 +333,7 @@ nonisolated struct MeetingStage05LiveAdapterSummary: Codable, Equatable, Sendabl
     }
 }
 
-nonisolated struct MeetingStage05AutorunOutcome: Codable, Equatable, Sendable {
+nonisolated struct MeetingStage05AutorunOutcome: Codable, Equatable {
     let exitStatus: Int
     let status: String
     let reason: String?
@@ -356,9 +358,9 @@ nonisolated enum MeetingStage05EvidenceAutorun {
     static let expectedOperatorMediaFixtureSHA256 = "fbf7a7c40c0a491975de45ff18a7fec7e13135ea01f9821db27f6611ba42eda0"
     static let captureSeconds = 14.0
     static let operatorResponseSeconds = 30.0
-    // The declared sub-budgets total forty-eight seconds (30 s operator response + 2 s start
-    // + 14 s capture + 2 s stop). Keep a separate, process-level deadline with bounded margin.
-    // This does not extend the fourteen-second target or twenty-second frame ceiling.
+    /// The declared sub-budgets total forty-eight seconds (30 s operator response + 2 s start
+    /// + 14 s capture + 2 s stop). Keep a separate, process-level deadline with bounded margin.
+    /// This does not extend the fourteen-second target or twenty-second frame ceiling.
     static let hardWatchdogSeconds = 56.0
 
     static func requested(environment: [String: String] = ProcessInfo.processInfo.environment) -> Bool {
@@ -480,7 +482,8 @@ nonisolated enum MeetingStage05EvidenceAutorun {
               output.isBuiltIn, !AudioDevice.outputDataSourceIsHeadphones(output.id),
               let initialVolume = Self.readOutputVolume(output.id), initialVolume > 0, initialVolume <= 0.25,
               MeetingCapturePathDecider.outputRouteDeclineReason(
-                  MeetingCaptureEngine.currentOutputRouteSnapshot()) == nil
+                  MeetingCaptureEngine.currentOutputRouteSnapshot()
+              ) == nil
         else {
             return "{\"exitStatus\":1,\"status\":\"failure\",\"reason\":\"route\"}"
         }
@@ -859,7 +862,9 @@ nonisolated enum MeetingStage05EvidenceAutorun {
 
     private final class CompletionGate: @unchecked Sendable {
         private let lock = NSLock(); private var done = false
-        func claim() -> Bool { self.lock.lock(); defer { lock.unlock() }; guard !self.done else { return false }; self.done = true; return true }
+        func claim() -> Bool {
+            self.lock.lock(); defer { lock.unlock() }; guard !self.done else { return false }; self.done = true; return true
+        }
     }
 
     private final class CleanupBox: @unchecked Sendable {
@@ -882,7 +887,9 @@ nonisolated enum MeetingStage05EvidenceAutorun {
             self.lock.unlock()
         }
 
-        func run() { self.lock.lock(); let action = self.action; self.action = nil; self.lock.unlock(); action?() }
+        func run() {
+            self.lock.lock(); let action = self.action; self.action = nil; self.lock.unlock(); action?()
+        }
     }
 
     enum TimeoutError: Error { case timeout }
@@ -970,11 +977,16 @@ final class MeetingStage05StreamOutput: NSObject, SCStreamOutput, @unchecked Sen
 
 private final class MeetingStage05StreamDelegate: NSObject, SCStreamDelegate, @unchecked Sendable {
     private let lock = NSLock(); private var errors = 0
-    var errorCount: Int { self.lock.lock(); defer { lock.unlock() }; return self.errors }
-    func stream(_ stream: SCStream, didStopWithError error: Error) { self.lock.lock(); self.errors += 1; self.lock.unlock() }
+    var errorCount: Int {
+        self.lock.lock(); defer { lock.unlock() }; return self.errors
+    }
+
+    func stream(_ stream: SCStream, didStopWithError error: Error) {
+        self.lock.lock(); self.errors += 1; self.lock.unlock()
+    }
 }
 
-nonisolated struct MeetingStage05NativePCMFormat: Equatable, Sendable {
+nonisolated struct MeetingStage05NativePCMFormat: Equatable {
     let codec: String
     let bytesPerFrame: Int
     let bitsPerChannel: Int
@@ -1005,7 +1017,7 @@ nonisolated struct MeetingStage05NativePCMFormat: Equatable, Sendable {
 
 /// Privacy-safe finalization categories. These values describe only which invariant failed;
 /// they never include samples, device identifiers, paths, titles, or measured values.
-nonisolated enum MeetingStage05FinalizeFailure: String, Error, CaseIterable, Sendable {
+nonisolated enum MeetingStage05FinalizeFailure: String, Error, CaseIterable {
     case appendInvalidFrame = "AppendInvalidFrame"
     case appendFormatChanged = "AppendFormatChanged"
     case appendSampleRateChanged = "AppendSampleRateChanged"
@@ -1029,11 +1041,11 @@ nonisolated enum MeetingStage05FinalizeFailure: String, Error, CaseIterable, Sen
 /// Privacy-safe, versioned, numeric-only record retained exclusively for completed
 /// render/capture timing finalization failures. Never add PCM, peaks, hashes, identifiers,
 /// titles, paths, labels, transcripts, or provenance fields here.
-nonisolated struct MeetingStage05TimingFailureRecord: Codable, Equatable, Sendable {
+nonisolated struct MeetingStage05TimingFailureRecord: Codable, Equatable {
     static let schema = "fv-stage05-timing-failure-v1"
     static let filename = "timing.json"
 
-    nonisolated struct Track: Codable, Equatable, Sendable {
+    nonisolated struct Track: Codable, Equatable {
         let blocks: [MeetingSignalDomainGateManifest.TimingBlock]
         let gapCount: Int
         let overlapCount: Int
@@ -1130,7 +1142,7 @@ nonisolated struct MeetingStage05TimingFailureRecord: Codable, Equatable, Sendab
 }
 
 final class MeetingStage05PCMCollector: @unchecked Sendable {
-    // Explicitly nonisolated: on macOS 15.4+ the synthesized main-actor deinit can abort until the OS runtime has the fix (swiftlang/swift#88036).
+    /// Explicitly nonisolated: on macOS 15.4+ the synthesized main-actor deinit can abort until the OS runtime has the fix (swiftlang/swift#88036).
     nonisolated deinit {}
 
     enum Output { case render, capture }
@@ -1541,7 +1553,7 @@ final class MeetingStage05PCMCollector: @unchecked Sendable {
 }
 
 private final class WAVWriter {
-    // Explicitly nonisolated: on macOS 15.4+ the synthesized main-actor deinit can abort until the OS runtime has the fix (swiftlang/swift#88036).
+    /// Explicitly nonisolated: on macOS 15.4+ the synthesized main-actor deinit can abort until the OS runtime has the fix (swiftlang/swift#88036).
     nonisolated deinit {}
 
     let url: URL
@@ -1550,7 +1562,10 @@ private final class WAVWriter {
     private(set) var frameCount = 0
     private(set) var codec: String?
     private(set) var peak: Float = 0
-    var format: String? { self.codec }
+    var format: String? {
+        self.codec
+    }
+
     init(url: URL) throws {
         self.url = url
         let descriptor = Darwin.open(url.path, O_WRONLY | O_CREAT | O_EXCL, 0o600)
@@ -1583,7 +1598,9 @@ private final class WAVWriter {
         try self.handle.seek(toOffset: 0); try self.handle.write(contentsOf: header); try self.handle.synchronize(); try self.handle.close()
     }
 
-    func discard() { try? self.handle.close(); try? FileManager.default.removeItem(at: self.url) }
+    func discard() {
+        try? self.handle.close(); try? FileManager.default.removeItem(at: self.url)
+    }
 }
 
 private struct MeetingStage05Provenance: Codable {
@@ -1602,7 +1619,9 @@ private struct MeetingStage05Provenance: Codable {
 }
 
 private extension Data {
-    mutating func appendLE<T: FixedWidthInteger>(_ value: T) { var little = value.littleEndian; Swift.withUnsafeBytes(of: &little) { append(contentsOf: $0) } }
+    mutating func appendLE<T: FixedWidthInteger>(_ value: T) {
+        var little = value.littleEndian; Swift.withUnsafeBytes(of: &little) { append(contentsOf: $0) }
+    }
 }
 
 private enum SHA256Hex {
@@ -1625,7 +1644,9 @@ private enum SHA256Hex {
 }
 
 private extension JSONEncoder {
-    static var sorted: JSONEncoder { let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]; return encoder }
+    static var sorted: JSONEncoder {
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]; return encoder
+    }
 }
 
 #endif

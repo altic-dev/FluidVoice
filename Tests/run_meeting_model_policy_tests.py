@@ -6,17 +6,9 @@ import re
 import subprocess
 import tempfile
 
+from swift_source import declaration
+
 ROOT = Path(__file__).resolve().parents[1]
-
-
-def declaration(source: str, marker: str) -> str:
-    start = source.index(marker)
-    brace = source.index("{", start)
-    depth, end = 1, brace + 1
-    while depth:
-        depth += (source[end] == "{") - (source[end] == "}")
-        end += 1
-    return source[start:end]
 
 
 def main() -> None:

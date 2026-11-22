@@ -13,7 +13,9 @@ actor MeetingModelPreparationQueue {
 
     #if DEBUG
     /// Allows regression tests to confirm admission before cancelling a waiter.
-    var queuedPreparationCount: Int { self.waiters.count }
+    var queuedPreparationCount: Int {
+        self.waiters.count
+    }
     #endif
 
     func run(_ operation: @escaping @Sendable () async throws -> Void) async throws {

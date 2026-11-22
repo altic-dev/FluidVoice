@@ -9,7 +9,7 @@ import AppKit
 import Combine
 import Foundation
 
-nonisolated struct AudioBudgetMeasurementGate: Equatable, Sendable {
+nonisolated struct AudioBudgetMeasurementGate: Equatable {
     let revision: UInt64
     let budgetBytes: Int64
 
@@ -20,7 +20,7 @@ nonisolated struct AudioBudgetMeasurementGate: Equatable, Sendable {
 
 // MARK: - Transcription History Entry Model
 
-struct TranscriptionHistoryEntry: Codable, Identifiable, Equatable, Sendable {
+struct TranscriptionHistoryEntry: Codable, Identifiable, Equatable {
     let id: UUID
     let timestamp: Date
     let rawText: String
@@ -228,14 +228,12 @@ struct TranscriptionHistoryEntry: Codable, Identifiable, Equatable, Sendable {
         )
     }
 
-    /// A restore can hand an existing id different text, and the search index only
-    /// replaces a row whose revision rose. Bumping past the restored revision, the
-    /// indexed one and the wall clock keeps that true whichever backup the text came
-    /// from, including one written before this field existed.
     mutating func markRestored(over indexed: UInt64?, at date: Date = Date()) {
-        let now = UInt64(max(1, date.timeIntervalSince1970 * 1000))
-        let base = max(now, self.searchRevision ?? 1, indexed ?? 1)
-        self.searchRevision = base == .max ? .max : base + 1
+        self.searchRevision = HistorySearchRevision.afterRestore(
+            restored: self.searchRevision,
+            indexed: indexed,
+            at: date
+        )
     }
 }
 
@@ -817,7 +815,7 @@ final class TranscriptionHistoryStore: ObservableObject {
 // MARK: - Stats Computation Extension
 
 extension TranscriptionHistoryStore {
-    nonisolated struct TodaySummary: Equatable, Sendable {
+    nonisolated struct TodaySummary: Equatable {
         let words: Int
         let transcriptions: Int
 

@@ -128,7 +128,9 @@ struct MeetingLiveBubbleRow: View, Equatable {
         lhs.row == rhs.row && lhs.hidesPartialFromAccessibility == rhs.hidesPartialFromAccessibility && lhs.documentStyle == rhs.documentStyle
     }
 
-    private var isMicrophone: Bool { self.row.speaker == .you }
+    private var isMicrophone: Bool {
+        self.row.speaker == .you
+    }
 
     private var sourceLabel: String {
         self.isMicrophone ? "Microphone" : "Meeting audio"

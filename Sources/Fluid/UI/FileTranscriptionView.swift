@@ -45,7 +45,7 @@ struct FileTranscriptionView: View {
 
     @State private var rowMetadata: [UUID: RowMetadata] = [:]
     @State private var filteredEntries: [FileTranscriptionEntry] = []
-    // Only an explicit global-search reveal may move the library viewport.
+    /// Only an explicit global-search reveal may move the library viewport.
     @State private var pendingRevealID: UUID?
 
     private func updateSearchResults(entries: [FileTranscriptionEntry]) {
@@ -60,7 +60,7 @@ struct FileTranscriptionView: View {
         return entries.first { $0.id == self.fileHistoryStore.selectedEntryID } ?? entries.first
     }
 
-    enum ExportFormat: String, CaseIterable, Sendable {
+    enum ExportFormat: String, CaseIterable {
         case text = "Text (.txt)"
         case json = "JSON (.json)"
 
@@ -297,9 +297,7 @@ struct FileTranscriptionView: View {
                                 Text("Label speakers")
                                     .font(self.theme.typography.bodySmall)
 
-                                Text(self.selectedFileIsVideo
-                                    ? "Available for audio files only"
-                                    : "Identify who said what (downloads speaker models on first use)")
+                                Text("Identify who said what (downloads speaker models on first use)")
                                     .font(self.theme.typography.caption)
                                     .foregroundColor(.secondary)
                             }
@@ -307,9 +305,9 @@ struct FileTranscriptionView: View {
                         }
                         .toggleStyle(.switch)
                         .accessibilityLabel("Label speakers")
-                        .disabled(self.selectedFileIsVideo || self.transcriptionService.isTranscribing)
+                        .disabled(self.transcriptionService.isTranscribing)
 
-                        if self.settings.fileTranscriptionSpeakerLabelsEnabled, !self.selectedFileIsVideo {
+                        if self.settings.fileTranscriptionSpeakerLabelsEnabled {
                             HStack {
                                 Text("Number of speakers")
                                     .font(self.theme.typography.bodySmall)
@@ -459,8 +457,10 @@ struct FileTranscriptionView: View {
                 .fill(self.theme.palette.cardBorder)
                 .frame(width: 1)
             Capsule()
-                .fill(self.isSplitterHovered || self.splitterDragStart != nil
-                    ? self.theme.palette.accent : self.theme.palette.secondaryText.opacity(0.5))
+                .fill(
+                    self.isSplitterHovered || self.splitterDragStart != nil
+                        ? self.theme.palette.accent : self.theme.palette.secondaryText.opacity(0.5)
+                )
                 .frame(width: 3, height: 28)
         }
         .frame(width: 10)

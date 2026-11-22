@@ -5,7 +5,7 @@ import Foundation
 
 // MARK: - Metric records
 
-nonisolated struct MeetingVPIOAcousticDelayMetrics: Codable, Equatable, Sendable {
+nonisolated struct MeetingVPIOAcousticDelayMetrics: Codable, Equatable {
     /// Positive means the captured signal lags the rendered reference on the shared host-time
     /// grid. Negative is physically impossible for an acoustic path and therefore evidence of a
     /// timestamp-domain error rather than of a fast echo.
@@ -21,7 +21,7 @@ nonisolated struct MeetingVPIOAcousticDelayMetrics: Codable, Equatable, Sendable
     var reasons: [MeetingVPIOAcousticReason]
 }
 
-nonisolated struct MeetingVPIOAcousticBandMetrics: Codable, Equatable, Sendable {
+nonisolated struct MeetingVPIOAcousticBandMetrics: Codable, Equatable {
     var lowHz: Double
     var highHz: Double
     var binCount: Int
@@ -42,7 +42,7 @@ nonisolated struct MeetingVPIOAcousticBandMetrics: Codable, Equatable, Sendable 
     var reasons: [MeetingVPIOAcousticReason]
 }
 
-nonisolated struct MeetingVPIOAcousticMeasurement: Codable, Equatable, Sendable {
+nonisolated struct MeetingVPIOAcousticMeasurement: Codable, Equatable {
     static let currentSchemaVersion = 1
 
     var schemaVersion: Int

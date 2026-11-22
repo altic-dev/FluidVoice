@@ -45,14 +45,14 @@ nonisolated enum MeetingExternalReferenceTrialAGate {
 
 // Keep the subsystem-qualified name distinct from other capture and analysis contracts.
 // swiftlint:disable:next type_name
-nonisolated struct MeetingExternalReferenceTrialADisplayCandidate: Equatable, Sendable {
+nonisolated struct MeetingExternalReferenceTrialADisplayCandidate: Equatable {
     let displayID: UInt32
     let frame: CGRect
 }
 
 // Keep the subsystem-qualified name distinct from other capture and analysis contracts.
 // swiftlint:disable:next type_name
-nonisolated struct MeetingExternalReferenceTrialAWindowCandidate: Equatable, Sendable {
+nonisolated struct MeetingExternalReferenceTrialAWindowCandidate: Equatable {
     let windowID: UInt32
     let owningBundleIdentifier: String?
     let owningProcessID: Int32
@@ -104,7 +104,7 @@ nonisolated enum MeetingExternalReferenceTrialADisplaySelector {
 
 // Keep the subsystem-qualified name distinct from other capture and analysis contracts.
 // swiftlint:disable:next type_name
-nonisolated struct MeetingExternalReferenceTrialATrackSample: Equatable, Sendable {
+nonisolated struct MeetingExternalReferenceTrialATrackSample: Equatable {
     let presentationSeconds: Double
     let durationSeconds: Double
     let frameCount: Int
@@ -142,7 +142,7 @@ nonisolated struct MeetingExternalReferenceTrialATrackSample: Equatable, Sendabl
 
 // Keep the subsystem-qualified name distinct from other capture and analysis contracts.
 // swiftlint:disable:next type_name
-nonisolated struct MeetingExternalReferenceTrialATrackReport: Codable, Equatable, Sendable {
+nonisolated struct MeetingExternalReferenceTrialATrackReport: Codable, Equatable {
     let callbackCount: Int
     let droppedFrameCount: Int
     let validSampleCount: Int
@@ -306,14 +306,14 @@ nonisolated struct MeetingExternalReferenceTrialATrackReport: Codable, Equatable
 
 // Keep the subsystem-qualified name distinct from other capture and analysis contracts.
 // swiftlint:disable:next type_name
-nonisolated struct MeetingExternalReferenceTrialAClockReport: Codable, Equatable, Sendable {
+nonisolated struct MeetingExternalReferenceTrialAClockReport: Codable, Equatable {
     let sharedClockEstablished: Bool
     let acousticDelaySeconds: Double?
     let relationship: String
     let reason: String
 }
 
-nonisolated struct MeetingExternalReferenceTrialAReport: Codable, Equatable, Sendable {
+nonisolated struct MeetingExternalReferenceTrialAReport: Codable, Equatable {
     static let currentSchemaVersion = 2
     let schemaVersion: Int
     let targetBundleID: String
@@ -350,7 +350,9 @@ nonisolated struct MeetingExternalReferenceTrialAReport: Codable, Equatable, Sen
     /// Backward-compatible summary used by the offline diagnostic tests. Trial A can report
     /// capture health while remaining invalid as an acoustic measurement until clock mapping is
     /// established.
-    var valid: Bool { self.acousticMeasurementValid }
+    var valid: Bool {
+        self.acousticMeasurementValid
+    }
 }
 
 /// Lock-protected PCM collector. `reportAndRelease` computes numbers and then drops every sample
@@ -562,11 +564,13 @@ nonisolated enum MeetingExternalReferenceTrialAAutorun {
         return true
     }
 
-    private struct Outcome: Sendable { let exitStatus: Int32; let line: String }
+    private struct Outcome { let exitStatus: Int32; let line: String }
     private enum RunError: Error { case timeout }
     private final class CompletionGate: @unchecked Sendable {
         private let lock = NSLock(); private var done = false
-        func claim() -> Bool { self.lock.lock(); defer { lock.unlock() }; guard !self.done else { return false }; self.done = true; return true }
+        func claim() -> Bool {
+            self.lock.lock(); defer { lock.unlock() }; guard !self.done else { return false }; self.done = true; return true
+        }
     }
 
     @MainActor
@@ -697,7 +701,8 @@ nonisolated enum MeetingExternalReferenceTrialAAutorun {
             microphoneUID: microphoneDevice.coreAudioUID, outputDeviceID: outputDevice.id
         )
         let postCaptureOutputVolume = Self.readOutputVolume(
-            AudioDevice.getDefaultOutputDevice()?.id ?? kAudioObjectUnknown).map(Double.init)
+            AudioDevice.getDefaultOutputDevice()?.id ?? kAudioObjectUnknown
+        ).map(Double.init)
         await capture.stopForPhase1Probe()
         let reference = referenceCollector.reportAndRelease(requestedDurationSeconds: Self.captureDurationSeconds)
         let microphoneReport = microphoneCollector.reportAndRelease(requestedDurationSeconds: Self.captureDurationSeconds)
@@ -797,7 +802,8 @@ nonisolated enum MeetingExternalReferenceTrialAAutorun {
               let output = AudioDevice.getDefaultOutputDevice(), output.isAlive,
               output.id == outputDeviceID,
               MeetingCapturePathDecider.outputRouteDeclineReason(
-                  MeetingCaptureEngine.currentOutputRouteSnapshot()) == nil,
+                  MeetingCaptureEngine.currentOutputRouteSnapshot()
+              ) == nil,
               let volume = readOutputVolume(output.id), volume > 0, volume <= 0.6
         else {
             return false
@@ -869,7 +875,10 @@ nonisolated enum MeetingExternalReferenceTrialAAutorun {
 
 private final class TrialAStreamOutput: NSObject, SCStreamOutput, @unchecked Sendable {
     private let collector: MeetingExternalReferenceTrialACollector
-    init(collector: MeetingExternalReferenceTrialACollector) { self.collector = collector }
+    init(collector: MeetingExternalReferenceTrialACollector) {
+        self.collector = collector
+    }
+
     func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of outputType: SCStreamOutputType) {
         guard outputType == .audio else { return }
         self.collector.ingest(sampleBuffer)
@@ -879,7 +888,10 @@ private final class TrialAStreamOutput: NSObject, SCStreamOutput, @unchecked Sen
 private final class TrialAStreamDelegate: NSObject, SCStreamDelegate, @unchecked Sendable {
     private let lock = NSLock()
     private var stoppedWithErrorCount = 0
-    var errorCount: Int { self.lock.lock(); defer { lock.unlock() }; return self.stoppedWithErrorCount }
+    var errorCount: Int {
+        self.lock.lock(); defer { lock.unlock() }; return self.stoppedWithErrorCount
+    }
+
     func stream(_ stream: SCStream, didStopWithError error: Error) {
         self.lock.lock(); self.stoppedWithErrorCount += 1; self.lock.unlock()
     }

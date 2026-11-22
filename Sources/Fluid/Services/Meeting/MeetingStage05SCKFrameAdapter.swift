@@ -7,7 +7,7 @@ import Foundation
 /// One extracted Stage 0.5 callback block. Callback presentation time, callback arrival
 /// time, and per-queue sequence order are distinct facts: this type carries the first two
 /// and the adapter assigns the third.
-nonisolated struct MeetingStage05AdapterFrame: Equatable, Sendable {
+nonisolated struct MeetingStage05AdapterFrame: Equatable {
     let presentationSeconds: Double
     let durationSeconds: Double
     let frameCount: Int
@@ -35,7 +35,7 @@ nonisolated struct MeetingStage05AdapterFrame: Equatable, Sendable {
     }
 }
 
-nonisolated enum MeetingStage05AdapterRejection: String, Equatable, Sendable {
+nonisolated enum MeetingStage05AdapterRejection: String, Equatable {
     case nonFiniteTiming
     case negativeTiming
     case invalidGeometry
@@ -47,7 +47,7 @@ nonisolated enum MeetingStage05AdapterRejection: String, Equatable, Sendable {
     case frameLimit
 }
 
-nonisolated struct MeetingStage05AdapterTrackDiagnostics: Equatable, Sendable {
+nonisolated struct MeetingStage05AdapterTrackDiagnostics: Equatable {
     var acceptedCallbackCount = 0
     var rejectedCallbackCount = 0
     var gapCount = 0
@@ -57,7 +57,7 @@ nonisolated struct MeetingStage05AdapterTrackDiagnostics: Equatable, Sendable {
     var formatChangeCount = 0
 }
 
-nonisolated struct MeetingStage05AdapterDrain: Equatable, Sendable {
+nonisolated struct MeetingStage05AdapterDrain: Equatable {
     let microphone: [MeetingMicrophonePCMFrame]
     let reference: [MeetingReferencePCMFrame]
     let microphoneDiagnostics: MeetingStage05AdapterTrackDiagnostics
@@ -70,7 +70,7 @@ nonisolated struct MeetingStage05AdapterDrain: Equatable, Sendable {
 /// rejection. Overlapping or late blocks are preserved as synchronizer inputs and counted
 /// here as diagnostics; nothing is flattened or invented.
 final class MeetingStage05SCKFrameAdapter: @unchecked Sendable {
-    // Explicitly nonisolated: on macOS 15.4+ the synthesized main-actor deinit can abort until the OS runtime has the fix (swiftlang/swift#88036).
+    /// Explicitly nonisolated: on macOS 15.4+ the synthesized main-actor deinit can abort until the OS runtime has the fix (swiftlang/swift#88036).
     nonisolated deinit {}
 
     static let supportedSampleRateHz = 48_000.0

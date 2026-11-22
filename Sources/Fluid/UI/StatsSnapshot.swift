@@ -1,7 +1,7 @@
 import Foundation
 
 /// A bounded, read-only summary. No transcription text is retained in the result.
-nonisolated struct StatsSnapshot: Sendable {
+nonisolated struct StatsSnapshot {
     var totalWords = 0
     var totalTranscriptions = 0
     var totalCharacters = 0

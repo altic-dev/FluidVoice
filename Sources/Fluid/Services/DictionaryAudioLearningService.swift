@@ -25,7 +25,9 @@ final class DictionaryAudioLearningService {
     private var queue: [Request] = []
     private var task: Task<Void, Never>?
     private var expiryTask: Task<Void, Never>?
-    var pendingCount: Int { self.queue.count }
+    var pendingCount: Int {
+        self.queue.count
+    }
 
     init(
         store: PronunciationDictionaryStore = .shared,
@@ -48,8 +50,13 @@ final class DictionaryAudioLearningService {
     }
 
     /// Cancel encoder work immediately when audio activity starts. Retry the same bounded request when it ends.
-    func cancelForRecording() { self.task?.cancel() }
-    func activityDidEnd() { self.drain() }
+    func cancelForRecording() {
+        self.task?.cancel()
+    }
+
+    func activityDidEnd() {
+        self.drain()
+    }
 
     func learn(
         entry: SettingsStore.CustomDictionaryEntry,
@@ -163,9 +170,10 @@ actor OriginalAudioEmbeddingExtractor {
         else {
             throw PronunciationDictionaryStoreError.outdatedModelRevision
         }
-        let models = try await AsrModels.loadLocalOnly(
+        let models = try await LocalParakeetModelLoader.load(
             from: directory,
-            version: version
+            version: version,
+            archiveSHA256: descriptor.archiveSHA256
         )
         try Task.checkCancellation()
         guard descriptor.installationRevisionMatches(at: directory) else {

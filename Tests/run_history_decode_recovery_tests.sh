@@ -10,6 +10,7 @@ export DEVELOPER_DIR="$task_developer_dir"
 task_test_dir=$(mktemp -d /tmp/fluidvoice-history-decode.XXXXXX)
 trap 'rm -rf "$task_test_dir"' EXIT HUP INT TERM
 xcrun swiftc -parse-as-library \
+    Sources/Fluid/Persistence/Search/HistorySearchRevision.swift \
     Sources/Fluid/Persistence/ChatHistoryStore.swift \
     Sources/Fluid/Persistence/FileTranscriptionHistoryStore.swift \
     Sources/Fluid/Persistence/PersistedHistory.swift \

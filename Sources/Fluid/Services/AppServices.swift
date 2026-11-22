@@ -105,6 +105,8 @@ final class AppServices: ObservableObject {
         return arbiter
     }
 
+    private(set) lazy var meetingSummaryGeneration = MeetingSummaryGeneration()
+
     private var _meetingSessionCoordinator: MeetingSessionCoordinator?
     var meetingSessionCoordinator: MeetingSessionCoordinator {
         if let existing = self._meetingSessionCoordinator {
@@ -381,8 +383,13 @@ final class AppServices: ObservableObject {
     }
 
     /// Read-only checks for MeetingAutoDetector: never force either lazy service into existence.
-    var isMeetingSessionCoordinatorMaterialized: Bool { self._meetingSessionCoordinator != nil }
-    var activeExclusiveActivityIfASRMaterialized: ASRExclusiveActivity? { self._asr?.activeExclusiveActivity }
+    var isMeetingSessionCoordinatorMaterialized: Bool {
+        self._meetingSessionCoordinator != nil
+    }
+
+    var activeExclusiveActivityIfASRMaterialized: ASRExclusiveActivity? {
+        self._asr?.activeExclusiveActivity
+    }
 
     /// Legacy UI guard; ASRService is the atomic source of truth for acquisition.
     var hasActiveMeetingActivity: Bool {

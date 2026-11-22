@@ -3,7 +3,7 @@ import Foundation
 /// Runs the bundled `fv-serve` for real and reports what it says, so the settings page can show
 /// proof that the command works instead of only that a file was written.
 nonisolated enum FluidServeSelfCheck {
-    enum Outcome: Equatable, Sendable {
+    enum Outcome: Equatable {
         case working(meetings: Int)
         case accessOff
         case failed(String)

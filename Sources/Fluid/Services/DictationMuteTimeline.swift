@@ -10,7 +10,9 @@ nonisolated struct DictationMuteTimeline {
 
     private var intervals: [Interval] = []
     private(set) var isMuted = false
-    var hasExclusions: Bool { !self.intervals.isEmpty }
+    var hasExclusions: Bool {
+        !self.intervals.isEmpty
+    }
 
     mutating func setMuted(_ muted: Bool, at hostTime: UInt64) {
         guard muted != self.isMuted else { return }
