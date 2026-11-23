@@ -558,6 +558,7 @@ struct MeetingResultCanvas: View {
                 }
             }
             .frame(maxWidth: 760, alignment: .leading)
+            .padding(self.theme.metrics.spacing.lg * 2)
             .frame(maxWidth: .infinity, alignment: .center)
         }
         .id(self.session.id)
