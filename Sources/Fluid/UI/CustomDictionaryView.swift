@@ -4196,6 +4196,7 @@ struct EditDictionaryEntrySheet: View {
         .frame(minWidth: 400, idealWidth: 480, maxWidth: 560)
         .frame(minHeight: 360, idealHeight: self.isTestingWord ? 680 : 500, maxHeight: self.isTestingWord ? 780 : 600)
         .dismissTextFocusOnBackgroundTap()
+        .background(SheetOutsideClickDismisser(isEnabled: !self.isTestBusy) { self.dismiss() })
         .onChange(of: self.hasUnsavedChanges) { _, changed in
             if changed { self.isTestingWord = false }
         }
@@ -4223,6 +4224,60 @@ struct EditDictionaryEntrySheet: View {
         )
         self.onSave(updatedEntry)
         self.dismiss()
+    }
+}
+
+/// Native sheets swallow clicks on their parent window; treat such a click as Cancel.
+private struct SheetOutsideClickDismisser: NSViewRepresentable {
+    let isEnabled: Bool
+    let onOutsideClick: () -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        context.coordinator.view = view
+        context.coordinator.install()
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        context.coordinator.isEnabled = self.isEnabled
+        context.coordinator.onOutsideClick = self.onOutsideClick
+    }
+
+    static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
+        coordinator.remove()
+    }
+
+    @MainActor
+    final class Coordinator {
+        weak var view: NSView?
+        var isEnabled = true
+        var onOutsideClick: () -> Void = {}
+        private var monitor: Any?
+
+        func install() {
+            self.monitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak self] event in
+                MainActor.assumeIsolated {
+                    guard let self, self.isEnabled,
+                          let sheet = self.view?.window,
+                          let clicked = event.window,
+                          clicked !== sheet,
+                          clicked.attachedSheet === sheet
+                    else { return event }
+                    self.onOutsideClick()
+                    return nil
+                }
+            }
+        }
+
+        func remove() {
+            if let monitor { NSEvent.removeMonitor(monitor) }
+            self.monitor = nil
+        }
     }
 }
 
