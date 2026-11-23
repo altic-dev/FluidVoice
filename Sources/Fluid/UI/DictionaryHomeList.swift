@@ -20,6 +20,7 @@ struct DictionaryHomeList<CustomWords: View>: View {
     @State private var searchText = ""
     @State private var pendingDeletion: SettingsStore.CustomDictionaryEntry?
     @State private var isMoreMenuPresented = false
+    @State private var isScrolling = false
 
     @Environment(\.theme) private var theme
 
@@ -197,18 +198,21 @@ struct DictionaryHomeList<CustomWords: View>: View {
                 .fluidGlassAction(prominent: true, tone: self.theme.palette.accent)
             }
             .frame(maxHeight: .infinity)
-        } else if self.filteredEntries.isEmpty {
-            ContentUnavailableView.search(text: self.searchText)
-                .frame(maxHeight: .infinity)
         } else {
-            self.entryList
+            let groups = self.groupedEntries
+            if groups.isEmpty {
+                ContentUnavailableView.search(text: self.searchText)
+                    .frame(maxHeight: .infinity)
+            } else {
+                self.entryList(groups)
+            }
         }
     }
 
-    private var entryList: some View {
+    private func entryList(_ groups: [(key: String, entries: [SettingsStore.CustomDictionaryEntry])]) -> some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 2) {
-                ForEach(self.groupedEntries, id: \.key) { group in
+                ForEach(groups, id: \.key) { group in
                     Section {
                         ForEach(group.entries) { entry in
                             self.row(for: entry)
@@ -228,6 +232,11 @@ struct DictionaryHomeList<CustomWords: View>: View {
             .padding(.horizontal, self.pageInset - self.rowOutset)
             .padding(.bottom, self.pageInset)
             .frame(maxWidth: .infinity)
+            // Rows sliding under a still cursor would otherwise re-run hover and hit-testing every frame.
+            .allowsHitTesting(!self.isScrolling)
+        }
+        .onScrollPhaseChange { _, phase in
+            self.isScrolling = phase.isScrolling
         }
     }
 
@@ -252,11 +261,19 @@ private struct DictionaryHomeRow: View {
 
     @Environment(\.theme) private var theme
     @Environment(\.isEnabled) private var isEnabled
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isHovered = false
 
-    private var triggerText: String {
-        self.entry.triggers.isEmpty ? "Learned from your voice" : self.entry.triggers.joined(separator: ", ")
+    private static let visibleTriggerLimit = 2
+
+    private var hiddenTriggerCount: Int {
+        max(0, self.entry.triggers.count - Self.visibleTriggerLimit)
+    }
+
+    private var accessibilitySummary: String {
+        let base = self.entry.triggers.isEmpty
+            ? "\(self.entry.replacement), learned from your voice"
+            : "\(self.entry.replacement), replaces \(self.entry.triggers.joined(separator: ", "))"
+        return self.entry.caseSensitive ? base + ", matches case" : base
     }
 
     private var highlighted: Bool {
@@ -266,36 +283,36 @@ private struct DictionaryHomeRow: View {
     var body: some View {
         HStack(spacing: self.theme.metrics.spacing.sm) {
             Button(action: self.onSelect) {
-                HStack(alignment: .top, spacing: self.theme.metrics.spacing.md) {
-                    Image(systemName: "textformat")
-                        .font(self.theme.typography.bodySmall)
+                HStack(spacing: self.theme.metrics.spacing.md) {
+                    self.heardSide
+                    Image(systemName: "arrow.right")
+                        .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(self.theme.palette.secondaryText)
-                        .frame(width: 18, height: 22)
-                    VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xs) {
+                    HStack(spacing: self.theme.metrics.spacing.sm) {
                         Text(self.entry.replacement)
                             .font(self.theme.typography.bodyStrong)
                             .foregroundStyle(self.theme.palette.primaryText)
                             .lineLimit(1)
-                        HStack(spacing: self.theme.metrics.spacing.xs) {
-                            if !self.entry.triggers.isEmpty {
-                                Text("Fixes").foregroundStyle(self.theme.palette.tertiaryText)
-                            }
-                            Text(self.triggerText).lineLimit(1).truncationMode(.tail)
-                            if self.entry.caseSensitive {
-                                Text("·").foregroundStyle(self.theme.palette.tertiaryText)
-                                Text("Match case")
-                            }
+                        if self.entry.caseSensitive {
+                            Text("Aa")
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundStyle(self.theme.palette.secondaryText)
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 1)
+                                .overlay {
+                                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                                        .strokeBorder(self.theme.palette.secondaryText.opacity(0.35), lineWidth: 1)
+                                }
                         }
-                        .font(self.theme.typography.caption)
-                        .foregroundStyle(self.theme.palette.secondaryText)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .padding(self.theme.metrics.spacing.md)
+                .padding(.horizontal, self.theme.metrics.spacing.md)
+                .padding(.vertical, 12)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("\(self.entry.replacement), fixes \(self.triggerText)")
+            .accessibilityLabel(self.accessibilitySummary)
             .accessibilityHint("Opens the word for editing")
 
             Button(action: self.onDelete) {
@@ -305,9 +322,7 @@ private struct DictionaryHomeRow: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .foregroundStyle(self.theme.palette.secondaryText)
-            .meetingHoverFeedback()
-            .help("Remove word")
+            .foregroundStyle(self.highlighted ? self.theme.palette.primaryText : self.theme.palette.secondaryText)
             .accessibilityLabel("Remove \(self.entry.replacement)")
             .padding(.trailing, self.theme.metrics.spacing.sm)
         }
@@ -316,9 +331,52 @@ private struct DictionaryHomeRow: View {
                 .fill(self.highlighted ? self.theme.palette.primaryText.opacity(0.06) : .clear)
                 .allowsHitTesting(false)
         }
-        .animation(self.reduceMotion ? nil : .easeOut(duration: 0.14), value: self.highlighted)
         .onHover { self.isHovered = $0 && self.isEnabled }
         .onDisappear { self.isHovered = false }
+    }
+
+    @ViewBuilder
+    private var heardSide: some View {
+        if self.entry.triggers.isEmpty {
+            Label("Learned from your voice", systemImage: "waveform")
+                .font(self.theme.typography.caption)
+                .foregroundStyle(self.theme.palette.tertiaryText)
+                .lineLimit(1)
+        } else {
+            HStack(spacing: 6) {
+                ForEach(Array(self.entry.triggers.prefix(Self.visibleTriggerLimit).enumerated()), id: \.offset) { _, trigger in
+                    DictionaryTriggerChip(text: trigger)
+                }
+                if self.hiddenTriggerCount > 0 {
+                    Text("+\(self.hiddenTriggerCount)")
+                        .font(self.theme.typography.caption)
+                        .foregroundStyle(self.theme.palette.tertiaryText)
+                }
+            }
+        }
+    }
+}
+
+private struct DictionaryTriggerChip: View {
+    let text: String
+
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        Text(self.text)
+            .font(self.theme.typography.caption)
+            .strikethrough(true, color: self.theme.palette.tertiaryText)
+            .foregroundStyle(self.theme.palette.secondaryText)
+            .lineLimit(1)
+            .truncationMode(.tail)
+            .frame(maxWidth: 92, alignment: .leading)
+            .fixedSize(horizontal: true, vertical: false)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 2)
+            .background(
+                self.theme.palette.primaryText.opacity(0.06),
+                in: RoundedRectangle(cornerRadius: 5, style: .continuous)
+            )
     }
 }
 
