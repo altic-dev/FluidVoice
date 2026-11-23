@@ -53,7 +53,6 @@ struct DictionaryWordWizard: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @FocusState private var wordFocused: Bool
     @State private var showingRecordingTips = false
-    @State private var hasViewedTips = false
     @State private var showingAddSpelling = false
     @State private var newSpelling = ""
     @State private var spellingError: String?
@@ -201,7 +200,7 @@ struct DictionaryWordWizard: View {
                 .padding(.top, self.theme.metrics.spacing.sm)
         }
         .multilineTextAlignment(.center)
-        .padding(.vertical, self.theme.metrics.spacing.lg)
+        .padding(.top, self.theme.metrics.spacing.lg)
         .frame(maxWidth: .infinity)
         .accessibilityElement(children: .contain)
     }
@@ -231,7 +230,6 @@ struct DictionaryWordWizard: View {
         Button {
             withAnimation(self.reduceMotion ? nil : .easeInOut(duration: 0.25)) {
                 self.showingRecordingTips.toggle()
-                self.hasViewedTips = true
             }
         } label: {
             HStack(spacing: self.theme.metrics.spacing.sm) {
@@ -242,7 +240,7 @@ struct DictionaryWordWizard: View {
                     .accessibilityHidden(true)
             }
         }
-        .fluidGlassAction(prominent: !self.hasViewedTips || self.showingRecordingTips, tone: self.theme.palette.accent)
+        .fluidGlassAction()
         .accessibilityValue(self.showingRecordingTips ? "Expanded" : "Collapsed")
         .accessibilityHint("Shows or hides guidance beside the learning area")
     }
@@ -354,19 +352,21 @@ struct DictionaryWordWizard: View {
                     } label: {
                         Label(DictionaryCaptureAction.title(failed: self.error != nil, count: self.count), systemImage: "mic.fill")
                     }
-                    .buttonStyle(FluidRecordInvitationStyle(inviting: self.count < 1, recording: false))
+                    .fluidGlassAction(prominent: true, tone: self.theme.palette.accent)
                     .disabled(self.busy)
                 }
             }
             .frame(minHeight: FluidButtonSize.large.controlHeight)
-            self.redoButton
-                .hidden()
-                .accessibilityHidden(true)
-                .overlay {
-                    if self.count >= 1, !self.captureActive {
-                        self.redoButton
+            if self.count >= 1 {
+                self.redoButton
+                    .hidden()
+                    .accessibilityHidden(true)
+                    .overlay {
+                        if !self.captureActive {
+                            self.redoButton
+                        }
                     }
-                }
+            }
         }
     }
 
