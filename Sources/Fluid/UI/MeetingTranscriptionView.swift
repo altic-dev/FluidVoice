@@ -255,6 +255,7 @@ struct MeetingTranscriptionView: View {
     let resumingSummarySessionID: MeetingSessionID?
 
     @Environment(\.theme) private var theme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     @State private var setupDraft: MeetingTranscriptionSetupDraft
     @State private var setupDraftBeforeEditing: MeetingTranscriptionSetupDraft
@@ -311,30 +312,34 @@ struct MeetingTranscriptionView: View {
 
     var body: some View {
         let screen = self.screen
-        VStack(spacing: 0) {
-            if case .canvas = screen {
-                MeetingTranscriptionHeader(
-                    actions: MeetingHeaderActions(
-                        screen: screen,
-                        isQuiescent: self.coordinator.isQuiescent,
-                        isSummaryRunning: self.summaryActivity.selectionLock != nil
-                    ),
-                    onBack: self.goHome,
-                    onNewRecording: self.openRecordingView,
-                    onOpenMeetingSettings: self.openMeetingSettings
-                )
-                .padding(.horizontal, FluidPageLayout.inset)
-                .padding(.vertical, 12)
-                Divider()
-            }
-
+        let isShowingHome = if case .home = screen { true } else { false }
+        ZStack {
             switch screen {
             case .home:
                 self.homeList
+                    .transition(.move(edge: .leading).combined(with: .opacity))
             case let .canvas(state):
-                self.canvas(for: state)
+                VStack(spacing: 0) {
+                    MeetingTranscriptionHeader(
+                        actions: MeetingHeaderActions(
+                            screen: screen,
+                            isQuiescent: self.coordinator.isQuiescent,
+                            isSummaryRunning: self.summaryActivity.selectionLock != nil
+                        ),
+                        onBack: self.goHome,
+                        onNewRecording: self.openRecordingView,
+                        onOpenMeetingSettings: self.openMeetingSettings
+                    )
+                    .padding(.horizontal, FluidPageLayout.inset)
+                    .padding(.vertical, 12)
+                    Divider()
+                    self.canvas(for: state)
+                }
+                .transition(.move(edge: .trailing).combined(with: .opacity))
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .animation(self.pageAnimation, value: isShowingHome)
         .background(self.theme.palette.contentBackground)
         .clipped()
         .onFluidPagePresented { MeetingDiarizationModelStore.shared.prepareInBackground() }
@@ -427,6 +432,10 @@ struct MeetingTranscriptionView: View {
 
     private var screen: MeetingScreen {
         MeetingScreen(route: self.route, canvasState: self.canvasState)
+    }
+
+    private var pageAnimation: Animation? {
+        self.reduceMotion ? nil : .timingCurve(0.22, 0.8, 0.25, 1, duration: 0.34)
     }
 
     private var homeList: some View {
@@ -1559,23 +1568,18 @@ struct MeetingTranscriptionCanvas: View {
 
     @Environment(\.theme) private var theme
 
-    /// Recording renders outside the ScrollView so the live captions card can fill the height;
-    /// its transcript list is its own scroller, and nested scrolling would fight it.
-    private var fillsCanvasHeight: Bool {
-        switch self.state {
-        case .recording, .stopping, .result: true
-        default: false
-        }
-    }
-
     var body: some View {
         Group {
-            if self.fillsCanvasHeight {
+            switch self.state {
+            case .result:
+                self.canvasContent
+            case .recording, .stopping:
+                // The live transcript owns its scroller and fills the remaining height.
                 self.canvasContent
                     .frame(maxWidth: 820)
                     .padding(self.theme.metrics.spacing.lg * 2)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            } else {
+            default:
                 ScrollView {
                     self.canvasContent
                         .frame(maxWidth: 720)
@@ -1631,6 +1635,8 @@ struct MeetingTranscriptionCanvas: View {
                             .foregroundStyle(self.theme.palette.warning)
                             .fixedSize(horizontal: false, vertical: true)
                             .frame(maxWidth: 760, alignment: .leading)
+                            .padding(.horizontal, self.theme.metrics.spacing.lg * 2)
+                            .padding(.top, self.theme.metrics.spacing.lg * 2)
                             .frame(maxWidth: .infinity, alignment: .center)
                             .accessibilityIdentifier("meeting-result-action-error")
                     }
