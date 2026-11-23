@@ -403,7 +403,7 @@ struct DictionaryWordWizard: View {
                 Text(self.busy ? "Saving…" : (self.pronunciationIncomplete ? "Save spelling corrections" : "Add to dictionary"))
             }
         }
-        .buttonStyle(FluidRecordInvitationStyle(inviting: self.step == .review && !self.busy, recording: false, fillsWidth: true))
+        .fluidGlassAction(prominent: true, tone: self.theme.palette.accent)
         .disabled(self.busy || !self.canSave)
         if self.count < CustomDictionaryTrainingMerge.maxSamples {
             VStack(spacing: self.theme.metrics.spacing.sm) {
