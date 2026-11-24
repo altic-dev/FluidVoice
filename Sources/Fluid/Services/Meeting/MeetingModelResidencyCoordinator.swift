@@ -54,12 +54,18 @@ final class MeetingModelResidencyCoordinator {
     private(set) var restorationErrors: [String] = []
     private var attempt: UUID?
     private var generation = UUID()
-    private var operations: Set<UUID> = []
+    private var operations: [UUID: String] = [:]
     private var vetoedOwners: Set<String> = []
+    /// Owners that keep normal admission during the current attempt because it never unloads them.
+    private var exemptOwners: Set<String> = []
     private var terminating = false
 
     var isExclusive: Bool {
         self.attempt != nil || self.terminating
+    }
+
+    func isExclusive(for owner: String) -> Bool {
+        self.terminating || (self.attempt != nil && !self.exemptOwners.contains(owner))
     }
 
     var warmupGeneration: UUID? {
@@ -70,30 +76,38 @@ final class MeetingModelResidencyCoordinator {
         generation != nil && generation == self.warmupGeneration
     }
 
+    func warmupGeneration(for owner: String) -> UUID? {
+        self.isExclusive(for: owner) ? nil : self.generation
+    }
+
+    func canRunWarmup(_ generation: UUID?, for owner: String) -> Bool {
+        generation != nil && generation == self.warmupGeneration(for: owner)
+    }
+
     func beginOperation(owner: String, modelID: String) throws -> UUID {
         guard !self.terminating else { throw MeetingModelResidencyError.terminating }
-        if let attempt {
+        if let attempt, !self.exemptOwners.contains(owner) {
             guard self.phase == .restoring || (self.phase == .transcription && owner == "speech"),
                   let grant = MeetingModelContext.grant,
                   grant.attempt == attempt, grant.generation == self.generation, grant.owner == owner, grant.modelID == modelID,
                   !self.vetoedOwners.contains(owner)
             else { throw MeetingModelResidencyError.busy }
-        } else if MeetingModelContext.grant != nil {
+        } else if let grant = MeetingModelContext.grant, grant.attempt != self.attempt {
             throw MeetingModelResidencyError.staleGrant
         }
         let token = UUID()
-        self.operations.insert(token)
+        self.operations[token] = owner
         return token
     }
 
     func endOperation(_ token: UUID) {
-        self.operations.remove(token)
+        self.operations.removeValue(forKey: token)
     }
 
     /// Decide whether an unload belongs to the meeting or ordinary work in one actor turn.
     /// Separate checks allow a meeting to start between checking exclusivity and admission.
     func vetoOrBeginOperation(owner: String, modelID: String, vetoDuringMeeting: Bool) throws -> UUID? {
-        if self.isExclusive {
+        if self.isExclusive(for: owner) {
             if vetoDuringMeeting { self.vetoRestoration(owner: owner) }
             return nil
         }
@@ -149,17 +163,20 @@ final class MeetingModelResidencyCoordinator {
         self.phase = .summary
     }
 
+    /// `exemptOwners` keep running and loading their models throughout; they must not be participants.
     func withExclusive<T>(
-        attemptID: UUID, participants: [MeetingModelParticipant],
+        attemptID: UUID, participants: [MeetingModelParticipant], exemptOwners: Set<String> = [],
         acceptsCompletedCancellation: (T) -> Bool = { _ in false }, work: () async throws -> T
     ) async throws -> T {
         try Task.checkCancellation()
         guard !self.terminating else { throw MeetingModelResidencyError.terminating }
-        guard self.attempt == nil, self.operations.isEmpty,
-              Set(participants.map(\.owner)).count == participants.count
+        let owners = Set(participants.map(\.owner))
+        guard self.attempt == nil, owners.count == participants.count, owners.isDisjoint(with: exemptOwners),
+              self.operations.values.allSatisfy({ exemptOwners.contains($0) })
         else { throw MeetingModelResidencyError.busy }
         self.generation = UUID()
         self.attempt = attemptID
+        self.exemptOwners = exemptOwners
         self.phase = .suspending
         self.vetoedOwners.removeAll()
         self.restorationErrors.removeAll()
@@ -221,6 +238,7 @@ final class MeetingModelResidencyCoordinator {
         }
         guard self.attempt == attemptID else { return }
         self.attempt = nil
+        self.exemptOwners.removeAll()
         self.vetoedOwners.removeAll()
         self.phase = self.terminating ? .terminating : .normal
     }

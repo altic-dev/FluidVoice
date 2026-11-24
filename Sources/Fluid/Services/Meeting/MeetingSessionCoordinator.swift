@@ -44,13 +44,20 @@ final class AudioActivityArbiter: MeetingAudioActivityArbitrating {
     private weak var activeASRService: (any ASRActivityLeasing)?
     private var releaseTask: Task<Void, Never>?
     private var releaseTaskLease: MeetingAudioActivityLease?
+    private let isSummaryRunning: @MainActor () -> Bool
 
-    init(asrServiceProvider: @escaping @MainActor () throws -> any ASRActivityLeasing) {
+    init(
+        asrServiceProvider: @escaping @MainActor () throws -> any ASRActivityLeasing,
+        isSummaryRunning: @escaping @MainActor () -> Bool = { MeetingSummaryActivityCoordinator.shared.isSummarizing }
+    ) {
         self.asrServiceProvider = asrServiceProvider
+        self.isSummaryRunning = isSummaryRunning
     }
 
     func acquireMeetingCapture() async throws -> MeetingAudioActivityLease {
         guard self.meetingLease == nil else { throw MeetingCoordinatorError.recordingAlreadyActive }
+        // A summary holds model residency, which this meeting's processing will need.
+        guard !self.isSummaryRunning() else { throw MeetingCoordinatorError.summaryInProgress }
         let asrService = try self.asrServiceProvider()
         let sharedLease = try asrService.acquireExclusiveActivity(.meeting)
         let lease = MeetingAudioActivityLease(id: UUID())
@@ -2378,6 +2385,7 @@ enum MeetingCoordinatorError: LocalizedError {
     case noCorrectionToUndo
     case maintenanceInProgress
     case unsupportedRetranscriptionLanguage
+    case summaryInProgress
 
     var errorDescription: String? {
         switch self {
@@ -2399,6 +2407,8 @@ enum MeetingCoordinatorError: LocalizedError {
             return "FluidVoice is tidying up meeting storage. Try again in a moment."
         case .unsupportedRetranscriptionLanguage:
             return "Choose a language the meeting transcription model supports."
+        case .summaryInProgress:
+            return "Wait for the meeting summary to finish, then try again."
         }
     }
 }

@@ -72,6 +72,15 @@ final class MeetingSummaryActivityCoordinator: ObservableObject {
     private var summary: UUID?
     private var remoteSummary: UUID?
     @Published private(set) var selectionLock: UUID?
+    private let isMeetingActive: @MainActor () -> Bool
+
+    var isSummarizing: Bool {
+        self.summary != nil
+    }
+
+    init(isMeetingActive: @escaping @MainActor () -> Bool = { AppServices.shared.asr.activeExclusiveActivity == .meeting }) {
+        self.isMeetingActive = isMeetingActive
+    }
 
     /// Acquired synchronously by the button action, before generation's task starts.
     func lockSelection() -> UUID? {
@@ -121,23 +130,27 @@ final class MeetingSummaryActivityCoordinator: ObservableObject {
         return try await work()
     }
 
-    func withSummary<T>(activity: any ASRActivityLeasing, work: () async throws -> T) async throws -> T {
+    /// On-device summaries only contend with the local LLM, so they take no audio lease and
+    /// leave speech recognition loaded: dictation keeps working while a summary runs.
+    func withSummary<T>(work: () async throws -> T) async throws -> T {
         try Task.checkCancellation()
         guard self.summary == nil, self.remoteSummary == nil, self.processing.isEmpty else { throw MeetingModelResidencyError.busy }
+        // Meeting processing needs exclusive model residency; the arbiter refuses new meetings while this runs.
+        guard !self.isMeetingActive() else { throw ASRActivityError.activityInProgress(.meeting) }
         let token = UUID()
         self.summary = token
         defer { if self.summary == token { self.summary = nil } }
-        let lease = try activity.acquireExclusiveActivity(.meeting)
-        do {
-            try await activity.prepareMeetingAudioHandoff(lease)
-            try Task.checkCancellation()
-            let value = try await work()
-            await Task { await activity.completeMeetingAudioHandback(lease) }.value
-            return value
-        } catch {
-            await Task { await activity.completeMeetingAudioHandback(lease) }.value
-            throw error
-        }
+        return try await work()
+    }
+
+    /// Unloads only the local LLM for the duration of `work`, then restores it.
+    static func withSummaryModelResidency<T>(work: () async throws -> T) async throws -> T {
+        try await MeetingModelResidencyCoordinator.shared.withExclusive(
+            attemptID: UUID(),
+            participants: [PrivateAIIntegrationService.meetingResidencyParticipant()],
+            exemptOwners: ["speech", "dictionary-vad"],
+            work: work
+        )
     }
 }
 
@@ -291,7 +304,7 @@ final class MeetingSummaryController: ObservableObject {
         }
     }
 
-    func deleteModel(asr: ASRService) {
+    func deleteModel() {
         guard !self.busy, !self.checking, self.installed, let model else { return }
         self.generation = UUID()
         self.deleting = true
@@ -300,8 +313,8 @@ final class MeetingSummaryController: ObservableObject {
             guard let self else { return }
             defer { self.deleting = false; self.operation = nil }
             do {
-                try await MeetingSummaryActivityCoordinator.shared.withSummary(activity: asr) {
-                    try await asr.withMeetingModelResidency(attemptID: UUID()) {
+                try await MeetingSummaryActivityCoordinator.shared.withSummary {
+                    try await MeetingSummaryActivityCoordinator.withSummaryModelResidency {
                         try Task.checkCancellation()
                         try await Task.detached(priority: .utility) {
                             try PrivateAIIntegrationService.removeInstalledModel(model)
@@ -388,11 +401,10 @@ final class MeetingSummaryGeneration: ObservableObject {
         kind: MeetingSummaryKind,
         model: PrivateAIRegisteredModel,
         customPrompt: String,
-        thinking: Bool,
-        asr: ASRService
+        thinking: Bool
     ) {
         self.start(session: session, kind: kind, customPrompt: customPrompt) { instructions, promptHash in
-            try await self.activity.withSummary(activity: asr) {
+            try await self.activity.withSummary {
                 let (transcript, contentHash) = try await Self.input(
                     for: session, maximumBytes: MeetingSummaryOnDevice.maximumTranscriptBytes
                 )
@@ -400,7 +412,7 @@ final class MeetingSummaryGeneration: ObservableObject {
                     throw LLMError.invalidRequest("Write a custom prompt before generating.")
                 }
                 try Task.checkCancellation()
-                let text = try await asr.withMeetingModelResidency(attemptID: UUID()) {
+                let text = try await MeetingSummaryActivityCoordinator.withSummaryModelResidency {
                     try MeetingModelResidencyCoordinator.shared.markSummary()
                     return try await PrivateAIIntegrationService.summarizeMeeting(
                         transcript, style: kind.rawValue, instructions: instructions, thinking: thinking

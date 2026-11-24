@@ -2847,11 +2847,6 @@ struct ContentView: View {
         benchmarkID: String? = nil,
         stopSnapshot: DictationStopSnapshot? = nil
     ) async throws -> AITextProcessingResult {
-        guard let summaryActivity = MeetingSummaryActivityCoordinator.shared.beginProcessing() else {
-            throw MeetingModelResidencyError.busy
-        }
-        defer { MeetingSummaryActivityCoordinator.shared.endProcessing(summaryActivity) }
-
         let routeStartedAt = ProcessInfo.processInfo.systemUptime
         let appInfo = stopSnapshot?.appInfo ?? self.recordingAppInfo ?? self.getCurrentAppInfo()
         let route: DictationProviderRoute
@@ -2889,6 +2884,15 @@ struct ContentView: View {
 
         let isDictationCall = overrideSystemPrompt != nil || dictationSlot != nil
         let isPrivateAIProvider = route.usesPrivateAI
+        // Only the local LLM is unloaded during an on-device meeting summary; other providers keep working.
+        var summaryActivity: UUID?
+        if isPrivateAIProvider || PrivateAIIntegrationService.shouldHandleDictation(model: derivedSelectedModel) {
+            guard let token = MeetingSummaryActivityCoordinator.shared.beginProcessing() else {
+                throw MeetingModelResidencyError.busy
+            }
+            summaryActivity = token
+        }
+        defer { if let summaryActivity { MeetingSummaryActivityCoordinator.shared.endProcessing(summaryActivity) } }
         let usePrivateAIProvider = !(stopSnapshot?.hasCustomPrompt ?? (overrideSystemPrompt != nil)) &&
             isDictationCall &&
             (isPrivateAIProvider || PrivateAIIntegrationService.shouldHandleDictation(model: derivedSelectedModel))
@@ -3148,12 +3152,6 @@ struct ContentView: View {
             contextCapture?.cancel()
             if self.dictationContextCapture === contextCapture { self.dictationContextCapture = nil }
         }
-        guard let summaryActivity = MeetingSummaryActivityCoordinator.shared.beginProcessing() else {
-            MeetingSummaryActivityCoordinator.presentBusyError()
-            return
-        }
-        defer { MeetingSummaryActivityCoordinator.shared.endProcessing(summaryActivity) }
-
         let pipelineStartedAt = ProcessInfo.processInfo.systemUptime
         let expectedOverlayLifecycleID = self.overlayLifecycleID
         self.appBench("pipeline_begin id=\(pipelineID) route=\(route.rawValue) toggleStopRequestedAt=\(toggleStopRequestedAt.map { String($0) } ?? "nil") loadAvg1m=\(self.benchmarkLoadAverage())")
@@ -4874,9 +4872,9 @@ struct ContentView: View {
         }
 
         // Pre-load model in background while recording (avoids 10s freeze on stop)
-        let warmupGeneration = MeetingModelResidencyCoordinator.shared.warmupGeneration
+        let warmupGeneration = MeetingModelResidencyCoordinator.shared.warmupGeneration(for: "speech")
         Task {
-            guard MeetingModelResidencyCoordinator.shared.canRunWarmup(warmupGeneration) else { return }
+            guard MeetingModelResidencyCoordinator.shared.canRunWarmup(warmupGeneration, for: "speech") else { return }
             do {
                 DebugLogger.shared.debug("ContentView: pre-load model task started", source: "ContentView")
                 try await self.asr.ensureAsrReady()

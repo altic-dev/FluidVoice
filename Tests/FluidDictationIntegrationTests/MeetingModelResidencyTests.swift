@@ -461,4 +461,62 @@ extension MeetingModelResidencyTests {
         XCTAssertFalse(owner.canRunWarmup(before))
         XCTAssertTrue(owner.canRunWarmup(owner.warmupGeneration))
     }
+
+    func testExemptOwnersKeepWorkingWhileOnlyParticipantsAreUnloaded() async throws {
+        let owner = MeetingModelResidencyCoordinator()
+        let trace = ResidencyTrace()
+        try await owner.withExclusive(
+            attemptID: UUID(), participants: [trace.participant("fluid", loaded: true)], exemptOwners: ["speech"]
+        ) {
+            XCTAssertTrue(owner.isExclusive)
+            XCTAssertFalse(owner.isExclusive(for: "speech"))
+            XCTAssertTrue(owner.isExclusive(for: "fluid"))
+            let speech = try owner.beginOperation(owner: "speech", modelID: "dictation")
+            owner.endOperation(speech)
+            XCTAssertThrowsError(try owner.beginOperation(owner: "fluid", modelID: "summary-only"))
+            let unload = try owner.vetoOrBeginOperation(owner: "speech", modelID: "dictation", vetoDuringMeeting: true)
+            XCTAssertNotNil(unload)
+            if let unload { owner.endOperation(unload) }
+            XCTAssertTrue(owner.canRunWarmup(owner.warmupGeneration(for: "speech"), for: "speech"))
+            XCTAssertNil(owner.warmupGeneration(for: "fluid"))
+        }
+        XCTAssertEqual(trace.events, ["snapshot:fluid", "unload:fluid", "restore:fluid", "finish:fluid"])
+        XCTAssertFalse(owner.isExclusive(for: "speech"))
+        XCTAssertFalse(owner.isExclusive(for: "fluid"))
+    }
+
+    func testExemptOwnerWorkInFlightDoesNotBlockButOtherWorkDoes() async throws {
+        let owner = MeetingModelResidencyCoordinator()
+        let speech = try owner.beginOperation(owner: "speech", modelID: "dictation")
+        try await owner.withExclusive(attemptID: UUID(), participants: [], exemptOwners: ["speech"]) {}
+        do {
+            try await owner.withExclusive(attemptID: UUID(), participants: []) {
+                XCTFail("A full meeting must still wait for speech work")
+            }
+            XCTFail("Expected busy")
+        } catch { XCTAssertTrue(error is MeetingModelResidencyError) }
+        owner.endOperation(speech)
+
+        let fluid = try owner.beginOperation(owner: "fluid", modelID: "running")
+        do {
+            try await owner.withExclusive(attemptID: UUID(), participants: [], exemptOwners: ["speech"]) {
+                XCTFail("Must not start while a non-exempt owner is busy")
+            }
+            XCTFail("Expected busy")
+        } catch { XCTAssertTrue(error is MeetingModelResidencyError) }
+        owner.endOperation(fluid)
+    }
+
+    func testOwnerCannotBeBothParticipantAndExempt() async throws {
+        let owner = MeetingModelResidencyCoordinator()
+        let trace = ResidencyTrace()
+        do {
+            try await owner.withExclusive(
+                attemptID: UUID(), participants: [trace.participant("fluid", loaded: true)], exemptOwners: ["fluid"]
+            ) { XCTFail("Overlapping ownership must be rejected") }
+            XCTFail("Expected busy")
+        } catch { XCTAssertTrue(error is MeetingModelResidencyError) }
+        XCTAssertTrue(trace.events.isEmpty)
+        XCTAssertFalse(owner.isExclusive)
+    }
 }

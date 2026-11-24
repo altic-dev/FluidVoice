@@ -211,38 +211,8 @@ final class MeetingSummaryInputTests: XCTestCase {
 
 @MainActor
 final class MeetingSummaryActivityTests: XCTestCase {
-    private final class Activity: ASRActivityLeasing {
-        var active: ASRActivityLease?
-        var handoffs = 0
-        var handbacks = 0
-        var onHandback: (() -> Void)?
-        var preparationError: Error?
-        func acquireExclusiveActivity(_ activity: ASRExclusiveActivity) throws -> ASRActivityLease {
-            if let active { throw ASRActivityError.activityInProgress(active.activity) }
-            let lease = ASRActivityLease(id: UUID(), activity: activity)
-            self.active = lease
-            return lease
-        }
-
-        func releaseExclusiveActivity(_ lease: ASRActivityLease) {
-            if self.active == lease { self.active = nil }
-        }
-
-        func prepareMeetingAudioHandoff(_: ASRActivityLease) async throws {
-            self.handoffs += 1
-            if let preparationError { throw preparationError }
-        }
-
-        func completeMeetingAudioHandback(_ lease: ASRActivityLease) async {
-            self.onHandback?()
-            self.handbacks += 1
-            self.releaseExclusiveActivity(lease)
-        }
-    }
-
-    func testProcessingBlocksSummaryWithoutTouchingAudioAndStaleReleaseCannotUnlock() async throws {
-        let gate = MeetingSummaryActivityCoordinator()
-        let activity = Activity()
+    func testProcessingBlocksSummaryAndStaleReleaseCannotUnlock() async throws {
+        let gate = MeetingSummaryActivityCoordinator(isMeetingActive: { false })
         var published: [Bool] = []
         let observation = gate.$isProcessing.removeDuplicates().sink { published.append($0) }
         defer { observation.cancel() }
@@ -255,42 +225,37 @@ final class MeetingSummaryActivityTests: XCTestCase {
         gate.endProcessing(first)
         XCTAssertTrue(gate.isProcessing)
         do {
-            try await gate.withSummary(activity: activity) { XCTFail("Must not begin") }
+            try await gate.withSummary { XCTFail("Must not begin") }
             XCTFail("Second processing token must still block")
         } catch { XCTAssertTrue(error is MeetingModelResidencyError) }
-        XCTAssertEqual(activity.handoffs, 0)
-        XCTAssertNil(activity.active)
+        XCTAssertFalse(gate.isSummarizing)
         gate.endProcessing(second)
         XCTAssertFalse(gate.isProcessing)
         XCTAssertEqual(published, [false, true, false])
-        try await gate.withSummary(activity: activity) {}
-        XCTAssertEqual(activity.handbacks, 1)
+        var ran = false
+        try await gate.withSummary { ran = true }
+        XCTAssertTrue(ran)
     }
 
-    func testSummaryBlocksProcessingAndDictationThroughHandback() async throws {
-        let gate = MeetingSummaryActivityCoordinator()
-        let activity = Activity()
+    func testOnDeviceSummaryBlocksLocalLLMWorkButLeavesDictationAudioFree() async throws {
+        let gate = MeetingSummaryActivityCoordinator(isMeetingActive: { false })
+        let asr = ASRService()
         let selectionLock = try XCTUnwrap(gate.lockSelection())
         XCTAssertNil(gate.lockSelection(), "A second summary cannot replace the selected meeting's lock")
         gate.unlockSelection(UUID())
         XCTAssertEqual(gate.selectionLock, selectionLock, "An unrelated completion cannot unlock selection")
-        activity.onHandback = {
-            XCTAssertEqual(gate.selectionLock, selectionLock, "Selection stays locked until model restoration drains")
-            XCTAssertNil(gate.beginProcessing())
+        try await gate.withSummary {
+            XCTAssertTrue(gate.isSummarizing)
+            XCTAssertNil(gate.beginProcessing(), "Local LLM cleanup must wait for the summary")
+            let dictation = try asr.acquireExclusiveActivity(.dictation)
+            asr.releaseExclusiveActivity(dictation)
             do {
-                _ = try activity.acquireExclusiveActivity(.dictation)
-                XCTFail("Handback must retain audio ownership")
-            } catch { XCTAssertTrue(error is ASRActivityError) }
-        }
-        try await gate.withSummary(activity: activity) {
-            XCTAssertNil(gate.beginProcessing())
-            XCTAssertThrowsError(try activity.acquireExclusiveActivity(.dictation))
-            do {
-                try await gate.withSummary(activity: activity) { XCTFail("Must not overlap") }
+                try await gate.withSummary { XCTFail("Must not overlap") }
                 XCTFail("Second summary must fail")
             } catch { XCTAssertTrue(error is MeetingModelResidencyError) }
         }
-        XCTAssertNil(activity.active)
+        XCTAssertFalse(gate.isSummarizing)
+        XCTAssertNil(asr.activeExclusiveActivity)
         gate.unlockSelection(selectionLock)
         XCTAssertNil(gate.selectionLock)
         let nextLock = try XCTUnwrap(gate.lockSelection())
@@ -298,50 +263,76 @@ final class MeetingSummaryActivityTests: XCTestCase {
         XCTAssertEqual(gate.selectionLock, nextLock, "A late old completion cannot unlock a new summary")
         gate.unlockSelection(nextLock)
         XCTAssertNotNil(gate.beginProcessing())
-        XCTAssertNoThrow(try activity.acquireExclusiveActivity(.dictation))
+    }
+
+    func testRunningDictationDoesNotBlockOnDeviceSummary() async throws {
+        let gate = MeetingSummaryActivityCoordinator(isMeetingActive: { false })
+        let asr = ASRService()
+        let dictation = try asr.acquireExclusiveActivity(.dictation)
+        defer { asr.releaseExclusiveActivity(dictation) }
+        var ran = false
+        try await gate.withSummary { ran = true }
+        XCTAssertTrue(ran)
+        XCTAssertEqual(asr.activeExclusiveActivity, .dictation)
+    }
+
+    func testActiveMeetingRejectsOnDeviceSummary() async {
+        let gate = MeetingSummaryActivityCoordinator(isMeetingActive: { true })
+        do {
+            try await gate.withSummary { XCTFail("Must not start during a meeting") }
+            XCTFail("Expected the meeting to block the summary")
+        } catch { XCTAssertTrue(error is ASRActivityError) }
+        XCTAssertFalse(gate.isSummarizing)
+        XCTAssertNotNil(gate.beginProcessing())
+    }
+
+    func testRunningSummaryRejectsNewMeetingCapture() async {
+        let arbiter = AudioActivityArbiter(
+            asrServiceProvider: { throw MeetingCoordinatorError.dictationActive },
+            isSummaryRunning: { true }
+        )
+        do {
+            _ = try await arbiter.acquireMeetingCapture()
+            XCTFail("Expected the summary to block meeting capture")
+        } catch {
+            guard case MeetingCoordinatorError.summaryInProgress = error else {
+                return XCTFail("Unexpected error \(error)")
+            }
+        }
     }
 
     func testRemoteSummaryLeavesDictationAndProcessingAvailable() async throws {
-        let gate = MeetingSummaryActivityCoordinator()
-        let activity = Activity()
+        let gate = MeetingSummaryActivityCoordinator(isMeetingActive: { false })
+        let asr = ASRService()
         try await gate.withRemoteSummary {
             let processing = try XCTUnwrap(gate.beginProcessing(), "Dictation must be able to finish during a cloud summary")
             gate.endProcessing(processing)
-            XCTAssertNoThrow(try activity.acquireExclusiveActivity(.dictation))
+            let dictation = try asr.acquireExclusiveActivity(.dictation)
+            asr.releaseExclusiveActivity(dictation)
             do {
                 try await gate.withRemoteSummary { XCTFail("Must not overlap") }
                 XCTFail("Second summary must fail")
             } catch { XCTAssertTrue(error is MeetingModelResidencyError) }
         }
-        XCTAssertEqual(activity.handoffs, 0)
         try await gate.withRemoteSummary {}
     }
 
-    func testFailureDrainsHandbackBeforeReleasingAdmission() async {
-        let gate = MeetingSummaryActivityCoordinator()
-        let activity = Activity()
-        activity.onHandback = { XCTAssertNil(gate.beginProcessing()) }
+    func testFailureReleasesSummaryAdmission() async {
+        let gate = MeetingSummaryActivityCoordinator(isMeetingActive: { false })
         do {
-            try await gate.withSummary(activity: activity) { throw MeetingModelResidencyError.staleGrant }
+            try await gate.withSummary { throw MeetingModelResidencyError.staleGrant }
             XCTFail("Expected failure")
         } catch { XCTAssertTrue(error is MeetingModelResidencyError) }
-        XCTAssertEqual(activity.handbacks, 1)
-        XCTAssertNil(activity.active)
+        XCTAssertFalse(gate.isSummarizing)
         XCTAssertNotNil(gate.beginProcessing())
     }
 
-    func testCancellationUsesUncancelledJoinedHandback() async {
-        let gate = MeetingSummaryActivityCoordinator()
-        let activity = Activity()
+    func testCancellationReleasesSummaryAdmission() async {
+        let gate = MeetingSummaryActivityCoordinator(isMeetingActive: { false })
         let selectionLock = gate.lockSelection()
-        activity.onHandback = {
-            XCTAssertNotNil(gate.selectionLock, "Cancel retains the meeting selection while work drains")
-            XCTAssertFalse(Task.isCancelled)
-            XCTAssertNil(gate.beginProcessing())
-        }
         let task = Task {
             defer { if let selectionLock { gate.unlockSelection(selectionLock) } }
-            try await gate.withSummary(activity: activity) {
+            try await gate.withSummary {
                 withUnsafeCurrentTask { $0?.cancel() }
                 try Task.checkCancellation()
             }
@@ -350,69 +341,24 @@ final class MeetingSummaryActivityTests: XCTestCase {
             try await task.value
             XCTFail("Expected cancellation")
         } catch { XCTAssertTrue(error is CancellationError) }
-        XCTAssertEqual(activity.handbacks, 1)
         XCTAssertNil(gate.selectionLock, "Cancellation eventually unlocks meeting selection")
-        XCTAssertNil(activity.active)
-        XCTAssertNotNil(gate.beginProcessing())
-    }
-
-    func testPreparationFailureDrainsPartialHandoffWithoutRunningSummary() async {
-        let gate = MeetingSummaryActivityCoordinator()
-        let activity = Activity()
-        activity.preparationError = MeetingModelResidencyError.busy
-        activity.onHandback = {
-            XCTAssertNil(gate.beginProcessing())
-            XCTAssertFalse(Task.isCancelled)
-        }
-        do {
-            try await gate.withSummary(activity: activity) { XCTFail("Preparation failed") }
-            XCTFail("Expected failure")
-        } catch { XCTAssertTrue(error is MeetingModelResidencyError) }
-        XCTAssertEqual(activity.handoffs, 1)
-        XCTAssertEqual(activity.handbacks, 1)
-        XCTAssertNil(activity.active)
-        XCTAssertNotNil(gate.beginProcessing())
-    }
-
-    func testRealASRLeaseRejectsSummaryWhileDictationOwnsAudio() async throws {
-        let gate = MeetingSummaryActivityCoordinator()
-        let asr = ASRService()
-        let dictation = try asr.acquireExclusiveActivity(.dictation)
-        defer { asr.releaseExclusiveActivity(dictation) }
-        do {
-            try await gate.withSummary(activity: asr) { XCTFail("Must not start") }
-            XCTFail("Expected existing dictation to block summary")
-        } catch { XCTAssertTrue(error is ASRActivityError) }
-        XCTAssertEqual(asr.activeExclusiveActivity, .dictation)
+        XCTAssertFalse(gate.isSummarizing)
         XCTAssertNotNil(gate.beginProcessing())
     }
 
     func testRealASRMeetingLeaseBlocksEveryCompetingAudioActivity() throws {
         let asr = ASRService()
-        let summary = try asr.acquireExclusiveActivity(.meeting)
+        let meeting = try asr.acquireExclusiveActivity(.meeting)
         let activities: [ASRExclusiveActivity] = [.dictation, .meeting, .fileTranscription, .localAPI, .modelMaintenance]
         for activity in activities {
             XCTAssertThrowsError(try asr.acquireExclusiveActivity(activity))
         }
         asr.releaseExclusiveActivity(ASRActivityLease(id: UUID(), activity: .meeting))
         XCTAssertEqual(asr.activeExclusiveActivity, .meeting)
-        asr.releaseExclusiveActivity(summary)
+        asr.releaseExclusiveActivity(meeting)
         XCTAssertNil(asr.activeExclusiveActivity)
         let dictation = try asr.acquireExclusiveActivity(.dictation)
         asr.releaseExclusiveActivity(dictation)
-    }
-
-    func testActiveDictationRejectsSummaryWithoutReleasingItsLease() async throws {
-        let gate = MeetingSummaryActivityCoordinator()
-        let activity = Activity()
-        let dictation = try activity.acquireExclusiveActivity(.dictation)
-        do {
-            try await gate.withSummary(activity: activity) { XCTFail("Must not start") }
-            XCTFail("Expected activity rejection")
-        } catch { XCTAssertTrue(error is ASRActivityError) }
-        XCTAssertEqual(activity.active, dictation)
-        XCTAssertEqual(activity.handbacks, 0)
-        XCTAssertNotNil(gate.beginProcessing())
     }
 
     func testALargeSummaryModelComesWithAWarningOnASixteenGBMacOnly() {
