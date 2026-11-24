@@ -107,7 +107,7 @@ struct MeetingSummaryView: View {
         .onDisappear { self.controller.cancelModelOperation() }
         .alert("Delete summary model?", isPresented: self.$confirmDeletion) {
             Button("Cancel", role: .cancel) {}
-            Button("Delete", role: .destructive) { self.controller.deleteModel(asr: AppServices.shared.asr) }
+            Button("Delete", role: .destructive) { self.controller.deleteModel() }
         } message: {
             Text("Remove the \(self.downloadSize.map { "\($0) " } ?? "")download from this Mac. Your meetings and saved summaries stay. You can download it again anytime.")
         }
@@ -404,8 +404,7 @@ struct MeetingSummaryView: View {
                 kind: self.kind,
                 model: model,
                 customPrompt: self.preferences.customPrompt,
-                thinking: self.preferences.thinksFirst,
-                asr: AppServices.shared.asr
+                thinking: self.preferences.thinksFirst
             )
             return
         }
