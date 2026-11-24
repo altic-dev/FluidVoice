@@ -8,6 +8,8 @@ final class UserDefaults {
     var values: [String: Any] = [:]
     var writes: [String] = []
     func object(forKey key: String) -> Any? { self.values[key] }
+    // swiftlint:disable:next discouraged_optional_collection
+    func dictionary(forKey key: String) -> [String: Any]? { self.values[key] as? [String: Any] }
     func set(_ value: Any?, forKey key: String) {
         self.values[key] = value
         self.writes.append(key)

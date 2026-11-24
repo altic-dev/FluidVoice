@@ -185,6 +185,13 @@ struct CommandModelPicker: View {
                         }
                     }
                     Spacer(minLength: 0)
+                    if self.option.doesAcceptImages == true {
+                        Image(systemName: "eye")
+                            .font(self.theme.typography.captionSmall)
+                            .foregroundStyle(self.theme.palette.secondaryText)
+                            .help("Can see your screen")
+                            .accessibilityHidden(true)
+                    }
                     Image(systemName: "checkmark")
                         .font(self.theme.typography.captionStrong)
                         .foregroundStyle(self.theme.palette.accent)
@@ -200,7 +207,9 @@ struct CommandModelPicker: View {
             .buttonStyle(.plain)
             .focused(self.$focused)
             .searchablePickerSelectedRowBackground(isSelected: self.highlighted)
-            .accessibilityLabel("\(self.option.displayName), \(self.option.providerName)")
+            .accessibilityLabel(
+                "\(self.option.displayName), \(self.option.providerName)\(self.option.doesAcceptImages == true ? ", supports images" : "")"
+            )
             .accessibilityAddTraits(self.selected ? .isSelected : [])
             .help("\(self.option.providerName) · \(self.option.modelID)")
             .onHover { hovering in

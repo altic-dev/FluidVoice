@@ -7,6 +7,8 @@ final class UserDefaults {
     var writes = 0
     func data(forKey key: String) -> Data? { self.values[key] as? Data }
     func string(forKey key: String) -> String? { self.values[key] as? String }
+    // swiftlint:disable:next discouraged_optional_collection
+    func dictionary(forKey key: String) -> [String: Any]? { self.values[key] as? [String: Any] }
     func set(_ value: Any?, forKey key: String) { self.values[key] = value; self.writes += 1 }
 }
 
@@ -138,7 +140,7 @@ final class UserDefaults {
     }
 }
 
-enum LLMError: Error { case invalidRequest(String), invalidResponse }
+enum LLMError: Error { case invalidRequest(String), invalidResponse, httpError(Int, String) }
 @MainActor final class LLMClient {
     struct ToolCall {
         let id: String

@@ -5,6 +5,8 @@ struct CommandModelOption: Identifiable, Hashable {
     let providerName: String
     let modelID: String
     let displayName: String
+    /// nil when the provider hasn't said; see `ModelImageSupport`.
+    var doesAcceptImages: Bool? = nil
 
     /// Length-prefix the provider so model IDs containing separators cannot collide.
     var id: String {

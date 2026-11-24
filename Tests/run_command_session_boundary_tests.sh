@@ -60,6 +60,7 @@ SWIFT
 xcrun swiftc -parse-as-library \
     "$task_test_dir/CommandModeService.swift" \
     Sources/Fluid/Services/AppleIntelligenceCommandProvider.swift \
+    Sources/Fluid/Services/CommandImageAttachment.swift \
     "$task_test_dir/ChatHistoryStore.swift" \
     Sources/Fluid/Persistence/PersistedHistory.swift \
     Tests/CommandSessionBoundaryTests.swift \

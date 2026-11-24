@@ -39,6 +39,7 @@ struct ChatMessage: Codable, Identifiable, Equatable {
         let command: String
         let workingDirectory: String?
         let purpose: String?
+        var imagePath: String? = nil
     }
 
     init(id: UUID = UUID(), role: Role, content: String, toolCall: ToolCall? = nil, stepType: StepType = .normal, timestamp: Date = Date()) {

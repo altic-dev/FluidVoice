@@ -1,5 +1,7 @@
+import AppKit
 import Combine
 import SwiftUI
+import UniformTypeIdentifiers
 
 enum CommandModeRecordingOwnershipPolicy {
     static func ownsRecording(after outcome: AudioCaptureStartOutcome, isRunning: Bool) -> Bool {
@@ -43,6 +45,9 @@ struct CommandModeView: View {
     @State private var followsLatestMessage = true
     @State private var isUserScrolling = false
     @State private var isThinkingExpanded = false
+    @State private var attachments: [String: CommandImageAttachment] = [:]
+    @State private var attachmentError: String?
+    @State private var isDropTargeted = false
     @FocusState private var composerFocused: Bool
 
     private var asr: ASRService {
@@ -54,6 +59,19 @@ struct CommandModeView: View {
             get: { self.drafts.text(for: self.service.currentChatID) },
             set: { self.drafts.set($0, for: self.service.currentChatID) }
         )
+    }
+
+    private var attachment: CommandImageAttachment? {
+        self.service.currentChatID.flatMap { self.attachments[$0] }
+    }
+
+    private var selectedModelDoesAcceptImages: Bool? {
+        self.modelOptions.first { $0.providerID == self.selectedModelProviderID && $0.modelID == self.selectedModelID }?.doesAcceptImages
+    }
+
+    private var attachmentBlockingReason: String? {
+        if self.selectedModelDoesAcceptImages == false { return "The selected model can't view images" }
+        return self.sessionBlockingReason
     }
 
     private var isPrewarming: Bool {
@@ -165,6 +183,11 @@ struct CommandModeView: View {
                 .padding(.top, 8)
         }
         .frame(maxWidth: .infinity)
+        .dropDestination(for: URL.self) { urls, _ in
+            guard let url = urls.first(where: \.isFileURL), self.attachmentBlockingReason == nil else { return false }
+            self.attachImage(at: url)
+            return true
+        } isTargeted: { self.isDropTargeted = $0 }
     }
 
     private func headerView(historyVisible: Bool, isWide: Bool) -> some View {
@@ -403,6 +426,14 @@ struct CommandModeView: View {
                 .foregroundStyle(self.theme.palette.secondaryText)
             }
             VStack(alignment: .leading, spacing: 16) {
+                if let attachment = self.attachment {
+                    self.attachmentPreview(attachment)
+                }
+                if let error = self.attachmentError {
+                    Text(error)
+                        .font(self.theme.typography.caption)
+                        .foregroundStyle(self.theme.palette.warning)
+                }
                 TextField("Ask anything…", text: self.inputText, axis: .vertical)
                     .textFieldStyle(.plain)
                     .font(self.theme.typography.statement)
@@ -426,8 +457,39 @@ struct CommandModeView: View {
             .background(self.theme.palette.elevatedCardBackground, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
             .overlay {
                 RoundedRectangle(cornerRadius: 24, style: .continuous)
-                    .strokeBorder(self.theme.palette.cardBorder.opacity(self.composerFocused ? 0.9 : 0.55))
+                    .strokeBorder(
+                        self.isDropTargeted ? self.theme.palette.accent : self.theme.palette.cardBorder.opacity(self.composerFocused ? 0.9 : 0.55),
+                        lineWidth: self.isDropTargeted ? 2 : 1
+                    )
                     .allowsHitTesting(false)
+            }
+        }
+    }
+
+    private func attachmentPreview(_ attachment: CommandImageAttachment) -> some View {
+        HStack(spacing: 10) {
+            if let image = NSImage(data: attachment.jpeg) {
+                Image(nsImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: 56, height: 56)
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                    .accessibilityLabel("Attached image")
+            }
+            Button {
+                self.setAttachment(nil)
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.fluidSystem(size: 16))
+                    .foregroundStyle(self.theme.palette.secondaryText)
+            }
+            .buttonStyle(.plain)
+            .help("Remove image")
+            .accessibilityLabel("Remove image")
+            if self.selectedModelDoesAcceptImages == false {
+                Text("The selected model can't view images. Pick another model or remove the image.")
+                    .font(self.theme.typography.caption)
+                    .foregroundStyle(self.theme.palette.warning)
             }
         }
     }
@@ -453,6 +515,16 @@ struct CommandModeView: View {
             self.modelSelector
             FluidGlassControlGroup {
                 HStack(spacing: 8) {
+                    Button(action: self.chooseImage) {
+                        Image(systemName: "paperclip")
+                            .font(.fluidSystem(size: 18))
+                            .frame(width: 24, height: 24)
+                            .foregroundStyle(self.theme.palette.secondaryText)
+                    }
+                    .fluidGlassAction(circular: true, quiet: true)
+                    .disabled(self.attachmentBlockingReason != nil || self.ownsASRRecording)
+                    .help(self.attachmentBlockingReason ?? "Attach an image, or drop one here")
+                    .accessibilityLabel("Attach image")
                     Button(action: self.toggleRecording) {
                         Image(systemName: self.ownsASRRecording ? "mic.fill" : "mic")
                             .font(.fluidSystem(size: 20))
@@ -526,7 +598,8 @@ struct CommandModeView: View {
     }
 
     private var canSubmitCommand: Bool {
-        !self.inputText.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+        (!self.inputText.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || self.attachment != nil) &&
+            (self.attachment == nil || self.selectedModelDoesAcceptImages != false) &&
             !self.compactHistoryPresented && self.canChangeSession && self.settings.commandModeReadinessIssue == nil
     }
 
@@ -600,6 +673,7 @@ struct CommandModeView: View {
         let sessionID = self.service.currentChatID
         let draft = self.inputText.wrappedValue
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        let image = self.attachment
         self.isSubmissionPending = true
         Task {
             defer { self.isSubmissionPending = false }
@@ -607,9 +681,40 @@ struct CommandModeView: View {
                   !self.service.isProcessing, self.service.pendingCommand == nil,
                   self.settings.commandModeReadinessIssue == nil else { return }
             if self.drafts.text(for: sessionID) == draft { self.drafts.set("", for: sessionID) }
+            if let sessionID, self.attachments[sessionID] == image { self.attachments[sessionID] = nil }
+            self.attachmentError = nil
             self.followsLatestMessage = true
-            await self.service.processUserCommand(text)
+            await self.service.processUserCommand(text, image: image)
         }
+    }
+
+    private func chooseImage() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.image]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.message = "Choose an image to send with your message"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        self.attachImage(at: url)
+    }
+
+    private func attachImage(at url: URL) {
+        let sessionID = self.service.currentChatID
+        Task {
+            do {
+                let image = try await CommandImageAttachment.load(path: url.path)
+                guard self.service.currentChatID == sessionID else { return }
+                self.setAttachment(image)
+            } catch {
+                self.attachmentError = error.localizedDescription
+            }
+        }
+    }
+
+    private func setAttachment(_ image: CommandImageAttachment?) {
+        guard let sessionID = self.service.currentChatID else { return }
+        self.attachments[sessionID] = image
+        self.attachmentError = nil
     }
 
     private func refreshModelCatalog() {

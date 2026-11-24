@@ -119,6 +119,7 @@ extension SettingsStore {
                   seenProviders.insert(key).inserted,
                   self.isCommandModeProviderVerified(providerID, apiKeys: apiKeys) else { continue }
             var seenModels = Set<String>()
+            let baseURL = self.commandModeProviderBaseURL(for: providerID)
             for rawModel in self.commandModeModels(for: providerID) {
                 let model = rawModel.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !model.isEmpty, !self.isUnsupportedCommandModeModel(model), seenModels.insert(model).inserted else { continue }
@@ -126,7 +127,8 @@ extension SettingsStore {
                     providerID: providerID,
                     providerName: provider.name,
                     modelID: model,
-                    displayName: ModelDisplayName.forID(model)
+                    displayName: ModelDisplayName.forID(model),
+                    doesAcceptImages: ModelImageSupport.shared.isSupported(model, baseURL: baseURL)
                 ))
             }
         }
@@ -135,7 +137,8 @@ extension SettingsStore {
                 providerID: AppleIntelligenceAvailability.providerID,
                 providerName: "Apple Intelligence",
                 modelID: AppleIntelligenceAvailability.modelID,
-                displayName: AppleIntelligenceAvailability.modelID
+                displayName: AppleIntelligenceAvailability.modelID,
+                doesAcceptImages: false
             ))
         }
         return options
