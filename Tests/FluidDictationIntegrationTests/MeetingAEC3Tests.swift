@@ -1290,7 +1290,7 @@ final class MeetingAEC3Tests: XCTestCase {
         _ = await writer.stop()
     }
 
-    func testCommitterWriterOverflowDemotesInMemoryAndReportsQueueBound() async throws {
+    func testCommitterWriterOverflowDemotesInMemoryWithoutStoppingCapture() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("fluid-aec3-committer-overflow-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -1325,12 +1325,12 @@ final class MeetingAEC3Tests: XCTestCase {
         let track = await writer.snapshot()
         XCTAssertEqual(track.captureEras?.last?.echoProtection, .unprotected)
         XCTAssertNil(track.captureEras?.last?.aecProvenance)
-        XCTAssertEqual(failures.values, [.writerQueueFull])
+        XCTAssertTrue(failures.values.isEmpty, "a full writer queue drops a sample; it must not stop the meeting")
         XCTAssertFalse(gate.admitsTranscript())
         _ = await writer.stop()
     }
 
-    func testCommitterPromotionQueueFullStaysUnprotectedAndReportsQueueBound() async throws {
+    func testCommitterPromotionQueueFullStaysUnprotectedWithoutStoppingCapture() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("fluid-aec3-promotion-overflow-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -1357,11 +1357,76 @@ final class MeetingAEC3Tests: XCTestCase {
         committer.commitProcessed(sample, mayPromote: true)
         await committer.waitForPendingCommits()
         let track = await writer.snapshot()
-        XCTAssertEqual(track.captureEras?.last?.echoProtection, .unprotected)
-        XCTAssertEqual(track.captureEras?.count, 1, "a failed promotion must not append an era")
-        XCTAssertEqual(failures.values, [.writerQueueFull])
+        XCTAssertEqual(
+            track.captureEras?.map(\.echoProtection),
+            [.unprotected, .unprotected],
+            "a failed promotion must not append a protected era, only the conservative cut"
+        )
+        XCTAssertTrue(failures.values.isEmpty, "a full writer queue drops a sample; it must not stop the meeting")
         XCTAssertFalse(gate.admitsTranscript())
         XCTAssertEqual(live.count, 0)
+        _ = await writer.stop()
+    }
+
+    /// A writer stall longer than the bounded queue (128 x 10 ms AEC frames) used to end the
+    /// whole meeting with "AEC microphone pipeline failed closed (writerQueueFull)". The
+    /// overflowing frame is dropped and demoted, and the next filtered frame re-promotes.
+    func testCommitterRecoversAfterTransientWriterOverflow() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fluid-aec3-overflow-recovery-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let writer = try MeetingAudioChunkWriter(
+            track: Self.microphoneTrack(),
+            sessionDirectory: directory,
+            chunkDuration: 60,
+            eventHandler: { _ in },
+            pendingSlotLimit: 1
+        )
+        let gate = MeetingMicrophoneTranscriptGate(.unprotected)
+        let live = AECLiveRecorder()
+        let failures = AECTerminalRecorder()
+        let committer = MeetingAECOutputCommitter(
+            writer: writer,
+            transcriptGate: gate,
+            liveAudioHandler: { _, sample in live.append(sample) },
+            terminalFailure: { failure in failures.append(failure) }
+        )
+        func frame(at seconds: Double) throws -> CMSampleBuffer {
+            try XCTUnwrap(MeetingAECPCMAdapter.synthesize(
+                samples: [Float](repeating: 0.1, count: 480),
+                presentationTime: CMTime(value: CMTimeValue(seconds * 48_000), timescale: 48_000)
+            ))
+        }
+
+        // Stall the writer so the promotion takes the only slot and the next frame overflows.
+        let writerEntered = DispatchSemaphore(value: 0)
+        let releaseWriter = DispatchSemaphore(value: 0)
+        let blocker = Task {
+            try await writer.updateTrackMetadata { _ in
+                writerEntered.signal()
+                _ = releaseWriter.wait(timeout: .now() + 5)
+            }
+        }
+        XCTAssertEqual(writerEntered.wait(timeout: .now() + 2), .success)
+        committer.commitProcessed(try frame(at: 2), mayPromote: true)
+        committer.commitProcessed(try frame(at: 3), mayPromote: true)
+        XCTAssertFalse(gate.admitsTranscript(), "the overflow must close transcript admission at once")
+        releaseWriter.signal()
+        try await blocker.value
+        await committer.waitForPendingCommits()
+
+        committer.commitProcessed(try frame(at: 4), mayPromote: true)
+        await committer.waitForPendingCommits()
+
+        let track = await writer.snapshot()
+        XCTAssertTrue(failures.values.isEmpty, "a transient writer stall must not stop the meeting")
+        XCTAssertEqual(
+            track.captureEras?.map(\.echoProtection),
+            [.unprotected, .softwareEchoCancelled, .unprotected, .softwareEchoCancelled]
+        )
+        XCTAssertEqual(track.captureEras?.map(\.startSeconds), [0, 2, 3, 4])
+        XCTAssertTrue(gate.admitsTranscript(), "the next filtered frame must re-promote durably")
+        XCTAssertEqual(live.count, 1, "only the re-promoted frame reaches live captions")
         _ = await writer.stop()
     }
 

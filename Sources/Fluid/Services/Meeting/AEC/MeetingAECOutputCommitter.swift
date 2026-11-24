@@ -61,7 +61,7 @@ final nonisolated class MeetingAECOutputCommitter: @unchecked Sendable {
     func commitProcessed(_ sampleBuffer: CMSampleBuffer, mayPromote: Bool) {
         let hasPromotion = self.lock.withLock { self.state != .unprotected }
         guard mayPromote || hasPromotion else {
-            guard self.enqueueOrFail(sampleBuffer, startSeconds: Self.seconds(of: sampleBuffer)) else { return }
+            guard self.enqueueOrDemote(sampleBuffer, startSeconds: Self.seconds(of: sampleBuffer)) else { return }
             _ = self.transcriptGate.observeAndAdmit(sampleBuffer)
             return
         }
@@ -105,7 +105,7 @@ final nonisolated class MeetingAECOutputCommitter: @unchecked Sendable {
         guard let token = action.token else {
             // The existing bounded writer queue orders live offers after the era commit and all
             // earlier samples, including a rapid filtered-to-unfiltered transition.
-            _ = self.enqueueOrFail(sampleBox.sampleBuffer, startSeconds: startSeconds) { [self] in
+            _ = self.enqueueOrDemote(sampleBox.sampleBuffer, startSeconds: startSeconds) { [self] in
                 self.offerLive(sampleBox, gateEpoch: action.gateEpoch)
                 if reportsProtectionChange { self.reportProtection(protection, gateEpoch: action.gateEpoch) }
             }
@@ -154,7 +154,13 @@ final nonisolated class MeetingAECOutputCommitter: @unchecked Sendable {
                     if self.generation == token { self.state = .unprotected }
                 }
                 _ = self.transcriptGate.invalidate()
-                self.reportTerminalFailure(Self.terminalFailure(for: error))
+                guard Self.isQueueOverflow(error) else {
+                    self.reportTerminalFailure(Self.terminalFailure(for: error))
+                    return
+                }
+                // The sample was dropped and its era never persisted. The track may still end in
+                // an older protected era, so cut an unprotected one before any later raw sample.
+                self.persistSafetyEra(startSeconds: startSeconds)
             }
         }
     }
@@ -189,7 +195,7 @@ final nonisolated class MeetingAECOutputCommitter: @unchecked Sendable {
         }
         _ = self.transcriptGate.invalidate()
         guard mustPersistDemotion else {
-            _ = self.enqueueOrFail(sampleBox.sampleBuffer, startSeconds: startSeconds)
+            _ = self.enqueueOrDemote(sampleBox.sampleBuffer, startSeconds: startSeconds)
             return
         }
 
@@ -208,7 +214,8 @@ final nonisolated class MeetingAECOutputCommitter: @unchecked Sendable {
             failClosed: true
         ) { [self] result in
             defer { self.endPendingCommit() }
-            if case let .failure(error) = result {
+            // On overflow the writer's fail-closed emergency run already applied the demotion.
+            if case let .failure(error) = result, !Self.isQueueOverflow(error) {
                 self.reportTerminalFailure(Self.terminalFailure(for: error))
             }
         }
@@ -229,7 +236,8 @@ final nonisolated class MeetingAECOutputCommitter: @unchecked Sendable {
     }
 
     /// Enqueues the fail-closed `unprotected` era as a bounded writer-queue command and reports a
-    /// terminal failure if even that command cannot persist.
+    /// terminal failure if even that command cannot persist. A full queue is not such a failure:
+    /// the writer's fail-closed emergency run applies the demotion ahead of any later sample.
     private func persistSafetyEra(startSeconds: Double?) {
         self.beginPendingCommit()
         self.writer.enqueueMetadata(
@@ -244,7 +252,7 @@ final nonisolated class MeetingAECOutputCommitter: @unchecked Sendable {
             }
         ) { [self] result in
             defer { self.endPendingCommit() }
-            if case let .failure(error) = result {
+            if case let .failure(error) = result, !Self.isQueueOverflow(error) {
                 self.reportTerminalFailure(Self.terminalFailure(for: error))
             }
         }
@@ -301,9 +309,11 @@ final nonisolated class MeetingAECOutputCommitter: @unchecked Sendable {
         if shouldReport { self.terminalFailure(failure) }
     }
 
-    /// The plain enqueue carries no era command, so an overflow must still leave the in-memory
-    /// and persisted track unprotected before the terminal stop completes.
-    private func enqueueOrFail(
+    /// A full writer queue drops this sample, as it does for raw capture, and keeps recording.
+    /// The plain enqueue carries no era command, so the overflow demotes the in-memory and
+    /// persisted track to unprotected; the next filtered sample must re-promote durably before
+    /// transcript admission reopens.
+    private func enqueueOrDemote(
         _ sampleBuffer: CMSampleBuffer,
         startSeconds: Double?,
         onConsumed: (@Sendable () -> Void)? = nil
@@ -315,10 +325,13 @@ final nonisolated class MeetingAECOutputCommitter: @unchecked Sendable {
             }
             _ = self.transcriptGate.invalidate()
             self.persistSafetyEra(startSeconds: startSeconds)
-            self.reportTerminalFailure(.writerQueueFull)
             return false
         }
         return true
+    }
+
+    private static func isQueueOverflow(_ error: Error) -> Bool {
+        (error as? MeetingAudioChunkWriter.SequencedCommandError) == .queueFull
     }
 
     private static func terminalFailure(for error: Error) -> MeetingAECFailure {
