@@ -26,7 +26,9 @@ enum OnboardingModelRecommendation {
 
 struct WelcomeView: View {
     @EnvironmentObject var appServices: AppServices
+    @ObservedObject var meetingHistory: MeetingHistorySnapshot
     @Binding var selectedSidebarItem: SidebarItem?
+    @Binding var requestedMeetingRoute: MeetingRoute?
     let accessibilityEnabled: Bool
     let openAccessibilitySettings: () -> Void
     let openFluidIntelligenceDemo: () -> Void
@@ -35,7 +37,9 @@ struct WelcomeView: View {
     var body: some View {
         DashboardView(
             asr: self.appServices.asr,
+            meetingHistory: self.meetingHistory,
             selectedSidebarItem: self.$selectedSidebarItem,
+            requestedMeetingRoute: self.$requestedMeetingRoute,
             accessibilityEnabled: self.accessibilityEnabled,
             openAccessibilitySettings: self.openAccessibilitySettings,
             openFluidIntelligenceDemo: self.openFluidIntelligenceDemo,

@@ -264,6 +264,7 @@ struct ContentView: View {
 
     @EnvironmentObject private var appServices: AppServices
     @StateObject private var meetingHistorySnapshot = MeetingHistorySnapshot()
+    @State private var requestedMeetingRoute: MeetingRoute?
     @State private var meetingSummaryToResume: MeetingSessionID?
     @StateObject private var mouseTracker = MousePositionTracker()
     @StateObject private var commandModeService = CommandModeService()
@@ -2032,7 +2033,9 @@ struct ContentView: View {
 
     private var welcomeView: some View {
         WelcomeView(
+            meetingHistory: self.meetingHistorySnapshot,
             selectedSidebarItem: self.$selectedSidebarItem,
+            requestedMeetingRoute: self.$requestedMeetingRoute,
             accessibilityEnabled: self.accessibilityEnabled,
             openAccessibilitySettings: self.openAccessibilitySettings,
             openFluidIntelligenceDemo: { self.showsFluidIntelligenceDemo = true },
@@ -2327,6 +2330,7 @@ struct ContentView: View {
             coordinator: self.appServices.meetingSessionCoordinator,
             asrService: self.asr,
             historySnapshot: self.meetingHistorySnapshot,
+            requestedRoute: self.$requestedMeetingRoute,
             resumingSummarySessionID: runningSessionID ?? self.meetingSummaryToResume,
             onOpenVoiceEngine: { self.selectedSidebarItem = .voiceEngine }
         )

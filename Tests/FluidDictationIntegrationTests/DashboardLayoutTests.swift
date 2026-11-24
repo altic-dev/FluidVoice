@@ -160,7 +160,9 @@ final class DashboardRecommendationTests: XCTestCase {
         await fulfillment(of: [preparing], timeout: 2)
         let dashboard = DashboardView(
             asr: asr,
+            meetingHistory: MeetingHistorySnapshot(load: { [] }),
             selectedSidebarItem: .constant(nil),
+            requestedMeetingRoute: .constant(nil),
             accessibilityEnabled: true,
             openAccessibilitySettings: {},
             openFluidIntelligenceDemo: {},

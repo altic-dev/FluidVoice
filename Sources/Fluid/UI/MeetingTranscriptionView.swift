@@ -281,6 +281,7 @@ struct MeetingTranscriptionView: View {
     @State private var cachedStorageReady = false
     @State private var storageReadinessRevision = 0
     @ObservedObject var historySnapshot: MeetingHistorySnapshot
+    @Binding private var requestedRoute: MeetingRoute?
     @State private var route: MeetingRoute
     @State private var pendingDeleteSessionID: MeetingSessionID?
     @State private var pendingDeleteAudioSessionID: MeetingSessionID?
@@ -290,12 +291,14 @@ struct MeetingTranscriptionView: View {
         coordinator: MeetingSessionCoordinator,
         asrService: ASRService,
         historySnapshot: MeetingHistorySnapshot,
+        requestedRoute: Binding<MeetingRoute?> = .constant(nil),
         resumingSummarySessionID: MeetingSessionID? = nil,
         onOpenVoiceEngine: @escaping () -> Void
     ) {
         self.coordinator = coordinator
         self.asrService = asrService
         self.historySnapshot = historySnapshot
+        self._requestedRoute = requestedRoute
         self.resumingSummarySessionID = resumingSummarySessionID
         self.onOpenVoiceEngine = onOpenVoiceEngine
         if let resumingSummarySessionID, coordinator.state != .completed(resumingSummarySessionID) {
@@ -344,6 +347,21 @@ struct MeetingTranscriptionView: View {
         .clipped()
         .onFluidPagePresented { MeetingDiarizationModelStore.shared.prepareInBackground() }
         .task { await self.refreshPageData() }
+        .task(id: self.requestedRoute) {
+            guard let requestedRoute = self.requestedRoute else { return }
+            self.requestedRoute = nil
+            switch requestedRoute {
+            case .home:
+                guard self.summaryActivity.selectionLock == nil else { return }
+                if case .completed = self.coordinator.state {
+                    guard self.startNewMeeting() else { return }
+                }
+                self.actionErrorMessage = nil
+                self.route = .home
+            case .newRecording: self.openRecordingView()
+            case let .meeting(id): self.openMeeting(id)
+            }
+        }
         .onChange(of: self.setupDraft.mode) { _, _ in
             Task { await self.refreshSources(requestPermissions: false) }
             self.regenerateDefaultTitleIfNeeded()
