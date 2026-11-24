@@ -214,7 +214,8 @@ final nonisolated class MeetingAECOutputCommitter: @unchecked Sendable {
             failClosed: true
         ) { [self] result in
             defer { self.endPendingCommit() }
-            // On overflow the writer's fail-closed emergency run already applied the demotion.
+            // `queueFull` means the writer's emergency run saved the demotion, or a pending one
+            // covers it; a failed emergency save arrives as its own error and stays terminal.
             if case let .failure(error) = result, !Self.isQueueOverflow(error) {
                 self.reportTerminalFailure(Self.terminalFailure(for: error))
             }

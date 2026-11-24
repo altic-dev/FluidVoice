@@ -1430,6 +1430,62 @@ final class MeetingAEC3Tests: XCTestCase {
         _ = await writer.stop()
     }
 
+    /// The emergency run must not report a failed manifest write as a harmless overflow, or
+    /// recording would continue while `track.json` still describes an older protected era.
+    func testCommitterStopsWhenTheEmergencyDemotionCannotBeSaved() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fluid-aec3-emergency-persist-\(UUID().uuidString)", isDirectory: true)
+        let trackDirectory = directory
+            .appendingPathComponent("tracks", isDirectory: true)
+            .appendingPathComponent("microphone", isDirectory: true)
+        defer {
+            try? FileManager.default.setAttributes(
+                [.posixPermissions: NSNumber(value: Int16(0o700))],
+                ofItemAtPath: trackDirectory.path
+            )
+            try? FileManager.default.removeItem(at: directory)
+        }
+        var seeded = Self.microphoneTrack()
+        MeetingAECOutputCommitter.applyEra(
+            to: &seeded,
+            protection: .softwareEchoCancelled,
+            provenance: MeetingAECConstants.provenance,
+            startSeconds: 1
+        )
+        let writer = try MeetingAudioChunkWriter(
+            track: seeded,
+            sessionDirectory: directory,
+            chunkDuration: 60,
+            eventHandler: { _ in },
+            pendingSlotLimit: 0
+        )
+        let failures = AECTerminalRecorder()
+        let committer = MeetingAECOutputCommitter(
+            writer: writer,
+            transcriptGate: MeetingMicrophoneTranscriptGate(.softwareEchoCancelled),
+            liveAudioHandler: nil,
+            terminalFailure: { failure in failures.append(failure) }
+        )
+        try FileManager.default.setAttributes(
+            [.posixPermissions: NSNumber(value: Int16(0o500))],
+            ofItemAtPath: trackDirectory.path
+        )
+        let sample = try XCTUnwrap(MeetingAECPCMAdapter.synthesize(
+            samples: [Float](repeating: 0.1, count: 480),
+            presentationTime: CMTime(value: 96_000, timescale: 48_000)
+        ))
+        committer.commitRaw(sample, failure: .bridgeProcessing)
+        await committer.waitForPendingCommits()
+        let track = await writer.snapshot()
+        XCTAssertEqual(track.captureEras?.last?.echoProtection, .unprotected)
+        XCTAssertEqual(failures.values, [.metadataPersistence])
+        try FileManager.default.setAttributes(
+            [.posixPermissions: NSNumber(value: Int16(0o700))],
+            ofItemAtPath: trackDirectory.path
+        )
+        _ = await writer.stop()
+    }
+
     /// An invalidation landing after a promotion was enqueued but before its persistence
     /// completes must keep the gate closed and leave the final era unprotected.
     func testPromotionInvalidatedBeforePersistenceCompletionNeverOpens() async throws {

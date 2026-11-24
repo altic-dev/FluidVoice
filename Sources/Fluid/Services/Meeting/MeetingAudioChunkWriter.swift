@@ -258,7 +258,8 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
 
     /// Full-queue path for sequenced commands. Must be called with `stateLock` held; returns with
     /// it released. A fail-closed command gets one bounded slot-bypassing emergency run so the
-    /// conservative era still reaches the in-memory track (and best-effort the manifest).
+    /// conservative era reaches the in-memory track and the manifest. It completes with
+    /// `queueFull` only when the manifest write succeeded, and with the write error otherwise.
     private func failOverflowedSequencedCommand(
         failClosed: Bool,
         mutate: @escaping @Sendable (inout MeetingAudioTrack) -> Void,
@@ -278,9 +279,13 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
                 var candidate = self.track
                 mutate(&candidate)
                 self.track = candidate
-                try? self.persistTrackManifest(candidate)
+                let persisted = Result { try self.persistTrackManifest(candidate) }
                 self.stateLock.withLock { self.emergencySafetyCommandPending = false }
-                completion(.failure(SequencedCommandError.queueFull))
+                if case let .failure(error) = persisted {
+                    completion(.failure(error))
+                } else {
+                    completion(.failure(SequencedCommandError.queueFull))
+                }
             }
         } else {
             completion(.failure(SequencedCommandError.queueFull))
