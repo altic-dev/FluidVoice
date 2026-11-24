@@ -685,7 +685,7 @@ struct MeetingResultCanvas: View {
     static func speakerAccuracyNote(speakerCount: Int) -> String? {
         guard speakerCount > 0 else { return nil }
         guard speakerCount > self.reliableSpeakerLimit else {
-            return "Speaker labels are automatic. Name speakers above; double-click a paragraph to edit its text."
+            return "Speaker labels are automatic. Name speakers above; use Edit on a paragraph to fix its text."
         }
         return "\(speakerCount) speakers found. Above \(self.reliableSpeakerLimit), labels are less reliable: one person may show up twice, or two people as one."
     }
@@ -1175,6 +1175,11 @@ private struct MeetingTranscriptSegmentRow: View {
                         .help("Tag this unknown paragraph with a speaker")
                         .accessibilityLabel("Assign speaker to unknown paragraph")
                     }
+                    Button("Edit", systemImage: "pencil", action: self.beginEditing)
+                        .fluidGlassAction()
+                        .disabled(!self.isQuiescent || self.isEditingText)
+                        .help("Edit this paragraph's text")
+                        .accessibilityLabel("Edit text for \(self.speakerName)'s paragraph")
                     Button {
                         if self.isAudioExpanded { self.playback.stop() } else { self.onPlayAudio() }
                     } label: {
