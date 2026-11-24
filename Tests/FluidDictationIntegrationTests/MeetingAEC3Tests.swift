@@ -1430,6 +1430,81 @@ final class MeetingAEC3Tests: XCTestCase {
         _ = await writer.stop()
     }
 
+    /// A later fail-closed demotion that overflows is coalesced into the pending emergency run.
+    /// A promotion admitted behind that run would outlive it and label later raw audio as
+    /// echo-cancelled, so promotions are refused until the emergency demotion has run.
+    func testWriterRefusesPromotionWhileEmergencyDemotionIsPending() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fluid-aec3-emergency-order-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let writer = try MeetingAudioChunkWriter(
+            track: Self.microphoneTrack(),
+            sessionDirectory: directory,
+            chunkDuration: 60,
+            eventHandler: { _ in },
+            pendingSlotLimit: 1
+        )
+        func frame(at seconds: Double) throws -> CMSampleBuffer {
+            try XCTUnwrap(MeetingAECPCMAdapter.synthesize(
+                samples: [Float](repeating: 0.1, count: 480),
+                presentationTime: CMTime(value: CMTimeValue(seconds * 48_000), timescale: 48_000)
+            ))
+        }
+
+        let writerEntered = DispatchSemaphore(value: 0)
+        let releaseWriter = DispatchSemaphore(value: 0)
+        let blocker = Task {
+            try await writer.updateTrackMetadata { _ in
+                writerEntered.signal()
+                _ = releaseWriter.wait(timeout: .now() + 5)
+            }
+        }
+        XCTAssertEqual(writerEntered.wait(timeout: .now() + 2), .success)
+        XCTAssertTrue(writer.enqueue(try frame(at: 1)), "the raw frame takes the only slot")
+
+        // The overflowing demotion becomes the emergency run. Hold it mid-run, after the raw
+        // frame has freed its slot, so a promotion could otherwise queue behind it.
+        let emergencyEntered = DispatchSemaphore(value: 0)
+        let releaseEmergency = DispatchSemaphore(value: 0)
+        let demotion = AECCompletionRecorder()
+        writer.enqueueMetadata(
+            failClosed: true,
+            mutate: { track in
+                emergencyEntered.signal()
+                _ = releaseEmergency.wait(timeout: .now() + 5)
+                MeetingAECOutputCommitter.applyEra(
+                    to: &track, protection: .unprotected, provenance: nil, startSeconds: 2
+                )
+            },
+            completion: { demotion.append($0) }
+        )
+        releaseWriter.signal()
+        try await blocker.value
+        XCTAssertEqual(emergencyEntered.wait(timeout: .now() + 2), .success)
+
+        let promotion = AECCompletionRecorder()
+        writer.enqueue(
+            try frame(at: 3),
+            afterPersistingMetadata: { track in
+                MeetingAECOutputCommitter.applyEra(
+                    to: &track,
+                    protection: .softwareEchoCancelled,
+                    provenance: MeetingAECConstants.provenance,
+                    startSeconds: 3
+                )
+            },
+            failClosed: false,
+            completion: { promotion.append($0) }
+        )
+        releaseEmergency.signal()
+        let track = await writer.snapshot()
+
+        XCTAssertTrue(demotion.allFailedWithQueueFull, "the emergency demotion saved and reported the overflow")
+        XCTAssertTrue(promotion.allFailedWithQueueFull, "a promotion must not queue behind a pending emergency")
+        XCTAssertEqual(track.captureEras?.map(\.echoProtection), [.unprotected, .unprotected])
+        _ = await writer.stop()
+    }
+
     /// The emergency run must not report a failed manifest write as a harmless overflow, or
     /// recording would continue while `track.json` still describes an older protected era.
     func testCommitterStopsWhenTheEmergencyDemotionCannotBeSaved() async throws {

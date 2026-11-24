@@ -89,7 +89,8 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
     private var pendingDroppedSampleCount = 0
     private var dropReportScheduled = false
     /// At most one bounded overflow command may bypass `pendingSlots`, solely to publish a
-    /// conservative in-memory safety era before a terminal stop.
+    /// conservative safety era. While it is pending, non-fail-closed sequenced commands are
+    /// refused, so no promotion can queue behind it and outlive a demotion it coalesced.
     private var emergencySafetyCommandPending = false
     private var lastHealthEmission = Date.distantPast
     private var lastLevelMeasurement = Date.distantPast
@@ -198,7 +199,9 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
             completion(.failure(SequencedCommandError.writerNotAccepting))
             return
         }
-        guard self.pendingSlots.wait(timeout: .now()) == .success else {
+        guard failClosed || !self.emergencySafetyCommandPending,
+              self.pendingSlots.wait(timeout: .now()) == .success
+        else {
             self.failOverflowedSequencedCommand(failClosed: failClosed, mutate: mutate, completion: completion)
             return
         }
@@ -235,7 +238,9 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
             completion(.failure(SequencedCommandError.writerNotAccepting))
             return
         }
-        guard self.pendingSlots.wait(timeout: .now()) == .success else {
+        guard failClosed || !self.emergencySafetyCommandPending,
+              self.pendingSlots.wait(timeout: .now()) == .success
+        else {
             self.failOverflowedSequencedCommand(failClosed: failClosed, mutate: mutate, completion: completion)
             return
         }

@@ -238,7 +238,8 @@ final nonisolated class MeetingAECOutputCommitter: @unchecked Sendable {
 
     /// Enqueues the fail-closed `unprotected` era as a bounded writer-queue command and reports a
     /// terminal failure if even that command cannot persist. A full queue is not such a failure:
-    /// the writer's fail-closed emergency run applies the demotion ahead of any later sample.
+    /// the writer's emergency run saves the demotion ahead of any later sample, and refuses
+    /// promotions while it is pending, so a demotion coalesced into it cannot be overtaken.
     private func persistSafetyEra(startSeconds: Double?) {
         self.beginPendingCommit()
         self.writer.enqueueMetadata(
