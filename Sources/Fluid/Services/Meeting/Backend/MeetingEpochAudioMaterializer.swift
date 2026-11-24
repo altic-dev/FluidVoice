@@ -88,11 +88,18 @@ nonisolated protocol MeetingEpochAudioMaterializing: Sendable {
 }
 
 nonisolated struct MeetingEpochAudioMaterializer: MeetingEpochAudioMaterializing {
-    /// 256M mono Float32 samples occupies 1 GiB, allowing about 140 minutes across two
-    /// continuous 16 kHz tracks. This bounds retained PCM, not total process memory: decoding
-    /// and conversion need additional buffers. Replace with a scoped immutable disk working
-    /// store before production retention requirements grow further.
-    static let conservativeSampleLimit = 256 * 1024 * 1024
+    /// Bounds retained 16 kHz PCM, not total process memory: decoding and conversion briefly
+    /// need several times this at the native capture rate, hence only 1/8 of RAM.
+    static let conservativeSampleLimit = Self.sampleLimit(physicalMemory: ProcessInfo.processInfo.physicalMemory)
+
+    /// 1 GiB floor (about 140 minutes across two continuous 16 kHz tracks).
+    static let minimumSampleLimit = 256 * 1024 * 1024
+
+    static func sampleLimit(physicalMemory: UInt64) -> Int {
+        let scaled = physicalMemory / 8 / UInt64(MemoryLayout<Float>.size)
+        return max(Self.minimumSampleLimit, Int(clamping: scaled))
+    }
+
     let sampleRate: Double
 
     init(sampleRate: Double = 16_000) {
@@ -116,6 +123,8 @@ nonisolated struct MeetingEpochAudioMaterializer: MeetingEpochAudioMaterializing
         // an uncovered interval.
         var sourceSlices: [SourceSlice] = []
         sourceSlices.reserveCapacity(epoch.spanIDs.count)
+        // Fail before decoding further native-rate audio once the output can no longer fit.
+        var projectedSamples = 0.0
         for spanID in epoch.spanIDs {
             try Task.checkCancellation()
             guard let span = spansByID[spanID] else {
@@ -123,6 +132,13 @@ nonisolated struct MeetingEpochAudioMaterializer: MeetingEpochAudioMaterializing
             }
             let slice = try autoreleasepool {
                 try self.readSpanAudio(span, sessionDirectory: sessionDirectory)
+            }
+            projectedSamples += Double(slice.samples.count) / slice.sampleRate * self.sampleRate
+            guard projectedSamples <= Double(Self.conservativeSampleLimit) else {
+                throw MeetingEpochMaterializationError.sampleLimitExceeded(
+                    spanID: spanID,
+                    sampleCount: Int(projectedSamples.rounded(.up))
+                )
             }
             sourceSlices.append(slice)
         }
@@ -195,6 +211,13 @@ nonisolated struct MeetingEpochAudioMaterializer: MeetingEpochAudioMaterializing
     }
 
     private func convert(_ run: [SourceSlice]) throws -> ConvertedRun {
+        let frameTotal = run.reduce(0) { $0 + $1.samples.count }
+        guard frameTotal <= Int(AVAudioFrameCount.max) else {
+            throw MeetingEpochMaterializationError.sampleLimitExceeded(
+                spanID: run.last?.spanID ?? "unknown",
+                sampleCount: frameTotal
+            )
+        }
         guard let first = run.first,
               let format = AVAudioFormat(
                   commonFormat: .pcmFormatFloat32,
@@ -204,7 +227,7 @@ nonisolated struct MeetingEpochAudioMaterializer: MeetingEpochAudioMaterializing
               ),
               let buffer = AVAudioPCMBuffer(
                   pcmFormat: format,
-                  frameCapacity: AVAudioFrameCount(run.reduce(0) { $0 + $1.samples.count })
+                  frameCapacity: AVAudioFrameCount(frameTotal)
               )
         else {
             throw MeetingEpochMaterializationError.emptySlice(spanID: run.first?.spanID ?? "unknown")

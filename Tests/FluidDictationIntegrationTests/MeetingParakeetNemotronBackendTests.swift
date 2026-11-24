@@ -26,6 +26,18 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
         }
     }
 
+    func testSampleLimitScalesWithPhysicalMemory() {
+        let gib: UInt64 = 1024 * 1024 * 1024
+        let floor = MeetingEpochAudioMaterializer.minimumSampleLimit
+        XCTAssertEqual(floor, 256 * 1024 * 1024)
+        XCTAssertEqual(MeetingEpochAudioMaterializer.sampleLimit(physicalMemory: 0), floor)
+        XCTAssertEqual(MeetingEpochAudioMaterializer.sampleLimit(physicalMemory: 8 * gib), floor)
+        XCTAssertEqual(MeetingEpochAudioMaterializer.sampleLimit(physicalMemory: 16 * gib), 2 * floor)
+        XCTAssertEqual(MeetingEpochAudioMaterializer.sampleLimit(physicalMemory: 64 * gib), 8 * floor)
+        XCTAssertEqual(MeetingEpochAudioMaterializer.sampleLimit(physicalMemory: .max), Int(UInt64.max / 32))
+        XCTAssertGreaterThanOrEqual(MeetingEpochAudioMaterializer.conservativeSampleLimit, floor)
+    }
+
     // MARK: - Session fixtures
 
     private func makeChunk(
