@@ -22,11 +22,8 @@ private final class DictionaryReloadTracker {
 // swiftlint:disable:next type_body_length
 struct CustomDictionaryView: View {
     var formattingOnly = false
-    @State private var isWordDrawerPresented = true
-    @State private var wordSearch = ""
-    @State private var isDrawerActionsPresented = false
+    @State private var isAddingWord = false
     @State private var newWordFocusRequest = 0
-    @State private var drawerDeletion: SettingsStore.CustomDictionaryEntry?
     @Environment(\.theme) private var theme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @EnvironmentObject private var appServices: AppServices
@@ -287,53 +284,18 @@ struct CustomDictionaryView: View {
             if self.formattingOnly {
                 self.punctuationDictionarySection
             } else {
-                HStack(spacing: 0) {
-                    ScrollView(.vertical, showsIndicators: false) {
-                        VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xl) {
-                            if let notice = self.pronunciationRevisionNotice {
-                                Text(notice)
-                                    .font(self.theme.typography.caption)
-                                    .foregroundStyle(self.theme.palette.secondaryText)
-                                    .fixedSize(horizontal: false, vertical: true)
-                            }
-                            self.trainReplacementSection
-                        }
-                        .fluidPageContent(width: .reading, alignment: .center)
+                ZStack {
+                    if self.isAddingWord {
+                        self.addWordPage
+                            .transition(.move(edge: .trailing).combined(with: .opacity))
+                    } else {
+                        self.dictionaryHome
+                            .transition(.move(edge: .leading).combined(with: .opacity))
                     }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-                    self.wordDrawer
-                        .frame(width: 240)
-                        .frame(maxHeight: .infinity)
-                        .transaction { $0.animation = nil }
-                        .frame(width: self.isWordDrawerPresented ? 240 : 0, alignment: .trailing)
-                        .clipped()
-                        .background {
-                            Rectangle()
-                                .fill(self.theme.materials.sidebar)
-                                .ignoresSafeArea(.container, edges: [.top, .bottom])
-                                .allowsHitTesting(false)
-                                .accessibilityHidden(true)
-                        }
-                        .overlay(alignment: .leading) {
-                            Rectangle()
-                                .fill(self.theme.palette.separator)
-                                .frame(width: 1)
-                                .ignoresSafeArea(.container, edges: [.top, .bottom])
-                                .allowsHitTesting(false)
-                                .accessibilityHidden(true)
-                        }
-                        .allowsHitTesting(self.isWordDrawerPresented)
-                        .disabled(!self.isWordDrawerPresented)
-                        .accessibilityElement(children: .contain)
-                        .accessibilityHidden(!self.isWordDrawerPresented)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .animation(self.drawerAnimation, value: self.isWordDrawerPresented)
+                .animation(self.pageAnimation, value: self.isAddingWord)
             }
-        }
-        .fluidPageActions(enabled: !self.formattingOnly) {
-            self.dictionaryDrawerToggle
         }
         .dismissTextFocusOnBackgroundTap()
         .task(id: self.revealTarget) {
@@ -449,153 +411,28 @@ struct CustomDictionaryView: View {
 
     // MARK: - Page Header
 
-    private var drawerAnimation: Animation? {
+    private var pageAnimation: Animation? {
         self.reduceMotion ? nil : .timingCurve(0.22, 0.8, 0.25, 1, duration: 0.34)
     }
 
-    private var dictionaryDrawerToggle: some View {
-        Button {
-            self.isDrawerActionsPresented = false
-            withAnimation(self.drawerAnimation) { self.isWordDrawerPresented.toggle() }
-        } label: {
-            Label("Your Dictionary", systemImage: self.isWordDrawerPresented ? "rectangle.righthalf.inset.filled" : "sidebar.right")
-                .foregroundStyle(self.isWordDrawerPresented ? self.theme.palette.accent : self.theme.palette.primaryText)
-        }
-
-        .accessibilityLabel(self.isWordDrawerPresented ? "Collapse your dictionary" : "Expand your dictionary")
-        .help(self.isWordDrawerPresented ? "Collapse your dictionary" : "Expand your dictionary")
+    private var isTrainingBusy: Bool {
+        self.isTrainingStarting || self.isTrainingRecording || self.isTrainingProcessing || self.trainingSaveID != nil
     }
 
-    private var drawerEntries: [SettingsStore.CustomDictionaryEntry] {
-        self.entries.filter {
-            self.wordSearch.isEmpty || $0.replacement.localizedCaseInsensitiveContains(self.wordSearch)
-                || $0.triggers.contains { $0.localizedCaseInsensitiveContains(self.wordSearch) }
-        }
-    }
-
-    private var wordDrawer: some View {
-        VStack(alignment: .leading, spacing: self.theme.metrics.spacing.md) {
-            HStack(alignment: .center, spacing: 8) {
-                Text("Your dictionary").font(self.theme.typography.sectionTitle)
-                Spacer()
-                FluidGlassControlGroup {
-                    HStack(spacing: 8) {
-                        Button(action: self.openNewManualDictionaryEntry) {
-                            Image(systemName: "plus")
-                                .font(.system(size: 12, weight: .semibold))
-                                .frame(width: 18, height: 18)
-                        }
-                        .fluidGlassAction(circular: true, quiet: true)
-                        .disabled(self.isManualEntryBlocked)
-                        .accessibilityLabel("Add word")
-                        .help(self.isManualEntryBlocked ? "Finish the current word recording or save first" : "Add a word manually")
-                        Button { self.isDrawerActionsPresented.toggle() } label: {
-                            Image(systemName: "ellipsis")
-                                .font(.system(size: 12, weight: .semibold))
-                                .frame(width: 18, height: 18)
-                        }
-                        .fluidGlassAction(circular: true, quiet: true)
-                        .accessibilityLabel("Dictionary actions")
-                        .popover(isPresented: self.$isDrawerActionsPresented) {
-                            VStack(alignment: .leading, spacing: 12) {
-                                Button("Import…") {
-                                    self.isDrawerActionsPresented = false
-                                    self.importDictionary()
-                                }.fluidGlassAction()
-                                Button("Export…") {
-                                    self.isDrawerActionsPresented = false
-                                    self.exportDictionary()
-                                }.fluidGlassAction()
-                                Divider()
-                                Button("Custom Words (Advanced)…") {
-                                    self.isDrawerActionsPresented = false
-                                    self.presentCustomWords()
-                                }.fluidGlassAction()
-                            }
-                            .padding(16)
-                        }
-                    }
-                }
-            }
-            Text("Saved replacements apply to dictation and finished meeting transcripts.")
-                .font(self.theme.typography.caption)
-                .foregroundStyle(self.theme.palette.secondaryText)
-                .fixedSize(horizontal: false, vertical: true)
-            HStack(spacing: 8) {
-                Image(systemName: "magnifyingglass")
-                    .foregroundStyle(self.theme.palette.secondaryText)
-                TextField("Search words", text: self.$wordSearch)
-                    .textFieldStyle(.plain)
-            }
-            .font(self.theme.typography.bodySmall)
-            .padding(10)
-            .background(self.theme.palette.contentBackground, in: RoundedRectangle(cornerRadius: 8))
-            .overlay(RoundedRectangle(cornerRadius: 8).stroke(self.theme.palette.cardBorder.opacity(0.4)))
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: self.theme.metrics.spacing.md) {
-                    ForEach(self.drawerEntries) { entry in
-                        HStack(alignment: .center, spacing: 12) {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(entry.replacement).font(self.theme.typography.bodyStrong)
-                                Text(entry.triggers.joined(separator: ", "))
-                                    .font(self.theme.typography.caption)
-                                    .foregroundStyle(self.theme.palette.secondaryText)
-                                    .lineLimit(3)
-                            }
-                            Spacer()
-                            Button { self.editingEntry = entry } label: {
-                                FluidPencilShape()
-                                    .stroke(style: StrokeStyle(lineWidth: 1.7, lineCap: .round, lineJoin: .round))
-                                    .frame(width: 14, height: 14)
-                                    .frame(width: 18, height: 18)
-                                    .contentShape(Rectangle())
-                            }
-                            .fluidGlassAction(circular: true, quiet: true)
-                            .help("Edit word")
-                            .accessibilityLabel("Edit \(entry.replacement)")
-                            Button(role: .destructive) { self.drawerDeletion = entry } label: {
-                                Image(systemName: "trash")
-                                    .font(.fluidSystem(size: 12, weight: .regular))
-                                    .frame(width: 18, height: 18)
-                                    .contentShape(Rectangle())
-                            }
-                            .fluidGlassAction(circular: true, quiet: true)
-                            .help("Delete word")
-                            .accessibilityLabel("Delete \(entry.replacement)")
-                        }
-                        .contextMenu {
-                            Button("Edit…") { self.editingEntry = entry }
-                            Button("Remove word", role: .destructive) { self.drawerDeletion = entry }
-                        }
-                        Divider().opacity(0.3)
-                    }
-                    if self.drawerEntries.isEmpty {
-                        Text(self.wordSearch.isEmpty ? "Add a word to see it here." : "No matching words.")
-                            .font(self.theme.typography.bodySmall)
-                            .foregroundStyle(self.theme.palette.secondaryText)
-                            .padding(.vertical, self.theme.metrics.spacing.lg)
-                    }
-                }
-            }
-            Text(self.wordSearch.isEmpty ? "\(self.entries.count) saved words" : "\(self.drawerEntries.count) of \(self.entries.count) words")
-                .font(self.theme.typography.caption)
-                .foregroundStyle(self.theme.palette.secondaryText)
-        }
-        .padding(self.theme.metrics.spacing.lg)
-        .padding(.top, 8)
-        .alert("Remove word?", isPresented: Binding(
-            get: { self.drawerDeletion != nil },
-            set: { if !$0 { self.drawerDeletion = nil } }
-        )) {
-            Button("Cancel", role: .cancel) { self.drawerDeletion = nil }
-            Button("Remove", role: .destructive) {
-                if let entry = self.drawerDeletion { self.deleteEntry(entry) }
-                self.drawerDeletion = nil
-            }
-        } message: {
-            Text("This removes the saved corrections and pronunciation for this word.")
-        }
-        .popover(isPresented: self.$isCustomWordsPresented) {
+    private var dictionaryHome: some View {
+        DictionaryHomeList(
+            entries: self.entries,
+            notice: self.pronunciationRevisionNotice,
+            actions: DictionaryHomeActions(
+                addWord: self.openAddWord,
+                edit: { self.editingEntry = $0 },
+                delete: self.deleteEntry,
+                importDictionary: self.importDictionary,
+                exportDictionary: self.exportDictionary,
+                openCustomWords: self.presentCustomWords
+            ),
+            isCustomWordsPresented: self.$isCustomWordsPresented
+        ) {
             VStack(alignment: .leading, spacing: self.theme.metrics.spacing.md) {
                 Toggle("Custom Words Boosting", isOn: self.$vocabBoostingEnabled)
                     .onChange(of: self.vocabBoostingEnabled) { _, enabled in
@@ -605,6 +442,37 @@ struct CustomDictionaryView: View {
             }
             .padding(self.theme.metrics.spacing.md)
         }
+    }
+
+    private var addWordPage: some View {
+        ScrollView(.vertical, showsIndicators: false) {
+            VStack(alignment: .leading, spacing: self.theme.metrics.spacing.lg) {
+                Button(action: self.closeAddWord) {
+                    Label("Dictionary", systemImage: "chevron.left")
+                }
+                .fluidGlassAction()
+                .disabled(self.isTrainingBusy)
+                .help(self.isTrainingBusy ? "Pause learning before leaving" : "Back to your words")
+                self.trainReplacementSection
+            }
+            .fluidPageContent(width: .reading, alignment: .center)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// Resetting on open, not close, keeps the outgoing page unchanged while it slides away.
+    private func openAddWord() {
+        self.manualDraft = .init()
+        self.manualSourceWord = ""
+        self.startNewDictionaryWord()
+        self.isAddingWord = true
+    }
+
+    private func closeAddWord() {
+        guard !self.isTrainingBusy else { return }
+        self.trainingRestart.cancel()
+        self.isAutomaticTrainingEnabled = false
+        self.isAddingWord = false
     }
 
     private func settingsIconTile(systemName: String) -> some View {
@@ -2662,20 +2530,7 @@ struct CustomDictionaryView: View {
         }
     }
 
-    private func openNewManualDictionaryEntry() {
-        guard !self.isManualEntryBlocked else { return }
-        self.isDrawerActionsPresented = false
-        if self.wizardStep != .manual {
-            self.manualReturnStep = self.wizardStep
-            self.manualSourceWord = ""
-            self.manualDraft = .init()
-            self.wizardStep = .manual
-        }
-        self.manualEntryFocusRequest &+= 1
-    }
-
     private func startNewDictionaryWord() {
-        self.isDrawerActionsPresented = false
         self.resetTraining()
         self.wizardStep = .spelling
         self.newWordFocusRequest &+= 1
@@ -4341,6 +4196,7 @@ struct EditDictionaryEntrySheet: View {
         .frame(minWidth: 400, idealWidth: 480, maxWidth: 560)
         .frame(minHeight: 360, idealHeight: self.isTestingWord ? 680 : 500, maxHeight: self.isTestingWord ? 780 : 600)
         .dismissTextFocusOnBackgroundTap()
+        .background(SheetOutsideClickDismisser(isEnabled: !self.isTestBusy) { self.dismiss() })
         .onChange(of: self.hasUnsavedChanges) { _, changed in
             if changed { self.isTestingWord = false }
         }
@@ -4368,6 +4224,60 @@ struct EditDictionaryEntrySheet: View {
         )
         self.onSave(updatedEntry)
         self.dismiss()
+    }
+}
+
+/// Native sheets swallow clicks on their parent window; treat such a click as Cancel.
+private struct SheetOutsideClickDismisser: NSViewRepresentable {
+    let isEnabled: Bool
+    let onOutsideClick: () -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        context.coordinator.view = view
+        context.coordinator.install()
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        context.coordinator.isEnabled = self.isEnabled
+        context.coordinator.onOutsideClick = self.onOutsideClick
+    }
+
+    static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
+        coordinator.remove()
+    }
+
+    @MainActor
+    final class Coordinator {
+        weak var view: NSView?
+        var isEnabled = true
+        var onOutsideClick: () -> Void = {}
+        private var monitor: Any?
+
+        func install() {
+            self.monitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak self] event in
+                MainActor.assumeIsolated {
+                    guard let self, self.isEnabled,
+                          let sheet = self.view?.window,
+                          let clicked = event.window,
+                          clicked !== sheet,
+                          clicked.attachedSheet === sheet
+                    else { return event }
+                    self.onOutsideClick()
+                    return nil
+                }
+            }
+        }
+
+        func remove() {
+            if let monitor { NSEvent.removeMonitor(monitor) }
+            self.monitor = nil
+        }
     }
 }
 
