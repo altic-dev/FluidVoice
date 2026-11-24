@@ -202,7 +202,12 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
         guard failClosed || !self.emergencySafetyCommandPending,
               self.pendingSlots.wait(timeout: .now()) == .success
         else {
-            self.failOverflowedSequencedCommand(failClosed: failClosed, mutate: mutate, completion: completion)
+            self.failOverflowedSequencedCommand(
+                failClosed: failClosed,
+                dropsSample: true,
+                mutate: mutate,
+                completion: completion
+            )
             return
         }
 
@@ -241,7 +246,12 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
         guard failClosed || !self.emergencySafetyCommandPending,
               self.pendingSlots.wait(timeout: .now()) == .success
         else {
-            self.failOverflowedSequencedCommand(failClosed: failClosed, mutate: mutate, completion: completion)
+            self.failOverflowedSequencedCommand(
+                failClosed: failClosed,
+                dropsSample: false,
+                mutate: mutate,
+                completion: completion
+            )
             return
         }
 
@@ -265,14 +275,19 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
     /// it released. A fail-closed command gets one bounded slot-bypassing emergency run so the
     /// conservative era reaches the in-memory track and the manifest. It completes with
     /// `queueFull` only when the manifest write succeeded, and with the write error otherwise.
+    /// Only a command that carries audio counts as a dropped sample.
     private func failOverflowedSequencedCommand(
         failClosed: Bool,
+        dropsSample: Bool,
         mutate: @escaping @Sendable (inout MeetingAudioTrack) -> Void,
         completion: @escaping @Sendable (Result<Void, Error>) -> Void
     ) {
-        self.pendingDroppedSampleCount += 1
-        let shouldScheduleReport = !self.dropReportScheduled
-        self.dropReportScheduled = true
+        var shouldScheduleReport = false
+        if dropsSample {
+            self.pendingDroppedSampleCount += 1
+            shouldScheduleReport = !self.dropReportScheduled
+            self.dropReportScheduled = true
+        }
         let enqueueEmergency = failClosed && !self.emergencySafetyCommandPending
         if enqueueEmergency { self.emergencySafetyCommandPending = true }
         self.stateLock.unlock()

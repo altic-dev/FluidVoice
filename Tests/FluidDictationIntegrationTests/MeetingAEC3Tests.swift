@@ -1326,6 +1326,7 @@ final class MeetingAEC3Tests: XCTestCase {
         XCTAssertEqual(track.captureEras?.last?.echoProtection, .unprotected)
         XCTAssertNil(track.captureEras?.last?.aecProvenance)
         XCTAssertTrue(failures.values.isEmpty, "a full writer queue drops a sample; it must not stop the meeting")
+        XCTAssertEqual(track.health.droppedSampleCount, 1, "the metadata-only safety cut drops no audio")
         XCTAssertFalse(gate.admitsTranscript())
         _ = await writer.stop()
     }
@@ -1363,6 +1364,7 @@ final class MeetingAEC3Tests: XCTestCase {
             "a failed promotion must not append a protected era, only the conservative cut"
         )
         XCTAssertTrue(failures.values.isEmpty, "a full writer queue drops a sample; it must not stop the meeting")
+        XCTAssertEqual(track.health.droppedSampleCount, 1, "one refused promotion frame is one dropped sample")
         XCTAssertFalse(gate.admitsTranscript())
         XCTAssertEqual(live.count, 0)
         _ = await writer.stop()
