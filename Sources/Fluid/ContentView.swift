@@ -1288,7 +1288,11 @@ struct ContentView: View {
             self.clearShortcutRecordingMode()
         }
         self.settingsNavigation.selectedSection = section
-        self.settingsSearchScrollRequest += 1
+        if self.isSidebarCollapsed {
+            self.resetSettingsSearch()
+        } else {
+            self.settingsSearchScrollRequest += 1
+        }
     }
 
     private func resetSettingsSearch() {
