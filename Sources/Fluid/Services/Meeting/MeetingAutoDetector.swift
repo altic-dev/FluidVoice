@@ -1146,7 +1146,8 @@ final class MeetingAutoDetector {
         let hasExplicitBrowserEnd = watched.tier == .browserTier2 && watched.browserCallEndedAt != nil
         let stillTalking = !hasExplicitBrowserEnd && self.lastSpeechAt().map { now.timeIntervalSince($0) < Self.speechQuietSeconds } == true
         let evidenceUncertain = audioUnknown && !hasExplicitBrowserEnd && watched.appGoneAt == nil
-        let shouldAsk = askAt.map { now >= $0 } == true && !stillTalking && !evidenceUncertain && !watched.asked
+        let shouldAsk = askAt.map { now.timeIntervalSinceReferenceDate >= $0.timeIntervalSinceReferenceDate } == true
+            && !stillTalking && !evidenceUncertain && !watched.asked
         // An automatic stop requires continued evidence. Resume, fresh speech, or an unreadable
         // query cancels it; valid end evidence can offer a new full countdown later.
         let shouldWithdraw = watched.asked && (askAt == nil || stillTalking || evidenceUncertain)

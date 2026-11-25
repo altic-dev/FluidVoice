@@ -2992,7 +2992,7 @@ final class SettingsStore: ObservableObject {
             return true // Never snoozed, show prompt
         }
 
-        return Date() >= snoozedUntil
+        return Date().timeIntervalSinceReferenceDate >= snoozedUntil.timeIntervalSinceReferenceDate
     }
 
     /// Snooze update prompts for 24 hours for the given version
@@ -4420,7 +4420,7 @@ final class SettingsStore: ObservableObject {
             let dedupeKey = "\(normalizedMode.rawValue)|\(normalizedBundleID)"
             if let existing = dedupe[dedupeKey] {
                 // Keep the most recently updated binding when duplicates exist.
-                if cleaned.updatedAt >= existing.updatedAt {
+                if cleaned.updatedAt.timeIntervalSinceReferenceDate >= existing.updatedAt.timeIntervalSinceReferenceDate {
                     dedupe[dedupeKey] = cleaned
                 }
                 didMutateBindings = true

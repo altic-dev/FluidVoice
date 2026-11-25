@@ -901,9 +901,16 @@ final class ImportingDefaults: UserDefaults {
         let first = entry(day.start, "  one\t two\nthree  ")
         let last = entry(day.end.addingTimeInterval(-1), "four")
         let tomorrow = entry(day.end, "next day")
+        store.restore(from: [yesterday])
+        await store.waitForTodaySummary()
+        precondition(store.todaySummary == .init(words: 0, transcriptions: 0), "Non-empty history outside today must produce an empty summary")
         store.restore(from: [yesterday, first, last, tomorrow])
         await store.waitForTodaySummary()
         precondition(store.todaySummary == .init(words: 4, transcriptions: 2), "Preserve word splitting and half-open local-day boundaries")
+        precondition(
+            store.entriesInRange(from: day.start, to: day.end).map(\.id) == [tomorrow.id, last.id, first.id],
+            "History date-range filtering must include both endpoints and preserve chronology"
+        )
         let reads = clockReads
         let unchangedEntries = store.entries
         for _ in 0..<10_000 {

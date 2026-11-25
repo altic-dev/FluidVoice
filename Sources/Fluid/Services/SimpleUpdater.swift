@@ -534,7 +534,7 @@ final class SimpleUpdater: ObservableObject {
     private func shouldShowUpdateOffer(version: String) -> Bool {
         if let snoozed = self.updateDefaults.string(forKey: SettingsStore.UpdateKeys.snoozedUpdateVersion), snoozed != version { return true }
         guard let until = self.updateDefaults.object(forKey: SettingsStore.UpdateKeys.updatePromptSnoozedUntil) as? Date else { return true }
-        return Date() >= until
+        return Date().timeIntervalSinceReferenceDate >= until.timeIntervalSinceReferenceDate
     }
 
     private func presentUpdateOffer(version: String, automatic: Bool) {

@@ -272,7 +272,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         DispatchQueue.global(qos: .utility).async {
             try? KeychainService.shared.refreshCachedKeys()
         }
-        if let deadline = self.analyticsActivationSuppressionDeadline, Date() <= deadline {
+        if let deadline = self.analyticsActivationSuppressionDeadline, Date().timeIntervalSinceReferenceDate <= deadline.timeIntervalSinceReferenceDate {
             self.analyticsActivationSuppressionDeadline = nil
         } else {
             self.analyticsActivationSuppressionDeadline = nil
