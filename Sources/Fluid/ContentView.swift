@@ -288,6 +288,7 @@ struct ContentView: View {
 
     @Environment(\.theme) private var theme
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.displayScale) private var displayScale
     @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
     @State private var hotkeyManager: GlobalHotkeyManager? = nil
     @State private var hotkeyManagerInitialized: Bool = false
@@ -347,9 +348,6 @@ struct ContentView: View {
     @State private var appSearchRevealTarget: AppSearchHit.Target?
     @State private var appSearchExpanded: Set<AppSearchKind> = []
 
-    @State private var isHelpEntryHovered = false
-    @State private var isSettingsEntryHovered = false
-    @State private var isSettingsBackHovered = false
     @FocusState private var isSettingsSearchFocused: Bool
     @State private var playgroundUsed: Bool = SettingsStore.shared.playgroundUsed
     @State private var showsFluidIntelligenceDemo = false
@@ -429,7 +427,7 @@ struct ContentView: View {
 
     @State private var savedProviders: [SettingsStore.SavedProvider] = []
     @State private var selectedProviderID: String = SettingsStore.shared.selectedProviderID
-    @State private var columnVisibility: NavigationSplitViewVisibility = .all
+    @State private var isSidebarCollapsed = false
     #if DEBUG
     private var dictationModeSwitchASRForTesting: ASRService?
     private var dictationModeSwitchOnReadyForTesting: ((ContentView) -> Void)?
@@ -491,15 +489,19 @@ struct ContentView: View {
                 if self.settings.shouldShowOnboarding {
                     self.onboardingOnlyView
                 } else {
-                    NavigationSplitView(columnVisibility: self.$columnVisibility) {
+                    HStack(spacing: 0) {
                         self.sidebarContent
-                            .frame(minWidth: 264, maxWidth: 360)
-                            .navigationSplitViewColumnWidth(min: 264, ideal: 300, max: 360)
-                            .toolbar(removing: .sidebarToggle)
-                    } detail: {
+                            .frame(width: self.isSidebarCollapsed ? MainSidebarLayout.collapsedWidth : MainSidebarLayout.expandedWidth)
+                            .background(.bar, ignoresSafeAreaEdges: .bottom)
+                            .clipped()
+                        Rectangle()
+                            .fill(self.theme.palette.separator.opacity(0.5))
+                            .frame(width: 1 / self.displayScale)
+                            .padding(.vertical, 8)
+                            .accessibilityHidden(true)
                         self.detailView
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
                     }
-                    .navigationSplitViewStyle(.balanced)
                 }
             }
         )
@@ -533,6 +535,13 @@ struct ContentView: View {
             }
             .onReceive(NotificationCenter.default.publisher(for: .appNavigationRequested)) { _ in
                 self.handlePendingAppNavigation()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .sidebarSearchFocusRequested)) { _ in
+                guard self.isSidebarCollapsed else { return }
+                self.isSidebarCollapsed = false
+                DispatchQueue.main.async {
+                    NotificationCenter.default.post(name: .sidebarSearchFocusRequested, object: nil)
+                }
             }
             .onReceive(NotificationCenter.default.publisher(for: .dictationPromptShortcutsChanged)) { _ in
                 self.hotkeyManager?.updatePromptShortcutAssignments(SettingsStore.shared.dictationPromptShortcutAssignments())
@@ -1279,7 +1288,11 @@ struct ContentView: View {
             self.clearShortcutRecordingMode()
         }
         self.settingsNavigation.selectedSection = section
-        self.settingsSearchScrollRequest += 1
+        if self.isSidebarCollapsed {
+            self.resetSettingsSearch()
+        } else {
+            self.settingsSearchScrollRequest += 1
+        }
     }
 
     private func resetSettingsSearch() {
@@ -1487,6 +1500,25 @@ struct ContentView: View {
     }
 
     private var sidebarContent: some View {
+        VStack(spacing: 0) {
+            Button(action: self.toggleSidebar) {
+                MainSidebarLabel(title: "", systemImage: "sidebar.left", isCollapsed: true)
+                    .frame(width: 40)
+            }
+            .buttonStyle(MainSidebarButtonStyle())
+            .help(self.isSidebarCollapsed ? "Expand sidebar" : "Collapse sidebar")
+            .accessibilityLabel(self.isSidebarCollapsed ? "Expand sidebar" : "Collapse sidebar")
+            .accessibilityIdentifier("FluidVoice.SidebarToggle")
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 8)
+
+            self.sidebarNavigationContent
+        }
+        .clipped()
+    }
+
+    private var sidebarNavigationContent: some View {
         ZStack {
             // Keep both sidebars mounted so navigation feedback never waits on view construction.
             self.appSidebarView
@@ -1509,18 +1541,10 @@ struct ContentView: View {
 
     private var appSidebarView: some View {
         VStack(spacing: 0) {
-            SidebarSearchField(
-                text: self.$appSearch.query,
-                placeholder: "Search",
-                isActive: !self.settingsNavigation.isPresented,
-                onCommand: self.handleAppSearchCommand
-            )
-            .padding(.horizontal, self.theme.metrics.spacing.md)
-            .padding(.top, self.theme.metrics.spacing.sm)
-            .padding(.bottom, self.theme.metrics.spacing.sm)
+            self.appSidebarSearch
 
             Group {
-                if self.isAppSearchActive {
+                if self.isAppSearchActive && !self.isSidebarCollapsed {
                     AppSearchResultsView(
                         service: self.appSearch,
                         cursor: self.$appSearchCursor,
@@ -1534,12 +1558,11 @@ struct ContentView: View {
             .frame(maxHeight: .infinity)
             .clipped()
 
-            // Reserve real layout space for the footer. A safe-area inset can let
-            // the native sidebar list draw its last rows beneath these controls.
-            VStack(spacing: 0) {
+            VStack(spacing: 4) {
                 self.helpEntryButton
                 self.settingsEntryButton
             }
+            .padding(8)
             .fixedSize(horizontal: false, vertical: true)
         }
         .onChange(of: self.appSearch.groups) {
@@ -1548,53 +1571,80 @@ struct ContentView: View {
         }
     }
 
+    @ViewBuilder
+    private var appSidebarSearch: some View {
+        if self.isSidebarCollapsed {
+            Button(action: self.expandSidebarForSearch) {
+                MainSidebarLabel(title: "Search", systemImage: "magnifyingglass", isCollapsed: true)
+            }
+            .buttonStyle(MainSidebarButtonStyle())
+            .help("Search")
+            .accessibilityLabel("Search")
+            .padding(.horizontal, 8)
+            .padding(.vertical, 8)
+        } else {
+            SidebarSearchField(
+                text: self.$appSearch.query,
+                placeholder: "Search",
+                isActive: !self.settingsNavigation.isPresented,
+                onCommand: self.handleAppSearchCommand
+            )
+            .frame(height: 34)
+            .padding(.horizontal, self.theme.metrics.spacing.md)
+            .padding(.top, self.theme.metrics.spacing.sm)
+            .padding(.bottom, self.theme.metrics.spacing.sm)
+        }
+    }
+
     private var isAppSearchActive: Bool {
         !self.appSearch.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private var appSidebarSections: some View {
-        // Rows set the page themselves: List selection can deliver a rapid click only when the next one arrives.
-        List {
-            Section {
-                self.sidebarNavigationLink(.welcome, title: "Dashboard", systemImage: "house.fill")
-                self.sidebarNavigationLink(.history, title: "History", systemImage: "clock.arrow.circlepath")
-                self.sidebarNavigationLink(.stats, title: "Stats", systemImage: "chart.bar.fill")
-            } header: {
-                self.sidebarSectionHeader("Activity")
-            }
-
-            Section {
-                self.sidebarNavigationLink(.voiceEngine, title: "Voice Engine", systemImage: "waveform")
-                self.sidebarNavigationLink(.aiEnhancements, title: "AI Settings", systemImage: "cpu")
-                self.sidebarNavigationLink(.cleanupStyles, title: "Cleanup Styles", systemImage: "wand.and.stars")
-                self.sidebarNavigationLink(.customDictionary, title: "Custom Dictionary", systemImage: "text.book.closed.fill")
-            } header: {
-                self.sidebarSectionHeader("Configure")
-            }
-
-            Section {
-                self.sidebarNavigationLink(.commandMode, title: "Command Mode", systemImage: "terminal.fill")
-                self.sidebarNavigationLink(.fileTranscription, title: "File Transcription", systemImage: "doc.text.fill")
-                if self.settings.fluidMeetEnabled {
-                    self.sidebarNavigationLink(
-                        .meetingTranscription,
-                        title: "FluidMeet",
-                        systemImage: "person.2.fill"
-                    )
+        ScrollView {
+            VStack(alignment: .leading, spacing: 4) {
+                Section {
+                    self.sidebarNavigationLink(.welcome, title: "Dashboard", systemImage: "house.fill")
+                    self.sidebarNavigationLink(.history, title: "History", systemImage: "clock.arrow.circlepath")
+                    self.sidebarNavigationLink(.stats, title: "Stats", systemImage: "chart.bar.fill")
+                } header: {
+                    self.sidebarSectionHeader("Activity")
                 }
-            } header: {
-                self.sidebarSectionHeader("Use")
-            }
 
-            Section {
-                self.sidebarNavigationLink(.changelog, title: "Change logs", systemImage: "doc.text.magnifyingglass")
-                self.sidebarNavigationLink(.feedback, title: "Feedback", systemImage: "envelope.fill")
-            } header: {
-                self.sidebarSectionHeader("Help")
+                Section {
+                    self.sidebarNavigationLink(.voiceEngine, title: "Voice Engine", systemImage: "waveform")
+                    self.sidebarNavigationLink(.aiEnhancements, title: "AI Settings", systemImage: "cpu")
+                    self.sidebarNavigationLink(.cleanupStyles, title: "Cleanup Styles", systemImage: "wand.and.stars")
+                    self.sidebarNavigationLink(.customDictionary, title: "Custom Dictionary", systemImage: "text.book.closed.fill")
+                } header: {
+                    self.sidebarSectionHeader("Configure")
+                }
+
+                Section {
+                    self.sidebarNavigationLink(.commandMode, title: "Command Mode", systemImage: "terminal.fill")
+                    self.sidebarNavigationLink(.fileTranscription, title: "File Transcription", systemImage: "doc.text.fill")
+                    if self.settings.fluidMeetEnabled {
+                        self.sidebarNavigationLink(
+                            .meetingTranscription,
+                            title: "FluidMeet",
+                            systemImage: "person.2.fill"
+                        )
+                    }
+                } header: {
+                    self.sidebarSectionHeader("Use")
+                }
+
+                Section {
+                    self.sidebarNavigationLink(.changelog, title: "Change logs", systemImage: "doc.text.magnifyingglass")
+                    self.sidebarNavigationLink(.feedback, title: "Feedback", systemImage: "envelope.fill")
+                } header: {
+                    self.sidebarSectionHeader("Help")
+                }
             }
+            .padding(.horizontal, 8)
+            .padding(.bottom, 8)
         }
-        .listStyle(.sidebar)
-        .accentColor(self.theme.palette.accent)
+        .scrollIndicators(self.isSidebarCollapsed ? .hidden : .automatic)
         .animation(nil, value: self.selectedSidebarItem)
     }
 
@@ -1646,73 +1696,62 @@ struct ContentView: View {
 
     private var settingsSidebarView: some View {
         VStack(spacing: 0) {
-            Button {
-                self.closeSettings()
-            } label: {
-                HStack(spacing: self.theme.metrics.spacing.sm) {
-                    Image(systemName: "chevron.left")
-                        .font(.fluidSystem(size: 11, weight: .semibold))
-                        .frame(width: 18, height: 28)
-
-                    Text("Back to app")
-                        .font(self.theme.typography.sidebarItem)
-
-                    Spacer(minLength: 0)
-                }
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, self.theme.metrics.spacing.md)
-                .padding(.top, self.theme.metrics.spacing.sm)
-                .padding(.bottom, self.theme.metrics.spacing.xs)
-                .frame(maxWidth: .infinity, minHeight: 36, alignment: .leading)
-                .contentShape(Rectangle())
+            Button(action: self.closeSettings) {
+                MainSidebarLabel(title: "Back to app", systemImage: "chevron.left", isCollapsed: self.isSidebarCollapsed)
             }
-            .buttonStyle(SidebarChromeButtonStyle(
-                isHovered: self.isSettingsBackHovered,
-                reduceMotion: self.accessibilityReduceMotion
-            ))
-            .onHover { self.isSettingsBackHovered = $0 }
+            .buttonStyle(MainSidebarButtonStyle())
             .help("Back to FluidVoice")
             .accessibilityLabel("Back to FluidVoice")
+            .padding(.horizontal, 8)
+            .padding(.bottom, 8)
 
-            SidebarSearchField(
-                text: Binding(
-                    get: { self.settingsSearchQuery },
-                    set: { self.updateSettingsSearchQuery($0) }
-                ),
-                placeholder: "Search Settings",
-                isActive: self.settingsNavigation.isPresented
-            )
-            .padding(.horizontal, self.theme.metrics.spacing.md)
-            .padding(.top, self.theme.metrics.spacing.xs)
-            .padding(.bottom, self.theme.metrics.spacing.sm)
-
-            List {
-                ForEach(self.filteredSettingsSections) { section in
-                    let isSelected = self.settingsNavigation.selectedSection == section
-                    Button {
-                        self.selectSettingsSection(section)
-                    } label: {
-                        HStack(spacing: self.theme.metrics.spacing.sm) {
-                            Image(systemName: section.systemImage)
-                                .symbolRenderingMode(.hierarchical)
-                                .foregroundStyle(isSelected ? Color.white.opacity(0.9) : Color.secondary)
-                                .frame(width: 18)
-
-                            Text(section.title)
-                                .foregroundStyle(isSelected ? Color.white : Color.primary)
-                        }
-                        .font(self.theme.typography.sidebarItem)
-                        .sidebarOptionHover(
-                            isSelected: isSelected,
-                            reduceMotion: self.accessibilityReduceMotion
-                        )
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityAddTraits(isSelected ? .isSelected : [])
+            if self.isSidebarCollapsed {
+                Button(action: self.expandSidebarForSearch) {
+                    MainSidebarLabel(title: "Search Settings", systemImage: "magnifyingglass", isCollapsed: true)
                 }
+                .buttonStyle(MainSidebarButtonStyle())
+                .help("Search Settings")
+                .accessibilityLabel("Search Settings")
+                .padding(.horizontal, 8)
+                .padding(.bottom, 8)
+            } else {
+                SidebarSearchField(
+                    text: Binding(
+                        get: { self.settingsSearchQuery },
+                        set: { self.updateSettingsSearchQuery($0) }
+                    ),
+                    placeholder: "Search Settings",
+                    isActive: self.settingsNavigation.isPresented
+                )
+                .frame(height: 34)
+                .padding(.horizontal, self.theme.metrics.spacing.md)
+                .padding(.bottom, 8)
             }
-            .listStyle(.sidebar)
-            .accentColor(self.theme.palette.accent)
+
+            ScrollView {
+                VStack(spacing: 4) {
+                    ForEach(self.isSidebarCollapsed ? SettingsSection.allCases : self.filteredSettingsSections) { section in
+                        let isSelected = self.settingsNavigation.selectedSection == section
+                        Button {
+                            self.selectSettingsSection(section)
+                        } label: {
+                            MainSidebarLabel(
+                                title: section.title,
+                                systemImage: section.systemImage,
+                                isCollapsed: self.isSidebarCollapsed,
+                                isSelected: isSelected
+                            )
+                        }
+                        .buttonStyle(MainSidebarButtonStyle(isSelected: isSelected))
+                        .help(section.title)
+                        .accessibilityLabel(section.title)
+                        .accessibilityAddTraits(isSelected ? .isSelected : [])
+                    }
+                }
+                .padding(.horizontal, 8)
+                .padding(.bottom, 8)
+            }
+            .scrollIndicators(self.isSidebarCollapsed ? .hidden : .automatic)
             .animation(nil, value: self.settingsNavigation.selectedSection)
         }
     }
@@ -1765,30 +1804,9 @@ struct ContentView: View {
         Button {
             self.openSettings(.general)
         } label: {
-            HStack(spacing: self.theme.metrics.spacing.sm) {
-                Image(systemName: "gearshape")
-                    .symbolRenderingMode(.hierarchical)
-                    .foregroundStyle(.secondary)
-                    .frame(width: 18)
-
-                Text("Settings")
-
-                Spacer(minLength: self.theme.metrics.spacing.sm)
-
-                Image(systemName: "chevron.right")
-                    .font(.fluidSystem(size: 10, weight: .semibold))
-                    .foregroundStyle(.tertiary)
-            }
-            .font(self.theme.typography.sidebarItem)
-            .padding(.horizontal, self.theme.metrics.spacing.md)
-            .frame(maxWidth: .infinity, minHeight: 48, alignment: .leading)
-            .contentShape(Rectangle())
+            MainSidebarLabel(title: "Settings", systemImage: "gearshape", isCollapsed: self.isSidebarCollapsed)
         }
-        .buttonStyle(SidebarChromeButtonStyle(
-            isHovered: self.isSettingsEntryHovered,
-            reduceMotion: self.accessibilityReduceMotion
-        ))
-        .onHover { self.isSettingsEntryHovered = $0 }
+        .buttonStyle(MainSidebarButtonStyle())
         .help("Settings")
         .accessibilityLabel("Settings")
     }
@@ -1809,32 +1827,11 @@ struct ContentView: View {
             }
             .disabled(self.asr.isRunning || self.asr.isStarting || NotchContentState.shared.isProcessing)
         } label: {
-            HStack(spacing: self.theme.metrics.spacing.sm) {
-                Image(systemName: "questionmark.circle")
-                    .symbolRenderingMode(.hierarchical)
-                    .foregroundStyle(.secondary)
-                    .frame(width: 18)
-
-                Text("Help")
-
-                Spacer(minLength: self.theme.metrics.spacing.sm)
-
-                Image(systemName: "chevron.up.chevron.down")
-                    .font(.fluidSystem(size: 10, weight: .semibold))
-                    .foregroundStyle(.tertiary)
-            }
-            .font(self.theme.typography.sidebarItem)
-            .padding(.horizontal, self.theme.metrics.spacing.md)
-            .frame(maxWidth: .infinity, minHeight: 40, alignment: .leading)
-            .contentShape(Rectangle())
+            MainSidebarLabel(title: "Help", systemImage: "questionmark.circle", isCollapsed: self.isSidebarCollapsed)
         }
         .menuStyle(.button)
         .menuIndicator(.hidden)
-        .buttonStyle(SidebarChromeButtonStyle(
-            isHovered: self.isHelpEntryHovered,
-            reduceMotion: self.accessibilityReduceMotion
-        ))
-        .onHover { self.isHelpEntryHovered = $0 }
+        .buttonStyle(MainSidebarButtonStyle())
         .help("Open FluidVoice Help")
         .accessibilityLabel("Help")
         .accessibilityHint("What’s new, documentation, Fluid Intelligence demo, and replay onboarding")
@@ -1851,13 +1848,18 @@ struct ContentView: View {
         self.accessibilityReduceMotion ? 0 : 8
     }
 
+    @ViewBuilder
     private func sidebarSectionHeader(_ title: String) -> some View {
-        Text(title)
-            .font(self.theme.typography.sidebarSection)
-            .foregroundStyle(.secondary)
-            .textCase(nil)
-            .padding(.top, self.theme.metrics.spacing.sm)
-            .padding(.bottom, self.theme.metrics.spacing.xs)
+        if self.isSidebarCollapsed {
+            Color.clear.frame(height: 28).accessibilityHidden(true)
+        } else {
+            Text(title)
+                .font(self.theme.typography.sidebarSection)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .padding(.leading, 10)
+                .frame(maxWidth: .infinity, minHeight: 28, alignment: .bottomLeading)
+        }
     }
 
     private func sidebarNavigationLink(_ item: SidebarItem, title: String, systemImage: String) -> some View {
@@ -1865,31 +1867,15 @@ struct ContentView: View {
         return Button {
             self.selectedSidebarItem = item
         } label: {
-            HStack(spacing: self.theme.metrics.spacing.sm) {
-                Image(nsImage: SidebarSymbolCache.image(named: systemImage))
-                    .renderingMode(.template)
-                    .resizable()
-                    .scaledToFit()
-                    .foregroundStyle(isSelected ? Color.white.opacity(0.9) : Color.secondary)
-                    .frame(width: 16, height: 16)
-                    .accessibilityHidden(true)
-
-                Text(title)
-                    .foregroundStyle(isSelected ? Color.white : Color.primary)
-            }
-            .font(self.theme.typography.sidebarItem)
-            .padding(.vertical, self.theme.metrics.spacing.xs / 2)
-            .sidebarOptionHover(
-                isSelected: isSelected,
-                reduceMotion: self.accessibilityReduceMotion
-            )
+            MainSidebarLabel(title: title, systemImage: systemImage, isCollapsed: self.isSidebarCollapsed, isSelected: isSelected)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(MainSidebarButtonStyle(isSelected: isSelected))
+        .help(title)
+        .accessibilityLabel(title)
         .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
     private func configureToolbarActions() {
-        self.toolbarActions.toggleSidebar = self.toggleSidebar
         self.toolbarActions.openStats = { self.navigateToApp(.stats) }
         self.toolbarActions.reportIssue = self.openIssueReportingPage
     }
@@ -2123,8 +2109,15 @@ struct ContentView: View {
     }
 
     private func toggleSidebar() {
-        withAnimation(self.accessibilityReduceMotion ? nil : .easeInOut(duration: 0.2)) {
-            self.columnVisibility = self.columnVisibility == .detailOnly ? .all : .detailOnly
+        withAnimation(self.accessibilityReduceMotion ? nil : MainSidebarLayout.transition) {
+            self.isSidebarCollapsed.toggle()
+        }
+    }
+
+    private func expandSidebarForSearch() {
+        if self.isSidebarCollapsed { self.toggleSidebar() }
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(name: .sidebarSearchFocusRequested, object: nil)
         }
     }
 
@@ -2146,13 +2139,14 @@ struct ContentView: View {
             content
                 .toolbar {
                     MainWindowToolbar(
-                        isSidebarHidden: self.columnVisibility == .detailOnly,
                         pageWithActions: self.hasPageToolbarActions ? (self.selectedSidebarItem ?? .welcome) : nil,
                         actions: self.toolbarActions,
                         pageToolbarStore: self.pageToolbarStore
                     )
                 }
                 .toolbar(removing: .sidebarToggle)
+                .toolbarBackground(self.theme.palette.contentBackground, for: .windowToolbar)
+                .toolbarBackground(.visible, for: .windowToolbar)
                 .onAppear { self.configureToolbarActions() }
                 .onChange(of: self.accessibilityReduceMotion) { _, _ in self.configureToolbarActions() }
         }
@@ -6190,73 +6184,6 @@ extension ContentView {
 
 // swiftlint:enable type_body_length
 
-@MainActor
-private enum SidebarSymbolCache {
-    private static let symbolNames = [
-        "waveform",
-        "brain",
-        "cpu",
-        "wand.and.stars",
-        "text.book.closed.fill",
-        "terminal.fill",
-        "doc.text.fill",
-        "person.2.fill",
-        "clock.arrow.circlepath",
-        "chart.bar.fill",
-        "house.fill",
-        "doc.text.magnifyingglass",
-        "envelope.fill",
-    ]
-
-    private static let images: [String: NSImage] = {
-        let configuration = NSImage.SymbolConfiguration(pointSize: 14, weight: .regular)
-            .applying(.preferringHierarchical())
-        var images: [String: NSImage] = [:]
-
-        for name in symbolNames {
-            guard let image = NSImage(systemSymbolName: name, accessibilityDescription: nil)?
-                .withSymbolConfiguration(configuration)
-            else { continue }
-
-            image.isTemplate = true
-            image.cacheMode = .always
-            images[name] = image
-        }
-
-        return images
-    }()
-
-    static func image(named name: String) -> NSImage {
-        self.images[name] ?? NSImage(systemSymbolName: "questionmark", accessibilityDescription: nil) ?? NSImage()
-    }
-}
-
-private struct SidebarChromeButtonStyle: ButtonStyle {
-    let isHovered: Bool
-    let reduceMotion: Bool
-
-    func makeBody(configuration: Configuration) -> some View {
-        let scale = self.reduceMotion || !configuration.isPressed ? 1 : 0.985
-
-        configuration.label
-            .foregroundStyle(.primary)
-            .background(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(Color.primary.opacity(self.backgroundOpacity(isPressed: configuration.isPressed)))
-            )
-            .scaleEffect(scale)
-            .animation(.easeOut(duration: self.reduceMotion ? 0.08 : 0.1), value: configuration.isPressed)
-            .animation(.easeOut(duration: 0.1), value: self.isHovered)
-    }
-
-    private func backgroundOpacity(isPressed: Bool) -> Double {
-        if isPressed {
-            return 0.12
-        }
-        return self.isHovered ? 0.08 : 0
-    }
-}
-
 extension View {
     func sidebarOptionHover(isSelected: Bool, reduceMotion: Bool) -> some View {
         modifier(SidebarOptionHoverModifier(isSelected: isSelected, reduceMotion: reduceMotion))
@@ -6476,31 +6403,16 @@ private extension ContentView {
 /// A stable reference, so page switches leave `MainWindowToolbar`'s inputs unchanged.
 @MainActor
 private final class MainToolbarActions {
-    var toggleSidebar: () -> Void = {}
     var openStats: () -> Void = {}
     var reportIssue: () -> Void = {}
 }
 
 private struct MainWindowToolbar: ToolbarContent {
-    let isSidebarHidden: Bool
     let pageWithActions: SidebarItem?
     let actions: MainToolbarActions
     let pageToolbarStore: FluidPageToolbarStore
 
     var body: some ToolbarContent {
-        // Keep one navigation control alive in both sidebar states. An overlay
-        // belongs to the sidebar content and shifts below AppKit-hosted title bars.
-        ToolbarItem(placement: .navigation) {
-            Button {
-                self.actions.toggleSidebar()
-            } label: {
-                Image(systemName: "sidebar.left")
-                    .fluidToolbarIcon()
-            }
-            .buttonStyle(.automatic)
-            .help(self.isSidebarHidden ? "Show sidebar" : "Hide sidebar")
-            .accessibilityLabel(self.isSidebarHidden ? "Show sidebar" : "Hide sidebar")
-        }
         ToolbarItemGroup(placement: .primaryAction) {
             UpdateAvailableToolbarButton()
 
