@@ -794,6 +794,7 @@ private struct MeetingStillRecordingNudgeContent: View {
                         .accessibilityIdentifier("meeting-end-stop-now")
                     Button("Keep recording") { self.controller.dismiss(presentationID: presentationID) }
                         .buttonStyle(FluidOutlinedButtonStyle(height: 34))
+                        .fixedSize(horizontal: true, vertical: false)
                         .accessibilityIdentifier("meeting-end-keep-recording")
                 }
             }
