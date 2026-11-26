@@ -5882,6 +5882,120 @@ final class MeetingRecoveryTests: XCTestCase {
         XCTAssertEqual(reloaded?.state, .completed)
     }
 
+    func testNotesWhileRecordingSaveWithoutStoppingCaptureAndSurviveStop() async throws {
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MeetingSessionStore(rootDirectory: dir)
+        let capture = StubCaptureController()
+        let microphone = self.makeMicrophoneTrack(chunks: [self.makeFinalizedChunk()])
+        capture.startResult = MeetingCaptureStartResult(tracks: [microphone], firstPresentationTime: nil)
+        let coordinator = MeetingSessionCoordinator(store: store, capture: capture, processing: StubProcessingController(), audioArbiter: StubArbiter())
+        let started = try await coordinator.startRecording(configuration: self.makeConfiguration())
+        try await Task.sleep(nanoseconds: 100_000_000) // Let startup retention maintenance finish before gating saves.
+        let updated = try await coordinator.updateNotes(sessionID: started.id, to: "## Agenda\n- budget\n\n")
+        XCTAssertEqual(updated.notes, "## Agenda\n- budget")
+        XCTAssertEqual(coordinator.state, .recording(started.id))
+        XCTAssertEqual(capture.stopCount, 0)
+        capture.stopResult = MeetingCaptureStopResult(tracks: [microphone], stoppedAt: Date())
+        let completed = try await coordinator.stopAndTranscribe()
+        XCTAssertEqual(completed.notes, "## Agenda\n- budget")
+        let reloaded = try await store.load(id: started.id)
+        XCTAssertEqual(reloaded?.notes, "## Agenda\n- budget")
+    }
+
+    func testNotesTypedWhileStartingOrStoppingAreNotOverwrittenBySnapshots() async throws {
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MeetingSessionStore(rootDirectory: dir)
+        let capture = StubCaptureController()
+        let microphone = self.makeMicrophoneTrack(chunks: [self.makeFinalizedChunk()])
+        capture.startResult = MeetingCaptureStartResult(tracks: [microphone], firstPresentationTime: nil)
+        let coordinator = MeetingSessionCoordinator(store: store, capture: capture, processing: StubProcessingController(), audioArbiter: StubArbiter())
+        capture.onStart = { @MainActor in
+            guard let id = coordinator.activeSession?.id else { return XCTFail("Start must publish the session first") }
+            _ = try? await coordinator.updateNotes(sessionID: id, to: "typed while starting")
+        }
+        let started = try await coordinator.startRecording(configuration: self.makeConfiguration())
+        XCTAssertEqual(started.notes, "typed while starting")
+        let persistedAtStart = try await store.load(id: started.id)
+        XCTAssertEqual(persistedAtStart?.notes, "typed while starting")
+        capture.onStop = { @MainActor in
+            _ = try? await coordinator.updateNotes(sessionID: started.id, to: "typed while stopping")
+        }
+        capture.stopResult = MeetingCaptureStopResult(tracks: [microphone], stoppedAt: Date())
+        let completed = try await coordinator.stopAndTranscribe()
+        XCTAssertEqual(completed.notes, "typed while stopping")
+        let reloaded = try await store.load(id: started.id)
+        XCTAssertEqual(reloaded?.notes, "typed while stopping")
+    }
+
+    func testNotesEditedDuringProcessingAreKeptInTheCompletedMeeting() async throws {
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MeetingSessionStore(rootDirectory: dir)
+        let capture = StubCaptureController()
+        let microphone = self.makeMicrophoneTrack(chunks: [self.makeFinalizedChunk()])
+        capture.startResult = MeetingCaptureStartResult(tracks: [microphone], firstPresentationTime: nil)
+        let processing = GatedProcessingController()
+        let coordinator = MeetingSessionCoordinator(store: store, capture: capture, processing: processing, audioArbiter: StubArbiter())
+        let started = try await coordinator.startRecording(configuration: self.makeConfiguration())
+        try await Task.sleep(nanoseconds: 100_000_000) // Let startup retention maintenance finish before gating saves.
+        _ = try await coordinator.updateNotes(sessionID: started.id, to: "first")
+        capture.stopResult = MeetingCaptureStopResult(tracks: [microphone], stoppedAt: Date())
+        let stopping = Task { try await coordinator.stopAndTranscribe() }
+        for _ in 0..<200 where !processing.didStart {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTAssertTrue(processing.didStart)
+        _ = try await coordinator.updateNotes(sessionID: started.id, to: "first\n- typed while processing")
+        processing.openGate()
+        let completed = try await stopping.value
+        XCTAssertEqual(completed.notes, "first\n- typed while processing")
+        let reloaded = try await store.load(id: started.id)
+        XCTAssertEqual(reloaded?.notes, "first\n- typed while processing")
+    }
+
+    func testNotesOnFinishedMeetingSaveAndClearToNil() async throws {
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MeetingSessionStore(rootDirectory: dir)
+        let saved = self.makeSession(state: .completed, audioTracks: [self.makeMicrophoneTrack(chunks: [])])
+        try await store.create(saved)
+        let coordinator = MeetingSessionCoordinator(store: store, capture: StubCaptureController(), processing: StubProcessingController(), audioArbiter: StubArbiter())
+        let updated = try await coordinator.updateNotes(sessionID: saved.id, to: "- [ ] follow up")
+        XCTAssertEqual(updated.notes, "- [ ] follow up")
+        let persisted = try await store.load(id: saved.id)
+        XCTAssertEqual(persisted?.notes, "- [ ] follow up")
+        let cleared = try await coordinator.updateNotes(sessionID: saved.id, to: "  \n")
+        XCTAssertNil(cleared.notes)
+        let reloaded = try await store.load(id: saved.id)
+        XCTAssertNil(reloaded?.notes)
+    }
+
+    func testNotesOnInterruptedRecoveryOfferAreSaved() async throws {
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MeetingSessionStore(rootDirectory: dir)
+        let capture = StubCaptureController()
+        let microphone = self.makeMicrophoneTrack(chunks: [])
+        capture.startResult = MeetingCaptureStartResult(tracks: [microphone], firstPresentationTime: nil)
+        let coordinator = MeetingSessionCoordinator(store: store, capture: capture, processing: StubProcessingController(), audioArbiter: StubArbiter())
+        let session = try await coordinator.startRecording(configuration: self.makeConfiguration())
+        capture.stopResult = MeetingCaptureStopResult(tracks: [microphone], stoppedAt: Date())
+        capture.emit(.sourceApplicationEnded(detail: "Zoom is no longer available to record."))
+        for _ in 0..<200 {
+            if coordinator.isQuiescent, coordinator.state == .interrupted(session.id) { break }
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+        XCTAssertEqual(coordinator.state, .interrupted(session.id))
+        XCTAssertEqual(coordinator.activeSession?.id, session.id)
+        let updated = try await coordinator.updateNotes(sessionID: session.id, to: "after the drop")
+        XCTAssertEqual(updated.notes, "after the drop")
+        XCTAssertEqual(coordinator.activeSession?.notes, "after the drop")
+        let reloaded = try await store.load(id: session.id)
+        XCTAssertEqual(reloaded?.notes, "after the drop")
+    }
+
     func testRenameWhileRecordingRejectsBlankAndRecoversAfterSaveFailure() async throws {
         let dir = self.makeTempDirectory()
         defer { try? FileManager.default.removeItem(at: dir) }
@@ -6208,6 +6322,7 @@ private final class StubCaptureController: MeetingCaptureControlling, @unchecked
     var startError: Error?
     var startupEvents: [MeetingCaptureEvent] = []
     var onStart: (@Sendable () async -> Void)?
+    var onStop: (@Sendable () async -> Void)?
     var preflightError: Error?
     var onPreflight: (@Sendable () async -> Void)?
     private(set) var preflightCount = 0
@@ -6243,6 +6358,7 @@ private final class StubCaptureController: MeetingCaptureControlling, @unchecked
 
     func stop(sessionID: MeetingSessionID) async throws -> MeetingCaptureStopResult {
         self.stopCount += 1
+        await self.onStop?()
         return self.stopResult ?? MeetingCaptureStopResult(tracks: [], stoppedAt: Date())
     }
 
