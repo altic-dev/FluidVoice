@@ -144,9 +144,12 @@ final class MeetingSummaryInputTests: XCTestCase {
     func testMeetingWithoutNotesKeepsTodaysInputAndFingerprint() {
         var session = self.session(origin: 0, segmentStart: 0, segmentEnd: 1, gapStart: 2, gapEnd: 3)
         let before = MeetingSummaryInput.transcript(for: session)
-        session.notes = nil
+        let fingerprint = MeetingSummaryInput.contentFingerprint(for: session)
+        XCTAssertTrue(before.contains("----------\n**Speaker 1**: hello"), "The header is followed directly by the turns")
+
+        session.notes = " \n\t "
         XCTAssertEqual(MeetingSummaryInput.transcript(for: session), before)
-        XCTAssertFalse(before.contains("<notes>"))
+        XCTAssertEqual(MeetingSummaryInput.contentFingerprint(for: session), fingerprint)
     }
 
     func testNotesAreAddedBetweenHeaderAndTranscriptAndChangeTheFingerprint() {
@@ -162,6 +165,7 @@ final class MeetingSummaryInputTests: XCTestCase {
     func testNotesNormalizeBlankToNil() {
         XCTAssertNil(MeetingSession.normalizedNotes(" \n\t "))
         XCTAssertEqual(MeetingSession.normalizedNotes("  keep inner\nspacing  \n"), "  keep inner\nspacing")
+        XCTAssertEqual(MeetingSession.normalizedNotes("a\n\n\nb"), "a\n\n\nb")
     }
 
     func testNotesRoundTripAndManifestWithoutNotesKeyDecodes() throws {

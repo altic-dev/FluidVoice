@@ -241,6 +241,8 @@ final class MeetingSummaryProviderTests: XCTestCase {
             let prompt = MeetingSummaryRemoteService.prompt(for: kind, customInstructions: "List risks")
             XCTAssertTrue(prompt.contains("If user notes are supplied"), kind.rawValue)
             XCTAssertTrue(prompt.contains("(from notes)"), kind.rawValue)
+            XCTAssertFalse(prompt.contains("as your only source and"), kind.rawValue)
+            XCTAssertTrue(prompt.contains("transcript and"), kind.rawValue)
         }
         let custom = MeetingSummaryRemoteService.prompt(for: .custom, customInstructions: "List risks")
         let rule = try XCTUnwrap(custom.range(of: "If user notes are supplied"))
