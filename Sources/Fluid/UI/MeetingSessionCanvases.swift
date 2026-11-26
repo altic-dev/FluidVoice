@@ -360,7 +360,7 @@ private struct MeetingNotesPane: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
-            MeetingMarkdownEditor(text: self.$notes.text)
+            MeetingMarkdownEditor(text: self.$notes.text, documentID: self.notes.sessionID)
                 .frame(minHeight: self.minHeight, idealHeight: self.minHeight, maxHeight: self.fillsHeight ? .infinity : self.minHeight)
             if let saveError = self.notes.saveError {
                 Label(saveError, systemImage: "exclamationmark.triangle.fill")

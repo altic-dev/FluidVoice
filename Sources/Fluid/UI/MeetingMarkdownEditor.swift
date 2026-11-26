@@ -4,8 +4,9 @@ import SwiftUI
 /// Plain-text markdown editor with in-place styling. The stored text is exactly what was typed.
 struct MeetingMarkdownEditor: NSViewRepresentable {
     @Binding var text: String
+    /// Which meeting the text belongs to; a change resets undo even when two meetings' notes match.
+    var documentID: MeetingSessionID?
     var placeholder = "Jot down notes. Markdown works: # headings, - bullets, - [ ] tasks."
-    var isEditable = true
 
     func makeCoordinator() -> Coordinator {
         Coordinator(text: self.$text)
@@ -37,34 +38,39 @@ struct MeetingMarkdownEditor: NSViewRepresentable {
         textView.font = MeetingNotesTextView.baseFont
         textView.textColor = .labelColor
         textView.defaultParagraphStyle = MeetingNotesTextView.baseParagraphStyle
-        textView.isEditable = self.isEditable
         textView.placeholder = self.placeholder
         textView.setAccessibilityLabel("Meeting notes")
         textView.delegate = context.coordinator
-        textView.string = self.text
-        textView.restyleAll()
+        context.coordinator.load(self.text, documentID: self.documentID, into: textView)
         return scrollView
     }
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         context.coordinator.text = self.$text
         guard let textView = scrollView.documentView as? MeetingNotesTextView else { return }
-        if textView.isEditable != self.isEditable { textView.isEditable = self.isEditable }
         textView.placeholder = self.placeholder
-        if textView.string != self.text {
-            // A different meeting: its text must not be undone into the previous one's.
-            context.coordinator.undoManager.removeAllActions()
-            textView.string = self.text
-            textView.restyleAll()
-        }
+        context.coordinator.load(self.text, documentID: self.documentID, into: textView)
     }
 
     final class Coordinator: NSObject, NSTextViewDelegate {
         var text: Binding<String>
         let undoManager = UndoManager()
+        private var documentID: MeetingSessionID?
+        private var hasLoaded = false
 
         init(text: Binding<String>) {
             self.text = text
+        }
+
+        /// Replaces the shown text when the meeting or its text changed outside the editor.
+        func load(_ text: String, documentID: MeetingSessionID?, into textView: MeetingNotesTextView) {
+            guard !self.hasLoaded || documentID != self.documentID || textView.string != text else { return }
+            self.hasLoaded = true
+            self.documentID = documentID
+            // Undo steps refer to the old text; replaying them into this text would corrupt it.
+            self.undoManager.removeAllActions()
+            textView.string = text
+            textView.restyleAll()
         }
 
         func undoManager(for view: NSTextView) -> UndoManager? {
@@ -84,6 +90,8 @@ struct MeetingMarkdownEditor: NSViewRepresentable {
             var contentsEnd = 0
             string.getLineStart(&lineStart, end: nil, contentsEnd: &contentsEnd, for: NSRange(location: selection.location, length: 0))
             guard NSMaxRange(selection) <= contentsEnd else { return false }
+            // List rules don't apply to code.
+            if let notesView = textView as? MeetingNotesTextView, notesView.isInCodeBlock(lineStart: lineStart) { return false }
             switch selector {
             case #selector(NSResponder.insertNewline(_:)):
                 guard selection.length == 0 else { return false }
@@ -139,6 +147,7 @@ final class MeetingNotesTextView: NSTextView {
 
     private var pendingRestyle = PendingRestyle.none
     private var taskBoxes: [NSRange] = []
+    private var codeBlockLines: [NSRange] = []
     private var showsPlaceholder = false
     private var hoverTracking: NSTrackingArea?
 
@@ -148,6 +157,9 @@ final class MeetingNotesTextView: NSTextView {
         paragraph.lineSpacing = 3
         return paragraph
     }()
+
+    /// Keys restyling owns; anything else (such as dictation alternatives) is left alone.
+    private static let managedKeys: [NSAttributedString.Key] = [.font, .foregroundColor, .backgroundColor, .strikethroughStyle, .paragraphStyle]
 
     static let baseAttributes: [NSAttributedString.Key: Any] = [
         .font: baseFont,
@@ -172,6 +184,7 @@ final class MeetingNotesTextView: NSTextView {
     }
 
     override func didChangeText() {
+        self.updatePlaceholderVisibility()
         if self.hasMarkedText() {
             // Restyling would strip the IME's marked-text underline; restyle once composition commits.
             self.pendingRestyle = .full
@@ -184,6 +197,19 @@ final class MeetingNotesTextView: NSTextView {
             self.pendingRestyle = .none
         }
         super.didChangeText()
+    }
+
+    override func unmarkText() {
+        super.unmarkText()
+        // Composition committed without a further edit: apply the restyle it deferred.
+        if case .full = self.pendingRestyle {
+            self.restyleAll()
+            self.pendingRestyle = .none
+        }
+    }
+
+    func isInCodeBlock(lineStart: Int) -> Bool {
+        self.codeBlockLines.contains { $0.location == lineStart }
     }
 
     func restyleAll() {
@@ -205,18 +231,26 @@ final class MeetingNotesTextView: NSTextView {
     private func apply(_ spans: [MeetingMarkdownSpan], in range: NSRange) {
         guard let storage = self.textStorage else { return }
         self.taskBoxes = spans.compactMap { if case .taskBox = $0.style { $0.range } else { nil } }
+        self.codeBlockLines = spans.compactMap { $0.style == .codeBlock ? $0.range : nil }
         storage.beginEditing()
-        storage.setAttributes(Self.baseAttributes, range: range)
+        for key in Self.managedKeys {
+            storage.removeAttribute(key, range: range)
+        }
+        storage.addAttributes(Self.baseAttributes, range: range)
         for span in spans {
             let target = NSIntersectionRange(span.range, range)
             if target.length > 0 { Self.style(storage, span.style, in: target) }
         }
         storage.endEditing()
         self.typingAttributes = Self.baseAttributes
-        if (storage.length == 0) != self.showsPlaceholder {
-            self.showsPlaceholder.toggle()
-            self.needsDisplay = true
-        }
+        self.updatePlaceholderVisibility()
+    }
+
+    private func updatePlaceholderVisibility() {
+        let isEmpty = self.textStorage?.length ?? 0 == 0
+        guard isEmpty != self.showsPlaceholder else { return }
+        self.showsPlaceholder = isEmpty
+        self.needsDisplay = true
     }
 
     private static func containsFence(_ text: String) -> Bool {
@@ -269,7 +303,7 @@ final class MeetingNotesTextView: NSTextView {
 
     override func mouseDown(with event: NSEvent) {
         let modifiers = event.modifierFlags.intersection([.shift, .command, .option, .control])
-        guard event.clickCount == 1, modifiers.isEmpty,
+        guard event.clickCount == 1, modifiers.isEmpty, !self.hasMarkedText(),
               let box = self.taskBox(at: self.convert(event.locationInWindow, from: nil))
         else { return super.mouseDown(with: event) }
         let string = self.string as NSString
@@ -287,7 +321,7 @@ final class MeetingNotesTextView: NSTextView {
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
         if let hoverTracking { self.removeTrackingArea(hoverTracking) }
-        let area = NSTrackingArea(rect: .zero, options: [.mouseMoved, .activeInKeyWindow, .inVisibleRect], owner: self)
+        let area = NSTrackingArea(rect: .zero, options: [.mouseMoved, .cursorUpdate, .activeInKeyWindow, .inVisibleRect], owner: self)
         self.addTrackingArea(area)
         self.hoverTracking = area
     }
@@ -305,20 +339,26 @@ final class MeetingNotesTextView: NSTextView {
         }
     }
 
-    // MARK: - Keys, paste, placeholder
+    // MARK: - Keys and placeholder
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         let modifiers = event.modifierFlags.intersection([.shift, .command, .option, .control])
-        guard self.window?.firstResponder === self, modifiers.contains(.command) else {
+        let responder = self.window?.firstResponder
+        let isFocused = responder === self
+        // Find next/previous also work from the find bar's field, which lives in the scroll view.
+        let isFinding = isFocused || (responder as? NSView).flatMap { view in
+            self.enclosingScrollView.map { view.isDescendant(of: $0) }
+        } == true
+        guard isFinding, modifiers.contains(.command) else {
             return super.performKeyEquivalent(with: event)
         }
         switch (event.charactersIgnoringModifiers?.lowercased(), modifiers) {
-        case ("b", .command) where self.isEditable:
+        case ("b", .command) where isFocused && self.isEditable:
             self.wrapSelection(with: "**")
-        case ("i", .command) where self.isEditable:
+        case ("i", .command) where isFocused && self.isEditable:
             self.wrapSelection(with: "*")
         // The app binds ⌘F to sidebar search; inside the notes it searches the notes.
-        case ("f", .command):
+        case ("f", .command) where isFocused:
             self.performFind(.showFindPanel)
         case ("g", .command):
             self.performFind(.next)
@@ -341,10 +381,6 @@ final class MeetingNotesTextView: NSTextView {
         let selected = (self.string as NSString).substring(with: range)
         self.insertText("\(marker)\(selected)\(marker)", replacementRange: range)
         self.setSelectedRange(NSRange(location: range.location + (marker as NSString).length, length: range.length))
-    }
-
-    override func paste(_ sender: Any?) {
-        self.pasteAsPlainText(sender)
     }
 
     override func draw(_ dirtyRect: NSRect) {

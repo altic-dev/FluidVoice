@@ -1210,3 +1210,105 @@ final class MeetingMarkdownStylerTests: XCTestCase {
         XCTAssertLessThan(Date().timeIntervalSince(start), 0.25, "styling runs on every keystroke")
     }
 }
+
+@MainActor
+final class MeetingMarkdownEditorTests: XCTestCase {
+    private func makeEditor(_ text: String = "") -> (MeetingNotesTextView, MeetingMarkdownEditor.Coordinator) {
+        let coordinator = MeetingMarkdownEditor.Coordinator(text: .constant(""))
+        coordinator.undoManager.groupsByEvent = false
+        let textView = MeetingNotesTextView(frame: NSRect(x: 0, y: 0, width: 400, height: 300))
+        textView.isRichText = false
+        textView.allowsUndo = true
+        textView.delegate = coordinator
+        coordinator.load(text, documentID: UUID(), into: textView)
+        return (textView, coordinator)
+    }
+
+    /// Runs one edit as its own undo step, like a separate user action.
+    private func step(_ coordinator: MeetingMarkdownEditor.Coordinator, _ edit: () -> Void) {
+        coordinator.undoManager.beginUndoGrouping()
+        edit()
+        coordinator.undoManager.endUndoGrouping()
+    }
+
+    private func assertMatchesFullRestyle(_ textView: MeetingNotesTextView, _ label: String, file: StaticString = #filePath, line: UInt = #line) {
+        let reference = MeetingNotesTextView(frame: textView.frame)
+        reference.string = textView.string
+        reference.restyleAll()
+        guard let actual = textView.textStorage, let expected = reference.textStorage else {
+            return XCTFail("\(label): no text storage", file: file, line: line)
+        }
+        XCTAssertEqual(actual.string, expected.string, label, file: file, line: line)
+        for index in 0..<actual.length {
+            for key in [NSAttributedString.Key.font, .foregroundColor, .backgroundColor, .strikethroughStyle] {
+                let lhs = actual.attribute(key, at: index, effectiveRange: nil) as? NSObject
+                let rhs = expected.attribute(key, at: index, effectiveRange: nil) as? NSObject
+                guard lhs != rhs else { continue }
+                XCTFail("\(label): \(key.rawValue) differs at \(index) in \(actual.string.debugDescription)", file: file, line: line)
+                return
+            }
+        }
+    }
+
+    func testIncrementalRestyleMatchesAFullRestyle() {
+        let (textView, coordinator) = self.makeEditor("# Plan\n- one\nplain **bold**\ncode later\nend")
+        self.assertMatchesFullRestyle(textView, "load")
+
+        self.step(coordinator) {
+            textView.setSelectedRange(NSRange(location: (textView.string as NSString).length, length: 0))
+            textView.insertText("\n## Typed *heading* with `code`", replacementRange: textView.selectedRange())
+        }
+        self.assertMatchesFullRestyle(textView, "type a paragraph")
+
+        let codeLine = (textView.string as NSString).range(of: "code later").location
+        self.step(coordinator) { textView.insertText("```\n", replacementRange: NSRange(location: codeLine, length: 0)) }
+        self.assertMatchesFullRestyle(textView, "open a fence")
+
+        let end = (textView.string as NSString).range(of: "\nend").location
+        self.step(coordinator) { textView.insertText("\n```", replacementRange: NSRange(location: end, length: 0)) }
+        self.assertMatchesFullRestyle(textView, "close the fence")
+
+        let secondLine = (textView.string as NSString).range(of: "- one").location
+        self.step(coordinator) {
+            textView.setSelectedRange(NSRange(location: secondLine, length: 0))
+            textView.deleteBackward(nil)
+        }
+        self.assertMatchesFullRestyle(textView, "join paragraphs")
+
+        self.step(coordinator) {
+            textView.insertText("> pasted\n- [x] done task\n### three", replacementRange: NSRange(location: 2, length: 0))
+        }
+        self.assertMatchesFullRestyle(textView, "multi-line paste")
+
+        let beforeUndo = textView.string
+        coordinator.undoManager.undo()
+        XCTAssertNotEqual(textView.string, beforeUndo)
+        self.assertMatchesFullRestyle(textView, "undo")
+        coordinator.undoManager.redo()
+        XCTAssertEqual(textView.string, beforeUndo)
+        self.assertMatchesFullRestyle(textView, "redo")
+    }
+
+    func testLoadingAnotherMeetingWithTheSameTextClearsUndo() {
+        let (textView, coordinator) = self.makeEditor("hello")
+        self.step(coordinator) { textView.insertText("!", replacementRange: NSRange(location: 5, length: 0)) }
+        XCTAssertTrue(coordinator.undoManager.canUndo)
+
+        coordinator.load("hello!", documentID: UUID(), into: textView)
+        XCTAssertFalse(coordinator.undoManager.canUndo, "undo must not reach into the previous meeting")
+        XCTAssertEqual(textView.string, "hello!")
+    }
+
+    func testReturnInsideACodeBlockDoesNotContinueTheList() {
+        let (textView, coordinator) = self.makeEditor("```\n- item\n```")
+        textView.setSelectedRange(NSRange(location: 10, length: 0))
+        XCTAssertFalse(coordinator.textView(textView, doCommandBy: #selector(NSResponder.insertNewline(_:))))
+
+        coordinator.load("- item", documentID: UUID(), into: textView)
+        textView.setSelectedRange(NSRange(location: 6, length: 0))
+        var handled = false
+        self.step(coordinator) { handled = coordinator.textView(textView, doCommandBy: #selector(NSResponder.insertNewline(_:))) }
+        XCTAssertTrue(handled)
+        XCTAssertEqual(textView.string, "- item\n- ")
+    }
+}
