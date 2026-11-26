@@ -409,12 +409,11 @@ struct MeetingTranscriptionView: View {
                 self.notesTabSessionID = nil
             }
         }
-        .onAppear {
-            self.appServices.flushMeetingNotes = { [notes = self.notes] in await notes.flushAndWait() }
-        }
+        .onAppear { self.appServices.meetingNotes = self.notes }
         .onDisappear {
             self.notes.flush()
-            self.appServices.flushMeetingNotes = nil
+            // A newer meeting view may already have registered its own model.
+            if self.appServices.meetingNotes === self.notes { self.appServices.meetingNotes = nil }
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             Task {
@@ -883,6 +882,7 @@ struct MeetingTranscriptionView: View {
         Task {
             defer { self.isStarting = false }
             do {
+                await self.notes.flushAndWait()
                 _ = try await self.coordinator.startRecording(configuration: configuration)
             } catch {
                 self.actionErrorMessage = error.localizedDescription
@@ -954,6 +954,7 @@ struct MeetingTranscriptionView: View {
         Task {
             defer { self.isRetrying = false }
             do {
+                await self.notes.flushAndWait()
                 _ = try await self.coordinator.retryProcessing(sessionID: id, languageCode: languageCode)
             } catch {
                 self.actionErrorMessage = error.localizedDescription
@@ -966,6 +967,7 @@ struct MeetingTranscriptionView: View {
         self.actionErrorMessage = nil
         Task {
             do {
+                await self.notes.flushAndWait()
                 let saved = try await self.coordinator.reassignSegment(sessionID: sessionID, segmentID: segmentID, to: speakerID)
                 self.historySnapshot.applySavedSession(saved)
             } catch {
@@ -982,6 +984,7 @@ struct MeetingTranscriptionView: View {
         self.actionErrorMessage = nil
         Task {
             do {
+                await self.notes.flushAndWait()
                 let saved = try await self.coordinator.nameUnknownSegment(
                     sessionID: sessionID,
                     segmentID: segmentID,
@@ -996,6 +999,7 @@ struct MeetingTranscriptionView: View {
 
     private func editTranscriptSegment(sessionID: MeetingSessionID, segmentID: MeetingTranscriptSegmentID, text: String, revision: Int) async -> String? {
         do {
+            await self.notes.flushAndWait()
             let saved = try await self.coordinator.editTranscriptText(sessionID: sessionID, segmentID: segmentID, text: text, expectedRevision: revision)
             self.historySnapshot.applySavedSession(saved)
             return nil
@@ -1008,6 +1012,7 @@ struct MeetingTranscriptionView: View {
         self.actionErrorMessage = nil
         var errorMessage: String?
         do {
+            await self.notes.flushAndWait()
             let saved = try await self.coordinator.editSpeakers(sessionID: sessionID, edits: edits)
             self.historySnapshot.applySavedSession(saved)
         } catch {
@@ -1020,6 +1025,7 @@ struct MeetingTranscriptionView: View {
         self.actionErrorMessage = nil
         Task {
             do {
+                await self.notes.flushAndWait()
                 let saved = try await self.coordinator.renameSession(sessionID: sessionID, to: title)
                 self.historySnapshot.applySavedSession(saved)
             } catch {
@@ -1031,6 +1037,7 @@ struct MeetingTranscriptionView: View {
     private func undoTranscriptCorrection(sessionID: MeetingSessionID) async -> Bool {
         self.actionErrorMessage = nil
         do {
+            await self.notes.flushAndWait()
             let saved = try await self.coordinator.undoTranscriptCorrection(sessionID: sessionID)
             self.historySnapshot.applySavedSession(saved)
         } catch {
@@ -1045,6 +1052,7 @@ struct MeetingTranscriptionView: View {
         self.actionErrorMessage = nil
         Task {
             do {
+                await self.notes.flushAndWait()
                 try await self.coordinator.deleteSession(id: id)
                 if self.route == .meeting(id) { self.route = .home }
             } catch {
@@ -1060,6 +1068,7 @@ struct MeetingTranscriptionView: View {
         self.actionErrorMessage = nil
         Task {
             do {
+                await self.notes.flushAndWait()
                 _ = try await self.coordinator.deleteAudio(sessionID: id)
             } catch {
                 self.actionErrorMessage = error.localizedDescription
@@ -1074,6 +1083,7 @@ struct MeetingTranscriptionView: View {
         self.actionErrorMessage = nil
         Task {
             do {
+                await self.notes.flushAndWait()
                 _ = try await self.coordinator.recordAgain(from: session.id, configuration: configuration)
                 self.route = .home
                 self.resetDraftTitleToDefault()

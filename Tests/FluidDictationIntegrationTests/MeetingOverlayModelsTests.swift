@@ -995,12 +995,26 @@ final class MeetingNotesModelTests: XCTestCase {
         return session
     }
 
+    private func with(_ session: MeetingSession, notes: String?) -> MeetingSession {
+        var copy = session
+        copy.notes = notes
+        return copy
+    }
+
+    private func waitUntil(timeout: Duration = .seconds(2), _ condition: () -> Bool) async throws {
+        let deadline = ContinuousClock.now + timeout
+        while !condition(), ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+    }
+
     func testTypingSavesOnceAfterThePause() async throws {
         var saves: [String] = []
         let model = MeetingNotesModel(debounce: .milliseconds(50)) { _, text in saves.append(text); return self.session(notes: text) }
         model.show(self.session())
         model.text = "a"; model.text = "ab"; model.text = "abc"
-        try await Task.sleep(for: .milliseconds(200))
+        try await self.waitUntil { !saves.isEmpty }
+        try await Task.sleep(for: .milliseconds(100))
         XCTAssertEqual(saves, ["abc"])
     }
 
@@ -1017,6 +1031,25 @@ final class MeetingNotesModelTests: XCTestCase {
         XCTAssertEqual(saves, ["last second"], "already saved")
     }
 
+    func testFlushAndWaitWaitsForASaveAlreadyInFlight() async throws {
+        var gate: CheckedContinuation<Void, Never>?
+        var finished = false
+        let model = MeetingNotesModel(debounce: .milliseconds(10)) { _, text in
+            await withCheckedContinuation { gate = $0 }
+            finished = true
+            return self.session(notes: text)
+        }
+        model.show(self.session())
+        model.text = "typed"
+        try await self.waitUntil { gate != nil }
+        Task {
+            try? await Task.sleep(for: .milliseconds(50))
+            gate?.resume()
+        }
+        await model.flushAndWait()
+        XCTAssertTrue(finished, "callers rely on the coordinator's mutation gate being free afterwards")
+    }
+
     func testShowingAnotherMeetingFlushesThePreviousOne() async throws {
         var saves: [(MeetingSessionID, String)] = []
         let model = MeetingNotesModel(debounce: .seconds(10)) { id, text in saves.append((id, text)); return self.session(notes: text) }
@@ -1024,7 +1057,7 @@ final class MeetingNotesModelTests: XCTestCase {
         model.show(first)
         model.text = "unsaved"
         model.show(self.session(notes: "other"))
-        try await Task.sleep(for: .milliseconds(50))
+        try await self.waitUntil { !saves.isEmpty }
         XCTAssertEqual(saves.map(\.0), [first.id])
         XCTAssertEqual(saves.map(\.1), ["unsaved"])
         XCTAssertEqual(model.text, "other")
@@ -1038,17 +1071,34 @@ final class MeetingNotesModelTests: XCTestCase {
         XCTAssertEqual(saveCount, 0)
     }
 
-    func testRefreshOfTheSameMeetingThatLostNotesResaves() async throws {
-        var saves: [String] = []
-        let model = MeetingNotesModel(debounce: .milliseconds(10)) { _, text in saves.append(text); return self.session(notes: text) }
-        let session = self.session(notes: "kept")
+    func testCleanEditorAdoptsNewerStoredNotesWithoutSaving() async throws {
+        var saveCount = 0
+        let model = MeetingNotesModel(debounce: .milliseconds(10)) { _, text in saveCount += 1; return self.session(notes: text) }
+        let session = self.session(notes: "old")
         model.show(session)
-        var stale = session
-        stale.notes = nil
-        model.show(stale)
+        model.show(self.with(session, notes: "newer"))
+        XCTAssertEqual(model.text, "newer")
         try await Task.sleep(for: .milliseconds(50))
-        XCTAssertEqual(saves, ["kept"])
+        XCTAssertEqual(saveCount, 0)
+    }
+
+    /// Unsaved edits win over a refresh that doesn't have them; a clean editor would adopt it instead.
+    func testRefreshWithoutUnsavedEditsResavesThem() async throws {
+        var saves: [String] = []
+        let model = MeetingNotesModel(debounce: .milliseconds(10)) { _, text in
+            saves.append(text)
+            if saves.count == 1 { throw CocoaError(.fileWriteUnknown) }
+            return self.session(notes: text)
+        }
+        let session = self.session()
+        model.show(session)
+        model.text = "kept"
+        try await self.waitUntil { model.saveError != nil }
+        model.show(session)
+        try await self.waitUntil { saves.count == 2 }
+        XCTAssertEqual(saves, ["kept", "kept"])
         XCTAssertEqual(model.text, "kept")
+        XCTAssertNil(model.saveError)
     }
 
     func testRefreshWithOnlyTrailingWhitespaceDifferenceDoesNotResave() async throws {
@@ -1060,18 +1110,11 @@ final class MeetingNotesModelTests: XCTestCase {
         let session = self.session(notes: "line")
         model.show(session)
         model.text = "line\n\n"
-        try await Task.sleep(for: .milliseconds(50))
-        let afterTyping = saveCount
+        try await self.waitUntil { saveCount == 1 }
         model.show(session)
         try await Task.sleep(for: .milliseconds(50))
-        XCTAssertEqual(saveCount, afterTyping, "normalized text already matches the stored notes")
-    }
-
-    private func waitUntil(timeout: Duration = .seconds(2), _ condition: () -> Bool) async throws {
-        let deadline = ContinuousClock.now + timeout
-        while !condition(), ContinuousClock.now < deadline {
-            try await Task.sleep(for: .milliseconds(5))
-        }
+        XCTAssertEqual(saveCount, 1, "normalized text already matches the stored notes")
+        XCTAssertEqual(model.text, "line\n\n", "matching stored notes must not reload over the typed text")
     }
 
     func testBusyCoordinatorRetriesWithLatestText() async throws {
@@ -1112,6 +1155,58 @@ final class MeetingNotesModelTests: XCTestCase {
         XCTAssertEqual(attempts.map(\.1), ["first notes", "first notes"])
     }
 
+    func testReturningToAMeetingWhoseSaveIsBlockedKeepsTheNewerText() async throws {
+        let meetingA = self.session(notes: "a0")
+        var stored: [MeetingSessionID: String?] = [meetingA.id: "a0"]
+        var savedToA: [String] = []
+        var busy = true
+        let model = MeetingNotesModel(debounce: .seconds(10), retryDelay: .milliseconds(20)) { id, text in
+            if busy { throw MeetingCoordinatorError.activityInProgress }
+            if id == meetingA.id { savedToA.append(text) }
+            stored[id] = MeetingSession.normalizedNotes(text)
+            return self.with(meetingA, notes: MeetingSession.normalizedNotes(text))
+        }
+        model.show(meetingA)
+        model.text = "a1"
+        model.show(self.session())
+        try await Task.sleep(for: .milliseconds(30))
+        // Back to A while its save is still refused: the store still says "a0".
+        model.show(meetingA)
+        XCTAssertEqual(model.text, "a1")
+        busy = false
+        try await self.waitUntil { stored[meetingA.id] == "a1" }
+        model.show(self.with(meetingA, notes: "a1"))
+        try await Task.sleep(for: .milliseconds(80))
+        XCTAssertEqual(stored[meetingA.id], "a1")
+        XCTAssertEqual(model.text, "a1")
+        XCTAssertFalse(savedToA.contains("a0"), "older stored notes must never be written back")
+    }
+
+    func testReturningToAMeetingWhileItsSaveIsInFlightKeepsTheNewerText() async throws {
+        let meetingA = self.session(notes: "a0")
+        var gate: CheckedContinuation<Void, Never>?
+        var savedToA: [String] = []
+        let model = MeetingNotesModel(debounce: .seconds(10)) { id, text in
+            if id == meetingA.id {
+                savedToA.append(text)
+                if savedToA.count == 1 { await withCheckedContinuation { gate = $0 } }
+            }
+            return self.with(meetingA, notes: MeetingSession.normalizedNotes(text))
+        }
+        model.show(meetingA)
+        model.text = "a1"
+        model.show(self.session())
+        try await self.waitUntil { gate != nil }
+        model.show(meetingA)
+        XCTAssertEqual(model.text, "a1")
+        gate?.resume()
+        try await self.waitUntil { savedToA.count == 2 }
+        model.show(self.with(meetingA, notes: "a1"))
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertEqual(savedToA, ["a1", "a1"])
+        XCTAssertEqual(model.text, "a1")
+    }
+
     func testRefreshDuringAnInFlightSaveDoesNotSaveAgain() async throws {
         var saves: [String] = []
         var gate: CheckedContinuation<Void, Never>?
@@ -1120,16 +1215,14 @@ final class MeetingNotesModelTests: XCTestCase {
             await withCheckedContinuation { gate = $0 }
             return self.session(notes: text)
         }
-        let session = self.session(notes: "kept")
+        let session = self.session()
         model.show(session)
-        var stale = session
-        stale.notes = nil
-        model.show(stale)
+        model.text = "typed"
         try await self.waitUntil { gate != nil }
-        model.show(stale)
+        model.show(session)
         try await Task.sleep(for: .milliseconds(50))
         gate?.resume()
-        XCTAssertEqual(saves, ["kept"])
+        XCTAssertEqual(saves, ["typed"])
     }
 }
 

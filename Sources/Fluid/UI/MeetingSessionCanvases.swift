@@ -671,6 +671,8 @@ struct MeetingResultCanvas: View {
         .onChange(of: self.documentSection) { _, _ in
             self.playback.stop()
             self.copied = false
+            // A summary generated right after typing must see the last keystrokes.
+            self.notes.flush()
         }
         .onChange(of: self.showsProbableEchoes) { _, _ in self.playback.stop() }
         .task(id: self.copyRevision) {
