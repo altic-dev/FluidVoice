@@ -373,7 +373,6 @@ private struct MeetingHomeRow: View {
                 Image(systemName: "note.text")
                     .padding(.leading, self.theme.metrics.spacing.xs)
                     .help("Has notes")
-                    .accessibilityLabel("Has notes")
             }
         }
         .font(self.theme.typography.caption)

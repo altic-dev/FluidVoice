@@ -286,7 +286,9 @@ struct MeetingTranscriptionView: View {
     @State private var pendingDeleteSessionID: MeetingSessionID?
     @State private var pendingDeleteAudioSessionID: MeetingSessionID?
     @State private var draftMeetingAudioRetentionPolicy = SettingsStore.shared.meetingAudioRetentionPolicy
-    @StateObject private var notes: MeetingNotesModel
+    /// Held without observing: only the editor and Copy button re-render as notes change, not this page.
+    @State private var notes: MeetingNotesModel
+    @State private var notesTabSessionID: MeetingSessionID?
 
     init(
         coordinator: MeetingSessionCoordinator,
@@ -299,7 +301,7 @@ struct MeetingTranscriptionView: View {
         self.coordinator = coordinator
         self.asrService = asrService
         self.historySnapshot = historySnapshot
-        self._notes = StateObject(wrappedValue: MeetingNotesModel { [coordinator, historySnapshot] id, text in
+        self._notes = State(initialValue: MeetingNotesModel { [coordinator, historySnapshot] id, text in
             let saved = try await coordinator.updateNotes(sessionID: id, to: text)
             // Keeps the home list's notes icon and reopened meetings current.
             historySnapshot.applySavedSession(saved)
@@ -403,6 +405,8 @@ struct MeetingTranscriptionView: View {
                 self.notes.show(session)
             } else {
                 self.notes.flush()
+                // Only the hand-off from recording to its result opens on Notes, not later visits.
+                self.notesTabSessionID = nil
             }
         }
         .onAppear {
@@ -479,7 +483,9 @@ struct MeetingTranscriptionView: View {
         switch state {
         case let .recording(session, _, _), let .stopping(session, _, _), let .processing(session, _), let .result(session):
             return session
-        case .setup, .failed:
+        case let .failed(session, _):
+            return session
+        case .setup:
             return nil
         }
     }
@@ -536,6 +542,7 @@ struct MeetingTranscriptionView: View {
             readiness: self.readiness,
             errorMessage: self.actionErrorMessage,
             notes: self.notes,
+            notesTabSessionID: self.$notesTabSessionID,
             onStart: self.startRecording,
             onStop: self.stopAndTranscribe,
             onRetrySession: { self.retryProcessingSession(id: $0.id, languageCode: MeetingRetranscriptionLanguage.failedAttemptLanguage(for: $0)) },
@@ -1611,6 +1618,7 @@ struct MeetingTranscriptionCanvas: View {
     let readiness: MeetingSetupReadiness
     let errorMessage: String?
     let notes: MeetingNotesModel
+    var notesTabSessionID: Binding<MeetingSessionID?> = .constant(nil)
     let onStart: () -> Void
     let onStop: () -> Void
     let onRetrySession: (MeetingSession) -> Void
@@ -1686,7 +1694,8 @@ struct MeetingTranscriptionCanvas: View {
                     notes: self.notes,
                     onStop: self.onStop,
                     onRename: isStopping ? nil : { self.onRenameSession(session.id, $0) },
-                    errorMessage: isStopping ? nil : self.errorMessage
+                    errorMessage: isStopping ? nil : self.errorMessage,
+                    notesTabSessionID: self.notesTabSessionID
                 )
             case let .processing(session, stage):
                 MeetingProcessingCanvas(session: session, stage: stage, notes: self.notes)
@@ -1726,7 +1735,8 @@ struct MeetingTranscriptionCanvas: View {
                         onClose: self.onCloseSelection,
                         isRetranscribing: self.isRetrying,
                         onOpenIntegrations: self.onOpenIntegrations,
-                        resumesSummary: session.id == self.resumingSummarySessionID
+                        resumesSummary: session.id == self.resumingSummarySessionID,
+                        resumesNotes: session.id == self.notesTabSessionID.wrappedValue
                     )
                 }
             case let .failed(session, message):
@@ -1737,7 +1747,8 @@ struct MeetingTranscriptionCanvas: View {
                     onRetrySession: self.onRetrySession,
                     onRevealAudio: self.onRevealAudio,
                     onRecordAgain: self.onRecordAgain,
-                    onClose: self.onCloseSelection
+                    onClose: self.onCloseSelection,
+                    notes: self.notes
                 )
             }
         }

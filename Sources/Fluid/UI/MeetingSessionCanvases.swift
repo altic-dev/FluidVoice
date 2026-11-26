@@ -6,10 +6,12 @@ struct MeetingRecordingCanvas: View {
     let trackHealth: [MeetingAudioTrackKind: MeetingTrackHealth]
     let liveTranscript: MeetingLiveTranscriptSnapshot
     let isStopping: Bool
-    @ObservedObject var notes: MeetingNotesModel
+    let notes: MeetingNotesModel
     let onStop: () -> Void
     var onRename: ((String) -> Void)? = nil
     var errorMessage: String? = nil
+    /// The meeting last left on the Notes tab, so the next canvas for it can open on Notes too.
+    var notesTabSessionID: Binding<MeetingSessionID?> = .constant(nil)
 
     @Environment(\.theme) private var theme
     @State private var liveSection: MeetingDocumentSection = .captions
@@ -82,7 +84,7 @@ struct MeetingRecordingCanvas: View {
             VStack(alignment: .leading, spacing: self.theme.metrics.spacing.lg) {
                 MeetingDocumentTabs(selection: self.$liveSection, sections: [.captions, .notes])
                 if self.liveSection == .notes {
-                    MeetingNotesPane(notes: self.notes, minHeight: 220, fillsHeight: true)
+                    MeetingNotesPane(notes: self.notes, minHeight: 72, fillsHeight: true)
                         .accessibilityIdentifier("meeting-recording-notes")
                 } else {
                     MeetingLiveTranscriptCard(snapshot: self.liveTranscript)
@@ -106,6 +108,12 @@ struct MeetingRecordingCanvas: View {
                     }
                 }
             }
+        }
+        .onAppear {
+            if self.notesTabSessionID.wrappedValue == self.session.id { self.liveSection = .notes }
+        }
+        .onChange(of: self.liveSection) { _, section in
+            self.notesTabSessionID.wrappedValue = section == .notes ? self.session.id : nil
         }
     }
 
@@ -234,7 +242,7 @@ private struct MeetingLiveTranscriptCard: View {
 struct MeetingProcessingCanvas: View {
     let session: MeetingSession
     let stage: MeetingProcessingStage
-    @ObservedObject var notes: MeetingNotesModel
+    let notes: MeetingNotesModel
 
     @Environment(\.theme) private var theme
 
@@ -293,14 +301,8 @@ struct MeetingProcessingCanvas: View {
             }
             .padding(.vertical, self.theme.metrics.spacing.sm)
 
-            VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
-                Text("Notes")
-                    .font(self.theme.typography.captionStrong)
-                    .foregroundStyle(self.theme.palette.secondaryText)
-                    .accessibilityAddTraits(.isHeader)
-                MeetingNotesPane(notes: self.notes, minHeight: 200)
-                    .accessibilityIdentifier("meeting-processing-notes")
-            }
+            MeetingNotesSection(notes: self.notes)
+                .accessibilityIdentifier("meeting-processing-notes")
         }
     }
 
@@ -372,6 +374,43 @@ private struct MeetingNotesPane: View {
     }
 }
 
+/// A labelled, fixed-height notes editor for canvases that scroll.
+private struct MeetingNotesSection: View {
+    let notes: MeetingNotesModel
+
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
+            Text("Notes")
+                .font(self.theme.typography.captionStrong)
+                .foregroundStyle(self.theme.palette.secondaryText)
+                .accessibilityAddTraits(.isHeader)
+            MeetingNotesPane(notes: self.notes, minHeight: 200)
+        }
+    }
+}
+
+/// Observes the notes so typing re-renders only this button, not the whole result canvas.
+private struct MeetingDocumentCopyButton: View {
+    @ObservedObject var notes: MeetingNotesModel
+    let copiesNotes: Bool
+    let canCopyTranscript: Bool
+    let copied: Bool
+    let action: () -> Void
+
+    var body: some View {
+        let subject = self.copiesNotes ? "notes" : "transcript"
+        Button(action: self.action) {
+            MeetingDocumentActionLabel(title: self.copied ? "Copied" : "Copy", symbol: self.copied ? "checkmark" : "doc.on.doc")
+        }
+        .meetingGlassAction()
+        .disabled(self.copiesNotes ? MeetingSession.normalizedNotes(self.notes.text) == nil : !self.canCopyTranscript)
+        .help("Copy \(subject)")
+        .accessibilityLabel(self.copied ? "\(subject.capitalized) copied" : "Copy \(subject)")
+    }
+}
+
 /// Escape also dismisses: viewing a past meeting is a detail view, not a mode.
 private struct MeetingCloseTranscriptButton: View {
     let action: () -> Void
@@ -416,7 +455,7 @@ struct MeetingResultCanvas: View {
     let session: MeetingSession
     let isQuiescent: Bool
     let canUndo: Bool
-    @ObservedObject var notes: MeetingNotesModel
+    let notes: MeetingNotesModel
     @State private var showsProbableEchoes = false
     @StateObject private var playback = MeetingSegmentPlayback()
     let onCopyTranscript: (MeetingSession, Bool) -> Void
@@ -433,6 +472,7 @@ struct MeetingResultCanvas: View {
     /// Opens FluidMeet settings on Integrations, so adding an agent is one step from any meeting.
     var onOpenIntegrations: (() -> Void)? = nil
     var resumesSummary = false
+    var resumesNotes = false
 
     @Environment(\.theme) private var theme
     @Environment(\.undoManager) private var undoManager
@@ -520,7 +560,7 @@ struct MeetingResultCanvas: View {
                 case .notes:
                     MeetingNotesPane(notes: self.notes, minHeight: 320)
                         .accessibilityIdentifier("meeting-result-notes")
-                default:
+                case .transcript, .captions:
                     if let warning = self.session.microphoneEchoWarning {
                         MeetingAudioTranscriptNotice(
                             text: "Some audio may have an echo.",
@@ -676,7 +716,7 @@ struct MeetingResultCanvas: View {
         }
         // Prevents an echo toggle left on for one meeting from leaking into the next.
         .onChange(of: self.session.id, initial: true) { _, _ in
-            self.documentSection = self.resumesSummary ? .summary : .transcript
+            self.documentSection = self.resumesSummary ? .summary : self.resumesNotes ? .notes : .transcript
             self.copied = false
             self.showsProbableEchoes = false
             self.isShowingAssignSpeakers = false
@@ -786,8 +826,12 @@ struct MeetingResultCanvas: View {
     @ViewBuilder private func transcriptActions(hasText: Bool) -> some View {
         // Copy follows the open tab, so the Notes tab needs no second Copy button.
         let copiesNotes = self.documentSection == .notes
-        let subject = copiesNotes ? "notes" : "transcript"
-        Button {
+        MeetingDocumentCopyButton(
+            notes: self.notes,
+            copiesNotes: copiesNotes,
+            canCopyTranscript: hasText && self.documentSection == .transcript,
+            copied: self.copied
+        ) {
             if copiesNotes {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(self.notes.text, forType: .string)
@@ -796,13 +840,7 @@ struct MeetingResultCanvas: View {
             }
             self.copied = true
             self.copyRevision += 1
-        } label: {
-            MeetingDocumentActionLabel(title: self.copied ? "Copied" : "Copy", symbol: self.copied ? "checkmark" : "doc.on.doc")
         }
-        .meetingGlassAction()
-        .disabled(copiesNotes ? MeetingSession.normalizedNotes(self.notes.text) == nil : !hasText || self.documentSection != .transcript)
-        .help("Copy \(subject)")
-        .accessibilityLabel(self.copied ? "\(subject.capitalized) copied" : "Copy \(subject)")
         Menu {
             Menu("Export", systemImage: "square.and.arrow.up") {
                 Button("Text…") { self.onExportTranscript(self.session, .text, self.showsProbableEchoes) }
@@ -982,6 +1020,7 @@ struct MeetingFailureCanvas: View {
     let onRevealAudio: (MeetingSession) -> Void
     let onRecordAgain: (MeetingSession) -> Void
     let onClose: (() -> Void)?
+    let notes: MeetingNotesModel
 
     @Environment(\.theme) private var theme
 
@@ -1050,6 +1089,10 @@ struct MeetingFailureCanvas: View {
                     HStack(spacing: self.theme.metrics.spacing.sm) { self.recoveryActions }
                     VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) { self.recoveryActions }
                 }
+            }
+            if self.session != nil {
+                MeetingNotesSection(notes: self.notes)
+                    .accessibilityIdentifier("meeting-failure-notes")
             }
         }
     }
