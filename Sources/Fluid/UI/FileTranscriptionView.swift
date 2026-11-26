@@ -530,6 +530,8 @@ struct FileTranscriptionView: View {
             VStack(alignment: .leading, spacing: 0) {
                 VStack(alignment: .leading, spacing: self.theme.metrics.spacing.md) {
                     MeetingDocumentTitle(title: entry.displayTitle)
+                        .lineLimit(2)
+                        .truncationMode(.middle)
                         .editableTitle(entry.displayTitle, id: entry.id.uuidString) {
                             self.fileHistoryStore.renameEntry(id: entry.id, to: $0)
                         }
