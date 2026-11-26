@@ -232,6 +232,24 @@ final class FluidServeTests: XCTestCase {
         XCTAssertTrue(self.run("meet", "list").output.contains("executive (outdated)"))
     }
 
+    func testSummaryInputParityIncludesNotes() throws {
+        var session = self.session(title: "Weekly sync")
+        session.notes = "- [x] Ship it"
+        try self.save(session)
+        let entry = try XCTUnwrap(FluidServeMeetings.entries(root: self.root).first)
+        XCTAssertEqual(FluidServeMeetings.summaryInput(for: entry.meeting), MeetingSummaryInput.transcript(for: session))
+
+        try self.saveSummary(
+            "Shipped.",
+            style: "detailed",
+            for: session,
+            transcriptHash: MeetingSummaryInput.contentFingerprint(for: session),
+            transcriptHashVersion: MeetingSummaryController.SavedSummary.currentTranscriptHashVersion
+        )
+        let detailed = try XCTUnwrap(FluidServeMeetings.savedSummaries(for: entry).first { $0.style == "detailed" })
+        XCTAssertFalse(detailed.isOutdated)
+    }
+
     func testListKeepsLongAndEmojiTitlesWholeAndMeasuresAnInterruptedMeeting() throws {
         var interrupted = self.session(title: "Sync 🚀🚀 with a much longer title than the heading")
         interrupted.state = .interrupted

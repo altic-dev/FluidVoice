@@ -45,6 +45,7 @@ nonisolated enum FluidServeMeetings {
         var state: String
         var speakers: [Speaker]
         var transcriptSegments: [Segment]
+        var notes: String?
 
         /// Turns the reader prints: echoes of the other side dropped, oldest first.
         var turns: [Segment] {
@@ -258,7 +259,7 @@ nonisolated enum FluidServeMeetings {
         Duration: \(Int(minutes)) minutes
         Participants: \(meeting.activeSpeakers.map(\.displayName).joined(separator: ", "))
         ----------
-        """ + "\n" + meeting.turns.map { "**\(self.speakerLabel(for: $0, in: meeting))**: \($0.text)" }.joined(separator: "\n")
+        """ + "\n" + self.summaryNotesSection(meeting.notes) + meeting.turns.map { "**\(self.speakerLabel(for: $0, in: meeting))**: \($0.text)" }.joined(separator: "\n")
     }
 
     static func fingerprint(_ text: String) -> String {
