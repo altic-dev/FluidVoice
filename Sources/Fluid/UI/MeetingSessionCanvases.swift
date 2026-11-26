@@ -90,6 +90,9 @@ struct MeetingRecordingCanvas: View {
                     MeetingLiveTranscriptCard(snapshot: self.liveTranscript)
                 }
             }
+            // Only this area gives up height in short windows, so the header and Stop stay on screen.
+            .frame(minHeight: 0, maxHeight: .infinity, alignment: .top)
+            .clipped()
 
             Divider()
             FluidGlassControlGroup {
@@ -235,7 +238,7 @@ private struct MeetingLiveTranscriptCard: View {
 
     private var scrollingBubbleList: some View {
         MeetingLiveBubbleScrollList(rows: self.rows, documentStyle: true)
-            .frame(minHeight: 120, maxHeight: .infinity)
+            .frame(minHeight: 0, maxHeight: .infinity)
     }
 }
 
