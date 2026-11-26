@@ -10,21 +10,6 @@ final class UserDefaults {
     func set(_ value: Any?, forKey key: String) { self.values[key] = value }
 }
 
-struct SpeakerTranscriptSegment: Codable, Equatable { let text: String }
-struct SpeakerTranscriptGap: Codable, Equatable { let text: String }
-struct TranscriptionResult {
-    let id: UUID
-    let text: String
-    let confidence: Float
-    let duration: TimeInterval
-    let processingTime: TimeInterval
-    let fileName: String
-    let timestamp: Date
-    let speakerSegments: [SpeakerTranscriptSegment]
-    let speakerLabelingNotice: String?
-    let speakerLabelingGaps: [SpeakerTranscriptGap]
-}
-
 final class DebugLogger {
     static let shared = DebugLogger()
     func debug(_: String, source _: String) {}
