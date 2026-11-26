@@ -466,7 +466,7 @@ struct MeetingResultCanvas: View {
             VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xxl) {
                 VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xl) {
                     self.documentHeader(hasText: !visibleSegments.isEmpty)
-                    MeetingDocumentTabs(selection: self.$documentSection)
+                    MeetingDocumentTabs(selection: self.$documentSection, sections: [.transcript, .summary])
                 }
 
                 if self.documentSection == .summary {

@@ -50,8 +50,28 @@ extension View {
 }
 
 enum MeetingDocumentSection: Hashable {
+    case captions
     case transcript
+    case notes
     case summary
+
+    var title: String {
+        switch self {
+        case .captions: "Captions"
+        case .transcript: "Transcript"
+        case .notes: "Notes"
+        case .summary: "Meet Summary"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .captions: "captions.bubble"
+        case .transcript: "text.alignleft"
+        case .notes: "note.text"
+        case .summary: "sparkles"
+        }
+    }
 }
 
 /// Meeting titles use the system's editorial face; controls retain the app's native type.
@@ -71,14 +91,14 @@ struct MeetingDocumentTitle: View {
 /// Document navigation, deliberately quieter than the primary recording action.
 struct MeetingDocumentTabs: View {
     @Binding var selection: MeetingDocumentSection
-    var primaryTitle = "Transcript"
-    var primaryIcon = "text.alignleft"
+    var sections: [MeetingDocumentSection] = [.transcript, .notes, .summary]
     @Environment(\.theme) private var theme
 
     var body: some View {
         HStack(spacing: self.theme.metrics.spacing.sm) {
-            self.tab(self.primaryTitle, section: .transcript, icon: self.primaryIcon)
-            self.tab("Meet Summary", section: .summary, icon: "sparkles")
+            ForEach(self.sections, id: \.self) { section in
+                self.tab(section)
+            }
             Spacer(minLength: 0)
         }
         .overlay(alignment: .bottom) {
@@ -93,18 +113,18 @@ struct MeetingDocumentTabs: View {
         .accessibilityLabel("Meeting document views")
     }
 
-    private func tab(_ title: String, section: MeetingDocumentSection, icon: String) -> some View {
+    private func tab(_ section: MeetingDocumentSection) -> some View {
         Button { self.selection = section } label: {
             HStack(spacing: self.theme.metrics.spacing.sm) {
-                Image(systemName: icon)
-                Text(title)
+                Image(systemName: section.icon)
+                Text(section.title)
             }
             .font(self.theme.typography.bodySmallStrong)
             .frame(height: 20)
             .contentShape(Rectangle())
         }
         .buttonStyle(MeetingDocumentTabButtonStyle(isSelected: self.selection == section))
-        .accessibilityLabel(title)
+        .accessibilityLabel(section.title)
         .accessibilityAddTraits(self.selection == section ? .isSelected : [])
     }
 }
