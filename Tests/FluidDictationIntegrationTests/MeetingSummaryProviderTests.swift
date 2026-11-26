@@ -236,6 +236,18 @@ final class MeetingSummaryProviderTests: XCTestCase {
         XCTAssertFalse(MeetingSummaryRemoteService.prompt(for: .executive).contains("User instructions"))
     }
 
+    func testPromptsExplainHowToUseUserNotes() throws {
+        for kind in MeetingSummaryKind.allCases {
+            let prompt = MeetingSummaryRemoteService.prompt(for: kind, customInstructions: "List risks")
+            XCTAssertTrue(prompt.contains("If user notes are supplied"), kind.rawValue)
+            XCTAssertTrue(prompt.contains("(from notes)"), kind.rawValue)
+        }
+        let custom = MeetingSummaryRemoteService.prompt(for: .custom, customInstructions: "List risks")
+        let rule = try XCTUnwrap(custom.range(of: "If user notes are supplied"))
+        let instructions = try XCTUnwrap(custom.range(of: "User instructions:"))
+        XCTAssertLessThan(rule.lowerBound, instructions.lowerBound, "The notes rule stays with the source rules, above the user's text")
+    }
+
     func testEmptyCustomPromptFailsBeforeNetworkRequest() async {
         do {
             _ = try await MeetingSummaryRemoteService().generate(transcript: "Meeting", kind: .custom, route: self.route(), customInstructions: " \n")
