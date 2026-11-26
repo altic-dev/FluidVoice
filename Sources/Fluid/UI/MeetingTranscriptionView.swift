@@ -405,7 +405,13 @@ struct MeetingTranscriptionView: View {
                 self.notes.flush()
             }
         }
-        .onDisappear { self.notes.flush() }
+        .onAppear {
+            self.appServices.flushMeetingNotes = { [notes = self.notes] in await notes.flushAndWait() }
+        }
+        .onDisappear {
+            self.notes.flush()
+            self.appServices.flushMeetingNotes = nil
+        }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             Task {
                 async let sources: Void = self.refreshSources(requestPermissions: false)

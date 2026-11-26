@@ -52,6 +52,14 @@ final class MeetingNotesModel: ObservableObject {
         Task { await self.persist(id, snapshot) }
     }
 
+    /// Saves an unsaved edit now and waits for it. Quit calls this, as it can't wait out the debounce.
+    func flushAndWait() async {
+        guard self.pending != nil, let id = self.sessionID else { return }
+        self.pending?.cancel()
+        self.pending = nil
+        await self.persist(id, self.text)
+    }
+
     private func load(_ text: String) {
         self.pending?.cancel()
         self.pending = nil

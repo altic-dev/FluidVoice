@@ -107,6 +107,9 @@ final class AppServices: ObservableObject {
 
     private(set) lazy var meetingSummaryGeneration = MeetingSummaryGeneration()
 
+    /// Set by the open meeting view so quit can save notes typed in the last second.
+    var flushMeetingNotes: (() async -> Void)?
+
     private var _meetingSessionCoordinator: MeetingSessionCoordinator?
     var meetingSessionCoordinator: MeetingSessionCoordinator {
         if let existing = self._meetingSessionCoordinator {

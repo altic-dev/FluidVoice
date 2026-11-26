@@ -137,6 +137,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         self.applyMainWindowRestorability()
         if Self.restartPrepared { return .terminateNow }
         Task { @MainActor in
+            await AppServices.shared.flushMeetingNotes?()
             await TranscriptionHistoryStore.shared.finishPendingWrites()
             if let error = TranscriptionHistoryStore.shared.persistenceError {
                 let alert = NSAlert()

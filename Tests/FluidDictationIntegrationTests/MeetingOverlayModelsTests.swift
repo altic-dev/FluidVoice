@@ -1004,6 +1004,19 @@ final class MeetingNotesModelTests: XCTestCase {
         XCTAssertEqual(saves, ["abc"])
     }
 
+    func testFlushAndWaitSavesAPendingEditImmediately() async {
+        var saves: [String] = []
+        let model = MeetingNotesModel(debounce: .seconds(10)) { _, text in saves.append(text); return self.session(notes: text) }
+        model.show(self.session())
+        await model.flushAndWait()
+        XCTAssertEqual(saves, [], "nothing unsaved, nothing to save")
+        model.text = "last second"
+        await model.flushAndWait()
+        XCTAssertEqual(saves, ["last second"])
+        await model.flushAndWait()
+        XCTAssertEqual(saves, ["last second"], "already saved")
+    }
+
     func testShowingAnotherMeetingFlushesThePreviousOne() async throws {
         var saves: [(MeetingSessionID, String)] = []
         let model = MeetingNotesModel(debounce: .seconds(10)) { id, text in saves.append((id, text)); return self.session(notes: text) }
