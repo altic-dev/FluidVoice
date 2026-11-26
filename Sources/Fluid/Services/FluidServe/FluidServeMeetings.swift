@@ -182,7 +182,7 @@ nonisolated enum FluidServeMeetings {
     }
 
     /// Saved summaries the app itself shows for this meeting: any written by a known provider.
-    /// One from before a transcript edit or a speaker rename is marked outdated.
+    /// One from before a transcript, speaker or notes edit is marked outdated.
     static func savedSummaries(for entry: Entry, fileManager: FileManager = .default) -> [SavedSummary] {
         struct Stored: Decodable {
             var transcriptHash: String

@@ -9,7 +9,8 @@ nonisolated struct MeetingMarkdownSpan: Hashable {
     let style: MeetingMarkdownStyle
 }
 
-private nonisolated func markdownRegex(_ pattern: String) -> NSRegularExpression {
+/// Shared by the styler and the list rules.
+nonisolated func meetingMarkdownRegex(_ pattern: String) -> NSRegularExpression {
     // Patterns are literals; a failure is a programming error.
     try! NSRegularExpression(pattern: pattern, options: [.anchorsMatchLines]) // swiftlint:disable:this force_try
 }
@@ -17,14 +18,14 @@ private nonisolated func markdownRegex(_ pattern: String) -> NSRegularExpression
 /// Styles markdown in place. The text is never changed, so markers stay visible (dimmed via `.marker`).
 /// Underscore emphasis (`_x_`, `__x__`) is not supported.
 nonisolated enum MeetingMarkdownStyler {
-    private static let heading = markdownRegex(#"^(#{1,3})[ \t]+\S.*$"#)
-    private static let quote = markdownRegex(#"^[ \t]*(>)"#)
-    private static let task = markdownRegex(#"^[ \t]*([-*] \[([ xX])\])(?:[ \t](.*))?$"#)
-    private static let list = markdownRegex(#"^[ \t]*([-*]|\d+\.)[ \t]"#)
-    private static let code = markdownRegex(#"(`)([^`\n]+)(`)"#)
-    private static let bold = markdownRegex(#"(\*\*)(?=\S)(.+?)(?<=\S)(\*\*)"#)
-    private static let italic = markdownRegex(#"(?<![*\w])(\*)(?=[^\s*])([^*\n]+?)(?<=\S)(\*)(?![*\w])"#)
-    private static let link = markdownRegex(#"(\[)([^\]\n]+)(\]\([^)\s]+\))"#)
+    private static let heading = meetingMarkdownRegex(#"^(#{1,3})[ \t]+\S.*$"#)
+    private static let quote = meetingMarkdownRegex(#"^[ \t]*(>)"#)
+    private static let task = meetingMarkdownRegex(#"^[ \t]*([-*] \[([ xX])\])(?:[ \t](.*))?$"#)
+    private static let list = meetingMarkdownRegex(#"^[ \t]*([-*]|\d+\.)[ \t]"#)
+    private static let code = meetingMarkdownRegex(#"(`)([^`\n]+)(`)"#)
+    private static let bold = meetingMarkdownRegex(#"(\*\*)(?=\S)(.+?)(?<=\S)(\*\*)"#)
+    private static let italic = meetingMarkdownRegex(#"(?<![*\w])(\*)(?=[^\s*])([^*\n]+?)(?<=\S)(\*)(?![*\w])"#)
+    private static let link = meetingMarkdownRegex(#"(\[)([^\]\n]+)(\]\([^)\s]+\))"#)
 
     static func spans(in text: String) -> [MeetingMarkdownSpan] {
         let string = text as NSString
@@ -78,46 +79,5 @@ nonisolated enum MeetingMarkdownStyler {
             }
         }
         return spans
-    }
-}
-
-nonisolated enum MeetingMarkdownLists {
-    enum ReturnAction: Equatable {
-        case insert(String)
-        /// Remove this many characters before the cursor (an empty list marker) and insert nothing.
-        case endList(removeLength: Int)
-        case none
-    }
-
-    private static let task = markdownRegex(#"^([ \t]*)([-*]) \[[ xX]\](?=[ \t]|$)[ \t]?(.*)$"#)
-    private static let bullet = markdownRegex(#"^([ \t]*)([-*]) (.*)$"#)
-    private static let ordered = markdownRegex(#"^([ \t]*)(\d+)\. (.*)$"#)
-    private static let toggle = markdownRegex(#"^([ \t]*[-*] \[)([ xX])(\])(?=[ \t]|$)"#)
-
-    /// `line` is the text from the start of the line to the cursor.
-    static func returnAction(forLine line: String) -> ReturnAction {
-        let string = line as NSString
-        let full = NSRange(location: 0, length: string.length)
-        func groups(_ expression: NSRegularExpression) -> (indent: String, marker: String, content: String)? {
-            guard let match = expression.firstMatch(in: line, range: full) else { return nil }
-            return (string.substring(with: match.range(at: 1)), string.substring(with: match.range(at: 2)), string.substring(with: match.range(at: 3)))
-        }
-        if let item = groups(self.task) {
-            return item.content.isEmpty ? .endList(removeLength: string.length) : .insert("\n\(item.indent)\(item.marker) [ ] ")
-        }
-        if let item = groups(self.bullet) {
-            return item.content.isEmpty ? .endList(removeLength: string.length) : .insert("\n\(item.indent)\(item.marker) ")
-        }
-        if let item = groups(self.ordered) {
-            return item.content.isEmpty ? .endList(removeLength: string.length) : .insert("\n\(item.indent)\((Int(item.marker) ?? 0) + 1). ")
-        }
-        return .none
-    }
-
-    static func toggledTask(_ line: String) -> String? {
-        let string = line as NSString
-        guard let match = self.toggle.firstMatch(in: line, range: NSRange(location: 0, length: string.length)) else { return nil }
-        let isDone = string.substring(with: match.range(at: 2)) != " "
-        return string.replacingCharacters(in: match.range(at: 2), with: isDone ? " " : "x")
     }
 }

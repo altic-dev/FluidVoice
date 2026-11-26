@@ -156,7 +156,7 @@ nonisolated enum MeetingPostProcessingError: LocalizedError {
     case inputTooLarge, notReady, invalidOutput, checkpointFailed
     var errorDescription: String? {
         switch self {
-        case .inputTooLarge: return "The transcript exceeds this summary model's input limit."
+        case .inputTooLarge: return "This meeting's transcript and notes exceed this summary model's input limit."
         case .notReady: return "The meeting summary model is not installed or ready."
         case .invalidOutput: return "The summary model returned an invalid result."
         case .checkpointFailed: return "Could not save the transcript checkpoint. Summary generation was skipped."

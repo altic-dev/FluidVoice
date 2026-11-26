@@ -6105,6 +6105,25 @@ final class MeetingRecoveryTests: XCTestCase {
         XCTAssertNil(reloaded?.notes)
     }
 
+    func testNotesForADeletedMeetingThrowAndDoNotRecreateIt() async throws {
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MeetingSessionStore(rootDirectory: dir)
+        let saved = self.makeSession(state: .completed, audioTracks: [self.makeMicrophoneTrack(chunks: [])])
+        try await store.create(saved)
+        let coordinator = MeetingSessionCoordinator(store: store, capture: StubCaptureController(), processing: StubProcessingController(), audioArbiter: StubArbiter())
+        let sessionDirectory = try await store.sessionDirectory(for: saved.id)
+        try await coordinator.deleteSession(id: saved.id)
+
+        do {
+            _ = try await coordinator.updateNotes(sessionID: saved.id, to: "late notes")
+            XCTFail("notes for a deleted meeting must not save")
+        } catch {}
+        XCTAssertFalse(FileManager.default.fileExists(atPath: sessionDirectory.path))
+        let reloaded = try await store.load(id: saved.id)
+        XCTAssertNil(reloaded)
+    }
+
     func testNotesOnInterruptedRecoveryOfferAreSaved() async throws {
         let dir = self.makeTempDirectory()
         defer { try? FileManager.default.removeItem(at: dir) }
