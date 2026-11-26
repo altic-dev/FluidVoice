@@ -956,6 +956,8 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable {
     /// Set when the user dismisses a recoverable session so it is not re-offered on next launch.
     /// Optional so pre-M2 persisted manifests still decode.
     var recoveryResolvedAt: Date? = nil
+    /// The user's markdown notes. Nil when empty; optional so earlier manifests decode.
+    var notes: String? = nil
 
     init(
         id: MeetingSessionID = UUID(),
@@ -1302,6 +1304,16 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable {
 }
 
 extension MeetingSession {
+    /// Leading whitespace is kept so an indented first list item survives.
+    nonisolated static func normalizedNotes(_ text: String) -> String? {
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        var trimmed = Substring(text)
+        while let last = trimmed.last, last.isWhitespace {
+            trimmed.removeLast()
+        }
+        return String(trimmed)
+    }
+
     var hasFinalizedAudio: Bool {
         self.audioTracks.contains { track in
             track.chunks.contains { $0.finalizationState == .finalized && $0.byteCount > 0 }

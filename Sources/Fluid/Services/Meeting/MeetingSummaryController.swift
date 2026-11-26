@@ -45,7 +45,7 @@ nonisolated enum MeetingSummaryInput {
         Duration: \(Int(duration)) minutes
         Participants: \(session.activeSpeakers.map(\.displayName).joined(separator: ", "))
         ----------
-        """ + "\n" + turns.map {
+        """ + "\n" + FluidServeMeetings.summaryNotesSection(session.notes) + turns.map {
             "**\(MeetingTranscriptExporter.speakerLabel(for: $0, in: session, speakerNames: names))**: \($0.text)"
         }.joined(separator: "\n")
     }

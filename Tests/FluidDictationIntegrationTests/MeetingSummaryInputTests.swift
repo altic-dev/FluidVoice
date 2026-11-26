@@ -141,6 +141,45 @@ final class MeetingSummaryInputTests: XCTestCase {
         XCTAssertTrue(reopened.output.isEmpty)
     }
 
+    func testMeetingWithoutNotesKeepsTodaysInputAndFingerprint() {
+        var session = self.session(origin: 0, segmentStart: 0, segmentEnd: 1, gapStart: 2, gapEnd: 3)
+        let before = MeetingSummaryInput.transcript(for: session)
+        session.notes = nil
+        XCTAssertEqual(MeetingSummaryInput.transcript(for: session), before)
+        XCTAssertFalse(before.contains("<notes>"))
+    }
+
+    func testNotesAreAddedBetweenHeaderAndTranscriptAndChangeTheFingerprint() {
+        var session = self.session(origin: 0, segmentStart: 0, segmentEnd: 1, gapStart: 2, gapEnd: 3)
+        let original = MeetingSummaryInput.contentFingerprint(for: session)
+        session.notes = "## Budget\n- [ ] Ask Sam"
+        let input = MeetingSummaryInput.transcript(for: session)
+        XCTAssertTrue(input.contains("----------\nNotes written by the user"))
+        XCTAssertTrue(input.contains("<notes>\n## Budget\n- [ ] Ask Sam\n</notes>\n----------\n**Speaker 1**: hello"))
+        XCTAssertNotEqual(MeetingSummaryInput.contentFingerprint(for: session), original)
+    }
+
+    func testNotesNormalizeBlankToNil() {
+        XCTAssertNil(MeetingSession.normalizedNotes(" \n\t "))
+        XCTAssertEqual(MeetingSession.normalizedNotes("  keep inner\nspacing  \n"), "  keep inner\nspacing")
+    }
+
+    func testNotesRoundTripAndManifestWithoutNotesKeyDecodes() throws {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        var session = self.session(origin: 0, segmentStart: 0, segmentEnd: 1, gapStart: 2, gapEnd: 3)
+        session.notes = "x"
+        let data = try encoder.encode(session)
+        XCTAssertEqual(try decoder.decode(MeetingSession.self, from: data).notes, "x")
+
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertNotNil(object.removeValue(forKey: "notes"))
+        let decoded = try decoder.decode(MeetingSession.self, from: JSONSerialization.data(withJSONObject: object))
+        XCTAssertNil(decoded.notes)
+    }
+
     private func session(
         origin: TimeInterval,
         segmentStart: TimeInterval,
