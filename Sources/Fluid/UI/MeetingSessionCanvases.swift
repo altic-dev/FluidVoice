@@ -6,11 +6,13 @@ struct MeetingRecordingCanvas: View {
     let trackHealth: [MeetingAudioTrackKind: MeetingTrackHealth]
     let liveTranscript: MeetingLiveTranscriptSnapshot
     let isStopping: Bool
+    @ObservedObject var notes: MeetingNotesModel
     let onStop: () -> Void
     var onRename: ((String) -> Void)? = nil
     var errorMessage: String? = nil
 
     @Environment(\.theme) private var theme
+    @State private var liveSection: MeetingDocumentSection = .captions
 
     var body: some View {
         VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xl) {
@@ -77,7 +79,15 @@ struct MeetingRecordingCanvas: View {
                     isSubtle: true
                 )
             }
-            MeetingLiveTranscriptCard(snapshot: self.liveTranscript)
+            VStack(alignment: .leading, spacing: self.theme.metrics.spacing.lg) {
+                MeetingDocumentTabs(selection: self.$liveSection, sections: [.captions, .notes])
+                if self.liveSection == .notes {
+                    MeetingNotesPane(notes: self.notes, minHeight: 220, fillsHeight: true)
+                        .accessibilityIdentifier("meeting-recording-notes")
+                } else {
+                    MeetingLiveTranscriptCard(snapshot: self.liveTranscript)
+                }
+            }
 
             Divider()
             FluidGlassControlGroup {
@@ -224,6 +234,7 @@ private struct MeetingLiveTranscriptCard: View {
 struct MeetingProcessingCanvas: View {
     let session: MeetingSession
     let stage: MeetingProcessingStage
+    @ObservedObject var notes: MeetingNotesModel
 
     @Environment(\.theme) private var theme
 
@@ -281,6 +292,15 @@ struct MeetingProcessingCanvas: View {
                 }
             }
             .padding(.vertical, self.theme.metrics.spacing.sm)
+
+            VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
+                Text("Notes")
+                    .font(self.theme.typography.captionStrong)
+                    .foregroundStyle(self.theme.palette.secondaryText)
+                    .accessibilityAddTraits(.isHeader)
+                MeetingNotesPane(notes: self.notes, minHeight: 200)
+                    .accessibilityIdentifier("meeting-processing-notes")
+            }
         }
     }
 
@@ -329,6 +349,29 @@ struct MeetingProcessingCanvas: View {
     }
 }
 
+/// The notes editor and its save error. Without `fillsHeight` it has a fixed height, so inside a
+/// ScrollView it scrolls internally instead of growing the page.
+private struct MeetingNotesPane: View {
+    @ObservedObject var notes: MeetingNotesModel
+    let minHeight: CGFloat
+    var fillsHeight = false
+
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
+            MeetingMarkdownEditor(text: self.$notes.text)
+                .frame(minHeight: self.minHeight, idealHeight: self.minHeight, maxHeight: self.fillsHeight ? .infinity : self.minHeight)
+            if let saveError = self.notes.saveError {
+                Label(saveError, systemImage: "exclamationmark.triangle.fill")
+                    .font(self.theme.typography.bodySmall)
+                    .foregroundStyle(self.theme.palette.warning)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+}
+
 /// Escape also dismisses: viewing a past meeting is a detail view, not a mode.
 private struct MeetingCloseTranscriptButton: View {
     let action: () -> Void
@@ -373,6 +416,7 @@ struct MeetingResultCanvas: View {
     let session: MeetingSession
     let isQuiescent: Bool
     let canUndo: Bool
+    @ObservedObject var notes: MeetingNotesModel
     @State private var showsProbableEchoes = false
     @StateObject private var playback = MeetingSegmentPlayback()
     let onCopyTranscript: (MeetingSession, Bool) -> Void
@@ -466,13 +510,17 @@ struct MeetingResultCanvas: View {
             VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xxl) {
                 VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xl) {
                     self.documentHeader(hasText: !visibleSegments.isEmpty)
-                    MeetingDocumentTabs(selection: self.$documentSection, sections: [.transcript, .summary])
+                    MeetingDocumentTabs(selection: self.$documentSection)
                 }
 
-                if self.documentSection == .summary {
+                switch self.documentSection {
+                case .summary:
                     MeetingSummaryView(session: self.session, isQuiescent: self.isQuiescent)
                         .id(self.session.id)
-                } else {
+                case .notes:
+                    MeetingNotesPane(notes: self.notes, minHeight: 320)
+                        .accessibilityIdentifier("meeting-result-notes")
+                default:
                     if let warning = self.session.microphoneEchoWarning {
                         MeetingAudioTranscriptNotice(
                             text: "Some audio may have an echo.",
@@ -577,7 +625,10 @@ struct MeetingResultCanvas: View {
         }
         .onChange(of: self.session.retention.audioDeletedAt) { _, _ in self.playback.stop() }
         .onChange(of: self.isQuiescent) { _, value in if !value { self.playback.stop() } }
-        .onChange(of: self.documentSection) { _, _ in self.playback.stop() }
+        .onChange(of: self.documentSection) { _, _ in
+            self.playback.stop()
+            self.copied = false
+        }
         .onChange(of: self.showsProbableEchoes) { _, _ in self.playback.stop() }
         .task(id: self.copyRevision) {
             guard self.copied else { return }
@@ -733,17 +784,25 @@ struct MeetingResultCanvas: View {
     }
 
     @ViewBuilder private func transcriptActions(hasText: Bool) -> some View {
+        // Copy follows the open tab, so the Notes tab needs no second Copy button.
+        let copiesNotes = self.documentSection == .notes
+        let subject = copiesNotes ? "notes" : "transcript"
         Button {
-            self.onCopyTranscript(self.session, self.showsProbableEchoes)
+            if copiesNotes {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(self.notes.text, forType: .string)
+            } else {
+                self.onCopyTranscript(self.session, self.showsProbableEchoes)
+            }
             self.copied = true
             self.copyRevision += 1
         } label: {
             MeetingDocumentActionLabel(title: self.copied ? "Copied" : "Copy", symbol: self.copied ? "checkmark" : "doc.on.doc")
         }
         .meetingGlassAction()
-        .disabled(!hasText || self.documentSection != .transcript)
-        .help("Copy transcript")
-        .accessibilityLabel(self.copied ? "Transcript copied" : "Copy transcript")
+        .disabled(copiesNotes ? MeetingSession.normalizedNotes(self.notes.text) == nil : !hasText || self.documentSection != .transcript)
+        .help("Copy \(subject)")
+        .accessibilityLabel(self.copied ? "\(subject.capitalized) copied" : "Copy \(subject)")
         Menu {
             Menu("Export", systemImage: "square.and.arrow.up") {
                 Button("Text…") { self.onExportTranscript(self.session, .text, self.showsProbableEchoes) }

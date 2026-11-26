@@ -33,6 +33,7 @@ struct MeetingMarkdownEditor: NSViewRepresentable {
         textView.isHorizontallyResizable = false
         textView.autoresizingMask = [.width]
         textView.textContainer?.widthTracksTextView = true
+        textView.textContainer?.lineFragmentPadding = 0
         textView.font = MeetingNotesTextView.baseFont
         textView.textColor = .labelColor
         textView.defaultParagraphStyle = MeetingNotesTextView.baseParagraphStyle

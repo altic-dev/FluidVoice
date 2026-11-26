@@ -211,7 +211,12 @@ final class MeetingRecoveryTests: XCTestCase {
         var actions = 0
         for (width, scheme): (CGFloat, ColorScheme) in [(640, .dark), (960, .light)] {
             let canvas = MeetingRecordingCanvas(
-                session: session, trackHealth: [:], liveTranscript: .empty, isStopping: false, onStop: { actions += 1 }
+                session: session,
+                trackHealth: [:],
+                liveTranscript: .empty,
+                isStopping: false,
+                notes: self.makeUnsavedNotesModel(),
+                onStop: { actions += 1 }
             )
             try self.renderMeetingUI(canvas, name: "echo-warning", width: width, height: 700, scheme: scheme)
         }
@@ -822,6 +827,7 @@ final class MeetingRecoveryTests: XCTestCase {
                         microphones: [],
                         readiness: .checking,
                         errorMessage: nil,
+                        notes: self.makeUnsavedNotesModel(),
                         onStart: action,
                         onStop: action,
                         onRetrySession: { _ in action() },
@@ -1256,6 +1262,7 @@ final class MeetingRecoveryTests: XCTestCase {
             microphones: fixture.microphones,
             readiness: readiness,
             errorMessage: errorMessage,
+            notes: self.makeUnsavedNotesModel(),
             onStart: { actions.record() },
             onStop: { actions.record() },
             onRetrySession: { _ in actions.record() },
@@ -1380,6 +1387,14 @@ final class MeetingRecoveryTests: XCTestCase {
             }
         }
         return bounds
+    }
+
+    /// Rendering never edits notes, so a save is a test failure.
+    private func makeUnsavedNotesModel() -> MeetingNotesModel {
+        MeetingNotesModel { _, _ in
+            XCTFail("Rendering must not save notes")
+            throw CancellationError()
+        }
     }
 
     @discardableResult

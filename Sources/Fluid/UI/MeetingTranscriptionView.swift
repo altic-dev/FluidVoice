@@ -286,6 +286,7 @@ struct MeetingTranscriptionView: View {
     @State private var pendingDeleteSessionID: MeetingSessionID?
     @State private var pendingDeleteAudioSessionID: MeetingSessionID?
     @State private var draftMeetingAudioRetentionPolicy = SettingsStore.shared.meetingAudioRetentionPolicy
+    @StateObject private var notes: MeetingNotesModel
 
     init(
         coordinator: MeetingSessionCoordinator,
@@ -298,6 +299,12 @@ struct MeetingTranscriptionView: View {
         self.coordinator = coordinator
         self.asrService = asrService
         self.historySnapshot = historySnapshot
+        self._notes = StateObject(wrappedValue: MeetingNotesModel { [coordinator, historySnapshot] id, text in
+            let saved = try await coordinator.updateNotes(sessionID: id, to: text)
+            // Keeps the home list's notes icon and reopened meetings current.
+            historySnapshot.applySavedSession(saved)
+            return saved
+        })
         self._requestedRoute = requestedRoute
         self.resumingSummarySessionID = resumingSummarySessionID
         self.onOpenVoiceEngine = onOpenVoiceEngine
@@ -391,6 +398,14 @@ struct MeetingTranscriptionView: View {
         .onChange(of: self.coordinator.latestCompletedSession?.id) { _, _ in
             Task { await self.loadMeetingHistory() }
         }
+        .onChange(of: self.notesSession.map(MeetingNotesSessionKey.init), initial: true) { _, _ in
+            if let session = self.notesSession {
+                self.notes.show(session)
+            } else {
+                self.notes.flush()
+            }
+        }
+        .onDisappear { self.notes.flush() }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             Task {
                 async let sources: Void = self.refreshSources(requestPermissions: false)
@@ -452,6 +467,17 @@ struct MeetingTranscriptionView: View {
         MeetingScreen(route: self.route, canvasState: self.canvasState)
     }
 
+    /// The meeting whose notes are on screen, if any.
+    private var notesSession: MeetingSession? {
+        guard case let .canvas(state) = self.screen else { return nil }
+        switch state {
+        case let .recording(session, _, _), let .stopping(session, _, _), let .processing(session, _), let .result(session):
+            return session
+        case .setup, .failed:
+            return nil
+        }
+    }
+
     private var pageAnimation: Animation? {
         self.reduceMotion ? nil : .timingCurve(0.22, 0.8, 0.25, 1, duration: 0.34)
     }
@@ -503,6 +529,7 @@ struct MeetingTranscriptionView: View {
             microphones: self.microphones,
             readiness: self.readiness,
             errorMessage: self.actionErrorMessage,
+            notes: self.notes,
             onStart: self.startRecording,
             onStop: self.stopAndTranscribe,
             onRetrySession: { self.retryProcessingSession(id: $0.id, languageCode: MeetingRetranscriptionLanguage.failedAttemptLanguage(for: $0)) },
@@ -891,6 +918,7 @@ struct MeetingTranscriptionView: View {
 
     private func stopAndTranscribe() {
         guard !self.isStopping else { return }
+        self.notes.flush()
         self.isStopping = true
         self.actionErrorMessage = nil
         // Stop is an explicit "show me my meeting" — an open meeting must not hijack the outcome.
@@ -1512,6 +1540,21 @@ enum MeetingTranscriptExportFormat {
     }
 }
 
+/// What `MeetingNotesModel.show` needs to see: a new meeting, or an update to the shown one.
+private struct MeetingNotesSessionKey: Equatable {
+    let id: MeetingSessionID
+    let notes: String?
+    let state: MeetingSessionState
+    let updatedAt: Date
+
+    init(_ session: MeetingSession) {
+        self.id = session.id
+        self.notes = session.notes
+        self.state = session.state
+        self.updatedAt = session.updatedAt
+    }
+}
+
 enum MeetingTranscriptionCanvasState {
     case setup(isStarting: Bool, recentSession: MeetingSession?)
     case recording(
@@ -1561,6 +1604,7 @@ struct MeetingTranscriptionCanvas: View {
     let microphones: [MeetingMicrophoneOption]
     let readiness: MeetingSetupReadiness
     let errorMessage: String?
+    let notes: MeetingNotesModel
     let onStart: () -> Void
     let onStop: () -> Void
     let onRetrySession: (MeetingSession) -> Void
@@ -1625,26 +1669,21 @@ struct MeetingTranscriptionCanvas: View {
                     onRepairSetup: self.onRepairSetup,
                     onEditSetup: self.onEditSetup ?? self.onRepairSetup
                 )
-            case let .recording(session, trackHealth, liveTranscript):
+            // One branch for both, so Stop keeps the canvas (and its open Notes tab) instead of replacing it.
+            case let .recording(session, trackHealth, liveTranscript), let .stopping(session, trackHealth, liveTranscript):
+                let isStopping = if case .stopping = self.state { true } else { false }
                 MeetingRecordingCanvas(
                     session: session,
                     trackHealth: trackHealth,
                     liveTranscript: liveTranscript,
-                    isStopping: false,
+                    isStopping: isStopping,
+                    notes: self.notes,
                     onStop: self.onStop,
-                    onRename: { self.onRenameSession(session.id, $0) },
-                    errorMessage: self.errorMessage
-                )
-            case let .stopping(session, trackHealth, liveTranscript):
-                MeetingRecordingCanvas(
-                    session: session,
-                    trackHealth: trackHealth,
-                    liveTranscript: liveTranscript,
-                    isStopping: true,
-                    onStop: self.onStop
+                    onRename: isStopping ? nil : { self.onRenameSession(session.id, $0) },
+                    errorMessage: isStopping ? nil : self.errorMessage
                 )
             case let .processing(session, stage):
-                MeetingProcessingCanvas(session: session, stage: stage)
+                MeetingProcessingCanvas(session: session, stage: stage, notes: self.notes)
             case let .result(session):
                 VStack(alignment: .leading, spacing: self.theme.metrics.spacing.md) {
                     if let errorMessage, !errorMessage.isEmpty {
@@ -1662,6 +1701,7 @@ struct MeetingTranscriptionCanvas: View {
                         session: session,
                         isQuiescent: self.isQuiescent,
                         canUndo: self.canUndoCorrection(session.id),
+                        notes: self.notes,
                         onCopyTranscript: self.onCopyTranscript,
                         onExportTranscript: self.onExportTranscript,
                         onReassignSegment: { segmentID, speakerID in
