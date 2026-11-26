@@ -979,3 +979,94 @@ extension MeetingMenuBarStartTests {
         )
     }
 }
+
+@MainActor
+final class MeetingNotesModelTests: XCTestCase {
+    private func session(notes: String? = nil) -> MeetingSession {
+        var session = MeetingSession(
+            configuration: MeetingCaptureConfiguration(
+                mode: .inRoom,
+                title: "Notes",
+                microphone: MeetingMicrophoneIdentity(captureDeviceID: "mic", displayName: "Mic")
+            ),
+            timebase: MeetingTimebaseMetadata(startedHostTime: 0, machTimebaseNumerator: 1, machTimebaseDenominator: 1, firstPresentationTime: nil)
+        )
+        session.notes = notes
+        return session
+    }
+
+    func testTypingSavesOnceAfterThePause() async throws {
+        var saves: [String] = []
+        let model = MeetingNotesModel(debounce: .milliseconds(50)) { _, text in saves.append(text); return self.session(notes: text) }
+        model.show(self.session())
+        model.text = "a"; model.text = "ab"; model.text = "abc"
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertEqual(saves, ["abc"])
+    }
+
+    func testShowingAnotherMeetingFlushesThePreviousOne() async throws {
+        var saves: [(MeetingSessionID, String)] = []
+        let model = MeetingNotesModel(debounce: .seconds(10)) { id, text in saves.append((id, text)); return self.session(notes: text) }
+        let first = self.session()
+        model.show(first)
+        model.text = "unsaved"
+        model.show(self.session(notes: "other"))
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertEqual(saves.map(\.0), [first.id])
+        XCTAssertEqual(saves.map(\.1), ["unsaved"])
+        XCTAssertEqual(model.text, "other")
+    }
+
+    func testLoadingAMeetingDoesNotSave() async throws {
+        var saveCount = 0
+        let model = MeetingNotesModel(debounce: .milliseconds(10)) { _, text in saveCount += 1; return self.session(notes: text) }
+        model.show(self.session(notes: "existing"))
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertEqual(saveCount, 0)
+    }
+
+    func testRefreshOfTheSameMeetingThatLostNotesResaves() async throws {
+        var saves: [String] = []
+        let model = MeetingNotesModel(debounce: .milliseconds(10)) { _, text in saves.append(text); return self.session(notes: text) }
+        let session = self.session(notes: "kept")
+        model.show(session)
+        var stale = session
+        stale.notes = nil
+        model.show(stale)
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertEqual(saves, ["kept"])
+        XCTAssertEqual(model.text, "kept")
+    }
+
+    func testRefreshWithOnlyTrailingWhitespaceDifferenceDoesNotResave() async throws {
+        var saveCount = 0
+        let model = MeetingNotesModel(debounce: .milliseconds(10)) { _, text in
+            saveCount += 1
+            return self.session(notes: MeetingSession.normalizedNotes(text))
+        }
+        let session = self.session(notes: "line")
+        model.show(session)
+        model.text = "line\n\n"
+        try await Task.sleep(for: .milliseconds(50))
+        let afterTyping = saveCount
+        model.show(session)
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertEqual(saveCount, afterTyping, "normalized text already matches the stored notes")
+    }
+
+    func testBusyCoordinatorRetriesWithLatestText() async throws {
+        var attempts: [String] = []
+        let model = MeetingNotesModel(debounce: .milliseconds(10), retryDelay: .milliseconds(30)) { _, text in
+            attempts.append(text)
+            if attempts.count == 1 { throw MeetingCoordinatorError.activityInProgress }
+            return self.session(notes: text)
+        }
+        model.show(self.session())
+        model.text = "x"
+        try await Task.sleep(for: .milliseconds(20))
+        model.text = "xy"
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertEqual(attempts.last, "xy")
+        XCTAssertNil(model.saveError)
+    }
+}
