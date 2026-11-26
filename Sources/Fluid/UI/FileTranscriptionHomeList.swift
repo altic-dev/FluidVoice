@@ -64,34 +64,32 @@ struct FileTranscriptionHomeList: View {
     }
 
     private var library: some View {
-        GeometryReader { geometry in
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: self.theme.metrics.spacing.xs) {
-                    ForEach(self.sections) { section in
-                        Section {
-                            ForEach(section.entries) { entry in
-                                self.row(entry)
-                                    .id(entry.id)
-                            }
-                        } header: {
-                            Text(section.title)
-                                .font(self.theme.typography.caption)
-                                .foregroundStyle(self.theme.palette.secondaryText)
-                                .padding(.horizontal, self.theme.metrics.spacing.md)
-                                .padding(.top, self.theme.metrics.spacing.lg)
-                                .padding(.bottom, self.theme.metrics.spacing.xs)
-                                .accessibilityAddTraits(.isHeader)
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: self.theme.metrics.spacing.xs) {
+                ForEach(self.sections) { section in
+                    Section {
+                        ForEach(section.entries) { entry in
+                            self.row(entry)
+                                .id(entry.id)
                         }
+                    } header: {
+                        Text(section.title)
+                            .font(self.theme.typography.caption)
+                            .foregroundStyle(self.theme.palette.secondaryText)
+                            .padding(.horizontal, self.theme.metrics.spacing.md)
+                            .padding(.top, self.theme.metrics.spacing.lg)
+                            .padding(.bottom, self.theme.metrics.spacing.xs)
+                            .accessibilityAddTraits(.isHeader)
                     }
                 }
-                // Match FluidMeet's text column, letting hover surfaces extend past its edges.
-                .frame(maxWidth: 720 + self.theme.metrics.spacing.md * 2)
-                .padding(.horizontal, self.theme.metrics.spacing.lg * 2 - self.theme.metrics.spacing.md)
-                .padding(.bottom, self.theme.metrics.spacing.lg)
-                // Center against the page, including a persistent native scrollbar gutter.
-                .frame(width: geometry.size.width)
             }
+            // Match FluidMeet's text column, letting hover surfaces extend past its edges.
+            .frame(maxWidth: 720 + self.theme.metrics.spacing.md * 2)
+            .padding(.horizontal, self.theme.metrics.spacing.lg * 2 - self.theme.metrics.spacing.md)
+            .padding(.bottom, self.theme.metrics.spacing.lg)
+            .frame(maxWidth: .infinity)
         }
+        .scrollIndicators(.visible, axes: .vertical)
     }
 
     private func row(_ entry: FileTranscriptionEntry) -> some View {
