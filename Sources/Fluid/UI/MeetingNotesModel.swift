@@ -19,7 +19,9 @@ final class MeetingNotesModel: ObservableObject {
     private let debounce: Duration
     private let retryDelay: Duration
     private var pending: Task<Void, Never>?
+    private var inFlight = 0
     private var isLoading = false
+    private static let maximumOffscreenAttempts = 30
 
     init(debounce: Duration = .seconds(1), retryDelay: Duration = .seconds(2), save: @escaping Save) {
         self.debounce = debounce
@@ -36,11 +38,12 @@ final class MeetingNotesModel: ObservableObject {
             return
         }
         // Only this model edits notes, so a refresh that disagrees means the coordinator missed an edit.
-        if self.pending == nil, session.notes != MeetingSession.normalizedNotes(self.text) {
+        if self.pending == nil, self.inFlight == 0, session.notes != MeetingSession.normalizedNotes(self.text) {
             self.scheduleSave(after: .zero)
         }
     }
 
+    /// Owners must call this when the editor goes away: a pending debounced edit is dropped when the model deinits.
     func flush() {
         guard self.pending != nil, let id = self.sessionID else { return }
         self.pending?.cancel()
@@ -68,12 +71,20 @@ final class MeetingNotesModel: ObservableObject {
         }
     }
 
-    private func persist(_ id: MeetingSessionID, _ snapshot: String) async {
+    private func persist(_ id: MeetingSessionID, _ snapshot: String, attempt: Int = 0) async {
         do {
+            self.inFlight += 1
+            defer { self.inFlight -= 1 }
             _ = try await self.save(id, snapshot)
             if id == self.sessionID { self.saveError = nil }
         } catch MeetingCoordinatorError.activityInProgress {
-            if id == self.sessionID { self.scheduleSave(after: self.retryDelay) }
+            if id == self.sessionID {
+                self.scheduleSave(after: self.retryDelay)
+            } else if attempt < Self.maximumOffscreenAttempts {
+                // Edits to a meeting no longer shown: retry the frozen snapshot.
+                try? await Task.sleep(for: self.retryDelay)
+                await self.persist(id, snapshot, attempt: attempt + 1)
+            }
         } catch {
             if id == self.sessionID { self.saveError = error.localizedDescription }
         }

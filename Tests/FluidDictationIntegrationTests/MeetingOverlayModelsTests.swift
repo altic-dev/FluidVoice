@@ -1054,20 +1054,69 @@ final class MeetingNotesModelTests: XCTestCase {
         XCTAssertEqual(saveCount, afterTyping, "normalized text already matches the stored notes")
     }
 
+    private func waitUntil(timeout: Duration = .seconds(2), _ condition: () -> Bool) async throws {
+        let deadline = ContinuousClock.now + timeout
+        while !condition(), ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+    }
+
     func testBusyCoordinatorRetriesWithLatestText() async throws {
         var attempts: [String] = []
-        let model = MeetingNotesModel(debounce: .milliseconds(10), retryDelay: .milliseconds(30)) { _, text in
+        var gate: CheckedContinuation<Void, Never>?
+        let model = MeetingNotesModel(debounce: .milliseconds(100), retryDelay: .milliseconds(10)) { _, text in
             attempts.append(text)
-            if attempts.count == 1 { throw MeetingCoordinatorError.activityInProgress }
+            if attempts.count == 1 {
+                await withCheckedContinuation { gate = $0 }
+                throw MeetingCoordinatorError.activityInProgress
+            }
             return self.session(notes: text)
         }
         model.show(self.session())
         model.text = "x"
-        try await Task.sleep(for: .milliseconds(20))
+        try await self.waitUntil { gate != nil }
         model.text = "xy"
-        try await Task.sleep(for: .milliseconds(200))
-        XCTAssertEqual(attempts.last, "xy")
+        gate?.resume()
+        try await self.waitUntil { attempts.count == 2 }
+        try await Task.sleep(for: .milliseconds(150))
+        XCTAssertEqual(attempts, ["x", "xy"])
         XCTAssertNil(model.saveError)
+    }
+
+    func testBusySaveForAMeetingNoLongerShownStillLands() async throws {
+        var attempts: [(MeetingSessionID, String)] = []
+        let model = MeetingNotesModel(debounce: .seconds(10), retryDelay: .milliseconds(20)) { id, text in
+            attempts.append((id, text))
+            if attempts.count == 1 { throw MeetingCoordinatorError.activityInProgress }
+            return self.session(notes: text)
+        }
+        let first = self.session()
+        model.show(first)
+        model.text = "first notes"
+        model.show(self.session())
+        try await self.waitUntil { attempts.count == 2 }
+        XCTAssertEqual(attempts.map(\.0), [first.id, first.id])
+        XCTAssertEqual(attempts.map(\.1), ["first notes", "first notes"])
+    }
+
+    func testRefreshDuringAnInFlightSaveDoesNotSaveAgain() async throws {
+        var saves: [String] = []
+        var gate: CheckedContinuation<Void, Never>?
+        let model = MeetingNotesModel(debounce: .milliseconds(10)) { _, text in
+            saves.append(text)
+            await withCheckedContinuation { gate = $0 }
+            return self.session(notes: text)
+        }
+        let session = self.session(notes: "kept")
+        model.show(session)
+        var stale = session
+        stale.notes = nil
+        model.show(stale)
+        try await self.waitUntil { gate != nil }
+        model.show(stale)
+        try await Task.sleep(for: .milliseconds(50))
+        gate?.resume()
+        XCTAssertEqual(saves, ["kept"])
     }
 }
 
@@ -1118,6 +1167,10 @@ final class MeetingMarkdownStylerTests: XCTestCase {
         XCTAssertEqual(MeetingMarkdownLists.returnAction(forLine: "- [x] done"), .insert("\n- [ ] "))
         XCTAssertEqual(MeetingMarkdownLists.returnAction(forLine: "- "), .endList(removeLength: 2))
         XCTAssertEqual(MeetingMarkdownLists.returnAction(forLine: "- [ ] "), .endList(removeLength: 6))
+        XCTAssertEqual(MeetingMarkdownLists.returnAction(forLine: "- [ ]"), .endList(removeLength: 5))
+        XCTAssertEqual(MeetingMarkdownLists.returnAction(forLine: "- [x]"), .endList(removeLength: 5))
+        XCTAssertEqual(MeetingMarkdownLists.returnAction(forLine: "  - [ ]"), .endList(removeLength: 7))
+        XCTAssertEqual(MeetingMarkdownLists.returnAction(forLine: "- [ ]x"), .insert("\n- "))
         XCTAssertEqual(MeetingMarkdownLists.returnAction(forLine: "plain"), MeetingMarkdownLists.ReturnAction.none)
         XCTAssertEqual(MeetingMarkdownLists.returnAction(forLine: "**bold** text"), MeetingMarkdownLists.ReturnAction.none)
     }
@@ -1125,7 +1178,29 @@ final class MeetingMarkdownStylerTests: XCTestCase {
     func testToggleTask() {
         XCTAssertEqual(MeetingMarkdownLists.toggledTask("- [ ] a"), "- [x] a")
         XCTAssertEqual(MeetingMarkdownLists.toggledTask("  * [X] a"), "  * [ ] a")
+        XCTAssertEqual(MeetingMarkdownLists.toggledTask("- [ ]"), "- [x]")
         XCTAssertNil(MeetingMarkdownLists.toggledTask("- a"))
+    }
+
+    func testBareTaskBoxIsStyled() {
+        XCTAssertTrue(MeetingMarkdownStyler.spans(in: "- [ ]").contains(.init(range: NSRange(location: 0, length: 5), style: .taskBox(isDone: false))))
+    }
+
+    func testOneLineFenceDoesNotSwallowTheRest() {
+        let spans = MeetingMarkdownStyler.spans(in: "```js x```\n# after")
+        XCTAssertTrue(spans.contains(.init(range: NSRange(location: 11, length: 7), style: .heading(level: 1))))
+    }
+
+    func testBoldContainingCodeStaysBold() {
+        let text = "**see `x` here**"
+        XCTAssertTrue(self.styles(text, at: NSRange(location: 0, length: 16)).contains(.bold))
+        XCTAssertTrue(self.styles(text, at: NSRange(location: 6, length: 3)).contains(.code))
+    }
+
+    func testOffsetsAreUTF16AndCRLFLinesSplit() {
+        XCTAssertTrue(self.styles("😀 **b**", at: NSRange(location: 3, length: 5)).contains(.bold))
+        let headings = MeetingMarkdownStyler.spans(in: "# a\r\n# b").filter { $0.style == .heading(level: 1) }.map(\.range)
+        XCTAssertEqual(headings, [NSRange(location: 0, length: 3), NSRange(location: 5, length: 3)])
     }
 
     func testStylingLongNotesIsFast() {

@@ -15,10 +15,11 @@ private nonisolated func markdownRegex(_ pattern: String) -> NSRegularExpression
 }
 
 /// Styles markdown in place. The text is never changed, so markers stay visible (dimmed via `.marker`).
+/// Underscore emphasis (`_x_`, `__x__`) is not supported.
 nonisolated enum MeetingMarkdownStyler {
     private static let heading = markdownRegex(#"^(#{1,3})[ \t]+\S.*$"#)
     private static let quote = markdownRegex(#"^[ \t]*(>)"#)
-    private static let task = markdownRegex(#"^[ \t]*([-*] \[([ xX])\])[ \t](.*)$"#)
+    private static let task = markdownRegex(#"^[ \t]*([-*] \[([ xX])\])(?:[ \t](.*))?$"#)
     private static let list = markdownRegex(#"^[ \t]*([-*]|\d+\.)[ \t]"#)
     private static let code = markdownRegex(#"(`)([^`\n]+)(`)"#)
     private static let bold = markdownRegex(#"(\*\*)(?=\S)(.+?)(?<=\S)(\*\*)"#)
@@ -31,9 +32,12 @@ nonisolated enum MeetingMarkdownStyler {
         var inFence = false
         string.enumerateSubstrings(in: NSRange(location: 0, length: string.length), options: [.byLines, .substringNotRequired]) { _, line, _, _ in
             let trimmed = string.substring(with: line).trimmingCharacters(in: .whitespaces)
-            if trimmed.hasPrefix("```") || trimmed.hasPrefix("~~~") {
-                inFence.toggle()
-                spans += [.init(range: line, style: .codeBlock), .init(range: line, style: .marker)]
+            if let fence = trimmed.hasPrefix("```") ? "```" : trimmed.hasPrefix("~~~") ? "~~~" : nil {
+                // A fence closed on its own line ("```js x```") is a one-line code block, not an opening fence.
+                let isOneLine = trimmed.dropFirst(3).contains(fence)
+                if !isOneLine { inFence.toggle() }
+                spans.append(.init(range: line, style: .codeBlock))
+                if !isOneLine { spans.append(.init(range: line, style: .marker)) }
             } else if inFence {
                 spans.append(.init(range: line, style: .codeBlock))
             } else {
@@ -63,9 +67,12 @@ nonisolated enum MeetingMarkdownStyler {
             codeRanges.append(match.range)
             spans += [.init(range: match.range, style: .code), .init(range: match.range(at: 1), style: .marker), .init(range: match.range(at: 3), style: .marker)]
         }
-        let outsideCode = { (range: NSRange) in !codeRanges.contains { NSIntersectionRange($0, range).length > 0 } }
+        // Only markers inside code cancel a match, so "**see `x` here**" stays bold.
+        let markersOutsideCode = { (match: NSTextCheckingResult) in
+            [match.range(at: 1), match.range(at: 3)].allSatisfy { marker in !codeRanges.contains { NSIntersectionRange($0, marker).length > 0 } }
+        }
         for (expression, style) in [(self.bold, MeetingMarkdownStyle.bold), (self.italic, .italic), (self.link, .link)] {
-            for match in expression.matches(in: text, range: line) where outsideCode(match.range) {
+            for match in expression.matches(in: text, range: line) where markersOutsideCode(match) {
                 let styled = style == .link ? match.range(at: 2) : match.range
                 spans += [.init(range: styled, style: style), .init(range: match.range(at: 1), style: .marker), .init(range: match.range(at: 3), style: .marker)]
             }
@@ -82,10 +89,10 @@ nonisolated enum MeetingMarkdownLists {
         case none
     }
 
-    private static let task = markdownRegex(#"^([ \t]*)([-*]) \[[ xX]\] (.*)$"#)
+    private static let task = markdownRegex(#"^([ \t]*)([-*]) \[[ xX]\](?=[ \t]|$)[ \t]?(.*)$"#)
     private static let bullet = markdownRegex(#"^([ \t]*)([-*]) (.*)$"#)
     private static let ordered = markdownRegex(#"^([ \t]*)(\d+)\. (.*)$"#)
-    private static let toggle = markdownRegex(#"^([ \t]*[-*] \[)([ xX])(\])"#)
+    private static let toggle = markdownRegex(#"^([ \t]*[-*] \[)([ xX])(\])(?=[ \t]|$)"#)
 
     /// `line` is the text from the start of the line to the cursor.
     static func returnAction(forLine line: String) -> ReturnAction {
