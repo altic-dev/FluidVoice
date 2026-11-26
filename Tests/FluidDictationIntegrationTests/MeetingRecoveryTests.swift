@@ -5891,7 +5891,6 @@ final class MeetingRecoveryTests: XCTestCase {
         capture.startResult = MeetingCaptureStartResult(tracks: [microphone], firstPresentationTime: nil)
         let coordinator = MeetingSessionCoordinator(store: store, capture: capture, processing: StubProcessingController(), audioArbiter: StubArbiter())
         let started = try await coordinator.startRecording(configuration: self.makeConfiguration())
-        try await Task.sleep(nanoseconds: 100_000_000) // Let startup retention maintenance finish before gating saves.
         let updated = try await coordinator.updateNotes(sessionID: started.id, to: "## Agenda\n- budget\n\n")
         XCTAssertEqual(updated.notes, "## Agenda\n- budget")
         XCTAssertEqual(coordinator.state, .recording(started.id))
@@ -5913,14 +5912,14 @@ final class MeetingRecoveryTests: XCTestCase {
         let coordinator = MeetingSessionCoordinator(store: store, capture: capture, processing: StubProcessingController(), audioArbiter: StubArbiter())
         capture.onStart = { @MainActor in
             guard let id = coordinator.activeSession?.id else { return XCTFail("Start must publish the session first") }
-            _ = try? await coordinator.updateNotes(sessionID: id, to: "typed while starting")
+            do { _ = try await coordinator.updateNotes(sessionID: id, to: "typed while starting") } catch { XCTFail("\(error)") }
         }
         let started = try await coordinator.startRecording(configuration: self.makeConfiguration())
         XCTAssertEqual(started.notes, "typed while starting")
         let persistedAtStart = try await store.load(id: started.id)
         XCTAssertEqual(persistedAtStart?.notes, "typed while starting")
         capture.onStop = { @MainActor in
-            _ = try? await coordinator.updateNotes(sessionID: started.id, to: "typed while stopping")
+            do { _ = try await coordinator.updateNotes(sessionID: started.id, to: "typed while stopping") } catch { XCTFail("\(error)") }
         }
         capture.stopResult = MeetingCaptureStopResult(tracks: [microphone], stoppedAt: Date())
         let completed = try await coordinator.stopAndTranscribe()
@@ -5939,7 +5938,6 @@ final class MeetingRecoveryTests: XCTestCase {
         let processing = GatedProcessingController()
         let coordinator = MeetingSessionCoordinator(store: store, capture: capture, processing: processing, audioArbiter: StubArbiter())
         let started = try await coordinator.startRecording(configuration: self.makeConfiguration())
-        try await Task.sleep(nanoseconds: 100_000_000) // Let startup retention maintenance finish before gating saves.
         _ = try await coordinator.updateNotes(sessionID: started.id, to: "first")
         capture.stopResult = MeetingCaptureStopResult(tracks: [microphone], stoppedAt: Date())
         let stopping = Task { try await coordinator.stopAndTranscribe() }
@@ -5953,6 +5951,126 @@ final class MeetingRecoveryTests: XCTestCase {
         XCTAssertEqual(completed.notes, "first\n- typed while processing")
         let reloaded = try await store.load(id: started.id)
         XCTAssertEqual(reloaded?.notes, "first\n- typed while processing")
+    }
+
+    func testNotesTypedBeforeAFailedStartAreSavedWithoutRecoverableAudio() async throws {
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MeetingSessionStore(rootDirectory: dir)
+        let capture = StubCaptureController()
+        capture.startError = MeetingCaptureError.captureStartFailed("Capture could not finish starting")
+        let coordinator = MeetingSessionCoordinator(store: store, capture: capture, processing: StubProcessingController(), audioArbiter: StubArbiter())
+        capture.onStart = { @MainActor in
+            guard let id = coordinator.activeSession?.id else { return XCTFail("Start must publish the session first") }
+            do { _ = try await coordinator.updateNotes(sessionID: id, to: "typed while preparing") } catch { XCTFail("\(error)") }
+        }
+        await XCTAssertThrowsErrorAsync(try await coordinator.startRecording(configuration: self.makeConfiguration()))
+        // No recoverable audio: the failed manifest is still written, but no offer stays in memory.
+        XCTAssertNil(coordinator.activeSession)
+        let sessions = try await store.loadAll()
+        XCTAssertEqual(sessions.count, 1)
+        XCTAssertEqual(sessions.first?.state, .failed)
+        XCTAssertEqual(sessions.first?.notes, "typed while preparing")
+    }
+
+    func testNotesTypedDuringAFailedStartSurviveOnTheRecoverableOffer() async throws {
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = GatedThrowingSaveStore(inner: MeetingSessionStore(rootDirectory: dir), recorder: EventRecorder())
+        let capture = StubCaptureController()
+        let microphone = self.makeMicrophoneTrack(chunks: [self.makeFinalizedChunk()])
+        capture.startResult = MeetingCaptureStartResult(tracks: [microphone], firstPresentationTime: nil)
+        let coordinator = MeetingSessionCoordinator(store: store, capture: capture, processing: StubProcessingController(), audioArbiter: StubArbiter())
+        capture.onStart = { @MainActor in
+            guard let id = coordinator.activeSession?.id else { return XCTFail("Start must publish the session first") }
+            do { _ = try await coordinator.updateNotes(sessionID: id, to: "typed while preparing") } catch { XCTFail("\(error)") }
+            capture.stopResult = MeetingCaptureStopResult(tracks: [microphone], stoppedAt: Date())
+        }
+        capture.onStop = { @MainActor in
+            guard let id = coordinator.activeSession?.id else { return XCTFail("The failing start must still own the session") }
+            do { _ = try await coordinator.updateNotes(sessionID: id, to: "typed while start failed") } catch { XCTFail("\(error)") }
+        }
+        // The first save is the recording-state save after capture.start, which fails the start.
+        await store.throwOnNextSave()
+        await XCTAssertThrowsErrorAsync(try await coordinator.startRecording(configuration: self.makeConfiguration()))
+        let offer = try XCTUnwrap(coordinator.activeSession)
+        XCTAssertEqual(offer.state, .failed)
+        XCTAssertEqual(offer.notes, "typed while start failed")
+        let reloaded = try await store.load(id: offer.id)
+        XCTAssertEqual(reloaded?.state, .failed)
+        XCTAssertEqual(reloaded?.notes, "typed while start failed")
+    }
+
+    func testNotesEditedDuringFailedProcessingAreKept() async throws {
+        try await self.assertNotesSurviveProcessingError(ProcessingFailure(), expectedState: .failed)
+    }
+
+    func testNotesEditedDuringCancelledProcessingAreKept() async throws {
+        try await self.assertNotesSurviveProcessingError(CancellationError(), expectedState: .interrupted)
+    }
+
+    private func assertNotesSurviveProcessingError(_ error: Error, expectedState: MeetingSessionState) async throws {
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MeetingSessionStore(rootDirectory: dir)
+        let capture = StubCaptureController()
+        let microphone = self.makeMicrophoneTrack(chunks: [self.makeFinalizedChunk()])
+        capture.startResult = MeetingCaptureStartResult(tracks: [microphone], firstPresentationTime: nil)
+        let processing = GatedFailingProcessingController(error: error)
+        let coordinator = MeetingSessionCoordinator(store: store, capture: capture, processing: processing, audioArbiter: StubArbiter())
+        let started = try await coordinator.startRecording(configuration: self.makeConfiguration())
+        capture.stopResult = MeetingCaptureStopResult(tracks: [microphone], stoppedAt: Date())
+        let stopping = Task { try await coordinator.stopAndTranscribe() }
+        for _ in 0..<500 where !processing.didStart {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTAssertTrue(processing.didStart)
+        _ = try await coordinator.updateNotes(sessionID: started.id, to: "typed while processing")
+        processing.openGate()
+        await XCTAssertThrowsErrorAsync(try await stopping.value)
+        XCTAssertEqual(coordinator.activeSession?.state, expectedState)
+        XCTAssertEqual(coordinator.activeSession?.notes, "typed while processing")
+        let reloaded = try await store.load(id: started.id)
+        XCTAssertEqual(reloaded?.state, expectedState)
+        XCTAssertEqual(reloaded?.notes, "typed while processing")
+    }
+
+    func testNotesEditedDuringTheFinalSaveAreSaved() async throws {
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let recorder = EventRecorder()
+        let store = GatedThrowingSaveStore(inner: MeetingSessionStore(rootDirectory: dir), recorder: recorder)
+        let capture = StubCaptureController()
+        let microphone = self.makeMicrophoneTrack(chunks: [self.makeFinalizedChunk()])
+        capture.startResult = MeetingCaptureStartResult(tracks: [microphone], firstPresentationTime: nil)
+        let processing = GatedProcessingController()
+        let coordinator = MeetingSessionCoordinator(store: store, capture: capture, processing: processing, audioArbiter: StubArbiter())
+        let started = try await coordinator.startRecording(configuration: self.makeConfiguration())
+        _ = try await coordinator.updateNotes(sessionID: started.id, to: "before the final save")
+        capture.stopResult = MeetingCaptureStopResult(tracks: [microphone], stoppedAt: Date())
+        let stopping = Task { try await coordinator.stopAndTranscribe() }
+        for _ in 0..<500 where !processing.didStart {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTAssertTrue(processing.didStart)
+        // Hold the completed-state save open, the only save after processing returns.
+        await store.closeGate()
+        let savesBefore = await recorder.events.count
+        processing.openGate()
+        for _ in 0..<500 {
+            if await recorder.events.count > savesBefore { break }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        let savesStarted = await recorder.events.count
+        XCTAssertEqual(savesStarted, savesBefore + 1, "The completed-state save must be held")
+        _ = try await coordinator.updateNotes(sessionID: started.id, to: "typed during the final save")
+        await store.openGate()
+        let completed = try await stopping.value
+        XCTAssertEqual(completed.notes, "typed during the final save")
+        XCTAssertEqual(coordinator.latestCompletedSession?.notes, "typed during the final save")
+        let reloaded = try await store.load(id: started.id)
+        XCTAssertEqual(reloaded?.state, .completed)
+        XCTAssertEqual(reloaded?.notes, "typed during the final save")
     }
 
     func testNotesOnFinishedMeetingSaveAndClearToNil() async throws {
@@ -5983,7 +6101,7 @@ final class MeetingRecoveryTests: XCTestCase {
         let session = try await coordinator.startRecording(configuration: self.makeConfiguration())
         capture.stopResult = MeetingCaptureStopResult(tracks: [microphone], stoppedAt: Date())
         capture.emit(.sourceApplicationEnded(detail: "Zoom is no longer available to record."))
-        for _ in 0..<200 {
+        for _ in 0..<1000 {
             if coordinator.isQuiescent, coordinator.state == .interrupted(session.id) { break }
             try await Task.sleep(nanoseconds: 5_000_000)
         }
@@ -6388,6 +6506,33 @@ private final class StubProcessingController: MeetingProcessingControlling {
                 errorCode: nil
             )
         )
+    }
+}
+
+/// Blocks `process(...)` until `openGate()` is called, then throws.
+@MainActor
+private final class GatedFailingProcessingController: MeetingProcessingControlling {
+    private let error: Error
+    private(set) var didStart = false
+    private var continuation: CheckedContinuation<Void, Never>?
+
+    init(error: Error) {
+        self.error = error
+    }
+
+    func openGate() {
+        self.continuation?.resume()
+        self.continuation = nil
+    }
+
+    func process(
+        session: MeetingSession,
+        sessionDirectory: URL,
+        progress: @escaping @MainActor (MeetingProcessingStage) -> Void
+    ) async throws -> MeetingProcessingResult {
+        self.didStart = true
+        await withCheckedContinuation { self.continuation = $0 }
+        throw self.error
     }
 }
 
