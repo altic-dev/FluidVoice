@@ -1070,3 +1070,68 @@ final class MeetingNotesModelTests: XCTestCase {
         XCTAssertNil(model.saveError)
     }
 }
+
+final class MeetingMarkdownStylerTests: XCTestCase {
+    private func styles(_ text: String, at range: NSRange) -> [MeetingMarkdownStyle] {
+        MeetingMarkdownStyler.spans(in: text).filter { $0.range == range }.map(\.style)
+    }
+
+    func testHeadingStylesLineAndDimsHashes() {
+        let spans = MeetingMarkdownStyler.spans(in: "## Budget")
+        XCTAssertTrue(spans.contains(.init(range: NSRange(location: 0, length: 9), style: .heading(level: 2))))
+        XCTAssertTrue(spans.contains(.init(range: NSRange(location: 0, length: 2), style: .marker)))
+    }
+
+    func testBoldItalicCodeAndLink() {
+        let text = "a **b** *c* `d` [e](https://x.y)"
+        XCTAssertTrue(self.styles(text, at: NSRange(location: 2, length: 5)).contains(.bold))
+        XCTAssertTrue(self.styles(text, at: NSRange(location: 8, length: 3)).contains(.italic))
+        XCTAssertTrue(self.styles(text, at: NSRange(location: 12, length: 3)).contains(.code))
+        XCTAssertTrue(self.styles(text, at: NSRange(location: 17, length: 1)).contains(.link))
+        XCTAssertFalse(MeetingMarkdownStyler.spans(in: "**b**").contains { $0.style == .italic }, "bold must not also read as italic")
+    }
+
+    func testNoEmphasisInsideInlineCode() {
+        XCTAssertFalse(MeetingMarkdownStyler.spans(in: "`**x**`").contains { $0.style == .bold })
+    }
+
+    func testTasksAndDoneTasks() {
+        let text = "- [ ] open\n- [x] done"
+        let spans = MeetingMarkdownStyler.spans(in: text)
+        XCTAssertTrue(spans.contains(.init(range: NSRange(location: 0, length: 5), style: .taskBox(isDone: false))))
+        XCTAssertTrue(spans.contains(.init(range: NSRange(location: 11, length: 5), style: .taskBox(isDone: true))))
+        XCTAssertTrue(spans.contains(.init(range: NSRange(location: 17, length: 4), style: .done)))
+    }
+
+    func testNothingIsStyledInsideFencedCode() {
+        let text = "```\n# not a heading **x**\n```\n# heading"
+        let spans = MeetingMarkdownStyler.spans(in: text)
+        XCTAssertFalse(spans.contains { $0.style == .heading(level: 1) && $0.range.location < 26 })
+        XCTAssertFalse(spans.contains { $0.style == .bold })
+        XCTAssertTrue(spans.contains { $0.style == .heading(level: 1) && $0.range.location == 30 })
+    }
+
+    func testReturnContinuesAndEndsLists() {
+        XCTAssertEqual(MeetingMarkdownLists.returnAction(forLine: "- item"), .insert("\n- "))
+        XCTAssertEqual(MeetingMarkdownLists.returnAction(forLine: "  * item"), .insert("\n  * "))
+        XCTAssertEqual(MeetingMarkdownLists.returnAction(forLine: "3. item"), .insert("\n4. "))
+        XCTAssertEqual(MeetingMarkdownLists.returnAction(forLine: "- [x] done"), .insert("\n- [ ] "))
+        XCTAssertEqual(MeetingMarkdownLists.returnAction(forLine: "- "), .endList(removeLength: 2))
+        XCTAssertEqual(MeetingMarkdownLists.returnAction(forLine: "- [ ] "), .endList(removeLength: 6))
+        XCTAssertEqual(MeetingMarkdownLists.returnAction(forLine: "plain"), MeetingMarkdownLists.ReturnAction.none)
+        XCTAssertEqual(MeetingMarkdownLists.returnAction(forLine: "**bold** text"), MeetingMarkdownLists.ReturnAction.none)
+    }
+
+    func testToggleTask() {
+        XCTAssertEqual(MeetingMarkdownLists.toggledTask("- [ ] a"), "- [x] a")
+        XCTAssertEqual(MeetingMarkdownLists.toggledTask("  * [X] a"), "  * [ ] a")
+        XCTAssertNil(MeetingMarkdownLists.toggledTask("- a"))
+    }
+
+    func testStylingLongNotesIsFast() {
+        let text = Array(repeating: "## Heading\n- [ ] task with **bold** and `code` [l](u)\n> quote", count: 400).joined(separator: "\n")
+        let start = Date()
+        _ = MeetingMarkdownStyler.spans(in: text)
+        XCTAssertLessThan(Date().timeIntervalSince(start), 0.25, "styling runs on every keystroke")
+    }
+}
