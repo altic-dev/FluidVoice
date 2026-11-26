@@ -12,6 +12,7 @@ trap 'rm -rf "$task_test_dir"' EXIT HUP INT TERM
 xcrun swiftc -parse-as-library \
     Sources/Fluid/Persistence/Search/HistorySearchRevision.swift \
     Sources/Fluid/Persistence/ChatHistoryStore.swift \
+    Sources/Fluid/Services/FileTranscriptModels.swift \
     Sources/Fluid/Persistence/FileTranscriptionHistoryStore.swift \
     Sources/Fluid/Persistence/PersistedHistory.swift \
     Tests/HistoryDecodeRecoveryTests.swift \

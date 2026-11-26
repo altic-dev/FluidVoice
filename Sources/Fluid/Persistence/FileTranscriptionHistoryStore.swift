@@ -24,9 +24,11 @@ nonisolated struct FileTranscriptionEntry: Codable, Identifiable, Equatable {
     let duration: TimeInterval
     let processingTime: TimeInterval
     let confidence: Float
-    let text: String
+    private(set) var text: String
     /// Speaker-attributed segments when diarization was enabled; empty otherwise.
     let speakerSegments: [SpeakerTranscriptSegment]
+    /// Names are keyed by the original diarization label, keeping speaker identities stable.
+    private(set) var speakerNames: [String: String] = [:]
     let speakerLabelingNotice: String?
     let speakerLabelingGaps: [SpeakerTranscriptGap]
 
@@ -69,7 +71,7 @@ nonisolated struct FileTranscriptionEntry: Codable, Identifiable, Equatable {
 
     enum CodingKeys: String, CodingKey {
         case id, timestamp, fileName, duration, processingTime, confidence, text, speakerSegments
-        case speakerLabelingNotice, speakerLabelingGaps, customTitle, searchRevision
+        case speakerLabelingNotice, speakerLabelingGaps, speakerNames, customTitle, searchRevision
     }
 
     init(from decoder: Decoder) throws {
@@ -85,6 +87,7 @@ nonisolated struct FileTranscriptionEntry: Codable, Identifiable, Equatable {
         self.text = try c.decode(String.self, forKey: .text)
         // Older history entries predate speaker labels — tolerate a missing key.
         self.speakerSegments = try c.decodeIfPresent([SpeakerTranscriptSegment].self, forKey: .speakerSegments) ?? []
+        self.speakerNames = try c.decodeIfPresent([String: String].self, forKey: .speakerNames) ?? [:]
         self.speakerLabelingNotice = try c.decodeIfPresent(String.self, forKey: .speakerLabelingNotice)
         self.speakerLabelingGaps = try c.decodeIfPresent([SpeakerTranscriptGap].self, forKey: .speakerLabelingGaps) ?? []
     }
@@ -103,10 +106,45 @@ nonisolated struct FileTranscriptionEntry: Codable, Identifiable, Equatable {
         if !self.speakerSegments.isEmpty {
             try c.encode(self.speakerSegments, forKey: .speakerSegments)
         }
+        if !self.speakerNames.isEmpty {
+            try c.encode(self.speakerNames, forKey: .speakerNames)
+        }
         try c.encodeIfPresent(self.speakerLabelingNotice, forKey: .speakerLabelingNotice)
         if !self.speakerLabelingGaps.isEmpty {
             try c.encode(self.speakerLabelingGaps, forKey: .speakerLabelingGaps)
         }
+    }
+
+    var speakerIdentifiers: [String] {
+        var seen = Set<String>()
+        return self.speakerSegments.compactMap { seen.insert($0.speaker).inserted ? $0.speaker : nil }
+    }
+
+    func speakerDisplayName(for speaker: String) -> String {
+        self.speakerNames[speaker] ?? speaker
+    }
+
+    private func namedSegment(_ segment: SpeakerTranscriptSegment) -> SpeakerTranscriptSegment {
+        SpeakerTranscriptSegment(
+            speaker: self.speakerDisplayName(for: segment.speaker),
+            startSeconds: segment.startSeconds,
+            endSeconds: segment.endSeconds,
+            text: segment.text
+        )
+    }
+
+    /// Rebuild the copy/search text only when names change, never during view updates.
+    mutating func renameSpeakers(_ names: [String: String]) -> Bool {
+        let speakers = Set(self.speakerIdentifiers)
+        var updated = self.speakerNames
+        for (speaker, draft) in names where speakers.contains(speaker) {
+            let name = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+            updated[speaker] = name.isEmpty || name == speaker ? nil : name
+        }
+        guard updated != self.speakerNames else { return false }
+        self.speakerNames = updated
+        self.text = self.speakerSegments.map { self.namedSegment($0).plainText }.joined(separator: "\n\n")
+        return true
     }
 
     /// Preview text for list display (first 80 chars)
@@ -144,7 +182,7 @@ nonisolated struct FileTranscriptionEntry: Codable, Identifiable, Equatable {
             processingTime: self.processingTime,
             fileName: self.fileName,
             timestamp: self.timestamp,
-            speakerSegments: self.speakerSegments,
+            speakerSegments: self.speakerNames.isEmpty ? self.speakerSegments : self.speakerSegments.map(self.namedSegment),
             speakerLabelingNotice: self.speakerLabelingNotice,
             speakerLabelingGaps: self.speakerLabelingGaps
         )
@@ -208,6 +246,14 @@ final class FileTranscriptionHistoryStore: ObservableObject {
               let index = self.entries.firstIndex(where: { $0.id == id }),
               self.entries[index].displayTitle != trimmed else { return }
         self.entries[index].customTitle = trimmed
+        let revision = self.entries[index].searchRevision ?? 1
+        self.entries[index].searchRevision = revision == .max ? .max : revision + 1
+        self.saveEntries()
+    }
+
+    func renameSpeakers(entryID: UUID, names: [String: String]) {
+        guard let index = self.entries.firstIndex(where: { $0.id == entryID }),
+              self.entries[index].renameSpeakers(names) else { return }
         let revision = self.entries[index].searchRevision ?? 1
         self.entries[index].searchRevision = revision == .max ? .max : revision + 1
         self.saveEntries()
