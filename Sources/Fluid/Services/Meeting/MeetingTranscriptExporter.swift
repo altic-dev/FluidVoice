@@ -19,7 +19,10 @@ nonisolated enum MeetingTranscriptExporter {
         let segments = session.transcriptSegments
             .filter { includeEchoes || !$0.isEcho }
             .sorted { $0.start.seconds < $1.start.seconds }
-        var blocks = ["# \(title)", "## Transcript"]
+        var blocks = ["# \(title)"]
+        // The user's own markdown, so it is not escaped.
+        if let notes = session.notes { blocks += ["## Notes", notes] }
+        blocks.append("## Transcript")
         for segment in segments {
             let speaker = Self.markdownHeading(Self.speakerLabel(for: segment, in: session, speakerNames: speakerNames))
             blocks.append("### [\(Self.timestampText(segment.start.seconds))] \(speaker)")
@@ -120,6 +123,7 @@ nonisolated enum MeetingTranscriptExporter {
             durationSeconds: session.duration,
             mode: session.mode.rawValue,
             applicationDisplayName: session.capturedApplication?.displayName,
+            notes: session.notes,
             speakers: speakers,
             segments: segments
         )
@@ -205,6 +209,7 @@ private struct ExportedTranscript: Codable {
     var durationSeconds: TimeInterval
     var mode: String
     var applicationDisplayName: String?
+    var notes: String?
     var speakers: [ExportedSpeaker]
     var segments: [ExportedSegment]
 }
