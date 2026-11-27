@@ -6,7 +6,7 @@ struct MeetingMarkdownEditor: NSViewRepresentable {
     @Binding var text: String
     /// Which meeting the text belongs to; a change resets undo even when two meetings' notes match.
     var documentID: MeetingSessionID?
-    var placeholder = "Jot down notes. Markdown works: # headings, - bullets, - [ ] tasks."
+    var placeholder = "Jot down notes"
 
     func makeCoordinator() -> Coordinator {
         Coordinator(text: self.$text)
