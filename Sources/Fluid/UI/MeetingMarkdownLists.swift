@@ -28,7 +28,9 @@ nonisolated enum MeetingMarkdownLists {
             return item.content.isEmpty ? .endList(removeLength: string.length) : .insert("\n\(item.indent)\(item.marker) ")
         }
         if let item = groups(self.ordered) {
-            return item.content.isEmpty ? .endList(removeLength: string.length) : .insert("\n\(item.indent)\((Int(item.marker) ?? 0) + 1). ")
+            if item.content.isEmpty { return .endList(removeLength: string.length) }
+            guard let number = Int(item.marker), number < Int.max else { return .none }
+            return .insert("\n\(item.indent)\(number + 1). ")
         }
         return .none
     }

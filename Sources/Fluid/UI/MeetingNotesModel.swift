@@ -29,6 +29,11 @@ final class MeetingNotesModel: ObservableObject {
     private var unsavedOffscreen: [MeetingSessionID: String] = [:]
     private static let maximumOffscreenAttempts = 30
 
+    /// A pending timer isn't the only sign: a failed save also leaves the text ahead of lastSynced.
+    private var hasUnsavedEdits: Bool {
+        self.pending != nil || MeetingSession.normalizedNotes(self.text) != self.lastSynced
+    }
+
     init(debounce: Duration = .seconds(1), retryDelay: Duration = .seconds(2), save: @escaping Save) {
         self.debounce = debounce
         self.retryDelay = retryDelay
@@ -67,7 +72,7 @@ final class MeetingNotesModel: ObservableObject {
 
     /// Owners must call this when the editor goes away: a pending debounced edit is dropped when the model deinits.
     func flush() {
-        guard self.pending != nil, let id = self.sessionID else { return }
+        guard let id = self.sessionID, self.pending != nil || (self.inFlight == 0 && self.hasUnsavedEdits) else { return }
         self.pending?.cancel()
         self.pending = nil
         let snapshot = self.text
@@ -78,11 +83,16 @@ final class MeetingNotesModel: ObservableObject {
     /// Saves an unsaved edit now and waits for every save in flight. Quit and actions that need the
     /// coordinator's mutation gate call this, as a notes save holds that gate.
     func flushAndWait() async {
-        if self.pending != nil, let id = self.sessionID {
-            self.pending?.cancel()
-            self.pending = nil
+        self.pending?.cancel()
+        self.pending = nil
+        await self.waitForSavesInFlight()
+        if let id = self.sessionID, self.hasUnsavedEdits {
             await self.persist(id, self.text)
         }
+        await self.waitForSavesInFlight()
+    }
+
+    private func waitForSavesInFlight() async {
         while self.inFlight > 0 {
             await withCheckedContinuation { self.idleWaiters.append($0) }
         }

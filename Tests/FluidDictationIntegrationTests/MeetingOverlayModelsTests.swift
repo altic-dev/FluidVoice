@@ -787,7 +787,7 @@ private final class HistorySnapshotLoader {
 
 @MainActor
 extension MeetingMenuBarStartTests {
-    func testMeetingShortcutIgnoresBusyStatesAndDuplicateStops() async throws {
+    func testMeetingShortcutIgnoresBusyStatesAndDuplicateStops() async {
         let previous = UserDefaults.standard.object(forKey: "FluidMeetEnabled")
         defer { UserDefaults.standard.set(previous, forKey: "FluidMeetEnabled") }
         SettingsStore.shared.fluidMeetEnabled = true
@@ -1031,6 +1031,38 @@ final class MeetingNotesModelTests: XCTestCase {
         XCTAssertEqual(saves, ["last second"], "already saved")
     }
 
+    func testFlushAndWaitRetriesAFailedSave() async throws {
+        var saves: [String] = []
+        let model = MeetingNotesModel(debounce: .milliseconds(10)) { _, text in
+            saves.append(text)
+            if saves.count == 1 { throw CocoaError(.fileWriteUnknown) }
+            return self.session(notes: text)
+        }
+        model.show(self.session())
+        model.text = "kept"
+        try await self.waitUntil { model.saveError != nil }
+        await model.flushAndWait()
+        XCTAssertEqual(saves, ["kept", "kept"])
+        XCTAssertNil(model.saveError)
+    }
+
+    func testSwitchingAwayAfterAFailedSaveKeepsTheEdit() async throws {
+        var saves: [(MeetingSessionID, String)] = []
+        let model = MeetingNotesModel(debounce: .milliseconds(10)) { id, text in
+            saves.append((id, text))
+            if saves.count == 1 { throw CocoaError(.fileWriteUnknown) }
+            return self.session(notes: text)
+        }
+        let first = self.session()
+        model.show(first)
+        model.text = "kept"
+        try await self.waitUntil { model.saveError != nil }
+        model.show(self.session(notes: "other"))
+        try await self.waitUntil { saves.count == 2 }
+        XCTAssertEqual(saves.map(\.0), [first.id, first.id])
+        XCTAssertEqual(saves.map(\.1), ["kept", "kept"])
+    }
+
     func testFlushAndWaitWaitsForASaveAlreadyInFlight() async throws {
         var gate: CheckedContinuation<Void, Never>?
         var finished = false
@@ -1270,6 +1302,8 @@ final class MeetingMarkdownStylerTests: XCTestCase {
         XCTAssertEqual(MeetingMarkdownLists.returnAction(forLine: "- item"), .insert("\n- "))
         XCTAssertEqual(MeetingMarkdownLists.returnAction(forLine: "  * item"), .insert("\n  * "))
         XCTAssertEqual(MeetingMarkdownLists.returnAction(forLine: "3. item"), .insert("\n4. "))
+        XCTAssertEqual(MeetingMarkdownLists.returnAction(forLine: "9223372036854775807. item"), MeetingMarkdownLists.ReturnAction.none)
+        XCTAssertEqual(MeetingMarkdownLists.returnAction(forLine: "99999999999999999999. item"), MeetingMarkdownLists.ReturnAction.none)
         XCTAssertEqual(MeetingMarkdownLists.returnAction(forLine: "- [x] done"), .insert("\n- [ ] "))
         XCTAssertEqual(MeetingMarkdownLists.returnAction(forLine: "- "), .endList(removeLength: 2))
         XCTAssertEqual(MeetingMarkdownLists.returnAction(forLine: "- [ ] "), .endList(removeLength: 6))
