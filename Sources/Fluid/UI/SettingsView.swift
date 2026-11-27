@@ -1417,6 +1417,14 @@ struct SettingsView: View {
                 }
                 .shownInSettingsSection(.overlay, selectedSection: self.selectedSection)
 
+                // Model Storage Card
+                ThemedCard(style: .standard) {
+                    ModelStorageSettingsSection()
+                        .padding(16)
+                }
+                .settingsSearchTarget(.modelStorage)
+                .shownInSettingsSection(.dataAndDiagnostics, selectedSection: self.selectedSection)
+
                 // Backup & Restore Card
                 ThemedCard(style: .standard) {
                     self.backupUtilityRow()

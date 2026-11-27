@@ -537,4 +537,53 @@ final class SpeechModelInstallationSnapshotTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: file), Data([1, 2, 3]))
         XCTAssertEqual(SettingsStore.shared.selectedSpeechModel, selection)
     }
+
+    // MARK: - Model storage location
+
+    private func customStorage(_ root: URL, file: String) throws -> ModelStorageConfiguration {
+        let directory = root.appendingPathComponent("Speech/WhisperModels", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try Data([1, 2, 3]).write(to: directory.appendingPathComponent(file))
+        return ModelStorageConfiguration(rootPath: root.path)
+    }
+
+    func testScanFindsModelsUnderCustomRoot() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = "fixture-\(UUID().uuidString).bin"
+        let storage = try self.customStorage(root, file: file)
+        let ids = try await SpeechModelInstallationSnapshot.scan(
+            [.init(modelID: "custom", kind: .whisper(file: file, expectedBytes: 3)), .init(modelID: "default-only", kind: .whisper(file: "missing-\(UUID().uuidString).bin", expectedBytes: 3))],
+            storage: storage
+        )
+        XCTAssertEqual(ids, ["custom"])
+    }
+
+    func testScanFollowsSymlinkedCustomRoot() async throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let real = base.appendingPathComponent("real", isDirectory: true)
+        let file = "fixture-\(UUID().uuidString).bin"
+        _ = try self.customStorage(real, file: file)
+        let link = base.appendingPathComponent("link", isDirectory: true)
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: real)
+        let ids = try await SpeechModelInstallationSnapshot.scan(
+            [.init(modelID: "linked", kind: .whisper(file: file, expectedBytes: 3))],
+            storage: ModelStorageConfiguration(rootPath: link.path)
+        )
+        XCTAssertEqual(ids, ["linked"])
+    }
+
+    func testScanWithMissingVolumeReportsOnlyBuiltInModelsAndCreatesNothing() async throws {
+        let volume = "/Volumes/FluidVoiceMissingDrive-\(UUID().uuidString)"
+        let storage = ModelStorageConfiguration(rootPath: volume + "/Models", volumeName: "Missing")
+        let start = Date()
+        let ids = try await SpeechModelInstallationSnapshot.scan(
+            [.init(modelID: "bundled", kind: .builtIn), .init(modelID: "whisper", kind: .whisper(file: "model.bin", expectedBytes: 3))],
+            storage: storage
+        )
+        XCTAssertEqual(ids, ["bundled"])
+        XCTAssertLessThan(Date().timeIntervalSince(start), 2)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: volume))
+    }
 }

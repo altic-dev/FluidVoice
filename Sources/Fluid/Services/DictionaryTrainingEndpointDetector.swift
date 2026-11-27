@@ -118,7 +118,8 @@ actor DictionaryTrainingEndpointDetector {
         }
 
         let task = Task<VadManager, Error> {
-            try await VadManager()
+            try ModelStorageLocation.requireAvailable()
+            return try await VadManager(modelDirectory: ModelStorageLocation.fluidAudioBaseDirectory())
         }
         self.managerTask = task
 

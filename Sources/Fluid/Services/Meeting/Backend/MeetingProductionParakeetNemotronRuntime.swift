@@ -125,7 +125,7 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
         let models = try await DownloadUtils.loadModels(
             .diarizer,
             modelNames: [ModelNames.Diarizer.embeddingFile],
-            directory: DiarizerModels.defaultModelsDirectory().deletingLastPathComponent(),
+            directory: ModelStorageLocation.fluidAudioModelsDirectory(),
             computeUnits: .cpuAndNeuralEngine
         )
         try Task.checkCancellation()

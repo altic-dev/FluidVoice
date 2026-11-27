@@ -64,7 +64,8 @@ actor SpeakerDiarizationService {
                     source: "SpeakerDiarizationService"
                 )
             }
-            try await self.manager.prepareModels()
+            try ModelStorageLocation.requireAvailable()
+            try await self.manager.prepareModels(directory: ModelStorageLocation.fluidAudioModelsDirectory())
             self.modelsReady = true
         }
 

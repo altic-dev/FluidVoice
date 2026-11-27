@@ -201,8 +201,8 @@ final class ExternalCoreMLTranscriptionProvider: TranscriptionProvider {
             if manager.fileExists(atPath: compiledDirectory.path) {
                 try manager.removeItem(at: compiledDirectory)
             }
-            if isManaged, manager.fileExists(atPath: directory.path) {
-                try manager.removeItem(at: directory)
+            if isManaged {
+                try ModelStorageLocation.removeDirectoryPreservingLinks(at: directory, fileManager: manager)
             }
         }.value
         DebugLogger.shared.info("ExternalCoreML: cleared app-managed cache for \(model.displayName)", source: "ExternalCoreML")
@@ -214,7 +214,10 @@ final class ExternalCoreMLTranscriptionProvider: TranscriptionProvider {
         at directory: URL,
         progressHandler: ((ModelPreparationProgress) -> Void)?
     ) async throws {
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        if !spec.validateArtifacts(at: directory) {
+            try ModelStorageLocation.requireAvailableForChanges()
+        }
+        try ModelStorageLocation.ensureDirectory(at: directory)
         let isManagedDirectory = spec.isAppManagedArtifactsDirectory(directory)
 
         // `validateArtifacts` proves the required entries exist and the manifest JSON decodes, but
@@ -231,8 +234,9 @@ final class ExternalCoreMLTranscriptionProvider: TranscriptionProvider {
                     "ExternalCoreML: refreshing managed artifacts for \(directory.lastPathComponent) due to outdated bundle stamp",
                     source: "ExternalCoreML"
                 )
-                try FileManager.default.removeItem(at: directory)
-                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                try ModelStorageLocation.requireAvailableForChanges()
+                try ModelStorageLocation.removeDirectoryPreservingLinks(at: directory)
+                try ModelStorageLocation.ensureDirectory(at: directory)
             } else if Self.cachedArtifactsAreMarkupCorrupt(spec: spec, directory: directory) {
                 DebugLogger.shared.warning(
                     "ExternalCoreML: cached artifacts for \(directory.lastPathComponent) contain an HTML/markup payload (corrupt); re-downloading",
@@ -293,15 +297,19 @@ final class ExternalCoreMLTranscriptionProvider: TranscriptionProvider {
 
         if isManagedDirectory {
             spec.persistArtifactBundleStamp(at: directory)
+        } else {
+            // Only explicit overrides are stored; managed folders follow the model storage location.
+            SettingsStore.shared.setExternalCoreMLArtifactsDirectory(directory, for: model)
         }
-        SettingsStore.shared.setExternalCoreMLArtifactsDirectory(directory, for: model)
     }
 
     private static func artifactsDirectory(
         for model: SettingsStore.SpeechModel,
         spec: ExternalCoreMLASRModelSpec
     ) -> URL? {
-        SettingsStore.shared.externalCoreMLArtifactsDirectory(for: model) ?? spec.defaultCacheDirectory
+        spec.resolvedArtifactsDirectory(
+            storedOverridePath: SettingsStore.shared.storedExternalCoreMLArtifactsPath(for: model)
+        ).directory
     }
 
     /// `true` if any required cached artifact is an HTML/markup payload instead of model data — a

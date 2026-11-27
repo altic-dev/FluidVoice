@@ -85,8 +85,7 @@ final class NemotronProvider: TranscriptionProvider {
     }
 
     private var cacheDirectory: URL? {
-        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?
-            .appendingPathComponent(self.folderHint, isDirectory: true)
+        ModelStorageLocation.coreMLModelDirectory(folderName: self.folderHint)
     }
 
     func modelsExistOnDisk() -> Bool {
@@ -133,7 +132,10 @@ final class NemotronProvider: TranscriptionProvider {
         guard let dir = self.cacheDirectory else {
             throw Self.makeError("Unable to resolve a cache directory for \(self.name).")
         }
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        if !Self.artifactsAreComplete(at: dir) {
+            try ModelStorageLocation.requireAvailableForChanges()
+        }
+        try ModelStorageLocation.ensureDirectory(at: dir)
 
         // A file-existence check alone would trust a corrupt cache: a network proxy can have
         // returned an HTML block page (HTTP 200) in place of a model file, persisting markup as
@@ -362,9 +364,7 @@ final class NemotronProvider: TranscriptionProvider {
         self.activeLanguageCode = nil
         if let directory = self.cacheDirectory {
             try await Task.detached(priority: .userInitiated) {
-                if FileManager.default.fileExists(atPath: directory.path) {
-                    try FileManager.default.removeItem(at: directory)
-                }
+                try ModelStorageLocation.removeDirectoryPreservingLinks(at: directory)
             }.value
         }
     }

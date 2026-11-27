@@ -139,7 +139,7 @@ actor DictionaryMatchPlayground {
         #if arch(arm64)
         let allProfiles = await PronunciationDictionaryStore.shared.allProfiles()
         let compatibleModelKeys = Self.installedModelKeys { descriptor in
-            AsrModels.defaultCacheDirectory(for: descriptor.asrModelVersion)
+            descriptor.cacheDirectory(in: ModelStorageLocation.fluidAudioModelsDirectory())
         }
         let targetProfile = try Self.targetProfile(from: allProfiles, target: target, compatibleModelKeys: compatibleModelKeys)
         let matching = allProfiles.filter { $0.modelKey == targetProfile.modelKey }.sorted {
@@ -154,7 +154,7 @@ actor DictionaryMatchPlayground {
             throw DictionaryMatchPlaygroundError.unavailable("This pronunciation model is unavailable.")
         }
         let version = descriptor.asrModelVersion
-        let directory = AsrModels.defaultCacheDirectory(for: version)
+        let directory = descriptor.cacheDirectory(in: ModelStorageLocation.fluidAudioModelsDirectory())
         guard descriptor.installationRevisionMatches(at: directory),
               descriptor.variant == .v2 || descriptor.variant == .v3 || descriptor.installedArchiveSHA256(at: directory) == descriptor.archiveSHA256
         else {
