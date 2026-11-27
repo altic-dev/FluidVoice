@@ -241,6 +241,7 @@ final class MeetingSummaryProviderTests: XCTestCase {
             let prompt = MeetingSummaryRemoteService.prompt(for: kind, customInstructions: "List risks")
             XCTAssertTrue(prompt.contains("If user notes are supplied"), kind.rawValue)
             XCTAssertTrue(prompt.contains("(from notes)"), kind.rawValue)
+            XCTAssertTrue(prompt.contains("Do not compare the notes with the transcript"), kind.rawValue)
             XCTAssertFalse(prompt.contains("as your only source and"), kind.rawValue)
             XCTAssertTrue(prompt.contains("transcript and"), kind.rawValue)
         }

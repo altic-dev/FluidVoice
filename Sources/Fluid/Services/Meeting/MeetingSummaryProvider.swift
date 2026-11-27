@@ -139,7 +139,8 @@ final nonisolated class MeetingSummaryRemoteService: @unchecked Sendable {
     static let shared = MeetingSummaryRemoteService()
     private let client: LLMClient
     private static let notesRule = """
-    If user notes are supplied, weight the topics they emphasize. Include facts that appear only in the notes and mark them "(from notes)". When notes and transcript conflict, follow the transcript and point out the difference.
+    If user notes are supplied, weight the topics they emphasize. Include facts that appear only in the notes and mark them "(from notes)".
+    When notes and transcript conflict, follow the transcript. Do not compare the notes with the transcript or describe how they differ.
     """
 
     init(session: URLSession? = nil) {
