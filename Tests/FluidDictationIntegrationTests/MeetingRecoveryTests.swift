@@ -1178,7 +1178,9 @@ final class MeetingRecoveryTests: XCTestCase {
     @MainActor
     private final class MeetingUIActionRecorder {
         var count = 0
-        func record() { self.count += 1 }
+        func record() {
+            self.count += 1
+        }
     }
 
     private struct MeetingUIPreferences: Equatable {
@@ -2260,7 +2262,16 @@ final class MeetingRecoveryTests: XCTestCase {
         }
         XCTAssertNil(coordinator.activeSession)
 
-        let result = try await coordinator.retryProcessing(sessionID: session.id)
+        // The reset also starts an audio retention sweep, which holds the mutation gate until it finishes.
+        var retried: MeetingSession?
+        for _ in 0..<200 where retried == nil {
+            do {
+                retried = try await coordinator.retryProcessing(sessionID: session.id)
+            } catch MeetingCoordinatorError.maintenanceInProgress {
+                try await Task.sleep(nanoseconds: 5_000_000)
+            }
+        }
+        let result = try XCTUnwrap(retried, "The retention sweep never released the mutation gate")
         XCTAssertEqual(result.state, .completed)
         XCTAssertEqual(coordinator.latestCompletedSession?.id, session.id)
         XCTAssertEqual(coordinator.state, .completed(session.id))
@@ -2549,8 +2560,8 @@ final class MeetingRecoveryTests: XCTestCase {
         XCTAssertNil(persistedOld?.recoveryResolvedAt)
     }
 
-    // A recoverable failed capture is passive after its lease is released; a later
-    // auto-detected start must be allowed to replace it without resolving its audio.
+    /// A recoverable failed capture is passive after its lease is released; a later
+    /// auto-detected start must be allowed to replace it without resolving its audio.
     func testOrdinaryStartReplacesPassiveFailedOfferWithoutResolvingIt() async throws {
         let dir = self.makeTempDirectory()
         defer { try? FileManager.default.removeItem(at: dir) }
@@ -2823,7 +2834,7 @@ final class MeetingRecoveryTests: XCTestCase {
 
     // MARK: - Slice 3, test 2: checkpoint validity matrix
 
-    func testCheckpointValidityMatrix() throws {
+    func testCheckpointValidityMatrix() {
         let session = self.makeSession(state: .interrupted, endedAt: Date())
         let trackID = UUID()
         let fingerprint = MeetingProcessingCheckpoint.ChunkFingerprint(id: UUID(), byteCount: 128, sha256: "abc123")
@@ -2892,7 +2903,7 @@ final class MeetingRecoveryTests: XCTestCase {
 
     /// A checkpoint must validate a resume on the same model and be invalidated by a model
     /// switch, so a resume can never continue from a stale, wrong-model checkpoint.
-    func testResumedVersusCleanCheckpointEquivalenceAcrossAModelSwitch() throws {
+    func testResumedVersusCleanCheckpointEquivalenceAcrossAModelSwitch() {
         let session = self.makeSession(state: .interrupted, endedAt: Date())
         let trackID = UUID()
         let fingerprint = MeetingProcessingCheckpoint.ChunkFingerprint(id: UUID(), byteCount: 128, sha256: "abc123")
@@ -6444,13 +6455,30 @@ private final class ThrowingDirectoryStore: MeetingSessionStoring, @unchecked Se
     private let wrapped: MeetingSessionStore
     var throwOnSessionDirectory = true
 
-    init(wrapping wrapped: MeetingSessionStore) { self.wrapped = wrapped }
+    init(wrapping wrapped: MeetingSessionStore) {
+        self.wrapped = wrapped
+    }
 
-    func create(_ session: MeetingSession) async throws { try await self.wrapped.create(session) }
-    func save(_ session: MeetingSession) async throws { try await self.wrapped.save(session) }
-    func load(id: MeetingSessionID) async throws -> MeetingSession? { try await self.wrapped.load(id: id) }
-    func loadAll() async throws -> [MeetingSession] { try await self.wrapped.loadAll() }
-    func loadRecoverable() async throws -> [MeetingSession] { try await self.wrapped.loadRecoverable() }
+    func create(_ session: MeetingSession) async throws {
+        try await self.wrapped.create(session)
+    }
+
+    func save(_ session: MeetingSession) async throws {
+        try await self.wrapped.save(session)
+    }
+
+    func load(id: MeetingSessionID) async throws -> MeetingSession? {
+        try await self.wrapped.load(id: id)
+    }
+
+    func loadAll() async throws -> [MeetingSession] {
+        try await self.wrapped.loadAll()
+    }
+
+    func loadRecoverable() async throws -> [MeetingSession] {
+        try await self.wrapped.loadRecoverable()
+    }
+
     func sessionDirectory(for id: MeetingSessionID) async throws -> URL {
         if self.throwOnSessionDirectory { throw CocoaError(.fileWriteNoPermission) }
         return try await self.wrapped.sessionDirectory(for: id)
@@ -6460,13 +6488,20 @@ private final class ThrowingDirectoryStore: MeetingSessionStoring, @unchecked Se
         try await self.wrapped.existingSessionDirectory(for: id)
     }
 
-    func delete(id: MeetingSessionID) async throws { try await self.wrapped.delete(id: id) }
-    func deleteAudioFiles(for id: MeetingSessionID) async throws { try await self.wrapped.deleteAudioFiles(for: id) }
+    func delete(id: MeetingSessionID) async throws {
+        try await self.wrapped.delete(id: id)
+    }
+
+    func deleteAudioFiles(for id: MeetingSessionID) async throws {
+        try await self.wrapped.deleteAudioFiles(for: id)
+    }
 }
 
 private actor EventRecorder {
     private(set) var events: [String] = []
-    func record(_ event: String) { self.events.append(event) }
+    func record(_ event: String) {
+        self.events.append(event)
+    }
 }
 
 private final class StubCaptureController: MeetingCaptureControlling, @unchecked Sendable {
@@ -6483,7 +6518,9 @@ private final class StubCaptureController: MeetingCaptureControlling, @unchecked
     var stopResult: MeetingCaptureStopResult?
     private var eventHandler: (@Sendable (MeetingCaptureEvent) -> Void)?
 
-    func emit(_ event: MeetingCaptureEvent) { self.eventHandler?(event) }
+    func emit(_ event: MeetingCaptureEvent) {
+        self.eventHandler?(event)
+    }
 
     func preflightPermissions() async throws {
         self.preflightCount += 1
@@ -6575,9 +6612,13 @@ private final class DiagnosticFailingProcessingController: MeetingProcessingCont
     private let error: Error
     private var lastProgress: (@MainActor (MeetingProcessingStage) -> Void)?
 
-    init(error: Error) { self.error = error }
+    init(error: Error) {
+        self.error = error
+    }
 
-    func emitLateProgress(_ stage: MeetingProcessingStage) { self.lastProgress?(stage) }
+    func emitLateProgress(_ stage: MeetingProcessingStage) {
+        self.lastProgress?(stage)
+    }
 
     func process(
         session: MeetingSession,
@@ -6694,7 +6735,9 @@ private final class StubArbiter: MeetingAudioActivityArbitrating {
         return MeetingAudioActivityLease(id: UUID())
     }
 
-    func release(_ lease: MeetingAudioActivityLease) async { self.releaseCount += 1 }
+    func release(_ lease: MeetingAudioActivityLease) async {
+        self.releaseCount += 1
+    }
 }
 
 /// Records acquire/release calls without touching a real ASRService.
@@ -6843,12 +6886,30 @@ private actor GatedDeleteStore: MeetingSessionStoring {
         self.continuation = nil
     }
 
-    func create(_ session: MeetingSession) async throws { try await self.inner.create(session) }
-    func save(_ session: MeetingSession) async throws { try await self.inner.save(session) }
-    func load(id: MeetingSessionID) async throws -> MeetingSession? { try await self.inner.load(id: id) }
-    func loadAll() async throws -> [MeetingSession] { try await self.inner.loadAll() }
-    func loadRecoverable() async throws -> [MeetingSession] { try await self.inner.loadRecoverable() }
-    func sessionDirectory(for id: MeetingSessionID) async throws -> URL { try await self.inner.sessionDirectory(for: id) }
+    func create(_ session: MeetingSession) async throws {
+        try await self.inner.create(session)
+    }
+
+    func save(_ session: MeetingSession) async throws {
+        try await self.inner.save(session)
+    }
+
+    func load(id: MeetingSessionID) async throws -> MeetingSession? {
+        try await self.inner.load(id: id)
+    }
+
+    func loadAll() async throws -> [MeetingSession] {
+        try await self.inner.loadAll()
+    }
+
+    func loadRecoverable() async throws -> [MeetingSession] {
+        try await self.inner.loadRecoverable()
+    }
+
+    func sessionDirectory(for id: MeetingSessionID) async throws -> URL {
+        try await self.inner.sessionDirectory(for: id)
+    }
+
     func existingSessionDirectory(for id: MeetingSessionID) async throws -> URL? {
         try await self.inner.existingSessionDirectory(for: id)
     }
@@ -6861,7 +6922,9 @@ private actor GatedDeleteStore: MeetingSessionStoring {
         try await self.inner.delete(id: id)
     }
 
-    func deleteAudioFiles(for id: MeetingSessionID) async throws { try await self.inner.deleteAudioFiles(for: id) }
+    func deleteAudioFiles(for id: MeetingSessionID) async throws {
+        try await self.inner.deleteAudioFiles(for: id)
+    }
 }
 
 /// Wraps a real `MeetingSessionStore`, suspending `loadRecoverable()` until `openGate()` is
@@ -6883,17 +6946,37 @@ private actor GatedRecoverableStore: MeetingSessionStoring {
         self.continuation = nil
     }
 
-    func create(_ session: MeetingSession) async throws { try await self.inner.create(session) }
-    func save(_ session: MeetingSession) async throws { try await self.inner.save(session) }
-    func load(id: MeetingSessionID) async throws -> MeetingSession? { try await self.inner.load(id: id) }
-    func loadAll() async throws -> [MeetingSession] { try await self.inner.loadAll() }
-    func sessionDirectory(for id: MeetingSessionID) async throws -> URL { try await self.inner.sessionDirectory(for: id) }
+    func create(_ session: MeetingSession) async throws {
+        try await self.inner.create(session)
+    }
+
+    func save(_ session: MeetingSession) async throws {
+        try await self.inner.save(session)
+    }
+
+    func load(id: MeetingSessionID) async throws -> MeetingSession? {
+        try await self.inner.load(id: id)
+    }
+
+    func loadAll() async throws -> [MeetingSession] {
+        try await self.inner.loadAll()
+    }
+
+    func sessionDirectory(for id: MeetingSessionID) async throws -> URL {
+        try await self.inner.sessionDirectory(for: id)
+    }
+
     func existingSessionDirectory(for id: MeetingSessionID) async throws -> URL? {
         try await self.inner.existingSessionDirectory(for: id)
     }
 
-    func delete(id: MeetingSessionID) async throws { try await self.inner.delete(id: id) }
-    func deleteAudioFiles(for id: MeetingSessionID) async throws { try await self.inner.deleteAudioFiles(for: id) }
+    func delete(id: MeetingSessionID) async throws {
+        try await self.inner.delete(id: id)
+    }
+
+    func deleteAudioFiles(for id: MeetingSessionID) async throws {
+        try await self.inner.deleteAudioFiles(for: id)
+    }
 
     func loadRecoverable() async throws -> [MeetingSession] {
         await self.recorder.record("restore.loadRecoverable.start")
@@ -6920,15 +7003,23 @@ private actor GatedThrowingSaveStore: MeetingSessionStoring {
         self.recorder = recorder
     }
 
-    func throwOnNextSave(_ count: Int = 1) { self.throwOnNextSaveCount = count }
-    func closeGate() { self.isOpen = false }
+    func throwOnNextSave(_ count: Int = 1) {
+        self.throwOnNextSaveCount = count
+    }
+
+    func closeGate() {
+        self.isOpen = false
+    }
+
     func openGate() {
         self.isOpen = true
         self.continuation?.resume()
         self.continuation = nil
     }
 
-    func create(_ session: MeetingSession) async throws { try await self.inner.create(session) }
+    func create(_ session: MeetingSession) async throws {
+        try await self.inner.create(session)
+    }
 
     func save(_ session: MeetingSession) async throws {
         await self.recorder.record("store.save.start")
@@ -6943,16 +7034,33 @@ private actor GatedThrowingSaveStore: MeetingSessionStoring {
         self.savedEventCounts.append(session.events.count)
     }
 
-    func load(id: MeetingSessionID) async throws -> MeetingSession? { try await self.inner.load(id: id) }
-    func loadAll() async throws -> [MeetingSession] { try await self.inner.loadAll() }
-    func loadRecoverable() async throws -> [MeetingSession] { try await self.inner.loadRecoverable() }
-    func sessionDirectory(for id: MeetingSessionID) async throws -> URL { try await self.inner.sessionDirectory(for: id) }
+    func load(id: MeetingSessionID) async throws -> MeetingSession? {
+        try await self.inner.load(id: id)
+    }
+
+    func loadAll() async throws -> [MeetingSession] {
+        try await self.inner.loadAll()
+    }
+
+    func loadRecoverable() async throws -> [MeetingSession] {
+        try await self.inner.loadRecoverable()
+    }
+
+    func sessionDirectory(for id: MeetingSessionID) async throws -> URL {
+        try await self.inner.sessionDirectory(for: id)
+    }
+
     func existingSessionDirectory(for id: MeetingSessionID) async throws -> URL? {
         try await self.inner.existingSessionDirectory(for: id)
     }
 
-    func delete(id: MeetingSessionID) async throws { try await self.inner.delete(id: id) }
-    func deleteAudioFiles(for id: MeetingSessionID) async throws { try await self.inner.deleteAudioFiles(for: id) }
+    func delete(id: MeetingSessionID) async throws {
+        try await self.inner.delete(id: id)
+    }
+
+    func deleteAudioFiles(for id: MeetingSessionID) async throws {
+        try await self.inner.deleteAudioFiles(for: id)
+    }
 }
 
 // MARK: - MeetingProcessingSerializationGate (REL-010)
