@@ -135,8 +135,8 @@ final class DictionaryAudioLearningService {
     }
 
     private func pruneExpired() {
-        if let first = self.queue.first, first.expiresAt <= Date() { self.task?.cancel() }
-        self.queue.removeAll { $0.expiresAt <= Date() }
+        if let first = self.queue.first, first.expiresAt.timeIntervalSinceReferenceDate <= Date().timeIntervalSinceReferenceDate { self.task?.cancel() }
+        self.queue.removeAll { $0.expiresAt.timeIntervalSinceReferenceDate <= Date().timeIntervalSinceReferenceDate }
     }
 
     private func scheduleExpiry() {

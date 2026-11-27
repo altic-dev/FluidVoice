@@ -459,7 +459,12 @@ final class TranscriptionHistoryStore: ObservableObject {
 
     /// Get entries filtered by date range
     func entriesInRange(from startDate: Date, to endDate: Date) -> [TranscriptionHistoryEntry] {
-        self.entries.filter { $0.timestamp >= startDate && $0.timestamp <= endDate }
+        let start = startDate.timeIntervalSinceReferenceDate
+        let end = endDate.timeIntervalSinceReferenceDate
+        return self.entries.filter {
+            let timestamp = $0.timestamp.timeIntervalSinceReferenceDate
+            return timestamp >= start && timestamp <= end
+        }
     }
 
     /// Get total character count across all entries
@@ -803,8 +808,12 @@ final class TranscriptionHistoryStore: ObservableObject {
 
     private nonisolated static func calculateTodaySummary(entries: [TranscriptionHistoryEntry], day: DateInterval?) -> TodaySummary {
         guard let day else { return TodaySummary(words: 0, transcriptions: 0) }
+        // Early macOS 27.2 betas lack Foundation's Date >= / <= symbols.
+        let start = day.start.timeIntervalSinceReferenceDate
+        let end = day.end.timeIntervalSinceReferenceDate
         let totals = entries.reduce(into: (words: 0, transcriptions: 0)) { result, entry in
-            guard entry.timestamp >= day.start, entry.timestamp < day.end else { return }
+            let timestamp = entry.timestamp.timeIntervalSinceReferenceDate
+            guard timestamp >= start, timestamp < end else { return }
             result.words += Self.countWords(in: entry.processedText)
             result.transcriptions += 1
         }

@@ -83,7 +83,7 @@ final class AutomaticDictionarySuggestionPolicy {
             .filter { now.timeIntervalSince($0) <= self.configuration.occurrenceWindow }
             .count
         guard !record.isAccepted,
-              record.dismissedUntil.map({ $0 <= now }) ?? true,
+              record.dismissedUntil.map({ $0.timeIntervalSinceReferenceDate <= now.timeIntervalSinceReferenceDate }) ?? true,
               occurrenceCount >= (requiredOccurrences ?? self.configuration.requiredOccurrences),
               self.sessionIgnoreCount < self.configuration.maximumSessionIgnores
         else {

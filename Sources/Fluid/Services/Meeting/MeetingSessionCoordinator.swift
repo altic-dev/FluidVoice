@@ -1275,7 +1275,7 @@ final class MeetingSessionCoordinator: ObservableObject {
             guard Self.isSweepEligible(session) else { continue }
             guard let deadline = policy.deadline(endedAt: session.endedAt, startedAt: session.startedAt) else { continue }
 
-            guard deadline <= now else {
+            guard deadline.timeIntervalSinceReferenceDate <= now.timeIntervalSinceReferenceDate else {
                 if nextDeadline.map({ deadline < $0 }) ?? true { nextDeadline = deadline }
                 continue
             }

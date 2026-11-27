@@ -20,4 +20,12 @@ xcrun swiftc -O -parse-as-library \
     Sources/Fluid/Persistence/TranscriptionHistoryStore.swift \
     Tests/HistoryPersistenceBoundaryTests.swift \
     -lsqlite3 -o "$task_test_dir/history-tests"
+# These weak imports resolve to null on early macOS 27.2 betas even though
+# their OS version passes the SDK's availability check.
+xcrun nm -u "$task_test_dir/history-tests" > "$task_test_dir/imports.txt"
+if grep -Eq '\$s10Foundation4DateV2(ge|le)oiy' "$task_test_dir/imports.txt"; then
+    echo "FAIL: history imports Foundation Date >= / <= symbols missing on early macOS 27.2 betas" >&2
+    exit 1
+fi
+echo "PASS: history does not import unavailable Foundation Date >= / <= symbols"
 "$task_test_dir/history-tests"
