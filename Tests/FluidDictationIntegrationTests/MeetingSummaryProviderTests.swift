@@ -239,14 +239,16 @@ final class MeetingSummaryProviderTests: XCTestCase {
     func testPromptsExplainHowToUseUserNotes() throws {
         for kind in MeetingSummaryKind.allCases {
             let prompt = MeetingSummaryRemoteService.prompt(for: kind, customInstructions: "List risks")
-            XCTAssertTrue(prompt.contains("If user notes are supplied"), kind.rawValue)
-            XCTAssertTrue(prompt.contains("(from notes)"), kind.rawValue)
-            XCTAssertTrue(prompt.contains("Do not compare the notes with the transcript"), kind.rawValue)
+            XCTAssertTrue(prompt.contains("Use the user's notes to identify important topics, context, and corrections."), kind.rawValue)
+            XCTAssertTrue(prompt.contains("Expand those topics with relevant transcript details."), kind.rawValue)
+            XCTAssertFalse(prompt.contains("(from notes)"), kind.rawValue)
+            XCTAssertTrue(prompt.contains("Both sources may contain errors. If they materially disagree, briefly state"), kind.rawValue)
+            XCTAssertTrue(prompt.contains("the conflicting details rather than silently choosing one."), kind.rawValue)
             XCTAssertFalse(prompt.contains("as your only source and"), kind.rawValue)
             XCTAssertTrue(prompt.contains("transcript and"), kind.rawValue)
         }
         let custom = MeetingSummaryRemoteService.prompt(for: .custom, customInstructions: "List risks")
-        let rule = try XCTUnwrap(custom.range(of: "If user notes are supplied"))
+        let rule = try XCTUnwrap(custom.range(of: "Use the user's notes"))
         let instructions = try XCTUnwrap(custom.range(of: "User instructions:"))
         XCTAssertLessThan(rule.lowerBound, instructions.lowerBound, "The notes rule stays with the source rules, above the user's text")
     }
