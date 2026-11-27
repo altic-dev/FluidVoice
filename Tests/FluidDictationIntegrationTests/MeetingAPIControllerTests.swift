@@ -36,6 +36,25 @@ final class MeetingAPIControllerTests: XCTestCase {
         }
     }
 
+    func testListFlagsMeetingsWithNotes() async throws {
+        try await self.withStore { store in
+            var withNotes = self.makeSession(startedAt: Date(timeIntervalSince1970: 1_700_000_120))
+            withNotes.notes = "# Decisions\n- [ ] Follow up"
+            let withoutNotes = self.makeSession()
+            try await store.create(withNotes)
+            try await store.create(withoutNotes)
+
+            let response = try await LocalAPIRouter(meetingStore: store).route(self.request(path: "/v1/meetings"))
+            XCTAssertEqual(response.status, 200)
+            let items = try XCTUnwrap(self.json(response)["items"] as? [[String: Any]])
+            let hasNotes = Dictionary(uniqueKeysWithValues: items.compactMap { item in
+                (item["id"] as? String).map { ($0, item["hasNotes"] as? Bool) }
+            })
+            XCTAssertEqual(hasNotes[withNotes.id.uuidString], true)
+            XCTAssertEqual(hasNotes[withoutNotes.id.uuidString], false)
+        }
+    }
+
     func testJSONTranscriptPreservesTextTimestampsSpeakersAndEchoFlags() async throws {
         try await self.withStore { store in
             var session = self.makeSession()

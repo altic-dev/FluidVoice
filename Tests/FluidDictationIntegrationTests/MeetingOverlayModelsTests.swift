@@ -787,7 +787,7 @@ private final class HistorySnapshotLoader {
 
 @MainActor
 extension MeetingMenuBarStartTests {
-    func testMeetingShortcutIgnoresBusyStatesAndDuplicateStops() async throws {
+    func testMeetingShortcutIgnoresBusyStatesAndDuplicateStops() async {
         let previous = UserDefaults.standard.object(forKey: "FluidMeetEnabled")
         defer { UserDefaults.standard.set(previous, forKey: "FluidMeetEnabled") }
         SettingsStore.shared.fluidMeetEnabled = true
@@ -977,5 +977,478 @@ extension MeetingMenuBarStartTests {
             applications: applications,
             preferredInputUID: nil
         )
+    }
+}
+
+@MainActor
+final class MeetingNotesModelTests: XCTestCase {
+    private func session(notes: String? = nil) -> MeetingSession {
+        var session = MeetingSession(
+            configuration: MeetingCaptureConfiguration(
+                mode: .inRoom,
+                title: "Notes",
+                microphone: MeetingMicrophoneIdentity(captureDeviceID: "mic", displayName: "Mic")
+            ),
+            timebase: MeetingTimebaseMetadata(startedHostTime: 0, machTimebaseNumerator: 1, machTimebaseDenominator: 1, firstPresentationTime: nil)
+        )
+        session.notes = notes
+        return session
+    }
+
+    private func with(_ session: MeetingSession, notes: String?) -> MeetingSession {
+        var copy = session
+        copy.notes = notes
+        return copy
+    }
+
+    private func waitUntil(timeout: Duration = .seconds(2), _ condition: () -> Bool) async throws {
+        let deadline = ContinuousClock.now + timeout
+        while !condition(), ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+    }
+
+    func testTypingSavesOnceAfterThePause() async throws {
+        var saves: [String] = []
+        let model = MeetingNotesModel(debounce: .milliseconds(50)) { _, text in saves.append(text); return self.session(notes: text) }
+        model.show(self.session())
+        model.text = "a"; model.text = "ab"; model.text = "abc"
+        try await self.waitUntil { !saves.isEmpty }
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(saves, ["abc"])
+    }
+
+    func testFlushAndWaitSavesAPendingEditImmediately() async {
+        var saves: [String] = []
+        let model = MeetingNotesModel(debounce: .seconds(10)) { _, text in saves.append(text); return self.session(notes: text) }
+        model.show(self.session())
+        await model.flushAndWait()
+        XCTAssertEqual(saves, [], "nothing unsaved, nothing to save")
+        model.text = "last second"
+        await model.flushAndWait()
+        XCTAssertEqual(saves, ["last second"])
+        await model.flushAndWait()
+        XCTAssertEqual(saves, ["last second"], "already saved")
+    }
+
+    func testFlushAndWaitRetriesAFailedSave() async throws {
+        var saves: [String] = []
+        let model = MeetingNotesModel(debounce: .milliseconds(10)) { _, text in
+            saves.append(text)
+            if saves.count == 1 { throw CocoaError(.fileWriteUnknown) }
+            return self.session(notes: text)
+        }
+        model.show(self.session())
+        model.text = "kept"
+        try await self.waitUntil { model.saveError != nil }
+        await model.flushAndWait()
+        XCTAssertEqual(saves, ["kept", "kept"])
+        XCTAssertNil(model.saveError)
+    }
+
+    func testSwitchingAwayAfterAFailedSaveKeepsTheEdit() async throws {
+        var saves: [(MeetingSessionID, String)] = []
+        let model = MeetingNotesModel(debounce: .milliseconds(10)) { id, text in
+            saves.append((id, text))
+            if saves.count == 1 { throw CocoaError(.fileWriteUnknown) }
+            return self.session(notes: text)
+        }
+        let first = self.session()
+        model.show(first)
+        model.text = "kept"
+        try await self.waitUntil { model.saveError != nil }
+        model.show(self.session(notes: "other"))
+        try await self.waitUntil { saves.count == 2 }
+        XCTAssertEqual(saves.map(\.0), [first.id, first.id])
+        XCTAssertEqual(saves.map(\.1), ["kept", "kept"])
+    }
+
+    func testFlushAndWaitWaitsForASaveAlreadyInFlight() async throws {
+        var gate: CheckedContinuation<Void, Never>?
+        var finished = false
+        let model = MeetingNotesModel(debounce: .milliseconds(10)) { _, text in
+            await withCheckedContinuation { gate = $0 }
+            finished = true
+            return self.session(notes: text)
+        }
+        model.show(self.session())
+        model.text = "typed"
+        try await self.waitUntil { gate != nil }
+        Task {
+            try? await Task.sleep(for: .milliseconds(50))
+            gate?.resume()
+        }
+        await model.flushAndWait()
+        XCTAssertTrue(finished, "callers rely on the coordinator's mutation gate being free afterwards")
+    }
+
+    func testShowingAnotherMeetingFlushesThePreviousOne() async throws {
+        var saves: [(MeetingSessionID, String)] = []
+        let model = MeetingNotesModel(debounce: .seconds(10)) { id, text in saves.append((id, text)); return self.session(notes: text) }
+        let first = self.session()
+        model.show(first)
+        model.text = "unsaved"
+        model.show(self.session(notes: "other"))
+        try await self.waitUntil { !saves.isEmpty }
+        XCTAssertEqual(saves.map(\.0), [first.id])
+        XCTAssertEqual(saves.map(\.1), ["unsaved"])
+        XCTAssertEqual(model.text, "other")
+    }
+
+    func testLoadingAMeetingDoesNotSave() async throws {
+        var saveCount = 0
+        let model = MeetingNotesModel(debounce: .milliseconds(10)) { _, text in saveCount += 1; return self.session(notes: text) }
+        model.show(self.session(notes: "existing"))
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertEqual(saveCount, 0)
+    }
+
+    func testCleanEditorAdoptsNewerStoredNotesWithoutSaving() async throws {
+        var saveCount = 0
+        let model = MeetingNotesModel(debounce: .milliseconds(10)) { _, text in saveCount += 1; return self.session(notes: text) }
+        let session = self.session(notes: "old")
+        model.show(session)
+        model.show(self.with(session, notes: "newer"))
+        XCTAssertEqual(model.text, "newer")
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertEqual(saveCount, 0)
+    }
+
+    /// Unsaved edits win over a refresh that doesn't have them; a clean editor would adopt it instead.
+    func testRefreshWithoutUnsavedEditsResavesThem() async throws {
+        var saves: [String] = []
+        let model = MeetingNotesModel(debounce: .milliseconds(10)) { _, text in
+            saves.append(text)
+            if saves.count == 1 { throw CocoaError(.fileWriteUnknown) }
+            return self.session(notes: text)
+        }
+        let session = self.session()
+        model.show(session)
+        model.text = "kept"
+        try await self.waitUntil { model.saveError != nil }
+        model.show(session)
+        try await self.waitUntil { saves.count == 2 }
+        XCTAssertEqual(saves, ["kept", "kept"])
+        XCTAssertEqual(model.text, "kept")
+        XCTAssertNil(model.saveError)
+    }
+
+    func testRefreshWithOnlyTrailingWhitespaceDifferenceDoesNotResave() async throws {
+        var saveCount = 0
+        let model = MeetingNotesModel(debounce: .milliseconds(10)) { _, text in
+            saveCount += 1
+            return self.session(notes: MeetingSession.normalizedNotes(text))
+        }
+        let session = self.session(notes: "line")
+        model.show(session)
+        model.text = "line\n\n"
+        try await self.waitUntil { saveCount == 1 }
+        model.show(session)
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertEqual(saveCount, 1, "normalized text already matches the stored notes")
+        XCTAssertEqual(model.text, "line\n\n", "matching stored notes must not reload over the typed text")
+    }
+
+    func testBusyCoordinatorRetriesWithLatestText() async throws {
+        var attempts: [String] = []
+        var gate: CheckedContinuation<Void, Never>?
+        let model = MeetingNotesModel(debounce: .milliseconds(100), retryDelay: .milliseconds(10)) { _, text in
+            attempts.append(text)
+            if attempts.count == 1 {
+                await withCheckedContinuation { gate = $0 }
+                throw MeetingCoordinatorError.activityInProgress
+            }
+            return self.session(notes: text)
+        }
+        model.show(self.session())
+        model.text = "x"
+        try await self.waitUntil { gate != nil }
+        model.text = "xy"
+        gate?.resume()
+        try await self.waitUntil { attempts.count == 2 }
+        try await Task.sleep(for: .milliseconds(150))
+        XCTAssertEqual(attempts, ["x", "xy"])
+        XCTAssertNil(model.saveError)
+    }
+
+    func testBusySaveForAMeetingNoLongerShownStillLands() async throws {
+        var attempts: [(MeetingSessionID, String)] = []
+        let model = MeetingNotesModel(debounce: .seconds(10), retryDelay: .milliseconds(20)) { id, text in
+            attempts.append((id, text))
+            if attempts.count == 1 { throw MeetingCoordinatorError.activityInProgress }
+            return self.session(notes: text)
+        }
+        let first = self.session()
+        model.show(first)
+        model.text = "first notes"
+        model.show(self.session())
+        try await self.waitUntil { attempts.count == 2 }
+        XCTAssertEqual(attempts.map(\.0), [first.id, first.id])
+        XCTAssertEqual(attempts.map(\.1), ["first notes", "first notes"])
+    }
+
+    func testReturningToAMeetingWhoseSaveIsBlockedKeepsTheNewerText() async throws {
+        let meetingA = self.session(notes: "a0")
+        var stored: [MeetingSessionID: String?] = [meetingA.id: "a0"]
+        var savedToA: [String] = []
+        var busy = true
+        let model = MeetingNotesModel(debounce: .seconds(10), retryDelay: .milliseconds(20)) { id, text in
+            if busy { throw MeetingCoordinatorError.activityInProgress }
+            if id == meetingA.id { savedToA.append(text) }
+            stored[id] = MeetingSession.normalizedNotes(text)
+            return self.with(meetingA, notes: MeetingSession.normalizedNotes(text))
+        }
+        model.show(meetingA)
+        model.text = "a1"
+        model.show(self.session())
+        try await Task.sleep(for: .milliseconds(30))
+        // Back to A while its save is still refused: the store still says "a0".
+        model.show(meetingA)
+        XCTAssertEqual(model.text, "a1")
+        busy = false
+        try await self.waitUntil { stored[meetingA.id] == "a1" }
+        model.show(self.with(meetingA, notes: "a1"))
+        try await Task.sleep(for: .milliseconds(80))
+        XCTAssertEqual(stored[meetingA.id], "a1")
+        XCTAssertEqual(model.text, "a1")
+        XCTAssertFalse(savedToA.contains("a0"), "older stored notes must never be written back")
+    }
+
+    func testReturningToAMeetingWhileItsSaveIsInFlightKeepsTheNewerText() async throws {
+        let meetingA = self.session(notes: "a0")
+        var gate: CheckedContinuation<Void, Never>?
+        var savedToA: [String] = []
+        let model = MeetingNotesModel(debounce: .seconds(10)) { id, text in
+            if id == meetingA.id {
+                savedToA.append(text)
+                if savedToA.count == 1 { await withCheckedContinuation { gate = $0 } }
+            }
+            return self.with(meetingA, notes: MeetingSession.normalizedNotes(text))
+        }
+        model.show(meetingA)
+        model.text = "a1"
+        model.show(self.session())
+        try await self.waitUntil { gate != nil }
+        model.show(meetingA)
+        XCTAssertEqual(model.text, "a1")
+        gate?.resume()
+        try await self.waitUntil { savedToA.count == 2 }
+        model.show(self.with(meetingA, notes: "a1"))
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertEqual(savedToA, ["a1", "a1"])
+        XCTAssertEqual(model.text, "a1")
+    }
+
+    func testRefreshDuringAnInFlightSaveDoesNotSaveAgain() async throws {
+        var saves: [String] = []
+        var gate: CheckedContinuation<Void, Never>?
+        let model = MeetingNotesModel(debounce: .milliseconds(10)) { _, text in
+            saves.append(text)
+            await withCheckedContinuation { gate = $0 }
+            return self.session(notes: text)
+        }
+        let session = self.session()
+        model.show(session)
+        model.text = "typed"
+        try await self.waitUntil { gate != nil }
+        model.show(session)
+        try await Task.sleep(for: .milliseconds(50))
+        gate?.resume()
+        XCTAssertEqual(saves, ["typed"])
+    }
+}
+
+final class MeetingMarkdownStylerTests: XCTestCase {
+    private func styles(_ text: String, at range: NSRange) -> [MeetingMarkdownStyle] {
+        MeetingMarkdownStyler.spans(in: text).filter { $0.range == range }.map(\.style)
+    }
+
+    func testHeadingStylesLineAndDimsHashes() {
+        let spans = MeetingMarkdownStyler.spans(in: "## Budget")
+        XCTAssertTrue(spans.contains(.init(range: NSRange(location: 0, length: 9), style: .heading(level: 2))))
+        XCTAssertTrue(spans.contains(.init(range: NSRange(location: 0, length: 2), style: .marker)))
+    }
+
+    func testBoldItalicCodeAndLink() {
+        let text = "a **b** *c* `d` [e](https://x.y)"
+        XCTAssertTrue(self.styles(text, at: NSRange(location: 2, length: 5)).contains(.bold))
+        XCTAssertTrue(self.styles(text, at: NSRange(location: 8, length: 3)).contains(.italic))
+        XCTAssertTrue(self.styles(text, at: NSRange(location: 12, length: 3)).contains(.code))
+        XCTAssertTrue(self.styles(text, at: NSRange(location: 17, length: 1)).contains(.link))
+        XCTAssertFalse(MeetingMarkdownStyler.spans(in: "**b**").contains { $0.style == .italic }, "bold must not also read as italic")
+    }
+
+    func testNoEmphasisInsideInlineCode() {
+        XCTAssertFalse(MeetingMarkdownStyler.spans(in: "`**x**`").contains { $0.style == .bold })
+    }
+
+    func testTasksAndDoneTasks() {
+        let text = "- [ ] open\n- [x] done"
+        let spans = MeetingMarkdownStyler.spans(in: text)
+        XCTAssertTrue(spans.contains(.init(range: NSRange(location: 0, length: 5), style: .taskBox(isDone: false))))
+        XCTAssertTrue(spans.contains(.init(range: NSRange(location: 11, length: 5), style: .taskBox(isDone: true))))
+        XCTAssertTrue(spans.contains(.init(range: NSRange(location: 17, length: 4), style: .done)))
+    }
+
+    func testNothingIsStyledInsideFencedCode() {
+        let text = "```\n# not a heading **x**\n```\n# heading"
+        let spans = MeetingMarkdownStyler.spans(in: text)
+        XCTAssertFalse(spans.contains { $0.style == .heading(level: 1) && $0.range.location < 26 })
+        XCTAssertFalse(spans.contains { $0.style == .bold })
+        XCTAssertTrue(spans.contains { $0.style == .heading(level: 1) && $0.range.location == 30 })
+    }
+
+    func testReturnContinuesAndEndsLists() {
+        XCTAssertEqual(MeetingMarkdownLists.returnAction(forLine: "- item"), .insert("\n- "))
+        XCTAssertEqual(MeetingMarkdownLists.returnAction(forLine: "  * item"), .insert("\n  * "))
+        XCTAssertEqual(MeetingMarkdownLists.returnAction(forLine: "3. item"), .insert("\n4. "))
+        XCTAssertEqual(MeetingMarkdownLists.returnAction(forLine: "9223372036854775807. item"), MeetingMarkdownLists.ReturnAction.none)
+        XCTAssertEqual(MeetingMarkdownLists.returnAction(forLine: "99999999999999999999. item"), MeetingMarkdownLists.ReturnAction.none)
+        XCTAssertEqual(MeetingMarkdownLists.returnAction(forLine: "- [x] done"), .insert("\n- [ ] "))
+        XCTAssertEqual(MeetingMarkdownLists.returnAction(forLine: "- "), .endList(removeLength: 2))
+        XCTAssertEqual(MeetingMarkdownLists.returnAction(forLine: "- [ ] "), .endList(removeLength: 6))
+        XCTAssertEqual(MeetingMarkdownLists.returnAction(forLine: "- [ ]"), .endList(removeLength: 5))
+        XCTAssertEqual(MeetingMarkdownLists.returnAction(forLine: "- [x]"), .endList(removeLength: 5))
+        XCTAssertEqual(MeetingMarkdownLists.returnAction(forLine: "  - [ ]"), .endList(removeLength: 7))
+        XCTAssertEqual(MeetingMarkdownLists.returnAction(forLine: "- [ ]x"), .insert("\n- "))
+        XCTAssertEqual(MeetingMarkdownLists.returnAction(forLine: "plain"), MeetingMarkdownLists.ReturnAction.none)
+        XCTAssertEqual(MeetingMarkdownLists.returnAction(forLine: "**bold** text"), MeetingMarkdownLists.ReturnAction.none)
+    }
+
+    func testToggleTask() {
+        XCTAssertEqual(MeetingMarkdownLists.toggledTask("- [ ] a"), "- [x] a")
+        XCTAssertEqual(MeetingMarkdownLists.toggledTask("  * [X] a"), "  * [ ] a")
+        XCTAssertEqual(MeetingMarkdownLists.toggledTask("- [ ]"), "- [x]")
+        XCTAssertNil(MeetingMarkdownLists.toggledTask("- a"))
+    }
+
+    func testBareTaskBoxIsStyled() {
+        XCTAssertTrue(MeetingMarkdownStyler.spans(in: "- [ ]").contains(.init(range: NSRange(location: 0, length: 5), style: .taskBox(isDone: false))))
+    }
+
+    func testOneLineFenceDoesNotSwallowTheRest() {
+        let spans = MeetingMarkdownStyler.spans(in: "```js x```\n# after")
+        XCTAssertTrue(spans.contains(.init(range: NSRange(location: 11, length: 7), style: .heading(level: 1))))
+    }
+
+    func testBoldContainingCodeStaysBold() {
+        let text = "**see `x` here**"
+        XCTAssertTrue(self.styles(text, at: NSRange(location: 0, length: 16)).contains(.bold))
+        XCTAssertTrue(self.styles(text, at: NSRange(location: 6, length: 3)).contains(.code))
+    }
+
+    func testOffsetsAreUTF16AndCRLFLinesSplit() {
+        XCTAssertTrue(self.styles("😀 **b**", at: NSRange(location: 3, length: 5)).contains(.bold))
+        let headings = MeetingMarkdownStyler.spans(in: "# a\r\n# b").filter { $0.style == .heading(level: 1) }.map(\.range)
+        XCTAssertEqual(headings, [NSRange(location: 0, length: 3), NSRange(location: 5, length: 3)])
+    }
+
+    func testStylingLongNotesIsFast() {
+        let text = Array(repeating: "## Heading\n- [ ] task with **bold** and `code` [l](u)\n> quote", count: 400).joined(separator: "\n")
+        let start = Date()
+        _ = MeetingMarkdownStyler.spans(in: text)
+        XCTAssertLessThan(Date().timeIntervalSince(start), 0.25, "styling runs on every keystroke")
+    }
+}
+
+@MainActor
+final class MeetingMarkdownEditorTests: XCTestCase {
+    private func makeEditor(_ text: String = "") -> (MeetingNotesTextView, MeetingMarkdownEditor.Coordinator) {
+        let coordinator = MeetingMarkdownEditor.Coordinator(text: .constant(""))
+        coordinator.undoManager.groupsByEvent = false
+        let textView = MeetingNotesTextView(frame: NSRect(x: 0, y: 0, width: 400, height: 300))
+        textView.isRichText = false
+        textView.allowsUndo = true
+        textView.delegate = coordinator
+        coordinator.load(text, documentID: UUID(), into: textView)
+        return (textView, coordinator)
+    }
+
+    /// Runs one edit as its own undo step, like a separate user action.
+    private func step(_ coordinator: MeetingMarkdownEditor.Coordinator, _ edit: () -> Void) {
+        coordinator.undoManager.beginUndoGrouping()
+        edit()
+        coordinator.undoManager.endUndoGrouping()
+    }
+
+    private func assertMatchesFullRestyle(_ textView: MeetingNotesTextView, _ label: String, file: StaticString = #filePath, line: UInt = #line) {
+        let reference = MeetingNotesTextView(frame: textView.frame)
+        reference.string = textView.string
+        reference.restyleAll()
+        guard let actual = textView.textStorage, let expected = reference.textStorage else {
+            return XCTFail("\(label): no text storage", file: file, line: line)
+        }
+        XCTAssertEqual(actual.string, expected.string, label, file: file, line: line)
+        for index in 0..<actual.length {
+            for key in [NSAttributedString.Key.font, .foregroundColor, .backgroundColor, .strikethroughStyle] {
+                let lhs = actual.attribute(key, at: index, effectiveRange: nil) as? NSObject
+                let rhs = expected.attribute(key, at: index, effectiveRange: nil) as? NSObject
+                guard lhs != rhs else { continue }
+                XCTFail("\(label): \(key.rawValue) differs at \(index) in \(actual.string.debugDescription)", file: file, line: line)
+                return
+            }
+        }
+    }
+
+    func testIncrementalRestyleMatchesAFullRestyle() {
+        let (textView, coordinator) = self.makeEditor("# Plan\n- one\nplain **bold**\ncode later\nend")
+        self.assertMatchesFullRestyle(textView, "load")
+
+        self.step(coordinator) {
+            textView.setSelectedRange(NSRange(location: (textView.string as NSString).length, length: 0))
+            textView.insertText("\n## Typed *heading* with `code`", replacementRange: textView.selectedRange())
+        }
+        self.assertMatchesFullRestyle(textView, "type a paragraph")
+
+        let codeLine = (textView.string as NSString).range(of: "code later").location
+        self.step(coordinator) { textView.insertText("```\n", replacementRange: NSRange(location: codeLine, length: 0)) }
+        self.assertMatchesFullRestyle(textView, "open a fence")
+
+        let end = (textView.string as NSString).range(of: "\nend").location
+        self.step(coordinator) { textView.insertText("\n```", replacementRange: NSRange(location: end, length: 0)) }
+        self.assertMatchesFullRestyle(textView, "close the fence")
+
+        let secondLine = (textView.string as NSString).range(of: "- one").location
+        self.step(coordinator) {
+            textView.setSelectedRange(NSRange(location: secondLine, length: 0))
+            textView.deleteBackward(nil)
+        }
+        self.assertMatchesFullRestyle(textView, "join paragraphs")
+
+        self.step(coordinator) {
+            textView.insertText("> pasted\n- [x] done task\n### three", replacementRange: NSRange(location: 2, length: 0))
+        }
+        self.assertMatchesFullRestyle(textView, "multi-line paste")
+
+        let beforeUndo = textView.string
+        coordinator.undoManager.undo()
+        XCTAssertNotEqual(textView.string, beforeUndo)
+        self.assertMatchesFullRestyle(textView, "undo")
+        coordinator.undoManager.redo()
+        XCTAssertEqual(textView.string, beforeUndo)
+        self.assertMatchesFullRestyle(textView, "redo")
+    }
+
+    func testLoadingAnotherMeetingWithTheSameTextClearsUndo() {
+        let (textView, coordinator) = self.makeEditor("hello")
+        self.step(coordinator) { textView.insertText("!", replacementRange: NSRange(location: 5, length: 0)) }
+        XCTAssertTrue(coordinator.undoManager.canUndo)
+
+        coordinator.load("hello!", documentID: UUID(), into: textView)
+        XCTAssertFalse(coordinator.undoManager.canUndo, "undo must not reach into the previous meeting")
+        XCTAssertEqual(textView.string, "hello!")
+    }
+
+    func testReturnInsideACodeBlockDoesNotContinueTheList() {
+        let (textView, coordinator) = self.makeEditor("```\n- item\n```")
+        textView.setSelectedRange(NSRange(location: 10, length: 0))
+        XCTAssertFalse(coordinator.textView(textView, doCommandBy: #selector(NSResponder.insertNewline(_:))))
+
+        coordinator.load("- item", documentID: UUID(), into: textView)
+        textView.setSelectedRange(NSRange(location: 6, length: 0))
+        var handled = false
+        self.step(coordinator) { handled = coordinator.textView(textView, doCommandBy: #selector(NSResponder.insertNewline(_:))) }
+        XCTAssertTrue(handled)
+        XCTAssertEqual(textView.string, "- item\n- ")
     }
 }

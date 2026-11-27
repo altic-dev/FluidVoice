@@ -45,7 +45,7 @@ nonisolated enum MeetingSummaryInput {
         Duration: \(Int(duration)) minutes
         Participants: \(session.activeSpeakers.map(\.displayName).joined(separator: ", "))
         ----------
-        """ + "\n" + turns.map {
+        """ + "\n" + FluidServeMeetings.summaryNotesSection(session.notes) + turns.map {
             "**\(MeetingTranscriptExporter.speakerLabel(for: $0, in: session, speakerNames: names))**: \($0.text)"
         }.joined(separator: "\n")
     }
@@ -217,7 +217,7 @@ final class MeetingSummaryController: ObservableObject {
             self.providerID != nil
         }
 
-        /// The transcript or speaker names changed since this summary was written. It is still shown, with a warning.
+        /// The transcript, speaker names or notes changed since this summary was written. It is still shown, with a warning.
         func isOutdated(for session: MeetingSession) -> Bool {
             let hash: String?
             switch self.transcriptHashVersion {

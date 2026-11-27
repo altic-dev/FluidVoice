@@ -286,6 +286,9 @@ struct MeetingTranscriptionView: View {
     @State private var pendingDeleteSessionID: MeetingSessionID?
     @State private var pendingDeleteAudioSessionID: MeetingSessionID?
     @State private var draftMeetingAudioRetentionPolicy = SettingsStore.shared.meetingAudioRetentionPolicy
+    /// Held without observing: only the editor and Copy button re-render as notes change, not this page.
+    @State private var notes: MeetingNotesModel
+    @State private var notesTabSessionID: MeetingSessionID?
 
     init(
         coordinator: MeetingSessionCoordinator,
@@ -298,6 +301,12 @@ struct MeetingTranscriptionView: View {
         self.coordinator = coordinator
         self.asrService = asrService
         self.historySnapshot = historySnapshot
+        self._notes = State(initialValue: MeetingNotesModel { [coordinator, historySnapshot] id, text in
+            let saved = try await coordinator.updateNotes(sessionID: id, to: text)
+            // Keeps the home list's notes icon and reopened meetings current.
+            historySnapshot.applySavedSession(saved)
+            return saved
+        })
         self._requestedRoute = requestedRoute
         self.resumingSummarySessionID = resumingSummarySessionID
         self.onOpenVoiceEngine = onOpenVoiceEngine
@@ -391,6 +400,21 @@ struct MeetingTranscriptionView: View {
         .onChange(of: self.coordinator.latestCompletedSession?.id) { _, _ in
             Task { await self.loadMeetingHistory() }
         }
+        .onChange(of: self.notesSession.map(MeetingNotesSessionKey.init), initial: true) { _, _ in
+            if let session = self.notesSession {
+                self.notes.show(session)
+            } else {
+                self.notes.flush()
+                // Only the hand-off from recording to its result opens on Notes, not later visits.
+                self.notesTabSessionID = nil
+            }
+        }
+        .onAppear { self.appServices.meetingNotes = self.notes }
+        .onDisappear {
+            self.notes.flush()
+            // A newer meeting view may already have registered its own model.
+            if self.appServices.meetingNotes === self.notes { self.appServices.meetingNotes = nil }
+        }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             Task {
                 async let sources: Void = self.refreshSources(requestPermissions: false)
@@ -452,6 +476,19 @@ struct MeetingTranscriptionView: View {
         MeetingScreen(route: self.route, canvasState: self.canvasState)
     }
 
+    /// The meeting whose notes are on screen, if any.
+    private var notesSession: MeetingSession? {
+        guard case let .canvas(state) = self.screen else { return nil }
+        switch state {
+        case let .recording(session, _, _), let .stopping(session, _, _), let .processing(session, _), let .result(session):
+            return session
+        case let .failed(session, _):
+            return session
+        case .setup:
+            return nil
+        }
+    }
+
     private var pageAnimation: Animation? {
         self.reduceMotion ? nil : .timingCurve(0.22, 0.8, 0.25, 1, duration: 0.34)
     }
@@ -503,6 +540,8 @@ struct MeetingTranscriptionView: View {
             microphones: self.microphones,
             readiness: self.readiness,
             errorMessage: self.actionErrorMessage,
+            notes: self.notes,
+            notesTabSessionID: self.$notesTabSessionID,
             onStart: self.startRecording,
             onStop: self.stopAndTranscribe,
             onRetrySession: { self.retryProcessingSession(id: $0.id, languageCode: MeetingRetranscriptionLanguage.failedAttemptLanguage(for: $0)) },
@@ -843,6 +882,7 @@ struct MeetingTranscriptionView: View {
         Task {
             defer { self.isStarting = false }
             do {
+                await self.notes.flushAndWait()
                 _ = try await self.coordinator.startRecording(configuration: configuration)
             } catch {
                 self.actionErrorMessage = error.localizedDescription
@@ -891,6 +931,7 @@ struct MeetingTranscriptionView: View {
 
     private func stopAndTranscribe() {
         guard !self.isStopping else { return }
+        self.notes.flush()
         self.isStopping = true
         self.actionErrorMessage = nil
         // Stop is an explicit "show me my meeting" — an open meeting must not hijack the outcome.
@@ -913,6 +954,7 @@ struct MeetingTranscriptionView: View {
         Task {
             defer { self.isRetrying = false }
             do {
+                await self.notes.flushAndWait()
                 _ = try await self.coordinator.retryProcessing(sessionID: id, languageCode: languageCode)
             } catch {
                 self.actionErrorMessage = error.localizedDescription
@@ -925,6 +967,7 @@ struct MeetingTranscriptionView: View {
         self.actionErrorMessage = nil
         Task {
             do {
+                await self.notes.flushAndWait()
                 let saved = try await self.coordinator.reassignSegment(sessionID: sessionID, segmentID: segmentID, to: speakerID)
                 self.historySnapshot.applySavedSession(saved)
             } catch {
@@ -941,6 +984,7 @@ struct MeetingTranscriptionView: View {
         self.actionErrorMessage = nil
         Task {
             do {
+                await self.notes.flushAndWait()
                 let saved = try await self.coordinator.nameUnknownSegment(
                     sessionID: sessionID,
                     segmentID: segmentID,
@@ -955,6 +999,7 @@ struct MeetingTranscriptionView: View {
 
     private func editTranscriptSegment(sessionID: MeetingSessionID, segmentID: MeetingTranscriptSegmentID, text: String, revision: Int) async -> String? {
         do {
+            await self.notes.flushAndWait()
             let saved = try await self.coordinator.editTranscriptText(sessionID: sessionID, segmentID: segmentID, text: text, expectedRevision: revision)
             self.historySnapshot.applySavedSession(saved)
             return nil
@@ -967,6 +1012,7 @@ struct MeetingTranscriptionView: View {
         self.actionErrorMessage = nil
         var errorMessage: String?
         do {
+            await self.notes.flushAndWait()
             let saved = try await self.coordinator.editSpeakers(sessionID: sessionID, edits: edits)
             self.historySnapshot.applySavedSession(saved)
         } catch {
@@ -979,6 +1025,7 @@ struct MeetingTranscriptionView: View {
         self.actionErrorMessage = nil
         Task {
             do {
+                await self.notes.flushAndWait()
                 let saved = try await self.coordinator.renameSession(sessionID: sessionID, to: title)
                 self.historySnapshot.applySavedSession(saved)
             } catch {
@@ -990,6 +1037,7 @@ struct MeetingTranscriptionView: View {
     private func undoTranscriptCorrection(sessionID: MeetingSessionID) async -> Bool {
         self.actionErrorMessage = nil
         do {
+            await self.notes.flushAndWait()
             let saved = try await self.coordinator.undoTranscriptCorrection(sessionID: sessionID)
             self.historySnapshot.applySavedSession(saved)
         } catch {
@@ -1004,6 +1052,7 @@ struct MeetingTranscriptionView: View {
         self.actionErrorMessage = nil
         Task {
             do {
+                await self.notes.flushAndWait()
                 try await self.coordinator.deleteSession(id: id)
                 if self.route == .meeting(id) { self.route = .home }
             } catch {
@@ -1019,6 +1068,7 @@ struct MeetingTranscriptionView: View {
         self.actionErrorMessage = nil
         Task {
             do {
+                await self.notes.flushAndWait()
                 _ = try await self.coordinator.deleteAudio(sessionID: id)
             } catch {
                 self.actionErrorMessage = error.localizedDescription
@@ -1033,6 +1083,7 @@ struct MeetingTranscriptionView: View {
         self.actionErrorMessage = nil
         Task {
             do {
+                await self.notes.flushAndWait()
                 _ = try await self.coordinator.recordAgain(from: session.id, configuration: configuration)
                 self.route = .home
                 self.resetDraftTitleToDefault()
@@ -1512,6 +1563,21 @@ enum MeetingTranscriptExportFormat {
     }
 }
 
+/// What `MeetingNotesModel.show` needs to see: a new meeting, or an update to the shown one.
+private struct MeetingNotesSessionKey: Equatable {
+    let id: MeetingSessionID
+    let notes: String?
+    let state: MeetingSessionState
+    let updatedAt: Date
+
+    init(_ session: MeetingSession) {
+        self.id = session.id
+        self.notes = session.notes
+        self.state = session.state
+        self.updatedAt = session.updatedAt
+    }
+}
+
 enum MeetingTranscriptionCanvasState {
     case setup(isStarting: Bool, recentSession: MeetingSession?)
     case recording(
@@ -1561,6 +1627,8 @@ struct MeetingTranscriptionCanvas: View {
     let microphones: [MeetingMicrophoneOption]
     let readiness: MeetingSetupReadiness
     let errorMessage: String?
+    let notes: MeetingNotesModel
+    var notesTabSessionID: Binding<MeetingSessionID?> = .constant(nil)
     let onStart: () -> Void
     let onStop: () -> Void
     let onRetrySession: (MeetingSession) -> Void
@@ -1625,26 +1693,22 @@ struct MeetingTranscriptionCanvas: View {
                     onRepairSetup: self.onRepairSetup,
                     onEditSetup: self.onEditSetup ?? self.onRepairSetup
                 )
-            case let .recording(session, trackHealth, liveTranscript):
+            // One branch for both, so Stop keeps the canvas (and its open Notes tab) instead of replacing it.
+            case let .recording(session, trackHealth, liveTranscript), let .stopping(session, trackHealth, liveTranscript):
+                let isStopping = if case .stopping = self.state { true } else { false }
                 MeetingRecordingCanvas(
                     session: session,
                     trackHealth: trackHealth,
                     liveTranscript: liveTranscript,
-                    isStopping: false,
+                    isStopping: isStopping,
+                    notes: self.notes,
                     onStop: self.onStop,
-                    onRename: { self.onRenameSession(session.id, $0) },
-                    errorMessage: self.errorMessage
-                )
-            case let .stopping(session, trackHealth, liveTranscript):
-                MeetingRecordingCanvas(
-                    session: session,
-                    trackHealth: trackHealth,
-                    liveTranscript: liveTranscript,
-                    isStopping: true,
-                    onStop: self.onStop
+                    onRename: isStopping ? nil : { self.onRenameSession(session.id, $0) },
+                    errorMessage: isStopping ? nil : self.errorMessage,
+                    notesTabSessionID: self.notesTabSessionID
                 )
             case let .processing(session, stage):
-                MeetingProcessingCanvas(session: session, stage: stage)
+                MeetingProcessingCanvas(session: session, stage: stage, notes: self.notes)
             case let .result(session):
                 VStack(alignment: .leading, spacing: self.theme.metrics.spacing.md) {
                     if let errorMessage, !errorMessage.isEmpty {
@@ -1662,6 +1726,7 @@ struct MeetingTranscriptionCanvas: View {
                         session: session,
                         isQuiescent: self.isQuiescent,
                         canUndo: self.canUndoCorrection(session.id),
+                        notes: self.notes,
                         onCopyTranscript: self.onCopyTranscript,
                         onExportTranscript: self.onExportTranscript,
                         onReassignSegment: { segmentID, speakerID in
@@ -1680,7 +1745,8 @@ struct MeetingTranscriptionCanvas: View {
                         onClose: self.onCloseSelection,
                         isRetranscribing: self.isRetrying,
                         onOpenIntegrations: self.onOpenIntegrations,
-                        resumesSummary: session.id == self.resumingSummarySessionID
+                        resumesSummary: session.id == self.resumingSummarySessionID,
+                        resumesNotes: session.id == self.notesTabSessionID.wrappedValue
                     )
                 }
             case let .failed(session, message):
@@ -1691,7 +1757,8 @@ struct MeetingTranscriptionCanvas: View {
                     onRetrySession: self.onRetrySession,
                     onRevealAudio: self.onRevealAudio,
                     onRecordAgain: self.onRecordAgain,
-                    onClose: self.onCloseSelection
+                    onClose: self.onCloseSelection,
+                    notes: self.notes
                 )
             }
         }

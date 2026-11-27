@@ -112,6 +112,7 @@ final class AudioActivityArbiter: MeetingAudioActivityArbitrating {
 }
 
 @MainActor
+// swiftlint:disable:next type_body_length
 final class MeetingSessionCoordinator: ObservableObject {
     @Published private(set) var state: MeetingCoordinatorState = .idle
     @Published private(set) var activeSession: MeetingSession?
@@ -527,6 +528,7 @@ final class MeetingSessionCoordinator: ObservableObject {
                 self.degradeReason = hasOtherDegradedTrack ? .sticky : (self.degradeReason ?? .startupWriterFailure)
             }
             session.updatedAt = Date()
+            self.carryLiveNotes(into: &session)
             self.activeSession = session
             self.trackHealth = Dictionary(uniqueKeysWithValues: session.audioTracks.map { ($0.kind, $0.health) })
             self.state = startedDegraded ? .recordingDegraded(session.id) : .recording(session.id)
@@ -590,6 +592,7 @@ final class MeetingSessionCoordinator: ObservableObject {
             }
             if let latestSession = self.activeSession, latestSession.id == session.id {
                 session.events = latestSession.events
+                session.notes = latestSession.notes
             }
             let hasRecoverableAudio = Self.hasRecoverableAudio(session)
             let failureDomain: MeetingFailureDomain = captureStarted
@@ -603,7 +606,8 @@ final class MeetingSessionCoordinator: ObservableObject {
             session.state = .failed
             session.failures.append(failure)
             session.updatedAt = Date()
-            try? await self.store.save(session)
+            await self.flushQueuedPersistence()
+            try? await self.saveCarryingLiveNotes(&session)
             self.activeSession = hasRecoverableAudio ? session : nil
             self.trackHealth = hasRecoverableAudio
                 ? Dictionary(uniqueKeysWithValues: session.audioTracks.map { ($0.kind, $0.health) })
@@ -1700,6 +1704,7 @@ final class MeetingSessionCoordinator: ObservableObject {
         session.state = .processing
         session.processingAttempts.append(Self.pendingProcessingAttempt())
         session.updatedAt = Date()
+        self.carryLiveNotes(into: &session)
         self.activeSession = session
         self.trackHealth = Dictionary(uniqueKeysWithValues: session.audioTracks.map { ($0.kind, $0.health) })
         try? await self.store.save(session)
@@ -1857,7 +1862,7 @@ final class MeetingSessionCoordinator: ObservableObject {
             session.state = .completed
             session.updatedAt = Date()
             await self.flushQueuedPersistence()
-            try await self.store.save(session)
+            try await self.saveCarryingLiveNotes(&session)
             self.removeCheckpoint(sessionDirectory: sessionDirectory)
             self.activeSession = nil
             self.latestCompletedSession = session
@@ -1888,7 +1893,7 @@ final class MeetingSessionCoordinator: ObservableObject {
                 session.state = hadVisibleTranscript ? .completed : .interrupted
                 session.updatedAt = Date()
                 await self.flushQueuedPersistence()
-                try? await self.store.save(session)
+                try? await self.saveCarryingLiveNotes(&session)
                 self.publishRetryOutcome(session, failure: nil)
                 await self.releaseActivityLease()
                 throw error
@@ -1908,7 +1913,7 @@ final class MeetingSessionCoordinator: ObservableObject {
             session.state = hadVisibleTranscript ? .completed : .failed
             session.updatedAt = Date()
             await self.flushQueuedPersistence()
-            try? await self.store.save(session)
+            try? await self.saveCarryingLiveNotes(&session)
             self.publishRetryOutcome(session, failure: hadVisibleTranscript ? nil : failure)
             await self.releaseActivityLease()
             throw error
@@ -2181,7 +2186,7 @@ final class MeetingSessionCoordinator: ObservableObject {
         }
         session.updatedAt = Date()
         await self.flushQueuedPersistence()
-        try? await self.store.save(session)
+        try? await self.saveCarryingLiveNotes(&session)
         self.activeSession = session
         self.trackHealth = Dictionary(uniqueKeysWithValues: session.audioTracks.map { ($0.kind, $0.health) })
         self.state = .interrupted(session.id)
@@ -2372,6 +2377,57 @@ private extension MeetingSessionCoordinator {
         }
         session.updatedAt = now
         return session
+    }
+}
+
+// MARK: - Notes
+
+extension MeetingSessionCoordinator {
+    /// Skips the mutation gate while capture or processing owns the session, so autosave doesn't wait behind
+    /// other edits. Callers retry on activityInProgress.
+    @discardableResult
+    func updateNotes(sessionID: MeetingSessionID, to text: String) async throws -> MeetingSession {
+        let notes = MeetingSession.normalizedNotes(text)
+        // A passive recovery offer has no in-flight save to carry the notes, so it takes the gated path.
+        if var session = self.activeSession, session.id == sessionID,
+           self.captureGeneration != nil || self.operationGeneration != nil
+        {
+            guard session.notes != notes else { return session }
+            session.notes = notes
+            session.updatedAt = Date()
+            self.activeSession = session
+            // Otherwise the next start, stop, processing or failure save carries these notes (carryLiveNotes).
+            if self.isRecording { self.enqueuePersistence(session) }
+            return session
+        }
+        guard !self.isMutatingSession else { throw MeetingCoordinatorError.activityInProgress }
+        self.isMutatingSession = true
+        defer { self.releaseMutationGate() }
+
+        await self.ensureRestored()
+        await self.flushQueuedPersistence()
+        var target = try await self.resolveSession(sessionID)
+        try self.assertSafeToMutate(sessionID: sessionID)
+        guard target.notes != notes else { return target }
+        target.notes = notes
+        target.updatedAt = Date()
+        try await self.store.save(target)
+        self.refreshSlots(with: target)
+        return target
+    }
+
+    /// Start, stop and processing finish from an earlier snapshot; notes typed meanwhile live only on activeSession.
+    private func carryLiveNotes(into session: inout MeetingSession) {
+        guard let live = self.activeSession, live.id == session.id else { return }
+        session.notes = live.notes
+    }
+
+    /// Re-saves until no edit landed during the await, so the stored copy ends with the latest notes.
+    private func saveCarryingLiveNotes(_ session: inout MeetingSession) async throws {
+        repeat {
+            self.carryLiveNotes(into: &session)
+            try await self.store.save(session)
+        } while self.activeSession?.id == session.id && self.activeSession?.notes != session.notes
     }
 }
 

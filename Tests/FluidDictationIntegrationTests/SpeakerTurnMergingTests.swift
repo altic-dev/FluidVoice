@@ -576,7 +576,7 @@ final class FluidAudioProviderWordTimingTests: XCTestCase {
 extension MeetingSessionModelTests {
     private static let allowedExportKeys: Set<String> = [
         "schemaVersion", "title", "languageCode", "startedAt", "endedAt", "durationSeconds",
-        "mode", "applicationDisplayName", "speakers", "id", "displayName", "isLocalUser",
+        "mode", "applicationDisplayName", "notes", "speakers", "id", "displayName", "isLocalUser",
         "segments", "startSeconds", "endSeconds", "speakerID", "text", "revision", "status",
         "overlap", "completeness", "isLikelyEcho", "attributionState",
     ]
@@ -654,6 +654,24 @@ extension MeetingSessionModelTests {
         session.title = "Empty meeting"
         session.transcriptSegments = []
         XCTAssertEqual(MeetingTranscriptExporter.markdown(for: session), "# Empty meeting\n\n## Transcript\n")
+    }
+
+    func testMarkdownExportPutsUnescapedNotesBeforeTranscript() {
+        var session = MeetingModelFixture.makeSession()
+        XCTAssertFalse(MeetingTranscriptExporter.markdown(for: session).contains("## Notes"))
+
+        session.notes = "# Agenda\n- one"
+        XCTAssertTrue(MeetingTranscriptExporter.markdown(for: session).contains("## Notes\n\n# Agenda\n- one\n\n## Transcript"))
+    }
+
+    func testJSONExportIncludesNotesOnlyWhenPresent() throws {
+        var session = MeetingModelFixture.makeSession()
+        let withoutNotes = try XCTUnwrap(JSONSerialization.jsonObject(with: MeetingTranscriptExporter.json(for: session)) as? [String: Any])
+        XCTAssertNil(withoutNotes["notes"])
+
+        session.notes = "# Agenda\n- one"
+        let withNotes = try XCTUnwrap(JSONSerialization.jsonObject(with: MeetingTranscriptExporter.json(for: session)) as? [String: Any])
+        XCTAssertEqual(withNotes["notes"] as? String, "# Agenda\n- one")
     }
 
     func testTextFormatMatchesTimestampFormatAndLegacyUnassignedSpeaker() {

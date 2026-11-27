@@ -325,7 +325,8 @@ private struct MeetingHomeRow: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("\(self.session.title), \(self.statusText), \(self.sourceName)")
+            // The button's label replaces its children's, so the notes icon is announced here.
+            .accessibilityLabel("\(self.session.title), \(self.statusText), \(self.sourceName)\(self.session.notes != nil ? ", has notes" : "")")
             .editableTitle(self.session.title, id: String(describing: self.session.id), enabled: self.isQuiescent, onRename: self.onRename)
             if let actionLabel {
                 Button(actionLabel, action: self.performAction)
@@ -367,6 +368,11 @@ private struct MeetingHomeRow: View {
                     Text("·").foregroundStyle(self.theme.palette.tertiaryText)
                 }
                 Text(part)
+            }
+            if self.session.notes != nil {
+                Image(systemName: "note.text")
+                    .padding(.leading, self.theme.metrics.spacing.xs)
+                    .help("Has notes")
             }
         }
         .font(self.theme.typography.caption)

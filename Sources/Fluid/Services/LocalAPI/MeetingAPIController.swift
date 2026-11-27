@@ -17,6 +17,7 @@ struct MeetingAPIController: LocalAPIRouteHandler {
         let durationSeconds: TimeInterval
         let segmentCount: Int
         let transcriptIsComplete: Bool?
+        let hasNotes: Bool
     }
 
     private enum TranscriptFormat: String {
@@ -59,7 +60,8 @@ struct MeetingAPIController: LocalAPIRouteHandler {
                     languageCode: session.languageCode,
                     durationSeconds: session.duration,
                     segmentCount: session.transcriptSegments.count,
-                    transcriptIsComplete: session.transcriptIsComplete
+                    transcriptIsComplete: session.transcriptIsComplete,
+                    hasNotes: session.notes != nil
                 )
             }
             return LocalAPI.json(MeetingListResponse(count: items.count, items: items))
