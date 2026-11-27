@@ -17,6 +17,33 @@ enum PrivateAIModelCarouselNavigation {
     }
 }
 
+/// Card widths for the model carousel. The preview card never narrows below its controls row, and
+/// a side card drops the content its width can no longer hold instead of breaking words.
+enum PrivateAIModelCarouselLayout {
+    enum SideContent: Equatable {
+        case full
+        case summary
+        case none
+    }
+
+    static func widths(
+        stageWidth: CGFloat,
+        preview: ClosedRange<CGFloat>,
+        sideMax: CGFloat,
+        spacing: CGFloat
+    ) -> (preview: CGFloat, side: CGFloat) {
+        let previewWidth = min(preview.upperBound, max(preview.lowerBound, stageWidth * 0.44))
+        // 80pt stays free beside the side cards for the previous and next arrows.
+        let sideWidth = min(sideMax, max(60, (stageWidth - previewWidth - spacing * 2 - 80) / 2))
+        return (previewWidth, sideWidth)
+    }
+
+    static func sideContent(width: CGFloat, summaryMinWidth: CGFloat, infoMinWidth: CGFloat) -> SideContent {
+        if width >= infoMinWidth { return .full }
+        return width >= summaryMinWidth ? .summary : .none
+    }
+}
+
 /// Presentation-only choice and a single bounded mutation slot. Browsing never invokes an action.
 struct PrivateAISettingsSession {
     private(set) var selectedModelID: String

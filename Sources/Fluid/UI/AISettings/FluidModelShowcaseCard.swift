@@ -14,10 +14,16 @@ struct FluidModelShowcaseCard: View {
     let isSelected: Bool
     let compact: Bool
     var isRecommended = false
+    /// What a side card has room for; the carousel decides from the card's width.
+    var content: PrivateAIModelCarouselLayout.SideContent = .full
     let browse: () -> Void
 
     private var shape: RoundedRectangle {
         RoundedRectangle(cornerRadius: AppTheme.Metrics.Showcase.cardRadius, style: .continuous)
+    }
+
+    private var showsInfoPanel: Bool {
+        self.showsInfo && self.content == .full
     }
 
     var body: some View {
@@ -31,13 +37,14 @@ struct FluidModelShowcaseCard: View {
                                 .font(self.theme.typography.captionSmall)
                                 .foregroundStyle(self.theme.palette.secondaryText)
                                 .lineLimit(1)
-                                .padding(.trailing, 24)
+                                .padding(.trailing, self.content == .full ? 24 : 0)
                         } else if self.isRecommended {
                             Text(self.compact ? "Recommended" : "Recommended for your Mac")
                                 .font(self.theme.typography.captionStrong)
                                 .foregroundStyle(FluidBrandColors.blue)
                                 .lineLimit(1).minimumScaleFactor(0.8)
-                                .padding(.trailing, 24)
+                                // Room for the info button, which only cards with full content show.
+                                .padding(.trailing, self.content == .full ? 24 : 0)
                                 .help("Based on your Mac’s RAM. You can choose either model.")
                         }
                     }
@@ -45,6 +52,7 @@ struct FluidModelShowcaseCard: View {
                     .font(self.compact ? self.theme.typography.sectionTitle : self.theme.typography.title)
                     .foregroundStyle(self.theme.palette.primaryText)
                     .lineLimit(self.compact ? 2 : 1).minimumScaleFactor(0.85)
+                    .layoutPriority(self.compact ? 2 : 0)
                 ZStack(alignment: .topLeading) {
                     VStack(alignment: .leading, spacing: self.theme.metrics.spacing.md) {
                         Text(presentation.summary)
@@ -54,28 +62,36 @@ struct FluidModelShowcaseCard: View {
                         Text(presentation.useCase)
                             .font(self.theme.typography.body)
                             .foregroundStyle(self.theme.palette.secondaryText)
-                            .fixedSize(horizontal: false, vertical: true)
+                            // A side card truncates this text rather than growing past its height.
+                            .fixedSize(horizontal: false, vertical: !self.compact)
                             .lineSpacing(3)
                     }
-                    .opacity(self.showsInfo ? 0 : 1)
-                    .accessibilityHidden(self.showsInfo)
-                    VStack(alignment: .leading, spacing: self.theme.metrics.spacing.md) {
-                        self.infoRow("Languages", value: presentation.language)
-                        if let memory = self.model.recommendedMemoryGB {
-                            self.infoRow("Recommended", value: "Mac with \(memory) GB+ RAM")
+                    .opacity(self.showsInfoPanel ? 0 : 1)
+                    .accessibilityHidden(self.showsInfoPanel)
+                    // Even while hidden, the info rows size the card, so leave them out where they cannot fit.
+                    if self.content == .full {
+                        VStack(alignment: .leading, spacing: self.theme.metrics.spacing.md) {
+                            self.infoRow("Languages", value: presentation.language)
+                            if let memory = self.model.recommendedMemoryGB {
+                                self.infoRow("Recommended", value: "Mac with \(memory) GB+ RAM")
+                            }
+                            if let bytes = self.model.artifact.byteCount, bytes > 0 {
+                                self.infoRow("Download size", value: "≈\(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))")
+                            }
                         }
-                        if let bytes = self.model.artifact.byteCount, bytes > 0 {
-                            self.infoRow("Download size", value: "≈\(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))")
-                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .opacity(self.showsInfoPanel ? 1 : 0)
+                        .accessibilityHidden(!self.showsInfoPanel)
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .opacity(self.showsInfo ? 1 : 0)
-                    .accessibilityHidden(!self.showsInfo)
                 }
-                .animation(self.reduceMotion ? nil : .easeInOut(duration: 0.16), value: self.showsInfo)
+                .animation(self.reduceMotion ? nil : .easeInOut(duration: 0.16), value: self.showsInfoPanel)
+                // In a side card the title, then this text, take the free height before the spacer,
+                // so the description truncates only when the card is full.
+                .layoutPriority(self.compact ? 1 : 0)
                 Spacer(minLength: self.theme.metrics.spacing.sm)
                 // Separate sibling controls are overlaid by the carousel; never nest buttons.
-                Color.clear.frame(height: 64)
+                // Side cards get no controls, only the Active label.
+                Color.clear.frame(height: self.compact ? 20 : 64)
                     .overlay(alignment: .bottomLeading) {
                         if self.compact, self.isSelected {
                             Text("Active")
@@ -84,8 +100,10 @@ struct FluidModelShowcaseCard: View {
                         }
                     }
             }
+            .opacity(self.content == .none ? 0 : 1)
             .padding(self.theme.metrics.spacing.xl)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+            // Hidden text may still need more height than the card has; it must not stretch the card.
+            .frame(maxWidth: .infinity, minHeight: self.content == .none ? 0 : nil, maxHeight: .infinity, alignment: .leading)
             .background {
                 self.shape.fill(self.colorScheme == .dark ? Color(red: 0.025, green: 0.04, blue: 0.095) : self.theme.palette.elevatedCardBackground)
                 if !self.reduceTransparency {
@@ -111,27 +129,31 @@ struct FluidModelShowcaseCard: View {
         .animation(self.reduceMotion ? nil : .easeOut(duration: 0.12), value: self.hovered)
         .accessibilityLabel("Preview \(self.model.displayName.replacingOccurrences(of: "Fluid-1", with: "Fluid 1"))")
         .accessibilityValue([self.isPreview ? "Previewed" : "", self.isSelected ? "Selected" : "", self.isRecommended ? "Recommended for your Mac" : ""].filter { !$0.isEmpty }.joined(separator: ", "))
-        .accessibilityHint(self.showsInfo ? self.infoAccessibilityDescription : "\(presentation.summary). \(presentation.useCase) Browse without changing the selected model.")
+        .accessibilityHint(self.showsInfoPanel ? self.infoAccessibilityDescription : "\(presentation.summary). \(presentation.useCase) Browse without changing the selected model.")
         .overlay(alignment: .topTrailing) {
             // Sibling to the browse button: opening details never selects or activates a model.
-            Button { self.showsInfo.toggle() } label: {
-                Image(systemName: self.showsInfo ? "xmark.circle" : "info.circle")
-                    .font(.fluidSystem(size: 19, weight: .regular))
-                    .foregroundStyle(self.theme.palette.secondaryText)
-                    .frame(width: 32, height: 32)
-                    .contentShape(Circle())
+            if self.content == .full {
+                Button { self.showsInfo.toggle() } label: {
+                    Image(systemName: self.showsInfo ? "xmark.circle" : "info.circle")
+                        .font(.fluidSystem(size: 19, weight: .regular))
+                        .foregroundStyle(self.theme.palette.secondaryText)
+                        .frame(width: 32, height: 32)
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .help(self.showsInfo ? "Close model information" : "About \(self.model.displayName)")
+                .accessibilityLabel(self.showsInfo ? "Close information for \(self.model.displayName)" : "About \(self.model.displayName)")
+                .accessibilityValue(self.showsInfo ? "Expanded" : "Collapsed")
+                .padding(14)
             }
-            .buttonStyle(.plain)
-            .help(self.showsInfo ? "Close model information" : "About \(self.model.displayName)")
-            .accessibilityLabel(self.showsInfo ? "Close information for \(self.model.displayName)" : "About \(self.model.displayName)")
-            .accessibilityValue(self.showsInfo ? "Expanded" : "Collapsed")
-            .padding(14)
         }
     }
 
     private func infoRow(_ title: String, value: String) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: self.theme.metrics.spacing.sm) {
+            // Labels are single words or short phrases; only the value wraps.
             Text(title).foregroundStyle(self.theme.palette.secondaryText)
+                .fixedSize(horizontal: true, vertical: false)
             Spacer(minLength: 0)
             Text(value).foregroundStyle(self.theme.palette.primaryText)
                 .multilineTextAlignment(.trailing)

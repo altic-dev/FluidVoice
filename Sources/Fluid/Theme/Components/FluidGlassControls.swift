@@ -306,8 +306,14 @@ extension AppTheme.Metrics {
     /// Shared showcase geometry, separate from compact form rows.
     enum Showcase {
         static let pageMaxWidth: CGFloat = 1080
+        /// Narrower side cards show no text, since their longest words would break mid-word.
+        static let sideCardSummaryMinWidth: CGFloat = 120
+        /// Narrower side cards hide the info panel, whose rows would overflow `cardHeight`.
+        static let sideCardInfoMinWidth: CGFloat = 220
         static let sideCardMaxWidth: CGFloat = 240
         static let cardHeight: CGFloat = 320
+        /// Keeps the preview card's bottom row, 260–296pt depending on its button, inside the card.
+        static let cardMinWidth: CGFloat = 300
         static let cardMaxWidth: CGFloat = 320
         static let cardRadius: CGFloat = 24
         static let stageHeight: CGFloat = 350

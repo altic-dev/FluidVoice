@@ -28,8 +28,19 @@ struct FluidIntelligenceModelCarousel<Controls: View>: View {
     var body: some View {
         VStack(spacing: self.spacing.sm) {
             GeometryReader { geometry in
-                let cardWidth = min(AppTheme.Metrics.Showcase.cardMaxWidth, geometry.size.width * 0.44)
-                let sideWidth = min(AppTheme.Metrics.Showcase.sideCardMaxWidth, max(60, (geometry.size.width - cardWidth - self.spacing.md * 2 - 80) / 2))
+                let widths = PrivateAIModelCarouselLayout.widths(
+                    stageWidth: geometry.size.width,
+                    preview: AppTheme.Metrics.Showcase.cardMinWidth...AppTheme.Metrics.Showcase.cardMaxWidth,
+                    sideMax: AppTheme.Metrics.Showcase.sideCardMaxWidth,
+                    spacing: self.spacing.md
+                )
+                let cardWidth = widths.preview
+                let sideWidth = widths.side
+                let sideContent = PrivateAIModelCarouselLayout.sideContent(
+                    width: sideWidth,
+                    summaryMinWidth: AppTheme.Metrics.Showcase.sideCardSummaryMinWidth,
+                    infoMinWidth: AppTheme.Metrics.Showcase.sideCardInfoMinWidth
+                )
                 let stride = cardWidth / 2 + sideWidth / 2 + self.spacing.md
                 ZStack {
                     ForEach(self.itemIDs.filter { abs(self.carouselPosition($0)) <= 1 }, id: \.self) { id in
@@ -42,10 +53,11 @@ struct FluidIntelligenceModelCarousel<Controls: View>: View {
                                     isSelected: self.selectedID == model.id,
                                     compact: position != 0,
                                     isRecommended: self.recommendedModelID == model.id,
+                                    content: position == 0 ? .full : sideContent,
                                     browse: { self.browse(id) }
                                 )
                             } else if let upcoming = PrivateAIUpcomingModel(rawValue: id) {
-                                self.upcomingCard(upcoming, compact: position != 0)
+                                self.upcomingCard(upcoming, compact: position != 0, showsText: position == 0 || sideContent != .none)
                             }
                         }
                         .overlay(alignment: .bottom) {
@@ -135,7 +147,7 @@ struct FluidIntelligenceModelCarousel<Controls: View>: View {
             ?? id
     }
 
-    private func upcomingCard(_ model: PrivateAIUpcomingModel, compact: Bool) -> some View {
+    private func upcomingCard(_ model: PrivateAIUpcomingModel, compact: Bool, showsText: Bool) -> some View {
         Button { self.browse(model.id) } label: {
             VStack(alignment: .leading, spacing: self.spacing.md) {
                 Text("Coming soon")
@@ -154,8 +166,10 @@ struct FluidIntelligenceModelCarousel<Controls: View>: View {
                     .font(self.theme.typography.caption)
                     .foregroundStyle(self.theme.palette.secondaryText)
             }
+            .opacity(showsText ? 1 : 0)
             .padding(self.spacing.xl)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+            // Hidden text may still need more height than the card has; it must not stretch the card.
+            .frame(maxWidth: .infinity, minHeight: showsText ? nil : 0, maxHeight: .infinity, alignment: .leading)
             .background(self.theme.palette.cardBackground, in: RoundedRectangle(cornerRadius: AppTheme.Metrics.Showcase.cardRadius))
             .overlay {
                 RoundedRectangle(cornerRadius: AppTheme.Metrics.Showcase.cardRadius)

@@ -19,6 +19,27 @@ struct PrivateAISettingsBoundaryTests {
         check(PrivateAIModelCarouselNavigation.next(in: ["pico", "mini"], current: "deleted", forward: true) == "pico", "Stale preview recovers to a real model")
         check(PrivateAIModelCarouselNavigation.position(of: "pico", in: ["pico", "mini", "full"], current: "mini") == -1, "Three-model carousel places the previous card left")
         check(PrivateAIModelCarouselNavigation.position(of: "full", in: ["pico", "mini", "full"], current: "mini") == 1, "Three-model carousel places the next card right")
+
+        func cardWidths(stage: CGFloat) -> (preview: CGFloat, side: CGFloat) {
+            PrivateAIModelCarouselLayout.widths(stageWidth: stage, preview: 300...320, sideMax: 240, spacing: 12)
+        }
+        let wideStage = cardWidths(stage: 900)
+        check(wideStage.preview == 320 && wideStage.side == 238, "A wide stage keeps the existing card widths")
+        check(cardWidths(stage: 700).preview == 700 * 0.44, "A stage with room keeps the existing preview fraction")
+        let defaultWindowStage = cardWidths(stage: 656)
+        check(defaultWindowStage.preview == 300, "The preview card never narrows below its controls row")
+        check(defaultWindowStage.side == 126, "Side cards take the room the preview card leaves")
+        check(cardWidths(stage: 0).side == 60, "An unmeasured stage keeps the existing side-card floor")
+        check(cardWidths(stage: 2000) == (320, 240), "Card widths stay capped on very wide stages")
+
+        func sideContent(width: CGFloat) -> PrivateAIModelCarouselLayout.SideContent {
+            PrivateAIModelCarouselLayout.sideContent(width: width, summaryMinWidth: 120, infoMinWidth: 220)
+        }
+        check(sideContent(width: 238) == .full, "A wide side card keeps its info panel")
+        check(sideContent(width: 220) == .full, "A side card at the info width keeps its info panel")
+        check(sideContent(width: 219) == .summary, "A side card too narrow for the info rows shows its summary")
+        check(sideContent(width: 120) == .summary, "A side card at the summary width shows its summary")
+        check(sideContent(width: 119) == .none, "A side card too narrow for whole words shows no text")
         var session = PrivateAISettingsSession(selectedModelID: "mini")
         let initialRevision = session.revision
         for id in ["pico", "mini", "pico"] {
