@@ -60,7 +60,7 @@ final nonisolated class TerminalService: Sendable {
                             "type": "string",
                             "description": """
                             Optional path of an image file to look at once the command succeeds, such as a screenshot \
-                            the command just saved (e.g. '/tmp/fluidvoice-screen.png'). The image is attached to the conversation.
+                            the command just saved. The image is attached to the conversation.
                             """,
                         ],
                     ],

@@ -857,21 +857,23 @@ final class CommandModeService: ObservableObject {
         }
     }
 
-    private static let screenWithImagesPrompt = """
-    ## SEEING THE USER'S SCREEN
-    The user often speaks while looking at something on their screen. When the request points at something you can't see,
-    take a screenshot FIRST, before running other commands or asking what they mean:
-    → execute_terminal_command(command: "screencapture -x /tmp/fluidvoice-screen.png", imagePath: "/tmp/fluidvoice-screen.png", purpose: "Looking at your screen")
-    Signs that you need it:
-    - Words like "this", "that", "these", "here", "it" with nothing earlier in the conversation they could refer to
-      (e.g. "summarize this", "what does this error mean?", "save this to a note", "open that link", "fix this")
-    - Mentions of what is visible: "on my screen", "what I'm looking at", "this page/window/tab/doc/email/error/image"
-    Then answer or act on what the screenshot shows. If it still isn't clear what they mean, say what you see and ask a short
-    question. Don't take a screenshot when the request is already clear without one (e.g. "create a folder called notes on my Desktop").
-    The screenshot may include FluidVoice's own window; ignore it. If screencapture fails, the user needs to allow FluidVoice under
-    System Settings > Privacy & Security > Screen & System Audio Recording.
-    To look at any other image file (e.g. "what's in ~/Downloads/photo.png"), pass its path as imagePath.
-    """
+    private static func screenWithImagesPrompt(screenPath: String) -> String {
+        """
+        ## SEEING THE USER'S SCREEN
+        The user often speaks while looking at something on their screen. When the request points at something you can't see,
+        take a screenshot FIRST, before running other commands or asking what they mean:
+        → execute_terminal_command(command: "screencapture -x '\(screenPath)'", imagePath: "\(screenPath)", purpose: "Looking at your screen")
+        Signs that you need it:
+        - Words like "this", "that", "these", "here", "it" with nothing earlier in the conversation they could refer to
+          (e.g. "summarize this", "what does this error mean?", "save this to a note", "open that link", "fix this")
+        - Mentions of what is visible: "on my screen", "what I'm looking at", "this page/window/tab/doc/email/error/image"
+        Then answer or act on what the screenshot shows. If it still isn't clear what they mean, say what you see and ask a short
+        question. Don't take a screenshot when the request is already clear without one (e.g. "create a folder called notes on my Desktop").
+        The screenshot may include FluidVoice's own window; ignore it. If screencapture fails, the user needs to allow FluidVoice under
+        System Settings > Privacy & Security > Screen & System Audio Recording.
+        To look at any other image file (e.g. "what's in ~/Downloads/photo.png"), pass its path as imagePath.
+        """
+    }
 
     private static let screenWithoutImagesPrompt = """
     ## THE USER'S SCREEN
@@ -967,12 +969,15 @@ final class CommandModeService: ObservableObject {
         }
         // Unknown models are tried; a rejection below records them as text-only.
         let doesAcceptImages = imageSupport.isSupported(model, baseURL: baseURL) != false
+        let screenPrompt = doesAcceptImages
+            ? Self.screenWithImagesPrompt(screenPath: CommandScreenshots.screenPath(forChat: self.currentChatID ?? "unsaved"))
+            : Self.screenWithoutImagesPrompt
 
         // Build conversation with agentic system prompt
         let systemPrompt = """
         You are an autonomous, thoughtful macOS terminal agent. Execute user requests reliably and safely.
 
-        \(doesAcceptImages ? Self.screenWithImagesPrompt : Self.screenWithoutImagesPrompt)
+        \(screenPrompt)
 
         ## AGENTIC WORKFLOW (Follow this pattern):
 
