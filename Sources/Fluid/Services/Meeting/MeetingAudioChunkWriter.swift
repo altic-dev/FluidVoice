@@ -89,7 +89,8 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
     private var pendingDroppedSampleCount = 0
     private var dropReportScheduled = false
     /// At most one bounded overflow command may bypass `pendingSlots`, solely to publish a
-    /// conservative in-memory safety era before a terminal stop.
+    /// conservative safety era. While it is pending, non-fail-closed sequenced commands are
+    /// refused, so no promotion can queue behind it and outlive a demotion it coalesced.
     private var emergencySafetyCommandPending = false
     private var lastHealthEmission = Date.distantPast
     private var lastLevelMeasurement = Date.distantPast
@@ -198,8 +199,15 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
             completion(.failure(SequencedCommandError.writerNotAccepting))
             return
         }
-        guard self.pendingSlots.wait(timeout: .now()) == .success else {
-            self.failOverflowedSequencedCommand(failClosed: failClosed, mutate: mutate, completion: completion)
+        guard failClosed || !self.emergencySafetyCommandPending,
+              self.pendingSlots.wait(timeout: .now()) == .success
+        else {
+            self.failOverflowedSequencedCommand(
+                failClosed: failClosed,
+                dropsSample: true,
+                mutate: mutate,
+                completion: completion
+            )
             return
         }
 
@@ -235,8 +243,15 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
             completion(.failure(SequencedCommandError.writerNotAccepting))
             return
         }
-        guard self.pendingSlots.wait(timeout: .now()) == .success else {
-            self.failOverflowedSequencedCommand(failClosed: failClosed, mutate: mutate, completion: completion)
+        guard failClosed || !self.emergencySafetyCommandPending,
+              self.pendingSlots.wait(timeout: .now()) == .success
+        else {
+            self.failOverflowedSequencedCommand(
+                failClosed: failClosed,
+                dropsSample: false,
+                mutate: mutate,
+                completion: completion
+            )
             return
         }
 
@@ -258,15 +273,21 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
 
     /// Full-queue path for sequenced commands. Must be called with `stateLock` held; returns with
     /// it released. A fail-closed command gets one bounded slot-bypassing emergency run so the
-    /// conservative era still reaches the in-memory track (and best-effort the manifest).
+    /// conservative era reaches the in-memory track and the manifest. It completes with
+    /// `queueFull` only when the manifest write succeeded, and with the write error otherwise.
+    /// Only a command that carries audio counts as a dropped sample.
     private func failOverflowedSequencedCommand(
         failClosed: Bool,
+        dropsSample: Bool,
         mutate: @escaping @Sendable (inout MeetingAudioTrack) -> Void,
         completion: @escaping @Sendable (Result<Void, Error>) -> Void
     ) {
-        self.pendingDroppedSampleCount += 1
-        let shouldScheduleReport = !self.dropReportScheduled
-        self.dropReportScheduled = true
+        var shouldScheduleReport = false
+        if dropsSample {
+            self.pendingDroppedSampleCount += 1
+            shouldScheduleReport = !self.dropReportScheduled
+            self.dropReportScheduled = true
+        }
         let enqueueEmergency = failClosed && !self.emergencySafetyCommandPending
         if enqueueEmergency { self.emergencySafetyCommandPending = true }
         self.stateLock.unlock()
@@ -278,9 +299,13 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
                 var candidate = self.track
                 mutate(&candidate)
                 self.track = candidate
-                try? self.persistTrackManifest(candidate)
+                let persisted = Result { try self.persistTrackManifest(candidate) }
                 self.stateLock.withLock { self.emergencySafetyCommandPending = false }
-                completion(.failure(SequencedCommandError.queueFull))
+                if case let .failure(error) = persisted {
+                    completion(.failure(error))
+                } else {
+                    completion(.failure(SequencedCommandError.queueFull))
+                }
             }
         } else {
             completion(.failure(SequencedCommandError.queueFull))
