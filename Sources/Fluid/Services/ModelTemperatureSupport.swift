@@ -61,7 +61,7 @@ final nonisolated class ModelTemperatureSupport: @unchecked Sendable {
         self.defaults.dictionary(forKey: Self.defaultsKey) as? [String: Bool] ?? [:]
     }
 
-    private static func key(_ model: String, baseURL: String) -> String {
+    static func key(_ model: String, baseURL: String) -> String {
         var endpoint = baseURL.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         while endpoint.hasSuffix("/") {
             endpoint.removeLast()

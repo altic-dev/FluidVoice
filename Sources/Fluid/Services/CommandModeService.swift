@@ -70,6 +70,7 @@ final class CommandModeService: ObservableObject {
         let toolCall: ToolCall?
         let stepType: StepType
         let timestamp: Date
+        let image: CommandImageAttachment?
 
         enum Role: Equatable {
             case user
@@ -100,15 +101,24 @@ final class CommandModeService: ObservableObject {
             let command: String
             let workingDirectory: String?
             let purpose: String? // Why this command is being run
+            var imagePath: String? = nil
         }
 
-        init(role: Role, content: String, thinking: String? = nil, toolCall: ToolCall? = nil, stepType: StepType = .normal) {
+        init(
+            role: Role,
+            content: String,
+            thinking: String? = nil,
+            toolCall: ToolCall? = nil,
+            stepType: StepType = .normal,
+            image: CommandImageAttachment? = nil
+        ) {
             self.role = role
             self.content = content
             self.thinking = thinking
             self.toolCall = toolCall
             self.stepType = stepType
             self.timestamp = Date()
+            self.image = image
         }
     }
 
@@ -117,6 +127,7 @@ final class CommandModeService: ObservableObject {
         let command: String
         let workingDirectory: String?
         let purpose: String?
+        var imagePath: String? = nil
     }
 
     // MARK: - Public Methods
@@ -294,7 +305,8 @@ final class CommandModeService: ObservableObject {
                 id: tc.id,
                 command: tc.command,
                 workingDirectory: tc.workingDirectory,
-                purpose: tc.purpose
+                purpose: tc.purpose,
+                imagePath: tc.imagePath
             )
         }
 
@@ -333,7 +345,8 @@ final class CommandModeService: ObservableObject {
                 id: tc.id,
                 command: tc.command,
                 workingDirectory: tc.workingDirectory,
-                purpose: tc.purpose
+                purpose: tc.purpose,
+                imagePath: tc.imagePath
             )
         }
 
@@ -369,7 +382,12 @@ final class CommandModeService: ObservableObject {
     }
 
     /// Process user voice/text command
-    func processUserCommand(_ text: String, notifyInvalidRequest: Bool = false, isOutputValid: (@MainActor () -> Bool)? = nil) async {
+    func processUserCommand(
+        _ text: String,
+        image: CommandImageAttachment? = nil,
+        notifyInvalidRequest: Bool = false,
+        isOutputValid: (@MainActor () -> Bool)? = nil
+    ) async {
         let voiceOutputValidity = isOutputValid
         let isOutputValid: @MainActor () -> Bool = voiceOutputValidity ?? { true }
         guard isOutputValid(), !self.isProcessing, self.pendingCommand == nil else { return }
@@ -380,7 +398,9 @@ final class CommandModeService: ObservableObject {
         }
         defer { MeetingSummaryActivityCoordinator.shared.endProcessing(summaryActivity) }
 
-        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty || image != nil else { return }
+        let text = trimmed.isEmpty ? "Attached an image." : text
 
         AnalyticsService.shared.recordUsage(
             mode: .command,
@@ -402,7 +422,7 @@ final class CommandModeService: ObservableObject {
             }
         }
         self.currentTurnCount = 0
-        self.conversationHistory.append(Message(role: .user, content: text))
+        self.conversationHistory.append(Message(role: .user, content: text, image: image))
 
         // Auto-save after adding user message
         self.saveCurrentChat()
@@ -470,7 +490,7 @@ final class CommandModeService: ObservableObject {
         self.pendingVoiceCommandCancellation = nil
         self.isProcessing = true
 
-        await self.executeCommand(pending.command, workingDirectory: pending.workingDirectory, callId: pending.id)
+        await self.executeCommand(pending.command, workingDirectory: pending.workingDirectory, callId: pending.id, imagePath: pending.imagePath)
     }
 
     /// Cancel pending command
@@ -567,7 +587,8 @@ final class CommandModeService: ObservableObject {
                         command: tc.command,
                         workingDirectory: tc
                             .workingDirectory,
-                        purpose: tc.purpose
+                        purpose: tc.purpose,
+                        imagePath: tc.imagePath
                     ),
                     stepType: stepType
                 ))
@@ -584,7 +605,8 @@ final class CommandModeService: ObservableObject {
                         id: tc.id,
                         command: tc.command,
                         workingDirectory: tc.workingDirectory,
-                        purpose: tc.purpose
+                        purpose: tc.purpose,
+                        imagePath: tc.imagePath
                     )
                     self.isProcessing = false
                     self.currentStep = nil
@@ -598,7 +620,14 @@ final class CommandModeService: ObservableObject {
                 }
 
                 // Auto-execute
-                await self.executeCommand(tc.command, workingDirectory: tc.workingDirectory, callId: tc.id, purpose: tc.purpose, isOutputValid: isOutputValid)
+                await self.executeCommand(
+                    tc.command,
+                    workingDirectory: tc.workingDirectory,
+                    callId: tc.id,
+                    purpose: tc.purpose,
+                    imagePath: tc.imagePath,
+                    isOutputValid: isOutputValid
+                )
 
             } else {
                 // Just a text response - check if it's a final summary
@@ -744,7 +773,14 @@ final class CommandModeService: ObservableObject {
         return false
     }
 
-    private func executeCommand(_ command: String, workingDirectory: String?, callId: String, purpose: String? = nil, isOutputValid: @escaping @MainActor () -> Bool = { true }) async {
+    private func executeCommand(
+        _ command: String,
+        workingDirectory: String?,
+        callId: String,
+        purpose: String? = nil,
+        imagePath: String? = nil,
+        isOutputValid: @escaping @MainActor () -> Bool = { true }
+    ) async {
         guard isOutputValid() else { return }
         self.currentStep = .executing(command)
 
@@ -753,12 +789,30 @@ final class CommandModeService: ObservableObject {
             workingDirectory: workingDirectory
         )
 
+        var image: CommandImageAttachment?
+        var imageNote: String?
+        if let imagePath, !imagePath.isEmpty, result.success {
+            let (_, model, baseURL) = self.commandModeEndpoint()
+            if ModelImageSupport.shared.isSupported(model, baseURL: baseURL) == false {
+                imageNote = "Not attached: the selected model can't view images."
+            } else {
+                do {
+                    let loaded = try await CommandImageAttachment.load(path: imagePath)
+                    image = loaded
+                    imageNote = "Attached \(imagePath) (\(loaded.width)x\(loaded.height)) in the next message."
+                } catch {
+                    imageNote = error.localizedDescription
+                }
+            }
+        }
+
         // A command already dispatched cannot be undone. Record its actual outcome
         // even if Escape suppresses every subsequent agent turn and visible output.
         // Create enhanced result with context
         let resultJSON = await EnhancedCommandResult(
             result: result,
-            purpose: purpose
+            purpose: purpose,
+            image: imageNote
         ).toJSON()
 
         // Determine result step type
@@ -768,7 +822,8 @@ final class CommandModeService: ObservableObject {
         self.conversationHistory.append(Message(
             role: .tool,
             content: resultJSON,
-            stepType: resultStepType
+            stepType: resultStepType,
+            image: image
         ))
 
         guard isOutputValid() else {
@@ -780,6 +835,54 @@ final class CommandModeService: ObservableObject {
         await self.processNextTurn(isOutputValid: isOutputValid)
     }
 
+    private func commandModeEndpoint() -> (providerID: String, model: String, baseURL: String) {
+        let settings = SettingsStore.shared
+        let providerID = settings.effectiveCommandModeProviderID
+        let baseURL: String
+        if let provider = settings.savedProviders.first(where: { $0.id == providerID }) {
+            baseURL = provider.baseURL
+        } else if ModelRepository.shared.isBuiltIn(providerID) {
+            baseURL = ModelRepository.shared.defaultBaseURL(for: providerID)
+        } else {
+            baseURL = ""
+        }
+        return (providerID, settings.effectiveCommandModeSelectedModel, baseURL)
+    }
+
+    private func noteImagesUnsupported(model: String) {
+        let notice = "\(model) can't view images, so I can't see your screen with it. Pick a model that supports images in Command Mode to use screenshots."
+        self.conversationHistory.append(Message(role: .assistant, content: notice))
+        if self.shouldSyncCommandNotchState {
+            NotchContentState.shared.addCommandMessage(role: .status, content: notice)
+        }
+    }
+
+    private static func screenWithImagesPrompt(screenPath: String) -> String {
+        """
+        ## SEEING THE USER'S SCREEN
+        The user often speaks while looking at something on their screen. When the request points at something you can't see,
+        take a screenshot FIRST, before running other commands or asking what they mean:
+        → execute_terminal_command(command: "screencapture -x '\(screenPath)'", imagePath: "\(screenPath)", purpose: "Looking at your screen")
+        Signs that you need it:
+        - Words like "this", "that", "these", "here", "it" with nothing earlier in the conversation they could refer to
+          (e.g. "summarize this", "what does this error mean?", "save this to a note", "open that link", "fix this")
+        - Mentions of what is visible: "on my screen", "what I'm looking at", "this page/window/tab/doc/email/error/image"
+        Then answer or act on what the screenshot shows. If it still isn't clear what they mean, say what you see and ask a short
+        question. Don't take a screenshot when the request is already clear without one (e.g. "create a folder called notes on my Desktop").
+        The screenshot may include FluidVoice's own window; ignore it. If screencapture fails, the user needs to allow FluidVoice under
+        System Settings > Privacy & Security > Screen & System Audio Recording.
+        To look at any other image file (e.g. "what's in ~/Downloads/photo.png"), pass its path as imagePath.
+        """
+    }
+
+    private static let screenWithoutImagesPrompt = """
+    ## THE USER'S SCREEN
+    The selected model can't view images, so you can't see the user's screen or image files. Never pass imagePath.
+    If the request refers to something on screen ("this", "that", "here", "this error/page/email") with nothing earlier in the
+    conversation it could mean, ask the user to paste or describe it, and mention that choosing a Command Mode model that
+    supports images lets you see their screen.
+    """
+
     // MARK: - Enhanced Result
 
     private nonisolated struct EnhancedCommandResult: Codable {
@@ -790,8 +893,9 @@ final class CommandModeService: ObservableObject {
         let exitCode: Int32
         let executionTimeMs: Int
         let purpose: String?
+        let image: String?
 
-        init(result: TerminalService.CommandResult, purpose: String?) {
+        init(result: TerminalService.CommandResult, purpose: String?, image: String? = nil) {
             self.success = result.success
             self.command = result.command
             self.output = result.output
@@ -799,6 +903,7 @@ final class CommandModeService: ObservableObject {
             self.exitCode = result.exitCode
             self.executionTimeMs = result.executionTimeMs
             self.purpose = purpose
+            self.image = image
         }
 
         /// Command output can be large; encode it off the main actor.
@@ -829,6 +934,7 @@ final class CommandModeService: ObservableObject {
             let command: String
             let workingDirectory: String?
             let purpose: String?
+            var imagePath: String? = nil
         }
     }
 
@@ -853,22 +959,25 @@ final class CommandModeService: ObservableObject {
             })
         }
 
-        let providerID = settings.effectiveCommandModeProviderID
-        let model = settings.effectiveCommandModeSelectedModel
+        let (providerID, model, baseURL) = self.commandModeEndpoint()
         let apiKey = settings.getAPIKey(for: providerID) ?? ""
 
-        let baseURL: String
-        if let provider = settings.savedProviders.first(where: { $0.id == providerID }) {
-            baseURL = provider.baseURL
-        } else if ModelRepository.shared.isBuiltIn(providerID) {
-            baseURL = ModelRepository.shared.defaultBaseURL(for: providerID)
-        } else {
-            baseURL = ""
+        let imageSupport = ModelImageSupport.shared
+        if imageSupport.isSupported(model, baseURL: baseURL) == nil {
+            await imageSupport.probeLocalServer(model: model, baseURL: baseURL)
+            guard isOutputValid() else { throw CancellationError() }
         }
+        // Unknown models are tried; a rejection below records them as text-only.
+        let doesAcceptImages = imageSupport.isSupported(model, baseURL: baseURL) != false
+        let screenPrompt = doesAcceptImages
+            ? Self.screenWithImagesPrompt(screenPath: CommandScreenshots.screenPath(forChat: self.currentChatID ?? "unsaved"))
+            : Self.screenWithoutImagesPrompt
 
         // Build conversation with agentic system prompt
         let systemPrompt = """
         You are an autonomous, thoughtful macOS terminal agent. Execute user requests reliably and safely.
+
+        \(screenPrompt)
 
         ## AGENTIC WORKFLOW (Follow this pattern):
 
@@ -954,20 +1063,31 @@ final class CommandModeService: ObservableObject {
 
         // Add conversation history
         var lastToolCallId: String? = nil
+        // Only the newest image is resent so each turn stays small.
+        let latestImageMessageID = doesAcceptImages ? self.conversationHistory.last(where: { $0.image != nil })?.id : nil
 
         for msg in self.conversationHistory {
             switch msg.role {
             case .user:
-                messages.append(["role": "user", "content": msg.content])
+                if let image = msg.image, msg.id == latestImageMessageID {
+                    messages.append([
+                        "role": "user",
+                        "content": [
+                            ["type": "text", "text": msg.content],
+                            ["type": "image_url", "image_url": ["url": image.dataURL]],
+                        ],
+                    ])
+                } else {
+                    messages.append(["role": "user", "content": msg.content])
+                }
             case .assistant:
                 if let tc = msg.toolCall {
                     lastToolCallId = tc.id
                     let argsJSON: String
                     do {
-                        let data = try JSONSerialization.data(withJSONObject: [
-                            "command": tc.command,
-                            "workingDirectory": tc.workingDirectory ?? "",
-                        ])
+                        var args: [String: Any] = ["command": tc.command, "workingDirectory": tc.workingDirectory ?? ""]
+                        if let imagePath = tc.imagePath { args["imagePath"] = imagePath }
+                        let data = try JSONSerialization.data(withJSONObject: args)
                         argsJSON = String(data: data, encoding: .utf8) ?? "{}"
                     } catch {
                         DebugLogger.shared.error("Failed to encode tool call args: \(error)", source: "CommandModeService")
@@ -994,6 +1114,16 @@ final class CommandModeService: ObservableObject {
                     "content": msg.content,
                     "tool_call_id": lastToolCallId ?? "call_unknown",
                 ])
+                // Chat APIs accept images only in user turns, so the image follows its tool result.
+                if let image = msg.image, msg.id == latestImageMessageID {
+                    messages.append([
+                        "role": "user",
+                        "content": [
+                            ["type": "text", "text": "Image requested by the previous command:"],
+                            ["type": "image_url", "image_url": ["url": image.dataURL]],
+                        ],
+                    ])
+                }
             }
         }
 
@@ -1084,7 +1214,17 @@ final class CommandModeService: ObservableObject {
 
         DebugLogger.shared.info("Using LLMClient for Command Mode (streaming=\(enableStreaming), messages=\(messages.count), history=\(self.conversationHistory.count))", source: "CommandModeService")
 
-        let response = try await LLMClient.shared.call(config)
+        let response: LLMClient.Response
+        do {
+            response = try await LLMClient.shared.call(config)
+        } catch let LLMError.httpError(status, body) where latestImageMessageID != nil && ModelImageSupport.isImageRejection(body) {
+            // The rejection arrives before any streamed output, so retrying without the image cannot duplicate text.
+            DebugLogger.shared.info("Command mode model \(model) rejected an image (HTTP \(status)); retrying without it", source: "CommandModeService")
+            imageSupport.record([model: false], baseURL: baseURL)
+            guard isOutputValid() else { throw CancellationError() }
+            self.noteImagesUnsupported(model: model)
+            return try await self.callLLM(isOutputValid: isOutputValid)
+        }
         guard isOutputValid() else { throw CancellationError() }
 
         // Final UI update - ensure all content is displayed
@@ -1133,6 +1273,7 @@ final class CommandModeService: ObservableObject {
             let command = tc.getString("command") ?? ""
             let workDir = tc.getOptionalString("workingDirectory")
             let purpose = tc.getString("purpose")
+            let imagePath = tc.getOptionalString("imagePath")
 
             return LLMResponse(
                 content: response.content,
@@ -1141,7 +1282,8 @@ final class CommandModeService: ObservableObject {
                     id: tc.id,
                     command: command,
                     workingDirectory: workDir,
-                    purpose: purpose
+                    purpose: purpose,
+                    imagePath: imagePath
                 )
             )
         }

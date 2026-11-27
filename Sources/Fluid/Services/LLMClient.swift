@@ -552,6 +552,11 @@ final nonisolated class LLMClient: @unchecked Sendable {
                     "role": role,
                     "content": content,
                 ])
+            } else if let parts = message["content"] as? [[String: Any]], !parts.isEmpty {
+                input.append([
+                    "role": role,
+                    "content": parts.map(self.responsesContentPart),
+                ])
             }
 
             guard let toolCalls = message["tool_calls"] as? [[String: Any]] else { continue }
@@ -570,6 +575,19 @@ final nonisolated class LLMClient: @unchecked Sendable {
         }
 
         return input
+    }
+
+    /// Chat Completions content parts use different type names in the Responses API.
+    private func responsesContentPart(_ part: [String: Any]) -> [String: Any] {
+        switch part["type"] as? String {
+        case "text":
+            return ["type": "input_text", "text": part["text"] as? String ?? ""]
+        case "image_url":
+            let url = (part["image_url"] as? [String: Any])?["url"] as? String ?? ""
+            return ["type": "input_image", "image_url": url]
+        default:
+            return part
+        }
     }
 
     // MARK: - Non-Streaming Response

@@ -33,6 +33,7 @@ final nonisolated class TerminalService: Sendable {
                 3. Verify the result
 
                 Returns JSON with: success (bool), output (stdout), error (stderr), exitCode, purpose.
+                If imagePath is set, the image at that path is shown to you after the command finishes.
                 """,
                 "parameters": [
                     "type": "object",
@@ -53,6 +54,13 @@ final nonisolated class TerminalService: Sendable {
                             - 'executing' (main action)
                             - 'verifying' (confirming result)
                             Example: 'Checking if config.json exists'
+                            """,
+                        ],
+                        "imagePath": [
+                            "type": "string",
+                            "description": """
+                            Optional path of an image file to look at once the command succeeds, such as a screenshot \
+                            the command just saved. The image is attached to the conversation.
                             """,
                         ],
                     ],

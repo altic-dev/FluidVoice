@@ -103,6 +103,17 @@ final class DebugLogger {
         check(cleanChatStore.sessions == chats && cleanChatStore.currentChatID == chats[1].id, "Readable chats load unchanged")
         check(cleanChatDefaults.data(forKey: self.chatKey) == cleanChatBytes, "Loading readable chats must not rewrite them")
 
+        let screenshots = chats.map { chat in
+            let path = CommandScreenshots.screenPath(forChat: chat.id)
+            FileManager.default.createFile(atPath: path, contents: Data([1]))
+            return path
+        }
+        cleanChatStore.deleteChat(id: chats[0].id)
+        check(!FileManager.default.fileExists(atPath: screenshots[0]), "Deleting a chat removes its screenshots")
+        check(FileManager.default.fileExists(atPath: screenshots[1]), "Deleting a chat keeps other chats' screenshots")
+        cleanChatStore.clearCurrentChat()
+        check(!FileManager.default.fileExists(atPath: screenshots[1]), "Clearing a chat removes its screenshots")
+
         print("History decode recovery: \(checks) checks passed")
     }
 

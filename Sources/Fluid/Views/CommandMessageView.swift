@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import SwiftUI
 
@@ -34,6 +35,14 @@ struct CommandMessageView: View {
         HStack(alignment: .top, spacing: 24) {
             Spacer(minLength: 36)
             VStack(alignment: .trailing, spacing: 5) {
+                if let attachment = self.message.image, let image = NSImage(data: attachment.jpeg) {
+                    Image(nsImage: image)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(maxWidth: 320, maxHeight: 240, alignment: .trailing)
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                        .accessibilityLabel("Attached image")
+                }
                 Text(verbatim: self.message.content)
                     .font(self.theme.typography.body)
                     .lineSpacing(4)
@@ -150,6 +159,14 @@ struct CommandMessageView: View {
                     .padding(.leading, 24)
             }
             if self.outputExpanded {
+                if let attachment = self.message.image, let image = NSImage(data: attachment.jpeg) {
+                    Image(nsImage: image)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(maxWidth: 480, alignment: .leading)
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                        .accessibilityLabel("Image sent to the model")
+                }
                 if let parsed = self.toolOutput {
                     if !parsed.output.isEmpty {
                         CommandCodeBlock(code: parsed.output, language: parsed.language)

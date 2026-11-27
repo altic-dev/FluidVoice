@@ -39,6 +39,7 @@ struct ChatMessage: Codable, Identifiable, Equatable {
         let command: String
         let workingDirectory: String?
         let purpose: String?
+        var imagePath: String? = nil
     }
 
     init(id: UUID = UUID(), role: Role, content: String, toolCall: ToolCall? = nil, stepType: StepType = .normal, timestamp: Date = Date()) {
@@ -125,6 +126,22 @@ struct ChatSession: Codable, Identifiable, Equatable {
 }
 
 // MARK: - Chat History Store
+
+/// Screenshots Command Mode takes for a chat; removed with the chat.
+enum CommandScreenshots {
+    static let root = FileManager.default.temporaryDirectory.appendingPathComponent("CommandModeScreenshots", isDirectory: true)
+
+    /// Creates the chat's folder so a screenshot command can write into it.
+    static func screenPath(forChat id: String) -> String {
+        let directory = self.root.appendingPathComponent(id, isDirectory: true)
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        return directory.appendingPathComponent("screen.png").path
+    }
+
+    static func remove(forChat id: String) {
+        try? FileManager.default.removeItem(at: self.root.appendingPathComponent(id, isDirectory: true))
+    }
+}
 
 @MainActor
 final class ChatHistoryStore: ObservableObject {
@@ -277,6 +294,7 @@ final class ChatHistoryStore: ObservableObject {
     func deleteChat(id: String) {
         guard self.sessions.contains(where: { $0.id == id }) else { return }
         self.sessions.removeAll { $0.id == id }
+        CommandScreenshots.remove(forChat: id)
 
         // If deleted current chat, switch to most recent or create new
         if self.currentChatID == id {
@@ -298,6 +316,7 @@ final class ChatHistoryStore: ObservableObject {
               let index = sessions.firstIndex(where: { $0.id == id }) else { return }
 
         self.sessions[index].messages = []
+        CommandScreenshots.remove(forChat: id)
         self.sessions[index].title = "New Chat"
         self.sessions[index].hasCustomTitle = false
         self.sessions[index].markUpdated()
@@ -358,6 +377,9 @@ final class ChatHistoryStore: ObservableObject {
         let candidates = active.filter { $0.id != self.currentChatID && $0.id != preservingID }
             .sorted { $0.updatedAt > $1.updatedAt }
         let retainedIDs = Set((protected + candidates.prefix(self.maxChats - protected.count)).map(\.id))
+        for session in active where !retainedIDs.contains(session.id) {
+            CommandScreenshots.remove(forChat: session.id)
+        }
         self.sessions.removeAll { !$0.isArchived && !retainedIDs.contains($0.id) }
     }
 }

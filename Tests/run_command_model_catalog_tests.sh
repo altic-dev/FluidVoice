@@ -16,6 +16,8 @@ xcrun swiftc -parse-as-library \
     "$task_test_dir/ModelRepository.swift" \
     Sources/Fluid/UI/ModelDisplayName.swift \
     Sources/Fluid/Views/CommandModelCatalog.swift \
+    Sources/Fluid/Services/ModelImageSupport.swift \
+    Sources/Fluid/Services/ModelTemperatureSupport.swift \
     Tests/AppleIntelligenceAvailabilityDouble.swift \
     Sources/Fluid/Persistence/SettingsStore+CommandMode.swift \
     Tests/CommandModelCatalogTests.swift \

@@ -27,6 +27,9 @@ awk '/MARK: - FoundationModels/{exit} 1' Sources/Fluid/Services/AppleIntelligenc
 # Only its model, terminal, UI, and UserDefaults dependencies are test doubles.
 xcrun swiftc -parse-as-library \
     Sources/Fluid/Services/CommandModeService.swift \
+    Sources/Fluid/Services/CommandImageAttachment.swift \
+    Sources/Fluid/Services/ModelImageSupport.swift \
+    Sources/Fluid/Services/ModelTemperatureSupport.swift \
     "$task_test_dir/AppleIntelligenceCore.swift" \
     Sources/Fluid/Persistence/ChatHistoryStore.swift \
     Sources/Fluid/Persistence/PersistedHistory.swift \
