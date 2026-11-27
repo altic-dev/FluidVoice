@@ -183,7 +183,7 @@ final class SpeechModelInstallationSnapshot: ObservableObject {
         self.deadlineID = nil
     }
 
-    private static func captureProbes() -> [Probe] {
+    static func captureProbes() -> [Probe] {
         let releases = CompactSpeechModelReleaseCatalog.shared
         return SettingsStore.SpeechModel.availableModels.map { model in
             let kind: Probe.Kind
@@ -215,19 +215,40 @@ final class SpeechModelInstallationSnapshot: ObservableObject {
         }
     }
 
-    @concurrent static func scan(_ probes: [Probe], cachesDirectory: URL? = nil, modelsDirectory: URL? = nil) async throws -> Set<String> {
-        try await self.scanResult(probes, cachesDirectory: cachesDirectory, modelsDirectory: modelsDirectory).installedIDs
+    @concurrent static func scan(
+        _ probes: [Probe],
+        cachesDirectory: URL? = nil,
+        modelsDirectory: URL? = nil,
+        storage: ModelStorageConfiguration? = nil
+    ) async throws -> Set<String> {
+        try await self.scanResult(probes, cachesDirectory: cachesDirectory, modelsDirectory: modelsDirectory, storage: storage).installedIDs
     }
 
-    @concurrent static func scanResult(_ probes: [Probe], cachesDirectory: URL? = nil, modelsDirectory: URL? = nil) async throws -> ScanResult {
+    /// `cachesDirectory` is the folder that holds Whisper, Cohere and Nemotron folders; tests inject it.
+    @concurrent static func scanResult(
+        _ probes: [Probe],
+        cachesDirectory: URL? = nil,
+        modelsDirectory: URL? = nil,
+        storage: ModelStorageConfiguration? = nil
+    ) async throws -> ScanResult {
         var installed: Set<String> = []
         var updates: Set<String> = []
         var hashes: [String: String] = [:]
         var manifests: [String: String] = [:]
         let fm = FileManager.default
-        let caches = cachesDirectory ?? fm.urls(for: .cachesDirectory, in: .userDomainMask).first
-        let models = modelsDirectory ?? fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
-            .appendingPathComponent("FluidAudio/Models", isDirectory: true)
+        let storage = storage ?? ModelStorageLocation.configuration
+        if cachesDirectory == nil, modelsDirectory == nil, !ModelStorageLocation.probe(storage, fileManager: fm).isUsable {
+            // An unplugged model drive is not an empty install: only built-in models are reported.
+            let builtIn = probes.compactMap { probe -> String? in
+                if case .builtIn = probe.kind {
+                    return probe.modelID
+                }
+                return nil
+            }
+            return ScanResult(installedIDs: Set(builtIn))
+        }
+        let caches: URL? = cachesDirectory ?? ModelStorageLocation.speechBaseDirectory(in: storage)
+        let models: URL? = modelsDirectory ?? ModelStorageLocation.fluidAudioModelsDirectory(in: storage)
         for probe in probes {
             try Task.checkCancellation()
             let exists: Bool
@@ -264,7 +285,14 @@ final class SpeechModelInstallationSnapshot: ObservableObject {
                     }
                 } ?? false
             case let .cohere(spec, storedPath):
-                let directory = storedPath.map { URL(fileURLWithPath: $0, isDirectory: true) } ?? spec.defaultCacheDirectory
+                let resolution = ModelStorageLocation.externalCoreMLDirectory(
+                    folderName: spec.artifactFolderHint,
+                    storedOverridePath: storedPath,
+                    in: storage
+                )
+                let directory = cachesDirectory != nil && resolution.isAppManaged
+                    ? caches?.appendingPathComponent(spec.artifactFolderHint, isDirectory: true)
+                    : resolution.directory
                 exists = directory.map { spec.validatesInstalledArtifacts(at: $0) } ?? false
             case let .nemotron(folder):
                 #if arch(arm64)
@@ -273,7 +301,7 @@ final class SpeechModelInstallationSnapshot: ObservableObject {
                 exists = false
                 #endif
             case let .whisper(file, expectedBytes):
-                let url = caches?.appendingPathComponent("WhisperModels", isDirectory: true).appendingPathComponent(file)
+                let url = caches?.appendingPathComponent(ModelStorageLocation.whisperFolderName, isDirectory: true).appendingPathComponent(file)
                 let attributes = url.flatMap { try? fm.attributesOfItem(atPath: $0.path) }
                 exists = expectedBytes > 0 && (attributes?[.size] as? NSNumber)?.int64Value == expectedBytes
             case .unavailable:

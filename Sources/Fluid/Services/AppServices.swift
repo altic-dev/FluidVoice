@@ -61,6 +61,11 @@ final class AppServices: ObservableObject {
 
     /// Automatic speech recognition service (lazily initialized)
     private var _asr: ASRService?
+    /// The speech service only if it already exists, for work that must not create it.
+    var existingASR: ASRService? {
+        self._asr
+    }
+
     var asr: ASRService {
         if let existing = self._asr {
             return existing

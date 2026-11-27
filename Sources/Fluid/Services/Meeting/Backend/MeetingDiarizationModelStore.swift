@@ -88,6 +88,12 @@ final class MeetingDiarizationModelStore: ObservableObject {
             self.state = .failed(message: "Speaker labels need an Apple silicon Mac.")
             throw MeetingParakeetNemotronRuntimeError.unsupportedArchitecture
         }
+        do {
+            try ModelStorageLocation.requireAvailableForChanges()
+        } catch {
+            self.state = .failed(message: error.localizedDescription)
+            throw error
+        }
         guard self.canDownload() else {
             let error = MeetingNemotronModelReadinessError.invalidModelPackage(reason: "developmentOverrideInvalid")
             self.state = .failed(message: "The development model path is missing or invalid. Remove the override and restart FluidVoice.")

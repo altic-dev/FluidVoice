@@ -38,5 +38,9 @@
 	<string>https://eu.i.posthog.com</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>FluidVoice uses on-device speech recognition to transcribe your voice commands and text quickly and privately.</string>
+	<key>NSRemovableVolumesUsageDescription</key>
+	<string>FluidVoice reads and stores speech models in the folder you chose on this drive.</string>
+	<key>NSNetworkVolumesUsageDescription</key>
+	<string>FluidVoice reads and stores speech models in the folder you chose on this network volume.</string>
 </dict>
 </plist>

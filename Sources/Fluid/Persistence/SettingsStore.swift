@@ -6004,21 +6004,16 @@ final class SettingsStore: ObservableObject {
                 default:
                     hint = "nemotron-3.5-asr-streaming320-int8-CoreML"
                 }
-                let directory = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?
-                    .appendingPathComponent(hint, isDirectory: true)
                 #if arch(arm64)
-                return directory.map { NemotronProvider.artifactsAreComplete(at: $0) } ?? false
+                return NemotronProvider.artifactsAreComplete(at: ModelStorageLocation.coreMLModelDirectory(folderName: hint))
                 #else
                 return false
                 #endif
             default:
                 // Whisper models
                 guard let whisperFile = self.whisperModelFile else { return false }
-                let directory = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?
-                    .appendingPathComponent("WhisperModels")
-                let modelURL = directory?.appendingPathComponent(whisperFile)
+                let modelURL = ModelStorageLocation.whisperModelsDirectory().appendingPathComponent(whisperFile)
                 guard
-                    let modelURL,
                     let attributes = try? FileManager.default.attributesOfItem(atPath: modelURL.path),
                     let size = attributes[.size] as? NSNumber,
                     size.int64Value > 0
@@ -6031,13 +6026,13 @@ final class SettingsStore: ObservableObject {
 
         #if canImport(FluidAudio)
         private static func parakeetModelsExist(descriptor: ParakeetSpeechModelCatalog.Descriptor) -> Bool {
-            let modelsDirectory = AsrModels.defaultCacheDirectory().deletingLastPathComponent()
+            let modelsDirectory = ModelStorageLocation.fluidAudioModelsDirectory()
             let directory = descriptor.cacheDirectory(in: modelsDirectory)
             return descriptor.artifactsAreComplete(at: directory)
         }
 
         private static func parakeetRealtimeModelsExist() -> Bool {
-            let modelsDirectory = AsrModels.defaultCacheDirectory().deletingLastPathComponent()
+            let modelsDirectory = ModelStorageLocation.fluidAudioModelsDirectory()
             let modelDirectory = modelsDirectory
                 .appendingPathComponent("parakeet-eou-streaming", isDirectory: true)
                 .appendingPathComponent(Repo.parakeetEou160.folderName, isDirectory: true)
@@ -6777,18 +6772,15 @@ extension SettingsStore {
         return path
     }
 
+    /// An explicit per-model path wins, then the model storage location; nil when the managed folder is absent.
     func externalCoreMLArtifactsDirectory(for model: SpeechModel) -> URL? {
         guard let spec = model.externalCoreMLSpec else { return nil }
-        let paths = self.defaults.dictionary(forKey: Keys.externalCoreMLArtifactsDirectories) as? [String: String] ?? [:]
-        if let storedPath = paths[model.rawValue], storedPath.isEmpty == false {
-            return URL(fileURLWithPath: storedPath, isDirectory: true)
+        let resolution = spec.resolvedArtifactsDirectory(storedOverridePath: self.storedExternalCoreMLArtifactsPath(for: model))
+        if resolution.source == .explicitOverride {
+            return resolution.directory
         }
-
-        let cachesDirectory = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
-        let fallback = cachesDirectory?.appendingPathComponent(spec.artifactFolderHint, isDirectory: true)
-        guard let fallback else { return nil }
-        if FileManager.default.fileExists(atPath: fallback.path) {
-            return fallback
+        if FileManager.default.fileExists(atPath: resolution.directory.path) {
+            return resolution.directory
         }
         return nil
     }

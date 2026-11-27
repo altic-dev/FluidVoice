@@ -4873,6 +4873,11 @@ struct ContentView: View {
                 DebugLogger.shared.debug("ContentView: pre-load model task started", source: "ContentView")
                 try await self.asr.ensureAsrReady()
                 DebugLogger.shared.debug("Model pre-loaded during recording", source: "ContentView")
+            } catch let error as ModelStorageError {
+                DebugLogger.shared.error("Failed to pre-load model: \(error)", source: "ContentView")
+                self.asr.errorTitle = "Model Storage Unavailable"
+                self.asr.errorMessage = error.localizedDescription
+                self.asr.showError = true
             } catch {
                 DebugLogger.shared.error("Failed to pre-load model: \(error)", source: "ContentView")
             }

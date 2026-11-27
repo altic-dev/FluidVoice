@@ -53,18 +53,21 @@ final class ParakeetRealtimeProvider: TranscriptionProvider {
         configuration.allowLowPrecisionAccumulationOnGPU = true
 
         try Task.checkCancellation()
+        if !missingBefore.isEmpty {
+            try ModelStorageLocation.requireAvailableForChanges()
+        }
         if !missingBefore.isEmpty, FileManager.default.fileExists(atPath: modelDirectory.path) {
             DebugLogger.shared.warning(
                 "ParakeetRealtimeProvider.prepare: removing incomplete Flash cache before download",
                 source: "ParakeetRealtimeProvider"
             )
-            try FileManager.default.removeItem(at: modelDirectory)
+            try ModelStorageLocation.removeDirectoryPreservingLinks(at: modelDirectory)
         }
 
         let engine = StreamingEouAsrManager(configuration: configuration, chunkSize: self.chunkSize)
         let progressRelay = ModelPreparationProgressRelay(progressHandler)
         do {
-            try await engine.loadModelsFromHuggingFace(progressHandler: { progress in
+            try await engine.loadModelsFromHuggingFace(to: Self.cacheRootDirectory(), progressHandler: { progress in
                 switch progress.phase {
                 case .listing:
                     progressRelay.report(.preparingDownload)
@@ -163,9 +166,7 @@ final class ParakeetRealtimeProvider: TranscriptionProvider {
         self.engine = nil
         let cacheRoot = Self.cacheRootDirectory()
         try await Task.detached(priority: .userInitiated) {
-            if FileManager.default.fileExists(atPath: cacheRoot.path) {
-                try FileManager.default.removeItem(at: cacheRoot)
-            }
+            try ModelStorageLocation.removeDirectoryPreservingLinks(at: cacheRoot)
         }.value
     }
 
@@ -249,16 +250,7 @@ final class ParakeetRealtimeProvider: TranscriptionProvider {
     }
 
     private static func cacheRootDirectory() -> URL {
-        let baseDirectory =
-            FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-                ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(
-                    "Library/Application Support",
-                    isDirectory: true
-                )
-
-        return baseDirectory
-            .appendingPathComponent("FluidAudio", isDirectory: true)
-            .appendingPathComponent("Models", isDirectory: true)
+        ModelStorageLocation.fluidAudioModelsDirectory()
             .appendingPathComponent("parakeet-eou-streaming", isDirectory: true)
     }
 }

@@ -81,6 +81,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         TypingService.startKeyboardLayoutTracking()
         DictationAccessibilityPreparation.shared.start()
         _ = TranscriptionHistoryStore.shared
+        ModelStorageMonitor.shared.start()
         #if arch(arm64)
         Task {
             await CompactSpeechModelReleaseCatalog.shared.refreshIfNeeded()

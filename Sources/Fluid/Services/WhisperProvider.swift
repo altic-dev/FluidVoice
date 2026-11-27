@@ -75,10 +75,7 @@ final class WhisperProvider: TranscriptionProvider {
         if let overriddenModelDirectory {
             return overriddenModelDirectory
         }
-        guard let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first else {
-            preconditionFailure("Could not find caches directory")
-        }
-        return cacheDir.appendingPathComponent("WhisperModels")
+        return ModelStorageLocation.whisperModelsDirectory()
     }
 
     private var modelDownloadURL: URL? {
@@ -174,7 +171,10 @@ final class WhisperProvider: TranscriptionProvider {
         try Self.backendInitialization.get()
         try self.validateBackendAvailability(for: targetModel)
 
-        try FileManager.default.createDirectory(at: self.modelDirectory, withIntermediateDirectories: true)
+        if self.overriddenModelDirectory == nil, !self.isModelFileValid(at: self.modelURL, for: targetModel) {
+            try ModelStorageLocation.requireAvailableForChanges()
+        }
+        try ModelStorageLocation.ensureDirectory(at: self.modelDirectory)
 
         if FileManager.default.fileExists(atPath: self.modelURL.path),
            !self.isModelFileValid(at: self.modelURL, for: targetModel)
@@ -360,7 +360,9 @@ final class WhisperProvider: TranscriptionProvider {
             for file in files where manager.fileExists(atPath: file.path) {
                 try manager.removeItem(at: file)
             }
-            if manager.fileExists(atPath: directory.path),
+            // A symlinked folder stays in place; removing it would break the user's setup.
+            if !ModelStorageLocation.isSymbolicLink(directory, fileManager: manager),
+               manager.fileExists(atPath: directory.path),
                try manager.contentsOfDirectory(atPath: directory.path).isEmpty
             {
                 try manager.removeItem(at: directory)

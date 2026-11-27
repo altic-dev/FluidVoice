@@ -70,15 +70,10 @@ nonisolated struct MeetingNemotronModelLocator: MeetingNemotronModelLocating {
 
     /// The versioned FluidVoice cache location used when nothing is injected or overridden.
     static func defaultPackageURL() -> URL {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Application Support", isDirectory: true)
-        return base
-            .appendingPathComponent("FluidVoice", isDirectory: true)
-            .appendingPathComponent("MeetingModels", isDirectory: true)
+        ModelStorageLocation.meetingModelsDirectory()
             .appendingPathComponent("nemotron-3-diarization", isDirectory: true)
-            .appendingPathComponent(Self.cacheVersion, isDirectory: true)
-            .appendingPathComponent(Self.packageFileName, isDirectory: true)
+            .appendingPathComponent(self.cacheVersion, isDirectory: true)
+            .appendingPathComponent(self.packageFileName, isDirectory: true)
     }
 
     func resolvedPackageURL() -> URL {

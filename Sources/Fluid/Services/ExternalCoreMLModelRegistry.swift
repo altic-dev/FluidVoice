@@ -94,9 +94,14 @@ nonisolated struct ExternalCoreMLASRModelSpec {
         directory.appendingPathComponent(entry, isDirectory: entry.hasSuffix(".mlpackage"))
     }
 
+    /// The legacy location in Caches. `ModelStorageLocation` decides the folder actually used.
     var defaultCacheDirectory: URL? {
         FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?
             .appendingPathComponent(self.artifactFolderHint, isDirectory: true)
+    }
+
+    func resolvedArtifactsDirectory(storedOverridePath: String?) -> ExternalCoreMLResolution {
+        ModelStorageLocation.externalCoreMLDirectory(folderName: self.artifactFolderHint, storedOverridePath: storedOverridePath)
     }
 
     func validateArtifacts(at directory: URL) -> Bool {
@@ -110,8 +115,7 @@ nonisolated struct ExternalCoreMLASRModelSpec {
     }
 
     func isAppManagedArtifactsDirectory(_ directory: URL) -> Bool {
-        guard let defaultCacheDirectory = self.defaultCacheDirectory else { return false }
-        return directory.standardizedFileURL.path == defaultCacheDirectory.standardizedFileURL.path
+        ModelStorageLocation.isAppManagedCoreMLDirectory(directory, folderName: self.artifactFolderHint)
     }
 
     func artifactBundleStampMatches(at directory: URL) -> Bool {

@@ -65,6 +65,7 @@ enum SettingsSearchTarget: Hashable {
     case bottomOffset
 
     case dataAndDiagnostics
+    case modelStorage
     case backupAndRestore
     case audioStorage
     case debugLogs
@@ -130,7 +131,7 @@ enum SettingsSearchTarget: Hashable {
              .bottomOffset:
             return .overlay
 
-        case .dataAndDiagnostics, .backupAndRestore, .debugLogs:
+        case .dataAndDiagnostics, .modelStorage, .backupAndRestore, .debugLogs:
             return .dataAndDiagnostics
 
         case .experimental, .returnToStartingField, .fasterLongDictation, .dictionaryMatcherExperiments, .historyPerformance, .dictationScreenContext:
@@ -426,6 +427,11 @@ enum SettingsSearchIndex {
             target: .dataAndDiagnostics,
             title: "Data & Diagnostics",
             terms: ["backup restore debug logs experimental storage troubleshooting"]
+        ),
+        .init(
+            target: .modelStorage,
+            title: "Model Storage Location",
+            terms: ["models folder download location external drive SSD disk space move speech meeting Fluid Intelligence cleanup"]
         ),
         .init(
             target: .backupAndRestore,

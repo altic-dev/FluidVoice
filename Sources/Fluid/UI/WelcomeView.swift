@@ -1141,10 +1141,13 @@ struct OnboardingFlowView: View {
                                     .padding(.top, 14)
                             }
 
-                            Text("You can switch models later in Voice Engine settings.")
+                            OnboardingModelStorageRow(isDisabled: self.isModelPreparationInProgress || self.asr.hasActiveModelDownload)
+                                .padding(.top, self.isModelPreparationInProgress ? 8 : 18)
+
+                            Text("You can switch models later in Voice Engine settings and change where they are stored in Data & Diagnostics.")
                                 .font(.fluidSystem(size: 12, weight: .medium))
                                 .foregroundStyle(Color.white.opacity(0.44))
-                                .padding(.top, self.isModelPreparationInProgress ? 8 : 18)
+                                .padding(.top, 8)
                         }
                         .frame(maxWidth: .infinity)
                         .padding(.top, 30)

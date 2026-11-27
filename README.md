@@ -251,6 +251,32 @@ To pause listening without ending a hands-free dictation, enable **Settings → 
 - Microphone access
 - Accessibility permissions for typing
 
+### Model storage location
+
+By default, speech and meeting models are stored inside your Library folder. You can keep them in a folder of your choice instead, including a folder on an external drive. Choose the folder with **Change…** on the voice engine step of onboarding, before the first download, or later under **Settings → Data & Diagnostics → Model Storage Location**. That page also lists where every kind of model is stored.
+
+- **Choose…** picks the folder. FluidVoice then offers to move your existing models there, checks that the folder has enough free space, and deletes the originals only after the copy is verified. If the folder already contains FluidVoice models, you can use them as they are.
+- **Reset to default** moves the models back to the default location in the same way.
+- **Reveal in Finder** opens the folder.
+- When the folder is on a drive that is not connected, FluidVoice shows that the model drive is not connected and does not download models anywhere else. The models become available again when you connect the drive.
+- Before you eject the drive, use **Release models for eject** so that FluidVoice unloads the dictation model. Other apps that have files open on the drive can still prevent the eject.
+- Fluid Intelligence cleanup and Edit models stay in their own location. When Fluid Intelligence is installed, the page shows that location with a **Reveal** button.
+
+A custom folder uses this layout:
+
+```text
+<your folder>/
+├── Speech/
+│   ├── WhisperModels/                               Whisper and Qwen3 ASR
+│   ├── cohere-transcribe-03-2026-CoreML-6bit/       Cohere Transcribe
+│   ├── nemotron-3.5-asr-offline-6bit-CoreML/        Nemotron 3.5
+│   ├── nemotron-3.5-asr-streaming320-int8-CoreML/   Nemotron 3.5 low latency
+│   └── FluidAudio/Models/                           Fluid Speech, Parakeet and helper models
+└── Meeting/                                         FluidMeet speaker labels
+```
+
+Optimized copies of some models stay in your Library's Caches folder. They are rebuilt automatically if removed. They do not let dictation work while the drive is away, because FluidVoice still needs the model files on the drive.
+
 ---
 
 ## Building from Source

@@ -501,9 +501,9 @@ final class FluidAudioProvider: TranscriptionProvider {
         let asrModelVersion = descriptor.asrModelVersion
         let modelVersion = descriptor.variant.rawValue
         #if DEBUG
-        let cacheDirectory = self.modelCacheRootForTesting ?? AsrModels.defaultCacheDirectory().deletingLastPathComponent()
+        let cacheDirectory = self.modelCacheRootForTesting ?? ModelStorageLocation.fluidAudioModelsDirectory()
         #else
-        let cacheDirectory = AsrModels.defaultCacheDirectory().deletingLastPathComponent()
+        let cacheDirectory = ModelStorageLocation.fluidAudioModelsDirectory()
         #endif
         let modelCacheDirectory = descriptor.cacheDirectory(in: cacheDirectory)
         DebugLogger.shared.info(
@@ -539,10 +539,11 @@ final class FluidAudioProvider: TranscriptionProvider {
                 return installedHash
             }
             try Task.checkCancellation()
-            if FileManager.default.fileExists(atPath: modelCacheDirectory.path),
-               !inspectionDescriptor.artifactsAreComplete(at: modelCacheDirectory)
-            {
-                try FileManager.default.removeItem(at: modelCacheDirectory)
+            guard !inspectionDescriptor.artifactsAreComplete(at: modelCacheDirectory) else { return nil }
+            // A missing model must not be downloaded while the model drive is away or models are moving.
+            try ModelStorageLocation.requireAvailableForChanges()
+            if FileManager.default.fileExists(atPath: modelCacheDirectory.path) {
+                try ModelStorageLocation.removeDirectoryPreservingLinks(at: modelCacheDirectory)
             }
             return nil
         }
@@ -606,6 +607,7 @@ final class FluidAudioProvider: TranscriptionProvider {
                 )
             } else {
                 models = try await AsrModels.downloadAndLoad(
+                    to: modelCacheDirectory,
                     version: asrModelVersion,
                     progressHandler: fluidAudioProgressHandler
                 )
@@ -1950,15 +1952,12 @@ final class FluidAudioProvider: TranscriptionProvider {
             throw NSError(domain: "FluidAudioProvider", code: -1, userInfo: [NSLocalizedDescriptionKey: "Choose a supported Parakeet model."])
         }
         #if DEBUG
-        let directory = self.modelCacheRootForTesting.map { descriptor.cacheDirectory(in: $0) }
-            ?? AsrModels.defaultCacheDirectory(for: descriptor.asrModelVersion)
+        let directory = descriptor.cacheDirectory(in: self.modelCacheRootForTesting ?? ModelStorageLocation.fluidAudioModelsDirectory())
         #else
-        let directory = AsrModels.defaultCacheDirectory(for: descriptor.asrModelVersion)
+        let directory = descriptor.cacheDirectory(in: ModelStorageLocation.fluidAudioModelsDirectory())
         #endif
         try await Task.detached(priority: .userInitiated) {
-            if FileManager.default.fileExists(atPath: directory.path) {
-                try FileManager.default.removeItem(at: directory)
-            }
+            try ModelStorageLocation.removeDirectoryPreservingLinks(at: directory)
         }.value
         DebugLogger.shared.info("FluidAudioProvider: Deleted cache for \(selectedModel.displayName)", source: "FluidAudioProvider")
     }

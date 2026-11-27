@@ -1390,6 +1390,9 @@ final class ASRService: ObservableObject {
         progressHandler: ((Double) -> Void)?
     ) async throws {
         try Task.checkCancellation()
+        if !model.usesAppleLogo {
+            try ModelStorageLocation.requireAvailableForChanges()
+        }
         let updateLease: ASRActivityLease?
         if updateWeights {
             guard model == .fluidParakeetMini || model == .fluidParakeetPico else {
@@ -6983,6 +6986,9 @@ final class ASRService: ObservableObject {
         // The legacy Streaming320 name shares Streaming's files and active provider.
         let model = requestedModel == .nemotronStreaming320 ? .nemotronStreaming : requestedModel
         try self.requireStreamingProviderAvailable()
+        if !model.usesAppleLogo {
+            try ModelStorageLocation.requireAvailableForChanges()
+        }
         guard self.deletingModelID == nil, !self.hasActiveModelDownload, !self.hasActiveModelPreparation,
               !self.isMeetingASRPreparationClaimed
         else {
