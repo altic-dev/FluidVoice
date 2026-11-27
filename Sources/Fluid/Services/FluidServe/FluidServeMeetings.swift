@@ -295,6 +295,18 @@ nonisolated enum FluidServeMeetings {
         "[\(self.timestampText(segment.start.seconds))] \(self.speakerLabel(for: segment, in: meeting)): \(segment.text)"
     }
 
+    /// The meeting's notes, or nil when there are none or they are blank.
+    static func notes(of meeting: Meeting) -> String? {
+        guard let notes = meeting.notes, !notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        return notes
+    }
+
+    /// Notes for `meet show`, between the header and the transcript; empty when there are none.
+    static func notesBlock(for meeting: Meeting) -> String {
+        guard let notes = self.notes(of: meeting) else { return "" }
+        return "Notes written by the user:\n\(notes)\n----------\n"
+    }
+
     /// The transcript as the app exports it, optionally limited to turns that start inside a time range.
     static func transcript(for meeting: Meeting, from: TimeInterval? = nil, to: TimeInterval? = nil) -> String {
         meeting.turns

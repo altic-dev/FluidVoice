@@ -232,6 +232,31 @@ final class FluidServeTests: XCTestCase {
         XCTAssertTrue(self.run("meet", "list").output.contains("executive (outdated)"))
     }
 
+    func testShowAndListIncludeNotes() throws {
+        let bare = self.session(title: "No notes", startedAt: Date(timeIntervalSince1970: 1_600_000_000))
+        try self.save(bare)
+        let barePrefix = String(bare.id.uuidString.prefix(8))
+        XCTAssertFalse(self.run("meet", "show", barePrefix).output.contains("Notes written by the user"))
+        let plainJSON = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(self.run("meet", "show", barePrefix, "--json").output.utf8)) as? [String: Any])
+        XCTAssertTrue(plainJSON["notes"] is NSNull)
+        XCTAssertEqual(plainJSON["hasNotes"] as? Bool, false)
+
+        var session = self.session(title: "Weekly sync")
+        session.notes = "- [x] Ship it"
+        try self.save(session)
+        let prefix = String(session.id.uuidString.prefix(8))
+        let show = self.run("meet", "show", prefix)
+        XCTAssertEqual(show.exitCode, 0)
+        XCTAssertTrue(show.output.contains("----------\nNotes written by the user:\n- [x] Ship it\n----------\n"))
+        XCTAssertTrue(show.output.hasSuffix(MeetingTranscriptExporter.text(for: session)), "Notes come before the transcript")
+
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(self.run("meet", "show", prefix, "--json").output.utf8)) as? [String: Any])
+        XCTAssertEqual(json["notes"] as? String, "- [x] Ship it")
+        XCTAssertEqual(json["hasNotes"] as? Bool, true)
+        let list = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(self.run("meet", "list", "--json").output.utf8)) as? [[String: Any]])
+        XCTAssertEqual(Set(list.compactMap { $0["hasNotes"] as? Bool }), [true, false])
+    }
+
     func testSummaryInputParityIncludesNotes() throws {
         var session = self.session(title: "Weekly sync")
         session.notes = "- [x] Ship it"
@@ -757,7 +782,9 @@ final class FluidServeTests: XCTestCase {
             if isFirst { self.released.wait() }
         }
 
-        func release() { self.released.signal() }
+        func release() {
+            self.released.signal()
+        }
     }
 
     private final class CallCounter: @unchecked Sendable {

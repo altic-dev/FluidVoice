@@ -172,6 +172,7 @@ nonisolated enum FluidServeCommand {
             if let from, let to, from > to { throw UsageError(message: "--from must be earlier than --to.") }
             if options.flags.contains("--json") {
                 var object = self.summaryObject(entry, fileManager: fileManager)
+                object["notes"] = FluidServeMeetings.notes(of: entry.meeting) ?? NSNull()
                 object["turns"] = entry.meeting.turns
                     .filter { $0.start.seconds >= (from ?? 0) && $0.start.seconds <= (to ?? .infinity) }
                     .map { [
@@ -185,6 +186,7 @@ nonisolated enum FluidServeCommand {
             let transcript = FluidServeMeetings.transcript(for: entry.meeting, from: from, to: to)
             return Result(
                 output: FluidServeMeetings.header(for: entry, timeZone: timeZone) + "\n----------\n"
+                    + FluidServeMeetings.notesBlock(for: entry.meeting)
                     + (transcript.isEmpty ? "No turns in that time range." : transcript),
                 exitCode: 0
             )
@@ -262,6 +264,7 @@ nonisolated enum FluidServeCommand {
             "speakers": meeting.activeSpeakers.map(\.displayName),
             "summaries": summaries.map(\.style),
             "outdatedSummaries": summaries.filter(\.isOutdated).map(\.style),
+            "hasNotes": FluidServeMeetings.notes(of: meeting) != nil,
         ]
     }
 
