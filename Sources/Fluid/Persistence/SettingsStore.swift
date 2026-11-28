@@ -1997,7 +1997,7 @@ final class SettingsStore: ObservableObject {
         }
     }
 
-    /// Lets the bundled `fv-serve` command read saved meetings. Off until the user turns it on;
+    /// Lets the bundled `fluidvoice` command read saved meetings. Off until the user turns it on;
     /// the command reads this same key from the app's preferences.
     var fluidServeMeetingAccessEnabled: Bool {
         get { self.defaults.bool(forKey: FluidServeMeetings.accessDefaultsKey) }

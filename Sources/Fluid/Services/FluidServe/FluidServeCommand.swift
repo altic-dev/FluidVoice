@@ -1,6 +1,6 @@
 import Foundation
 
-/// The `fv-serve` command, kept apart from `main.swift` so the app's tests can run it directly.
+/// The `fluidvoice` command, kept apart from `main.swift` so the app's tests can run it directly.
 /// It reads, prints and returns: no state is kept between calls and nothing is written.
 nonisolated enum FluidServeCommand {
     struct Result: Equatable {
@@ -13,14 +13,14 @@ nonisolated enum FluidServeCommand {
     }
 
     static let usage = """
-    fv-serve reads FluidVoice meetings. It is read-only.
+    fluidvoice reads FluidVoice meetings. It is read-only.
 
-      fv-serve meet list [--since 7d|24h|YYYY-MM-DD] [--limit N] [--json]
-      fv-serve meet show <id|latest> [--from MM:SS] [--to MM:SS] [--json]
-      fv-serve meet summary <id|latest> [--style NAME]
-      fv-serve meet search [--since 7d|24h|YYYY-MM-DD] [--limit N] [--] text
-      fv-serve status [--json]
-      fv-serve skill          (prints the skill file for a coding agent)
+      fluidvoice meet list [--since 7d|24h|YYYY-MM-DD] [--limit N] [--json]
+      fluidvoice meet show <id|latest> [--from MM:SS] [--to MM:SS] [--json]
+      fluidvoice meet summary <id|latest> [--style NAME]
+      fluidvoice meet search [--since 7d|24h|YYYY-MM-DD] [--limit N] [--] text
+      fluidvoice status [--json]
+      fluidvoice skill          (prints the skill file for a coding agent)
 
     An id is the first column of `meet list`; its first characters are enough.
     """

@@ -1,6 +1,6 @@
 import Foundation
 
-/// The `fluidmeet` skill text. Shared with the `fv-serve` tool so `fv-serve skill` prints exactly
+/// The `fluidmeet` skill text. Shared with the `fluidvoice` tool so `fluidvoice skill` prints exactly
 /// what the app's buttons install, for coding agents the app has no button for.
 nonisolated enum FluidServeSkill {
     static let name = "fluidmeet"

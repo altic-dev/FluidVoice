@@ -1,13 +1,13 @@
 import CryptoKit
 import Foundation
 
-/// Read-only view of saved meetings for the `fv-serve` command.
+/// Read-only view of saved meetings for the `fluidvoice` command.
 ///
 /// Foundation-only on purpose: the command line tool compiles this file alone, so it must not reach
 /// into the app's meeting model. It decodes just the fields it prints and never writes, so running
 /// it cannot change, lock or slow down anything the app owns.
 nonisolated enum FluidServeMeetings {
-    static let toolName = "fv-serve"
+    static let toolName = "fluidvoice"
     static let accessDefaultsKey = "FluidServeMeetingAccessEnabled"
     static let releaseBundleIdentifier = "com.FluidApp.app"
 

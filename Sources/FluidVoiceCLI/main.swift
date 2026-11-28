@@ -1,9 +1,9 @@
 import Foundation
 
-// `fv-serve` ships inside FluidVoice.app/Contents/Helpers. It answers one question and exits:
+// `fluidvoice` ships inside FluidVoice.app/Contents/Helpers. It answers one question and exits:
 // no server, no model, no audio. The switch that allows it lives in the app's own preferences.
 
-/// Where this program really is, asked of the loader. Not `argv[0]`, which is just "fv-serve" when
+/// Where this program really is, asked of the loader. Not `argv[0]`, which is just "fluidvoice" when
 /// it is found through PATH, and not `Bundle.main`, which an environment variable can redirect:
 /// either would let the caller choose which app's switch is read.
 func realExecutableURL() -> URL {

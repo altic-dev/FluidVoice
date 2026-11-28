@@ -116,7 +116,7 @@ final class FluidServeTests: XCTestCase {
         XCTAssertTrue(object["access"] is NSNull)
         XCTAssertEqual(object["meetings"] as? Int, 0)
         XCTAssertEqual(FluidServeSelfCheck.outcome(fromStatusJSON: data), .failed(FluidServeMeetings.ReadError.accessUnavailable.localizedDescription))
-        let skill = FluidServeSkill.document(toolPath: "/fixture/fv-serve")
+        let skill = FluidServeSkill.document(toolPath: "/fixture/fluidvoice")
         XCTAssertTrue(skill.contains("normal permission-approval flow"))
         XCTAssertTrue(skill.contains("Do not disable the sandbox"))
     }
@@ -293,7 +293,7 @@ final class FluidServeTests: XCTestCase {
 
     func testSkillIsAddedUpdatedAndRemovedOnlyWhereItBelongs() throws {
         let agent = FluidServeSkillInstaller.Agent.claudeCode
-        let tool = "/Applications/FluidVoice.app/Contents/Helpers/fv-serve"
+        let tool = "/Applications/FluidVoice.app/Contents/Helpers/fluidvoice"
         XCTAssertEqual(FluidServeSkillInstaller.status(for: agent, toolPath: tool, home: self.home), .agentNotFound)
 
         try FileManager.default.createDirectory(at: self.home.appendingPathComponent(".claude"), withIntermediateDirectories: true)
@@ -313,7 +313,7 @@ final class FluidServeTests: XCTestCase {
         XCTAssertEqual(FluidServeSkillInstaller.status(for: agent, toolPath: tool, home: self.home), .installed)
         XCTAssertFalse(FileManager.default.fileExists(atPath: self.home.appendingPathComponent(".codex").path), "Adding one tool's skill must not create the other tool's folder")
 
-        let moved = "/Users/someone/Apps/FluidVoice.app/Contents/Helpers/fv-serve"
+        let moved = "/Users/someone/Apps/FluidVoice.app/Contents/Helpers/fluidvoice"
         XCTAssertEqual(FluidServeSkillInstaller.status(for: agent, toolPath: moved, home: self.home), .needsUpdate)
         try FluidServeSkillInstaller.install(for: agent, toolPath: moved, home: self.home)
         XCTAssertEqual(FluidServeSkillInstaller.status(for: agent, toolPath: moved, home: self.home), .installed)
@@ -330,10 +330,34 @@ final class FluidServeTests: XCTestCase {
         let earlier = "---\nname: fluidmeet\n---\n\(FluidServeSkill.earlierMarkers[0])\n\nOld text.\n"
         try Data(earlier.utf8).write(to: file)
 
-        XCTAssertEqual(FluidServeSkillInstaller.status(for: .claudeCode, toolPath: "/x/fv-serve", home: self.home), .needsUpdate)
-        try FluidServeSkillInstaller.install(for: .claudeCode, toolPath: "/x/fv-serve", home: self.home)
-        XCTAssertEqual(FluidServeSkillInstaller.status(for: .claudeCode, toolPath: "/x/fv-serve", home: self.home), .installed)
+        XCTAssertEqual(FluidServeSkillInstaller.status(for: .claudeCode, toolPath: "/x/fluidvoice", home: self.home), .needsUpdate)
+        try FluidServeSkillInstaller.install(for: .claudeCode, toolPath: "/x/fluidvoice", home: self.home)
+        XCTAssertEqual(FluidServeSkillInstaller.status(for: .claudeCode, toolPath: "/x/fluidvoice", home: self.home), .installed)
         XCTAssertTrue(try String(contentsOf: file, encoding: .utf8).contains(FluidServeSkill.marker))
+    }
+
+    func testASkillForThisAppsOldCommandNameIsMigrated() throws {
+        let tool = "/Applications/FluidVoice.app/Contents/Helpers/fluidvoice"
+        try FluidServeSkillInstaller.install(for: .claudeCode, toolPath: "/Applications/FluidVoice.app/Contents/Helpers/fv-serve", home: self.home)
+        try FluidServeSkillInstaller.install(for: .codex, toolPath: "/Applications/FluidVoice Dev.app/Contents/Helpers/fv-serve", home: self.home)
+
+        XCTAssertEqual(FluidServeSkillInstaller.migrateLegacySkills(toolPath: tool, home: self.home), [.claudeCode])
+        XCTAssertEqual(FluidServeSkillInstaller.status(for: .claudeCode, toolPath: tool, home: self.home), .installed)
+        XCTAssertEqual(
+            FluidServeSkillInstaller.status(for: .codex, toolPath: "/Applications/FluidVoice Dev.app/Contents/Helpers/fv-serve", home: self.home),
+            .installed,
+            "Another copy of the app owns its own skill"
+        )
+    }
+
+    func testMigrationLeavesSomeoneElsesSkillAlone() throws {
+        let file = FluidServeSkillInstaller.skillFile(for: .claudeCode, home: self.home)
+        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let theirs = "---\nname: fluidmeet\n---\n'/x/fv-serve' meet list\n"
+        try Data(theirs.utf8).write(to: file)
+
+        XCTAssertEqual(FluidServeSkillInstaller.migrateLegacySkills(toolPath: "/x/fluidvoice", home: self.home), [])
+        XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), theirs)
     }
 
     func testSomeoneElsesSkillOfTheSameNameIsLeftAlone() throws {
@@ -343,14 +367,14 @@ final class FluidServeTests: XCTestCase {
         let theirs = "---\nname: fluidmeet\ndescription: mine\n---\nHand written.\n"
         try Data(theirs.utf8).write(to: file)
 
-        XCTAssertEqual(FluidServeSkillInstaller.status(for: agent, toolPath: "/x/fv-serve", home: self.home), .foreign)
-        XCTAssertThrowsError(try FluidServeSkillInstaller.install(for: agent, toolPath: "/x/fv-serve", home: self.home))
+        XCTAssertEqual(FluidServeSkillInstaller.status(for: agent, toolPath: "/x/fluidvoice", home: self.home), .foreign)
+        XCTAssertThrowsError(try FluidServeSkillInstaller.install(for: agent, toolPath: "/x/fluidvoice", home: self.home))
         XCTAssertThrowsError(try FluidServeSkillInstaller.remove(for: agent, home: self.home))
         XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), theirs)
     }
 
     func testSkillCommandPrintsExactlyWhatTheAppInstallsEvenWithAccessOff() throws {
-        let tool = "/Applications/FluidVoice.app/Contents/Helpers/fv-serve"
+        let tool = "/Applications/FluidVoice.app/Contents/Helpers/fluidvoice"
         try self.save(self.session(title: "Private planning"))
         let printed = FluidServeCommand.run(arguments: ["skill"], root: self.root, accessEnabled: false, toolPath: tool)
 
@@ -366,7 +390,7 @@ final class FluidServeTests: XCTestCase {
     }
 
     func testCopyInstructionsGivesAnAgentTheCommandAndSaysCopiedOnlyIfItWas() {
-        let tool = URL(fileURLWithPath: "/Applications/Fluid Voice.app/Contents/Helpers/fv-serve")
+        let tool = URL(fileURLWithPath: "/Applications/Fluid Voice.app/Contents/Helpers/fluidvoice")
         var clipboard: String?
         let model = self.model(tool: tool, check: { _ in .working(meetings: 0) }, copy: {
             clipboard = $0
@@ -378,7 +402,7 @@ final class FluidServeTests: XCTestCase {
         XCTAssertNil(model.issue)
         XCTAssertTrue(self.sharing.value, "Copying instructions for another agent starts sharing too")
         XCTAssertEqual(clipboard, FluidServeSkill.agentInstructions(toolPath: tool.path))
-        XCTAssertEqual(clipboard?.contains("'/Applications/Fluid Voice.app/Contents/Helpers/fv-serve' skill"), true, "The path is quoted, so a space in it still works")
+        XCTAssertEqual(clipboard?.contains("'/Applications/Fluid Voice.app/Contents/Helpers/fluidvoice' skill"), true, "The path is quoted, so a space in it still works")
         XCTAssertEqual(clipboard?.contains("fluidmeet"), true)
 
         let refused = self.model(tool: tool, check: { _ in .working(meetings: 0) }, copy: { _ in false })
@@ -390,14 +414,14 @@ final class FluidServeTests: XCTestCase {
 
         let missing = self.model(tool: nil, check: { _ in .working(meetings: 0) }, copy: { _ in true })
         missing.copyAgentInstructions()
-        XCTAssertFalse(missing.copiedAgentInstructions, "Nothing to copy when this build has no fv-serve")
+        XCTAssertFalse(missing.copiedAgentInstructions, "Nothing to copy when this build has no fluidvoice")
     }
 
     func testAnOddlyNamedAppFolderCannotChangeWhatThePastedCommandRuns() {
         XCTAssertEqual(FluidServeSkill.shellQuoted("/Applications/FluidVoice.app/x"), "'/Applications/FluidVoice.app/x'")
-        let nasty = "/Apps/It's \"mine\" $(touch /tmp/x) `id`/FluidVoice.app/Contents/Helpers/fv-serve"
+        let nasty = "/Apps/It's \"mine\" $(touch /tmp/x) `id`/FluidVoice.app/Contents/Helpers/fluidvoice"
         let quoted = FluidServeSkill.shellQuoted(nasty)
-        XCTAssertEqual(quoted, "'/Apps/It'\\''s \"mine\" $(touch /tmp/x) `id`/FluidVoice.app/Contents/Helpers/fv-serve'")
+        XCTAssertEqual(quoted, "'/Apps/It'\\''s \"mine\" $(touch /tmp/x) `id`/FluidVoice.app/Contents/Helpers/fluidvoice'")
         // Every single quote in the path is closed, escaped and reopened, so nothing sits outside quotes.
         XCTAssertEqual(quoted.components(separatedBy: "'\\''").joined().filter { $0 == "'" }.count, 2)
         XCTAssertTrue(FluidServeSkill.agentInstructions(toolPath: nasty).contains(quoted + " skill"))
@@ -409,7 +433,7 @@ final class FluidServeTests: XCTestCase {
         let theirs = FluidServeSkillInstaller.skillFile(for: .codex, home: self.home)
         try FileManager.default.createDirectory(at: theirs.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data("---\nname: fluidmeet\n---\nHand written.\n".utf8).write(to: theirs)
-        let model = self.model(tool: URL(fileURLWithPath: "/x/fv-serve"), check: { _ in .working(meetings: 0) }, copy: { _ in true })
+        let model = self.model(tool: URL(fileURLWithPath: "/x/fluidvoice"), check: { _ in .working(meetings: 0) }, copy: { _ in true })
         await model.refresh()
 
         await model.install(.codex)
@@ -437,7 +461,7 @@ final class FluidServeTests: XCTestCase {
 
     func testPressingAddConfirmsOnlyOnceTheFileIsThereAndRemoveSaysRemoved() async throws {
         try FileManager.default.createDirectory(at: self.home.appendingPathComponent(".claude"), withIntermediateDirectories: true)
-        let tool = URL(fileURLWithPath: "/Applications/FluidVoice.app/Contents/Helpers/fv-serve")
+        let tool = URL(fileURLWithPath: "/Applications/FluidVoice.app/Contents/Helpers/fluidvoice")
         let model = self.model(tool: tool, check: { _ in .working(meetings: 3) })
         let file = FluidServeSkillInstaller.skillFile(for: .claudeCode, home: self.home)
 
@@ -467,7 +491,7 @@ final class FluidServeTests: XCTestCase {
 
     func testAnAgentSetUpFromCopiedInstructionsKeepsAccessUntilTheUserStopsIt() async throws {
         try FileManager.default.createDirectory(at: self.home.appendingPathComponent(".claude"), withIntermediateDirectories: true)
-        let model = self.model(tool: URL(fileURLWithPath: "/x/fv-serve"))
+        let model = self.model(tool: URL(fileURLWithPath: "/x/fluidvoice"))
         await model.install(.claudeCode)
         model.copyAgentInstructions()
         XCTAssertTrue(model.otherAgentsShared)
@@ -492,7 +516,7 @@ final class FluidServeTests: XCTestCase {
 
     func testStoppingOtherAgentsLeavesSharingOnForAnAgentThatStillHasTheSkill() async throws {
         try FileManager.default.createDirectory(at: self.home.appendingPathComponent(".claude"), withIntermediateDirectories: true)
-        let model = self.model(tool: URL(fileURLWithPath: "/x/fv-serve"))
+        let model = self.model(tool: URL(fileURLWithPath: "/x/fluidvoice"))
         await model.install(.claudeCode)
         model.copyAgentInstructions()
 
@@ -503,7 +527,7 @@ final class FluidServeTests: XCTestCase {
 
     func testSharingLeftOnByAnEarlierBuildWithNoSkillsShowsAsOtherAgentsSoItCanBeStopped() async {
         self.sharing.value = true
-        let model = self.model(tool: URL(fileURLWithPath: "/x/fv-serve"))
+        let model = self.model(tool: URL(fileURLWithPath: "/x/fluidvoice"))
         XCTAssertFalse(model.otherAgentsShared)
 
         await model.refresh()
@@ -518,7 +542,7 @@ final class FluidServeTests: XCTestCase {
         for folder in [".claude", ".codex"] {
             try FileManager.default.createDirectory(at: self.home.appendingPathComponent(folder), withIntermediateDirectories: true)
         }
-        let tool = URL(fileURLWithPath: "/x/fv-serve")
+        let tool = URL(fileURLWithPath: "/x/fluidvoice")
         try FluidServeSkillInstaller.install(for: .claudeCode, toolPath: tool.path, home: self.home)
         self.sharing.value = true
         let gate = FirstCallGate()
@@ -548,7 +572,7 @@ final class FluidServeTests: XCTestCase {
         for folder in [".claude", ".codex"] {
             try FileManager.default.createDirectory(at: self.home.appendingPathComponent(folder), withIntermediateDirectories: true)
         }
-        let model = self.model(tool: URL(fileURLWithPath: "/x/fv-serve"))
+        let model = self.model(tool: URL(fileURLWithPath: "/x/fluidvoice"))
         await model.install(.claudeCode)
         await model.install(.codex)
         XCTAssertTrue(self.sharing.value)
@@ -566,7 +590,7 @@ final class FluidServeTests: XCTestCase {
         try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
         let theirs = "---\nname: fluidmeet\ndescription: mine\n---\nHand written.\n"
         try Data(theirs.utf8).write(to: file)
-        let model = self.model(tool: URL(fileURLWithPath: "/x/fv-serve"), check: { _ in .working(meetings: 0) })
+        let model = self.model(tool: URL(fileURLWithPath: "/x/fluidvoice"), check: { _ in .working(meetings: 0) })
 
         await model.refresh()
         XCTAssertEqual(model.statuses[.codex], .foreign)
@@ -580,8 +604,8 @@ final class FluidServeTests: XCTestCase {
     }
 
     func testASkillFromAMovedAppIsReportedAsUpdatedNotAdded() async throws {
-        try FluidServeSkillInstaller.install(for: .claudeCode, toolPath: "/Old/FluidVoice.app/Contents/Helpers/fv-serve", home: self.home)
-        let model = self.model(tool: URL(fileURLWithPath: "/New/FluidVoice.app/Contents/Helpers/fv-serve"), check: { _ in .working(meetings: 1) })
+        try FluidServeSkillInstaller.install(for: .claudeCode, toolPath: "/Old/FluidVoice.app/Contents/Helpers/fluidvoice", home: self.home)
+        let model = self.model(tool: URL(fileURLWithPath: "/New/FluidVoice.app/Contents/Helpers/fluidvoice"), check: { _ in .working(meetings: 1) })
 
         await model.refresh()
         XCTAssertEqual(model.statuses[.claudeCode], .needsUpdate)
@@ -593,7 +617,7 @@ final class FluidServeTests: XCTestCase {
 
     func testASlowCheckThatFinishesLateDoesNotOverwriteANewerAnswer() async throws {
         try FileManager.default.createDirectory(at: self.home.appendingPathComponent(".claude"), withIntermediateDirectories: true)
-        let tool = URL(fileURLWithPath: "/Applications/FluidVoice.app/Contents/Helpers/fv-serve")
+        let tool = URL(fileURLWithPath: "/Applications/FluidVoice.app/Contents/Helpers/fluidvoice")
         let gate = FirstCallGate()
         let model = self.model(tool: tool, check: { _ in
             gate.holdFirstCall()
@@ -619,7 +643,7 @@ final class FluidServeTests: XCTestCase {
 
     func testTheCommandIsNotRunWhileAccessIsOff() async {
         let calls = CallCounter()
-        let model = self.model(tool: URL(fileURLWithPath: "/x/fv-serve"), check: { _ in
+        let model = self.model(tool: URL(fileURLWithPath: "/x/fluidvoice"), check: { _ in
             calls.increment()
             return .working(meetings: 9)
         })
@@ -659,10 +683,10 @@ final class FluidServeTests: XCTestCase {
         }
     }
 
-    /// End to end: the real `fv-serve` inside this app is started as its own process and must obey
+    /// End to end: the real `fluidvoice` inside this app is started as its own process and must obey
     /// the same switch the settings page writes.
     func testTheBundledCommandReallyRunsAndObeysTheSwitch() throws {
-        let tool = try XCTUnwrap(FluidServeSkillInstaller.bundledToolURL(), "The app under test must contain fv-serve in Contents/Helpers")
+        let tool = try XCTUnwrap(FluidServeSkillInstaller.bundledToolURL(), "The app under test must contain fluidvoice in Contents/Helpers")
         let key = FluidServeMeetings.accessDefaultsKey
         let before = UserDefaults.standard.object(forKey: key)
         defer {
@@ -687,7 +711,12 @@ final class FluidServeTests: XCTestCase {
         let printed = try self.output(of: tool, ["skill"])
         XCTAssertEqual(printed, FluidServeSkillInstaller.skillDocument(toolPath: tool.resolvingSymlinksInPath().path))
 
-        guard case .failed = FluidServeSelfCheck.run(tool: URL(fileURLWithPath: "/nonexistent/fv-serve")) else {
+        // Skills and pasted instructions from before the rename call the old name.
+        let alias = tool.deletingLastPathComponent().appendingPathComponent(FluidServeSkillInstaller.legacyToolName)
+        XCTAssertEqual(try FileManager.default.destinationOfSymbolicLink(atPath: alias.path), FluidServeMeetings.toolName)
+        XCTAssertEqual(try self.output(of: alias, ["skill"]), printed, "The old name runs the same program and prints the new path")
+
+        guard case .failed = FluidServeSelfCheck.run(tool: URL(fileURLWithPath: "/nonexistent/fluidvoice")) else {
             return XCTFail("A missing command must be reported as a failure")
         }
     }
