@@ -197,9 +197,13 @@ EOF
     fi
     rm -f "${entitlements_file}"
 
-    # fv-serve is embedded and signed by the Xcode build; fail here rather than ship an app without it.
-    if [ ! -x "${app_path}/Contents/Helpers/fv-serve" ]; then
-        echo "fv-serve is missing from the built app: ${app_path}" >&2
+    # fluidvoice is embedded and signed by the Xcode build; fail here rather than ship an app without it.
+    if [ ! -x "${app_path}/Contents/Helpers/fluidvoice" ]; then
+        echo "fluidvoice is missing from the built app: ${app_path}" >&2
+        exit 1
+    fi
+    if [ ! -L "${app_path}/Contents/Helpers/fv-serve" ]; then
+        echo "The fv-serve alias is missing from the built app: ${app_path}" >&2
         exit 1
     fi
 

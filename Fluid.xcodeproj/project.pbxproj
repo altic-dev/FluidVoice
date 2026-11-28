@@ -147,7 +147,7 @@
 		D1C7A7100000000000000002 /* UpdatePromptIntegrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1C7A7100000000000000001 /* UpdatePromptIntegrationTests.swift */; };
 		C093F64545C6FDD2D79BF559 /* ParakeetArchiveInstallerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5F06B51CF3F45AF989D0CA7F /* ParakeetArchiveInstallerTests.swift */; };
 		640AB09C7781553DF72D1156 /* CompactSpeechModelArchiveTransportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01DEEE85A263FAED9ED5DEF8 /* CompactSpeechModelArchiveTransportTests.swift */; };
-		F5E000000000000000000014 /* fv-serve in Embed Helpers */ = {isa = PBXBuildFile; fileRef = F5E000000000000000000005 /* fv-serve */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
+		F5E000000000000000000014 /* fluidvoice in Embed Helpers */ = {isa = PBXBuildFile; fileRef = F5E000000000000000000005 /* fluidvoice */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
 		C0DE123A0000000000000002 /* DictationContextCaptureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE123A0000000000000001 /* DictationContextCaptureTests.swift */; };
 		E01100000000000000000002 /* EditModeRouteTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E01100000000000000000001 /* EditModeRouteTests.swift */; };
 		4F1300000000000000000001 /* Hummingbird in Frameworks */ = {isa = PBXBuildFile; productRef = 4F1300000000000000000004 /* Hummingbird */; };
@@ -174,7 +174,7 @@
 			containerPortal = 7C078D872E3B339200FB7CAC /* Project object */;
 			proxyType = 1;
 			remoteGlobalIDString = F5E000000000000000000001;
-			remoteInfo = "fv-serve";
+			remoteInfo = fluidvoice;
 		};
 /* End PBXContainerItemProxy section */
 
@@ -207,7 +207,7 @@
 			dstPath = Contents/Helpers;
 			dstSubfolderSpec = 1;
 			files = (
-				F5E000000000000000000014 /* fv-serve in Embed Helpers */,
+				F5E000000000000000000014 /* fluidvoice in Embed Helpers */,
 			);
 			name = "Embed Helpers";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -344,7 +344,7 @@
 		D1C7A7100000000000000001 /* UpdatePromptIntegrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpdatePromptIntegrationTests.swift; sourceTree = "<group>"; };
 		5F06B51CF3F45AF989D0CA7F /* ParakeetArchiveInstallerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ParakeetArchiveInstallerTests.swift; sourceTree = "<group>"; };
 		01DEEE85A263FAED9ED5DEF8 /* CompactSpeechModelArchiveTransportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompactSpeechModelArchiveTransportTests.swift; sourceTree = "<group>"; };
-		F5E000000000000000000005 /* fv-serve */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = "fv-serve"; sourceTree = BUILT_PRODUCTS_DIR; };
+		F5E000000000000000000005 /* fluidvoice */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = fluidvoice; sourceTree = BUILT_PRODUCTS_DIR; };
 		C0DE123A0000000000000001 /* DictationContextCaptureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DictationContextCaptureTests.swift; sourceTree = "<group>"; };
 		E01100000000000000000001 /* EditModeRouteTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditModeRouteTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -364,7 +364,7 @@
 				Services/FluidServe/FluidServeMeetings.swift,
 				Services/FluidServe/FluidServeSkill.swift,
 			);
-			target = F5E000000000000000000001 /* fv-serve */;
+			target = F5E000000000000000000001 /* fluidvoice */;
 		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
@@ -383,9 +383,9 @@
 			path = FluidASRBaselineTests;
 			sourceTree = "<group>";
 		};
-		F5E000000000000000000010 /* Sources/FVServe */ = {
+		F5E000000000000000000010 /* Sources/FluidVoiceCLI */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			path = Sources/FVServe;
+			path = Sources/FluidVoiceCLI;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -450,7 +450,7 @@
 			isa = PBXGroup;
 			children = (
 				7C078D912E3B339200FB7CAC /* Sources/Fluid */,
-				F5E000000000000000000010 /* Sources/FVServe */,
+				F5E000000000000000000010 /* Sources/FluidVoiceCLI */,
 				AEC3C0000000000000000001 /* WebRTCAEC3Notices */,
 				7CDB0A242F3C4D5600FB7CAD /* Tests */,
 				7CDB0A282F3C4D5600FB7CAD /* Frameworks */,
@@ -464,7 +464,7 @@
 				7CDB0A202F3C4D5600FB7CAD /* FluidDictationIntegrationTests.xctest */,
 				A5B000000000000000000005 /* FluidASRBaselineHost.app */,
 				A5B00000000000000000001D /* FluidASRBaselineTests.xctest */,
-				F5E000000000000000000005 /* fv-serve */,
+				F5E000000000000000000005 /* fluidvoice */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -662,6 +662,7 @@
 				7C5AF14D2F15041600DE21B0 /* Embed Frameworks */,
 				7C078D8D2E3B339200FB7CAC /* Resources */,
 				F5E000000000000000000015 /* Embed Helpers */,
+				F5E000000000000000000016 /* Link fv-serve Alias */,
 			);
 			buildRules = (
 			);
@@ -761,9 +762,9 @@
 			productReference = A5B00000000000000000001D /* FluidASRBaselineTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
-		F5E000000000000000000001 /* fv-serve */ = {
+		F5E000000000000000000001 /* fluidvoice */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = F5E000000000000000000002 /* Build configuration list for PBXNativeTarget "fv-serve" */;
+			buildConfigurationList = F5E000000000000000000002 /* Build configuration list for PBXNativeTarget "fluidvoice" */;
 			buildPhases = (
 				F5E000000000000000000006 /* Sources */,
 				F5E000000000000000000007 /* Frameworks */,
@@ -773,11 +774,11 @@
 			dependencies = (
 			);
 			fileSystemSynchronizedGroups = (
-				F5E000000000000000000010 /* Sources/FVServe */,
+				F5E000000000000000000010 /* Sources/FluidVoiceCLI */,
 			);
-			name = "fv-serve";
-			productName = "fv-serve";
-			productReference = F5E000000000000000000005 /* fv-serve */;
+			name = fluidvoice;
+			productName = fluidvoice;
+			productReference = F5E000000000000000000005 /* fluidvoice */;
 			productType = "com.apple.product-type.tool";
 		};
 /* End PBXNativeTarget section */
@@ -835,7 +836,7 @@
 				7CDB0A1F2F3C4D5600FB7CAD /* FluidDictationIntegrationTests */,
 				A5B000000000000000000001 /* FluidASRBaselineHost */,
 				A5B000000000000000000019 /* FluidASRBaselineTests */,
-				F5E000000000000000000001 /* fv-serve */,
+				F5E000000000000000000001 /* fluidvoice */,
 			);
 		};
 /* End PBXProject section */
@@ -887,6 +888,26 @@
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
 			shellScript = "\"$SRCROOT/Tests/FluidASRBaselineHost/stage-inputs.sh\"\n";
+		};
+		F5E000000000000000000016 /* Link fv-serve Alias */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"$(TARGET_BUILD_DIR)/$(CONTENTS_FOLDER_PATH)/Helpers/fluidvoice",
+			);
+			name = "Link fv-serve Alias";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(TARGET_BUILD_DIR)/$(CONTENTS_FOLDER_PATH)/Helpers/fv-serve",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "# The CLI was renamed to fluidvoice. Keeps skills and agent instructions written for fv-serve working.\nln -sfn fluidvoice \"$SCRIPT_OUTPUT_FILE_0\"\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
@@ -1063,7 +1084,7 @@
 		};
 		F5E000000000000000000013 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
-			target = F5E000000000000000000001 /* fv-serve */;
+			target = F5E000000000000000000001 /* fluidvoice */;
 			targetProxy = F5E000000000000000000012 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
@@ -1494,9 +1515,9 @@
 				DEVELOPMENT_TEAM = V4J43B279J;
 				ENABLE_HARDENED_RUNTIME = YES;
 				MACOSX_DEPLOYMENT_TARGET = 15.0;
-				PRODUCT_BUNDLE_IDENTIFIER = "com.FluidApp.fv-serve";
-				PRODUCT_MODULE_NAME = FVServe;
-				PRODUCT_NAME = "fv-serve";
+				PRODUCT_BUNDLE_IDENTIFIER = com.FluidApp.fluidvoice;
+				PRODUCT_MODULE_NAME = FluidVoiceCLI;
+				PRODUCT_NAME = fluidvoice;
 				SKIP_INSTALL = YES;
 				SWIFT_VERSION = 5.0;
 				VALID_ARCHS = "$(ARCHS_STANDARD)";
@@ -1512,9 +1533,9 @@
 				DEVELOPMENT_TEAM = V4J43B279J;
 				ENABLE_HARDENED_RUNTIME = YES;
 				MACOSX_DEPLOYMENT_TARGET = 15.0;
-				PRODUCT_BUNDLE_IDENTIFIER = "com.FluidApp.fv-serve";
-				PRODUCT_MODULE_NAME = FVServe;
-				PRODUCT_NAME = "fv-serve";
+				PRODUCT_BUNDLE_IDENTIFIER = com.FluidApp.fluidvoice;
+				PRODUCT_MODULE_NAME = FluidVoiceCLI;
+				PRODUCT_NAME = fluidvoice;
 				SKIP_INSTALL = YES;
 				SWIFT_VERSION = 5.0;
 				VALID_ARCHS = "$(ARCHS_STANDARD)";
@@ -1569,7 +1590,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		F5E000000000000000000002 /* Build configuration list for PBXNativeTarget "fv-serve" */ = {
+		F5E000000000000000000002 /* Build configuration list for PBXNativeTarget "fluidvoice" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				F5E000000000000000000003 /* Debug */,

@@ -111,6 +111,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         DictationAppSession.shared.start()
         OnboardingAISetupController.live.resumePendingDownload()
         LocalAPIServer.shared.start()
+        if let tool = FluidServeSkillInstaller.bundledToolURL() {
+            let home = FileManager.default.homeDirectoryForCurrentUser
+            DispatchQueue.global(qos: .utility).async {
+                FluidServeSkillInstaller.migrateLegacySkills(toolPath: tool.path, home: home)
+            }
+        }
 
         // Record first-open synchronously before async analytics bootstrap so
         // onboarding initialization is deterministic on brand-new installs.

@@ -1,6 +1,6 @@
 import Foundation
 
-/// Adds or removes the `fluidmeet` skill that tells Claude Code and Codex how to call `fv-serve`.
+/// Adds or removes the `fluidmeet` skill that tells Claude Code and Codex how to call `fluidvoice`.
 /// It only ever touches the one file it wrote: a skill of the same name from somewhere else is left alone.
 nonisolated enum FluidServeSkillInstaller {
     static let skillName = FluidServeSkill.name
@@ -125,6 +125,25 @@ nonisolated enum FluidServeSkillInstaller {
         guard fileManager.fileExists(atPath: file.path) else { return nil }
         guard let data = fileManager.contents(atPath: file.path) else { return "" }
         return String(data: data, encoding: .utf8) ?? ""
+    }
+
+    /// The command's name before it was renamed. The app still ships it as a symlink so old skills keep working.
+    static let legacyToolName = "fv-serve"
+
+    /// Rewrites skills that call this same app's command by its old name. A skill for another copy
+    /// of the app (a Dev build, a test host) is left for that copy or the user to update.
+    @discardableResult
+    static func migrateLegacySkills(toolPath: String, home: URL, fileManager: FileManager = .default) -> [Agent] {
+        let legacyPath = URL(fileURLWithPath: toolPath).deletingLastPathComponent()
+            .appendingPathComponent(self.legacyToolName, isDirectory: false).path
+        let legacyCall = FluidServeSkill.shellQuoted(legacyPath)
+        return Agent.allCases.filter { agent in
+            guard self.status(for: agent, toolPath: toolPath, home: home, fileManager: fileManager) == .needsUpdate,
+                  let existing = self.text(at: self.skillFile(for: agent, home: home), fileManager: fileManager),
+                  existing.contains(legacyCall)
+            else { return false }
+            return (try? self.install(for: agent, toolPath: toolPath, home: home, fileManager: fileManager)) != nil
+        }
     }
 
     static func skillDocument(toolPath: String) -> String {

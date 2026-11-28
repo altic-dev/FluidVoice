@@ -1,6 +1,6 @@
 import Foundation
 
-/// Runs the bundled `fv-serve` for real and reports what it says, so the settings page can show
+/// Runs the bundled `fluidvoice` for real and reports what it says, so the settings page can show
 /// proof that the command works instead of only that a file was written.
 nonisolated enum FluidServeSelfCheck {
     enum Outcome: Equatable {
@@ -10,7 +10,7 @@ nonisolated enum FluidServeSelfCheck {
     }
 
     /// Blocking and bounded: call it from a plain dispatch queue, never from the main thread or a Swift
-    /// concurrency thread. `fv-serve status` decodes every saved meeting, so a large library takes a while.
+    /// concurrency thread. `fluidvoice status` decodes every saved meeting, so a large library takes a while.
     static func run(tool: URL, timeout: TimeInterval = 10) -> Outcome {
         let process = Process()
         let output = Pipe()
