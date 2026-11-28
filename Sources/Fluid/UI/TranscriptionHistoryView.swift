@@ -232,7 +232,7 @@ struct TranscriptionHistoryView: View {
     private var entryListView: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(spacing: 6) {
+                LazyVStack(spacing: 2) {
                     ForEach(self.filteredEntries) { entry in
                         self.entryRow(entry)
                             .id(entry.id)
@@ -400,11 +400,11 @@ struct TranscriptionHistoryView: View {
                 .accessibilityIdentifier("History.Pin.\(entry.id.uuidString)")
             }
         }
-        .padding(12)
-        .background(self.theme.palette.accent.opacity(isSelected ? 0.12 : 0), in: RoundedRectangle(cornerRadius: 14))
-        .overlay(
-            RoundedRectangle(cornerRadius: 14)
-                .strokeBorder(isSelected ? self.theme.palette.accent.opacity(0.6) : self.theme.palette.cardBorder.opacity(0.25))
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(
+            Color.primary.opacity(isSelected ? 0.08 : 0),
+            in: RoundedRectangle(cornerRadius: 8, style: .continuous)
         )
         .contextMenu { self.entryActions(entry) }
     }

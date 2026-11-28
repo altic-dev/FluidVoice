@@ -123,7 +123,7 @@ struct DashboardView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 28) {
                         self.header
-                        self.finishSetup(layout: layout)
+                        self.finishSetup()
                         if layout.hasActionColumn {
                             HStack(alignment: .top, spacing: 28) {
                                 self.mainColumn(layout: layout)
@@ -215,7 +215,7 @@ struct DashboardView: View {
             .fixedSize(horizontal: false, vertical: true)
             // Keyboard focus reuses the hover border instead of the heavy system ring,
             // which otherwise lands on this card every time the dashboard opens.
-            .dashboardTile(hovered: self.statisticsHovered || self.statisticsFocused, horizontalPadding: 20, verticalPadding: 18, cornerRadius: 18)
+            .dashboardTile(hovered: self.statisticsHovered || self.statisticsFocused, horizontalPadding: 8, verticalPadding: 8)
         }
         .buttonStyle(.plain)
         .focused(self.$statisticsFocused)
@@ -259,12 +259,9 @@ struct DashboardView: View {
                     }
                     .frame(maxWidth: .infinity, alignment: .leading).padding(24)
                 } else {
-                    VStack(spacing: 0) {
+                    VStack(spacing: 2) {
                         ForEach(Array(self.history.entries.prefix(4))) { entry in
                             DashboardRecentRow(entry: entry)
-                            if entry.id != self.history.entries.prefix(4).last?.id {
-                                Divider().opacity(0.4).padding(.horizontal, 18)
-                            }
                         }
                     }
                 }
@@ -305,13 +302,10 @@ struct DashboardView: View {
                     }
                     .frame(maxWidth: .infinity, alignment: .leading).padding(24)
                 } else {
-                    VStack(spacing: 0) {
+                    VStack(spacing: 2) {
                         ForEach(sessions) { session in
                             DashboardRecentMeetingRow(session: session) { self.openMeetings(.meeting(session.id)) }
                                 .disabled(self.busy)
-                            if session.id != sessions.last?.id {
-                                Divider().opacity(0.4).padding(.horizontal, 18)
-                            }
                         }
                     }
                 }
@@ -354,7 +348,7 @@ struct DashboardView: View {
     }
 
     @ViewBuilder
-    private func finishSetup(layout: DashboardLayout) -> some View {
+    private func finishSetup() -> some View {
         let missing = DashboardSetupStatus(
             voiceModelReady: self.asr.modelsExistOnDisk || self.asr.isAsrReady,
             microphoneReady: self.asr.micStatus == .authorized,
@@ -362,9 +356,9 @@ struct DashboardView: View {
             screenCaptureReady: !self.supportsScreenContext || !self.screenPermission.hasChecked || self.screenPermission.isAllowed
         ).missing
         if !missing.isEmpty {
-            VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 8) {
                 Text("Finish setup").font(self.theme.typography.sectionTitle)
-                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: layout.setupColumns(count: missing.count)), alignment: .leading, spacing: 10) {
+                VStack(alignment: .leading, spacing: 2) {
                     ForEach(missing, id: \.self) { requirement in
                         let item = self.setupItem(for: requirement)
                         DashboardSetupCard(title: item.title, detail: item.detail, icon: item.icon, actionTitle: item.actionTitle, action: item.action)
@@ -443,13 +437,6 @@ struct DashboardView: View {
                 }
             }
         }
-        .padding(20)
-        .background(self.reduceTransparency ? self.theme.palette.cardBackground : Color.primary.opacity(0.025), in: RoundedRectangle(cornerRadius: 24))
-        .background {
-            if !self.reduceTransparency {
-                RoundedRectangle(cornerRadius: 24).fill(.ultraThinMaterial)
-            }
-        }
     }
 
     private var intelligenceInvitation: some View {
@@ -474,10 +461,7 @@ struct DashboardView: View {
                 .fluidGlassAction(prominent: true)
                 .disabled(self.busy || DictationPromptTestCoordinator.shared.isActive)
         }
-        .padding(20)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(self.theme.palette.accent.opacity(0.07), in: RoundedRectangle(cornerRadius: 18))
-        .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(self.theme.palette.accent.opacity(0.18)))
     }
 
     @ViewBuilder
@@ -660,7 +644,7 @@ private struct DashboardSetupCard: View {
                     .foregroundStyle(self.theme.palette.accent)
                     .fixedSize()
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
             .dashboardTile(hovered: self.hovered)
         }
         .buttonStyle(.plain)
@@ -674,34 +658,28 @@ private struct DashboardTileModifier: ViewModifier {
     let hovered: Bool
     let horizontalPadding: CGFloat
     let verticalPadding: CGFloat
-    let cornerRadius: CGFloat
-    @Environment(\.theme) private var theme
 
     func body(content: Content) -> some View {
-        let shape = RoundedRectangle(cornerRadius: self.cornerRadius, style: .continuous)
+        let shape = RoundedRectangle(cornerRadius: 8, style: .continuous)
         content
             .padding(.horizontal, self.horizontalPadding)
             .padding(.vertical, self.verticalPadding)
-            .background(self.theme.palette.cardBackground, in: shape)
-            .overlay(shape.fill(Color.primary.opacity(self.hovered ? 0.04 : 0)))
-            .overlay(shape.strokeBorder(self.theme.palette.cardBorder.opacity(self.hovered ? 0.9 : 0.45), lineWidth: 1))
+            .background(Color.primary.opacity(self.hovered ? 0.05 : 0), in: shape)
             .contentShape(shape)
     }
 }
 
 private extension View {
-    /// One surface for every small dashboard card so they hover and read as a set.
+    /// Hover tint only. The page panel is the container, so rows are not their own cards.
     func dashboardTile(
         hovered: Bool,
-        horizontalPadding: CGFloat = 12,
-        verticalPadding: CGFloat = 11,
-        cornerRadius: CGFloat = 14
+        horizontalPadding: CGFloat = 8,
+        verticalPadding: CGFloat = 8
     ) -> some View {
         modifier(DashboardTileModifier(
             hovered: hovered,
             horizontalPadding: horizontalPadding,
-            verticalPadding: verticalPadding,
-            cornerRadius: cornerRadius
+            verticalPadding: verticalPadding
         ))
     }
 }

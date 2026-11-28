@@ -17,7 +17,7 @@ struct StatsActivityView: View {
 
     var body: some View {
         let period = self.period
-        VStack(spacing: 16) {
+        VStack(alignment: .leading, spacing: 40) {
             self.calendarCard(period)
             ViewThatFits(in: .horizontal) {
                 HStack(alignment: .top, spacing: 16) {

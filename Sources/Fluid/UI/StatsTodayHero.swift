@@ -117,7 +117,7 @@ struct StatsTodayHero: View {
                         .frame(width: geometry.size.width * self.progress)
                 }
             }
-            .frame(height: 14)
+            .frame(height: 6)
             .accessibilityLabel("Today's word milestone")
             .accessibilityValue("\(Int(self.progress * 100)) percent")
             Label("\(self.sessions.formatted()) dictations", systemImage: "waveform")

@@ -11,7 +11,7 @@ struct StatsHighlightsView: View {
     @State private var pinnedHour: Int?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: 32) {
             self.sectionHeading("Your next chapter", subtitle: "\(self.snapshot.totalMilestonesAchieved) of 18 milestones reached")
             ViewThatFits(in: .horizontal) {
                 HStack(alignment: .top, spacing: 16) {

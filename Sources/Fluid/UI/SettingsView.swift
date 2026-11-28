@@ -212,7 +212,7 @@ struct SettingsView: View {
             searchScrollTarget: self.selectedSectionSearchResults.first?.target,
             searchScrollRequest: self.searchScrollRequest
         ) {
-            VStack(spacing: 16) {
+            VStack(alignment: .leading, spacing: 32) {
                 if self.selectedSection == .fluidMeet {
                     ThemedCard(style: .standard) {
                         VStack(alignment: .leading, spacing: 14) {

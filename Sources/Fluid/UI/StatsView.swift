@@ -21,7 +21,7 @@ struct StatsView: View {
                 ProgressView("Loading statistics…")
                     .frame(maxWidth: .infinity, minHeight: 240)
             } else {
-                VStack(spacing: 16) {
+                VStack(alignment: .leading, spacing: 40) {
                     self.todayHeaderCard
 
                     StatsActivityView(snapshot: self.stats)
@@ -37,7 +37,7 @@ struct StatsView: View {
                             .font(self.theme.typography.caption)
                             .foregroundStyle(.secondary)
                     }
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 280), spacing: 16)], spacing: 16) {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 180), spacing: 32, alignment: .leading)], alignment: .leading, spacing: 28) {
                         self.timeSavedCard
                         self.totalWordsCard
                         self.streakCard
@@ -301,16 +301,14 @@ private struct StatCard<Content: View>: View {
     @ViewBuilder let content: Content
 
     var body: some View {
-        ThemedCard(style: .standard, padding: 16, hoverEffect: false) {
-            VStack(alignment: .leading, spacing: 10) {
-                Label(self.title, systemImage: self.icon)
-                    .font(.fluidSystem(size: 11, weight: .semibold))
-                    .foregroundStyle(.secondary)
-
-                self.content
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
+        VStack(alignment: .leading, spacing: 4) {
+            Label(self.title, systemImage: self.icon)
+                .font(.fluidSystem(size: 11, weight: .medium))
+                .foregroundStyle(.secondary)
+            self.content
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .combine)
     }
 }
 
