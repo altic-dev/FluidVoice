@@ -6412,29 +6412,43 @@ private struct MainWindowToolbar: ToolbarContent {
     let pageToolbarStore: FluidPageToolbarStore
 
     var body: some ToolbarContent {
-        ToolbarItemGroup(placement: .primaryAction) {
-            UpdateAvailableToolbarButton()
+        self.blended {
+            ToolbarItemGroup(placement: .primaryAction) {
+                UpdateAvailableToolbarButton()
 
-            TodayStatsToolbarButton { self.actions.openStats() }
+                TodayStatsToolbarButton { self.actions.openStats() }
+                    .buttonStyle(.automatic)
+
+                ThemePreferenceToolbarButton()
+                    .buttonStyle(.automatic)
+
+                Button {
+                    self.actions.reportIssue()
+                } label: {
+                    Image(systemName: "ladybug.fill")
+                        .fluidToolbarIcon()
+                }
                 .buttonStyle(.automatic)
-
-            ThemePreferenceToolbarButton()
-                .buttonStyle(.automatic)
-
-            Button {
-                self.actions.reportIssue()
-            } label: {
-                Image(systemName: "ladybug.fill")
-                    .fluidToolbarIcon()
+                .help("Report an issue")
+                .accessibilityLabel("Report an issue")
             }
-            .buttonStyle(.automatic)
-            .help("Report an issue")
-            .accessibilityLabel("Report an issue")
         }
         if let pageWithActions {
-            ToolbarItemGroup(placement: .primaryAction) {
-                FluidPageToolbarActions(store: self.pageToolbarStore, page: pageWithActions)
+            self.blended {
+                ToolbarItemGroup(placement: .primaryAction) {
+                    FluidPageToolbarActions(store: self.pageToolbarStore, page: pageWithActions)
+                }
             }
+        }
+    }
+
+    /// The title bar is already the chrome. A shared glass pill would float a second container on it.
+    @ToolbarContentBuilder
+    private func blended(@ToolbarContentBuilder content: () -> some ToolbarContent) -> some ToolbarContent {
+        if #available(macOS 26, *) {
+            content().sharedBackgroundVisibility(.hidden)
+        } else {
+            content()
         }
     }
 }
