@@ -288,8 +288,8 @@ struct ContentView: View {
 
     @Environment(\.theme) private var theme
     @Environment(\.colorScheme) private var colorScheme
-    @Environment(\.displayScale) private var displayScale
     @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
+    @Environment(\.accessibilityReduceTransparency) private var accessibilityReduceTransparency
     @State private var hotkeyManager: GlobalHotkeyManager? = nil
     @State private var hotkeyManagerInitialized: Bool = false
     @State private var processingDictationLifecycleID: UInt64?
@@ -492,15 +492,15 @@ struct ContentView: View {
                     HStack(spacing: 0) {
                         self.sidebarContent
                             .frame(width: self.isSidebarCollapsed ? MainSidebarLayout.collapsedWidth : MainSidebarLayout.expandedWidth)
-                            .background(.bar, ignoresSafeAreaEdges: .bottom)
                             .clipped()
-                        Rectangle()
-                            .fill(self.theme.palette.separator.opacity(0.5))
-                            .frame(width: 1 / self.displayScale)
-                            .padding(.vertical, 8)
-                            .accessibilityHidden(true)
                         self.detailView
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .mainWindowContentPanel()
+                    }
+                    .background {
+                        // One material under the sidebar and, via the safe area, the title-bar strip.
+                        MainWindowChromeBackground(reduceTransparency: self.accessibilityReduceTransparency)
+                            .ignoresSafeArea()
                     }
                 }
             }
@@ -512,6 +512,10 @@ struct ContentView: View {
             self.handleMenuBarNavigation(destination)
         }
         let sized = nav.fluidWindowSizing(self.windowSizing)
+            .background(MainWindowChromeConfigurator(
+                enabled: !self.settings.shouldShowOnboarding,
+                reduceTransparency: self.accessibilityReduceTransparency
+            ))
 
         let observed = self.applyShortcutStateChanges(to: sized)
         let withToolbar = self.applyMainWindowToolbar(to: observed)
@@ -1645,6 +1649,7 @@ struct ContentView: View {
             .padding(.bottom, 8)
         }
         .scrollIndicators(self.isSidebarCollapsed ? .hidden : .automatic)
+        .scrollContentBackground(.hidden)
         .animation(nil, value: self.selectedSidebarItem)
     }
 
@@ -1752,6 +1757,7 @@ struct ContentView: View {
                 .padding(.bottom, 8)
             }
             .scrollIndicators(self.isSidebarCollapsed ? .hidden : .automatic)
+            .scrollContentBackground(.hidden)
             .animation(nil, value: self.settingsNavigation.selectedSection)
         }
     }
@@ -1882,9 +1888,6 @@ struct ContentView: View {
 
     private var detailView: some View {
         ZStack {
-            self.theme.palette.contentBackground
-                .ignoresSafeArea()
-
             // Preserve the app destination so Back never waits on expensive detail initialization.
             AppPageHost(
                 page: self.selectedSidebarItem ?? .welcome,
@@ -2145,8 +2148,7 @@ struct ContentView: View {
                     )
                 }
                 .toolbar(removing: .sidebarToggle)
-                .toolbarBackground(self.theme.palette.contentBackground, for: .windowToolbar)
-                .toolbarBackground(.visible, for: .windowToolbar)
+                .toolbarBackground(.hidden, for: .windowToolbar)
                 .onAppear { self.configureToolbarActions() }
                 .onChange(of: self.accessibilityReduceMotion) { _, _ in self.configureToolbarActions() }
         }
@@ -6194,7 +6196,6 @@ private struct SidebarOptionHoverModifier: ViewModifier {
     let isSelected: Bool
     let reduceMotion: Bool
 
-    @Environment(\.theme) private var theme
     @State private var isHovered = false
 
     func body(content: Content) -> some View {
@@ -6214,9 +6215,7 @@ private struct SidebarOptionHoverModifier: ViewModifier {
     }
 
     private var backgroundColor: Color {
-        if self.isSelected {
-            return self.theme.palette.accent
-        }
+        if self.isSelected { return Color.primary.opacity(0.10) }
         return Color.primary.opacity(self.isHovered ? 0.08 : 0)
     }
 }

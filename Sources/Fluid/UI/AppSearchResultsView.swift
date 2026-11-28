@@ -78,6 +78,7 @@ struct AppSearchResultsView: View {
                 }
             }
             .listStyle(.sidebar)
+            .scrollContentBackground(.hidden)
             .accentColor(self.theme.palette.accent)
             .onChange(of: self.cursor) { _, target in
                 target.map { proxy.scrollTo($0) }
@@ -131,11 +132,11 @@ struct AppSearchResultsView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(hit.title)
                     .font(self.theme.typography.sidebarItem)
-                    .foregroundStyle(isSelected ? Color.white : Color.primary)
+                    .foregroundStyle(Color.primary)
                     .lineLimit(1)
                 Text(hit.snippet)
                     .font(.caption)
-                    .foregroundStyle(isSelected ? Color.white.opacity(0.85) : Color.secondary)
+                    .foregroundStyle(Color.secondary)
                     .lineLimit(2)
             }
             .frame(maxWidth: .infinity, alignment: .leading)

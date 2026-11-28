@@ -19,12 +19,12 @@ struct MainSidebarLabel: View {
             Image(systemName: self.systemImage)
                 .symbolRenderingMode(.hierarchical)
                 .frame(width: 20, height: 20)
-                .foregroundStyle(self.isSelected ? Color.white : Color.secondary)
+                .foregroundStyle(self.isSelected ? Color.primary : Color.secondary)
                 .accessibilityHidden(true)
 
             if !self.isCollapsed {
                 Text(self.title)
-                    .foregroundStyle(self.isSelected ? Color.white : Color.primary)
+                    .foregroundStyle(Color.primary)
                     .lineLimit(1)
                     .fixedSize()
             }
@@ -37,15 +37,13 @@ struct MainSidebarLabel: View {
 }
 
 struct MainSidebarButtonStyle: ButtonStyle {
-    @Environment(\.theme) private var theme
     var isSelected = false
 
     func makeBody(configuration: Configuration) -> some View {
         MainSidebarButtonSurface(
             label: configuration.label,
             isSelected: self.isSelected,
-            isPressed: configuration.isPressed,
-            accent: self.theme.palette.accent
+            isPressed: configuration.isPressed
         )
     }
 }
@@ -54,21 +52,22 @@ private struct MainSidebarButtonSurface<Label: View>: View {
     let label: Label
     let isSelected: Bool
     let isPressed: Bool
-    let accent: Color
     @State private var isHovered = false
 
     var body: some View {
         self.label
             .background(
-                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .fill(self.backgroundColor)
             )
             .onHover { self.isHovered = $0 }
     }
 
+    /// A quiet rounded highlight. The row stays on the chrome material instead of
+    /// switching to a solid accent fill.
     private var backgroundColor: Color {
-        if self.isSelected { return self.accent }
-        if self.isPressed { return Color.primary.opacity(0.12) }
+        if self.isSelected { return Color.primary.opacity(self.isPressed || self.isHovered ? 0.16 : 0.10) }
+        if self.isPressed { return Color.primary.opacity(0.14) }
         return Color.primary.opacity(self.isHovered ? 0.07 : 0)
     }
 }
